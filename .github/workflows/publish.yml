@@ -74,7 +74,7 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run unit tests
-        run: uv run pytest tests/unit/ --cov=pylxpweb --cov-report=term-missing
+        run: uv run pytest tests/unit/ -v
 
   integration:
     name: Integration Tests
