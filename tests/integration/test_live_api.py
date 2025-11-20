@@ -114,7 +114,7 @@ class TestLiveDeviceDiscovery:
 
             for device in devices.rows:
                 serial_masked = f"{device.serialNum[:2]}****{device.serialNum[-2:]}"
-                print(f"Device: {device.deviceTypeText4APP} (SN: {serial_masked})")
+                print(f"Device: {device.deviceTypeText} (SN: {serial_masked})")
 
     @pytest.mark.integration
     @pytest.mark.asyncio

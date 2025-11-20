@@ -2,11 +2,12 @@
 """Remove orphaned method remnants from client.py."""
 
 # Read the file
-with open("src/pylxpweb/client.py", "r") as f:
+with open("src/pylxpweb/client.py") as f:
     lines = f.readlines()
 
 # Orphaned return type lines to remove (with their docstrings/bodies)
 orphan_lines = [444, 519, 553, 588, 607, 628, 715, 763, 809, 867, 911, 952, 990, 1049]
+
 
 def find_orphan_end(lines, start_idx):
     """Find the end of an orphaned method body."""
@@ -20,6 +21,7 @@ def find_orphan_end(lines, start_idx):
             return i
     return len(lines)
 
+
 # Convert to 0-indexed
 orphan_indices = [line - 1 for line in orphan_lines]
 
@@ -27,7 +29,7 @@ orphan_indices = [line - 1 for line in orphan_lines]
 ranges_to_remove = set()
 for idx in orphan_indices:
     end_idx = find_orphan_end(lines, idx)
-    print(f"Removing orphan at line {idx+1} to {end_idx}")
+    print(f"Removing orphan at line {idx + 1} to {end_idx}")
     for i in range(idx, end_idx):
         ranges_to_remove.add(i)
 

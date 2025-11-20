@@ -4,7 +4,7 @@
 import re
 
 # Read the current client.py
-with open("src/pylxpweb/client.py", "r") as f:
+with open("src/pylxpweb/client.py") as f:
     content = f.read()
     lines = content.splitlines(keepends=True)
 
@@ -18,7 +18,6 @@ METHODS_TO_REMOVE = [
     "set_daylight_saving_time",
     "get_plant_overview",
     "get_inverter_overview",
-
     # Devices methods
     "get_parallel_group_details",
     "get_devices",
@@ -27,7 +26,6 @@ METHODS_TO_REMOVE = [
     "get_parallel_energy",
     "get_battery_info",
     "get_midbox_runtime",
-
     # Control methods
     "read_parameters",
     "write_parameter",
@@ -35,7 +33,6 @@ METHODS_TO_REMOVE = [
     "start_quick_charge",
     "stop_quick_charge",
     "get_quick_charge_status",
-
     # Analytics methods
     "get_chart_data",
     "get_energy_day_breakdown",
@@ -45,14 +42,11 @@ METHODS_TO_REMOVE = [
     "get_event_list",
     "get_battery_list",
     "get_inverter_info",
-
     # Forecasting methods
     "get_solar_forecast",
     "get_weather_forecast",
-
     # Export methods
     "export_data",
-
     # Firmware methods
     "check_firmware_updates",
     "get_firmware_update_status",
@@ -60,13 +54,14 @@ METHODS_TO_REMOVE = [
     "start_firmware_update",
 ]
 
+
 def find_method_range(lines, method_name):
     """Find the start and end line numbers of a method."""
     # Find method start
     start_idx = None
     for i, line in enumerate(lines):
         # Match: "    async def method_name(" or "    def method_name("
-        if re.match(rf'^\s+(async\s+)?def {re.escape(method_name)}\(', line):
+        if re.match(rf"^\s+(async\s+)?def {re.escape(method_name)}\(", line):
             start_idx = i
             break
 
@@ -97,6 +92,7 @@ def find_method_range(lines, method_name):
 
     return start_idx, end_idx
 
+
 # Remove methods
 removed_methods = []
 lines_to_remove = set()
@@ -104,7 +100,7 @@ lines_to_remove = set()
 for method_name in METHODS_TO_REMOVE:
     start, end = find_method_range(lines, method_name)
     if start is not None:
-        print(f"Found {method_name}: lines {start+1}-{end}")
+        print(f"Found {method_name}: lines {start + 1}-{end}")
         removed_methods.append(method_name)
         for i in range(start, end):
             lines_to_remove.add(i)

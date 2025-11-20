@@ -16,7 +16,7 @@ from pylxpweb.endpoints.base import BaseEndpoint
 from pylxpweb.models import (
     BatteryInfo,
     EnergyInfo,
-    InverterListResponse,
+    InverterOverviewResponse,
     InverterRuntime,
     MidboxRuntime,
     ParallelGroupDetailsResponse,
@@ -66,23 +66,29 @@ class DeviceEndpoints(BaseEndpoint):
         )
         return ParallelGroupDetailsResponse.model_validate(response)
 
-    async def get_devices(self, plant_id: int) -> InverterListResponse:
-        """Get list of all devices in a plant.
+    async def get_devices(self, plant_id: int) -> InverterOverviewResponse:
+        """Get overview/status of all devices in a plant.
 
         Args:
             plant_id: Plant/station ID
 
         Returns:
-            InverterListResponse: List of inverters and devices
+            InverterOverviewResponse: Overview data for inverters and devices
 
         Example:
             devices = await client.devices.get_devices(12345)
             for device in devices.rows:
-                print(f"Device: {device.serialNum} - {device.alias}")
+                print(f"Device: {device.serialNum} - {device.statusText}")
         """
         await self.client._ensure_authenticated()
 
-        data = {"plantId": plant_id}
+        data = {
+            "page": 1,
+            "rows": 30,
+            "plantId": plant_id,
+            "searchText": "",
+            "statusText": "all",
+        }
 
         cache_key = self._get_cache_key("devices", plantId=plant_id)
         response = await self.client._request(
@@ -92,7 +98,7 @@ class DeviceEndpoints(BaseEndpoint):
             cache_key=cache_key,
             cache_endpoint="device_discovery",
         )
-        return InverterListResponse.model_validate(response)
+        return InverterOverviewResponse.model_validate(response)
 
     async def get_inverter_runtime(self, serial_num: str) -> InverterRuntime:
         """Get real-time runtime data for an inverter.

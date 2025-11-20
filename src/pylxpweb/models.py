@@ -295,10 +295,58 @@ class ParallelGroupDetailsResponse(BaseModel):
 
 
 class InverterListResponse(BaseModel):
-    """Inverter list API response."""
+    """Inverter list API response (deprecated - use login response instead)."""
 
     success: bool
     rows: list[InverterDevice]
+
+
+class InverterOverviewItem(BaseModel):
+    """Inverter overview/status from inverterOverview/list endpoint."""
+
+    serialNum: str
+    statusText: str
+    deviceType: int
+    deviceTypeText: str
+    phase: int
+    plantId: int
+    plantName: str
+    ppv: int  # PV power in watts
+    ppvText: str
+    pCharge: int  # Charge power in watts
+    pChargeText: str
+    pDisCharge: int  # Discharge power in watts
+    pDisChargeText: str
+    pConsumption: int  # Consumption power in watts
+    pConsumptionText: str
+    soc: str  # State of charge (e.g., "58 %")
+    vBat: int  # Battery voltage (scaled: divide by 10 for actual volts)
+    vBatText: str
+    totalYielding: int  # Total energy generated (scaled: divide by 10 for kWh)
+    totalYieldingText: str
+    totalDischarging: int  # Total energy discharged (scaled: divide by 10 for kWh)
+    totalDischargingText: str
+    totalExport: int  # Total energy exported (scaled: divide by 10 for kWh)
+    totalExportText: str
+    totalUsage: int  # Total energy consumed (scaled: divide by 10 for kWh)
+    totalUsageText: str
+    parallelGroup: str
+    parallelIndex: str
+    parallelInfo: str
+    parallelModel: str
+
+    @field_serializer("serialNum")
+    def serialize_serial(self, value: str) -> str:
+        """Obfuscate serial number in serialized output."""
+        return _obfuscate_serial(value)
+
+
+class InverterOverviewResponse(BaseModel):
+    """Response from inverterOverview/list endpoint."""
+
+    success: bool
+    total: int
+    rows: list[InverterOverviewItem]
 
 
 # Runtime Data Models
