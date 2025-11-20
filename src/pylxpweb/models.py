@@ -484,6 +484,16 @@ class InverterRuntime(BaseModel):
     haspEpsLNValue: bool = False
     # Directions
     directions: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def pac(self) -> int:
+        """AC output power (alias for pToUser for convenience).
+
+        Returns:
+            Power in watts flowing to user loads
+        """
+        return self.pToUser
+
     # Quick charge/discharge status
     hasUnclosedQuickChargeTask: bool = False
     hasUnclosedQuickDischargeTask: bool = False

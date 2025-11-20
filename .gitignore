@@ -87,3 +87,4 @@ docs/.doctrees/
 *.bak
 *.swp
 .DS_Store
+test_api_debug.py

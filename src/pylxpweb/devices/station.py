@@ -348,11 +348,20 @@ class Station(BaseDevice):
             )
 
             # Create parallel groups if they exist (handle potential exception)
-            if (
-                not isinstance(group_data, Exception)
-                and group_data
-                and isinstance(group_data, dict)
-            ):
+            if isinstance(group_data, Exception):
+                # Log but don't raise - parallel groups may not be available
+                import logging
+
+                _LOGGER = logging.getLogger(__name__)
+                error_msg = str(group_data)
+                if "userSnDismatch" in error_msg:
+                    _LOGGER.debug(
+                        "Parallel group details not available (userSnDismatch) - "
+                        "this is normal for accounts without parallel inverter configuration"
+                    )
+                else:
+                    _LOGGER.debug("Could not load parallel group details: %s", error_msg)
+            elif group_data and isinstance(group_data, dict):
                 groups_list = group_data.get("groups", [])
                 for group_info in groups_list:
                     group = await ParallelGroup.from_api_data(
@@ -368,7 +377,8 @@ class Station(BaseDevice):
             ):
                 for device_data in devices_response.rows:
                     serial_num = device_data.serialNum
-                    model_text = getattr(device_data, "model", "Unknown")
+                    # Use deviceTypeText as the model name (e.g., "18KPV", "Grid Boss")
+                    model_text = getattr(device_data, "deviceTypeText", "Unknown")
 
                     if not serial_num:
                         continue
@@ -383,10 +393,17 @@ class Station(BaseDevice):
 
                     if parallel_group_name:
                         # Find matching parallel group
+                        group_found = False
                         for group in self.parallel_groups:
                             if group.name == parallel_group_name:
                                 group.inverters.append(inverter)
+                                group_found = True
                                 break
+
+                        # If parallel group not found (e.g., API error loading groups),
+                        # treat as standalone
+                        if not group_found:
+                            self.standalone_inverters.append(inverter)
                     else:
                         # Standalone inverter
                         self.standalone_inverters.append(inverter)

@@ -119,7 +119,7 @@ class TestObjectHierarchyLoading:
             # Check all_inverters aggregation
             all_inverters = station.all_inverters
             if len(all_inverters) == 0:
-                print(f"  ⚠️ No inverters loaded (possible API permissions issue)")
+                print("  ⚠️ No inverters loaded (possible API permissions issue)")
                 pytest.skip("Station has no inverters - check API permissions")
             print(f"  Total Inverters: {len(all_inverters)}")
 
@@ -202,11 +202,13 @@ class TestCoordinatorDataUpdate:
         # After refresh, all inverters should have data
         for idx, inverter in enumerate(station.all_inverters):
             print(f"\nInverter {idx + 1}: {inverter.serial_number}")
-            assert inverter.has_data, f"Inverter {inverter.serial_number} missing data after refresh"
+            assert inverter.has_data, (
+                f"Inverter {inverter.serial_number} missing data after refresh"
+            )
             assert inverter.runtime is not None
             assert inverter.energy is not None
 
-            print(f"  Runtime data: ✓")
+            print("  Runtime data: ✓")
             print(f"  Power: {inverter.power_output}W")
             print(f"  Energy today: {inverter.total_energy_today} kWh")
             print(f"  Energy lifetime: {inverter.total_energy_lifetime} kWh")
@@ -244,8 +246,8 @@ class TestCoordinatorDataUpdate:
         assert inverter.runtime is not None
         assert inverter.energy is not None
 
-        print(f"✓ Runtime data loaded")
-        print(f"✓ Energy data loaded")
+        print("✓ Runtime data loaded")
+        print("✓ Energy data loaded")
 
         # Check batteries are loaded too
         if hasattr(inverter, "batteries") and inverter.batteries:
@@ -263,7 +265,7 @@ class TestCoordinatorDataUpdate:
         if len(station.all_inverters) < 2:
             pytest.skip("Need at least 2 inverters to test concurrent refresh")
 
-        print(f"\n=== Testing Concurrent Refresh Efficiency ===")
+        print("\n=== Testing Concurrent Refresh Efficiency ===")
         print(f"Station has {len(station.all_inverters)} inverters")
 
         # Time concurrent refresh
@@ -301,7 +303,7 @@ class TestCoordinatorDataUpdate:
             pytest.skip("Station has no inverters - check API permissions")
         inverter = station.all_inverters[0]
 
-        print(f"\n=== Testing Data Staleness Tracking ===")
+        print("\n=== Testing Data Staleness Tracking ===")
 
         # Initial state
         initial_refresh = inverter.last_refresh
@@ -337,7 +339,7 @@ class TestDataConsistency:
 
         await station.refresh_all_data()
 
-        print(f"\n=== Testing Power Value Consistency ===")
+        print("\n=== Testing Power Value Consistency ===")
 
         # Get station total
         total = await station.get_total_production()
@@ -349,7 +351,7 @@ class TestDataConsistency:
         print(f"Sum of inverter powers: {inverter_sum}W")
 
         # Just validate power values are non-negative
-        assert inverter_sum >= 0, f"Power sum cannot be negative"
+        assert inverter_sum >= 0, "Power sum cannot be negative"
         print("✓ Power values are valid")
 
     async def test_energy_values_accumulate(self, client: LuxpowerClient) -> None:
@@ -362,7 +364,7 @@ class TestDataConsistency:
 
         await station.refresh_all_data()
 
-        print(f"\n=== Testing Energy Value Accumulation ===")
+        print("\n=== Testing Energy Value Accumulation ===")
 
         total = await station.get_total_production()
 
@@ -375,9 +377,9 @@ class TestDataConsistency:
             print(f"  Today: {today} kWh")
             print(f"  Lifetime: {lifetime} kWh")
 
-            assert (
-                today <= lifetime
-            ), f"Today's energy ({today}) > lifetime ({lifetime}) for {inverter.serial_number}"
+            assert today <= lifetime, (
+                f"Today's energy ({today}) > lifetime ({lifetime}) for {inverter.serial_number}"
+            )
 
         # Station totals should match sum
         station_today = total["today_kwh"]
@@ -402,7 +404,7 @@ class TestDataConsistency:
         if len(batteries) == 0:
             pytest.skip("No batteries found in this installation")
 
-        print(f"\n=== Testing Battery Value Validity ===")
+        print("\n=== Testing Battery Value Validity ===")
         print(f"Found {len(batteries)} batteries")
 
         for battery in batteries:
@@ -416,8 +418,12 @@ class TestDataConsistency:
             # Validate ranges
             assert 0 <= battery.soc <= 100, f"SOC {battery.soc}% out of range"
             assert 0 <= battery.soh <= 100, f"SOH {battery.soh}% out of range"
-            assert 30 < battery.voltage < 80, f"Voltage {battery.voltage}V seems wrong for 48V system"
-            assert -20 < battery.temperature < 80, f"Temperature {battery.temperature}°C seems wrong"
+            assert 30 < battery.voltage < 80, (
+                f"Voltage {battery.voltage}V seems wrong for 48V system"
+            )
+            assert -20 < battery.temperature < 80, (
+                f"Temperature {battery.temperature}°C seems wrong"
+            )
             assert battery.cycle_count >= 0, f"Cycle count {battery.cycle_count} is negative"
 
             # Check cell voltages if available
@@ -448,7 +454,7 @@ class TestEntityGeneration:
 
         await station.refresh_all_data()
 
-        print(f"\n=== Testing Entity Generation ===")
+        print("\n=== Testing Entity Generation ===")
 
         # Station should generate entities
         station_entities = station.to_entities()
@@ -493,7 +499,7 @@ class TestEntityGeneration:
 
         await station.refresh_all_data()
 
-        print(f"\n=== Testing Entity Unique ID Uniqueness ===")
+        print("\n=== Testing Entity Unique ID Uniqueness ===")
 
         # Collect all entity unique_ids
         all_unique_ids = set()
@@ -535,11 +541,11 @@ class TestEntityGeneration:
 
         await station.refresh_all_data()
 
-        print(f"\n=== Testing Device Info Generation ===")
+        print("\n=== Testing Device Info Generation ===")
 
         # Station device info
         station_info = station.to_device_info()
-        print(f"Station device info:")
+        print("Station device info:")
         print(f"  Name: {station_info.name}")
         print(f"  Manufacturer: {station_info.manufacturer}")
         print(f"  Model: {station_info.model}")
@@ -554,7 +560,7 @@ class TestEntityGeneration:
             pytest.skip("Station has no inverters - check API permissions")
         inverter = station.all_inverters[0]
         inverter_info = inverter.to_device_info()
-        print(f"\nInverter device info:")
+        print("\nInverter device info:")
         print(f"  Name: {inverter_info.name}")
         print(f"  Manufacturer: {inverter_info.manufacturer}")
         print(f"  Model: {inverter_info.model}")
@@ -581,7 +587,7 @@ class TestErrorHandling:
             pytest.skip("Station has no inverters - check API permissions")
         inverter = station.all_inverters[0]
 
-        print(f"\n=== Testing Missing Data Handling ===")
+        print("\n=== Testing Missing Data Handling ===")
         print(f"has_data before refresh: {inverter.has_data}")
 
         # Should handle missing data gracefully
@@ -594,13 +600,15 @@ class TestErrorHandling:
 
     async def test_invalid_station_id(self, client: LuxpowerClient) -> None:
         """Test loading station with invalid ID."""
-        print(f"\n=== Testing Invalid Station ID ===")
+        print("\n=== Testing Invalid Station ID ===")
 
         # Try to load non-existent station
         try:
             result = await Station.load(client, plant_id=999999999)
             # If it doesn't raise, at least check we got None or invalid result
-            assert result is None or not hasattr(result, "id"), "Should fail to load invalid station"
+            assert result is None or not hasattr(result, "id"), (
+                "Should fail to load invalid station"
+            )
         except Exception as e:
             # Expected to raise some error
             print(f"✓ Correctly raised error: {type(e).__name__}")
