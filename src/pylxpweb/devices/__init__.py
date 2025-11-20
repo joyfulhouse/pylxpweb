@@ -6,6 +6,7 @@ batteries, and MID devices.
 
 from .base import BaseDevice
 from .battery import Battery
+from .battery_bank import BatteryBank
 from .mid_device import MIDDevice
 from .models import DeviceClass, DeviceInfo, Entity, EntityCategory, StateClass
 from .parallel_group import ParallelGroup
@@ -14,6 +15,7 @@ from .station import Location, Station
 __all__ = [
     "BaseDevice",
     "Battery",
+    "BatteryBank",
     "MIDDevice",
     "DeviceInfo",
     "Entity",

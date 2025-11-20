@@ -51,8 +51,8 @@ class BaseInverter(BaseDevice):
         # Energy data (refreshed less frequently)
         self.energy: EnergyInfo | None = None
 
-        # Battery collection (loaded separately)
-        self.batteries: list[Any] = []  # Will be Battery objects
+        # Battery bank (contains aggregate data and individual batteries)
+        self.battery_bank: Any | None = None  # Will be BatteryBank object
 
     async def refresh(self) -> None:
         """Refresh runtime, energy, and battery data from API.
@@ -79,9 +79,14 @@ class BaseInverter(BaseDevice):
         if not isinstance(energy_data, BaseException):
             self.energy = energy_data
 
-        # Update batteries if successful
-        if not isinstance(battery_data, BaseException) and battery_data.batteryArray:
-            await self._update_batteries(battery_data.batteryArray)
+        # Update batteries and battery bank if successful
+        if not isinstance(battery_data, BaseException):
+            # Create/update battery bank with aggregate data
+            await self._update_battery_bank(battery_data)
+
+            # Update individual batteries
+            if battery_data.batteryArray:
+                await self._update_batteries(battery_data.batteryArray)
 
         self._last_refresh = datetime.now()
 
@@ -166,6 +171,25 @@ class BaseInverter(BaseDevice):
             return None
         return getattr(self.runtime, "soc", None)
 
+    async def _update_battery_bank(self, battery_info: Any) -> None:
+        """Update battery bank object from API data.
+
+        Args:
+            battery_info: BatteryInfo object from API with aggregate data
+        """
+        from ..battery_bank import BatteryBank
+
+        # Create or update battery bank with aggregate data
+        if self.battery_bank is None:
+            self.battery_bank = BatteryBank(
+                client=self._client,
+                inverter_serial=self.serial_number,
+                battery_info=battery_info,
+            )
+        else:
+            # Update existing battery bank data
+            self.battery_bank.data = battery_info
+
     async def _update_batteries(self, battery_modules: list[Any]) -> None:
         """Update battery objects from API data.
 
@@ -174,9 +198,13 @@ class BaseInverter(BaseDevice):
         """
         from ..battery import Battery
 
+        # Batteries are stored in battery_bank, not directly on inverter
+        if self.battery_bank is None:
+            return
+
         # Create Battery objects for each module
         # Use batteryKey to match existing batteries or create new ones
-        battery_map = {b.battery_key: b for b in self.batteries}
+        battery_map = {b.battery_key: b for b in self.battery_bank.batteries}
         updated_batteries = []
 
         for module in battery_modules:
@@ -191,7 +219,7 @@ class BaseInverter(BaseDevice):
 
             updated_batteries.append(battery)
 
-        self.batteries = updated_batteries
+        self.battery_bank.batteries = updated_batteries
 
     # ============================================================================
     # Control Operations - Universal inverter controls
