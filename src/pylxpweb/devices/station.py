@@ -364,10 +364,10 @@ class Station(BaseDevice):
             if isinstance(devices_response, Exception):
                 devices_response = None
 
-            if devices_response and devices_response.get("rows"):
-                for device_data in devices_response["rows"]:
-                    serial_num = device_data.get("serialNum")
-                    model_text = device_data.get("model", "Unknown")
+            if devices_response and hasattr(devices_response, "rows") and devices_response.rows:
+                for device_data in devices_response.rows:
+                    serial_num = device_data.serialNum
+                    model_text = getattr(device_data, "model", "Unknown")
 
                     if not serial_num:
                         continue
@@ -378,7 +378,7 @@ class Station(BaseDevice):
                     )
 
                     # Assign to parallel group or standalone based on group membership
-                    parallel_group_name = device_data.get("parallelGroup")
+                    parallel_group_name = device_data.parallelGroup
 
                     if parallel_group_name:
                         # Find matching parallel group
