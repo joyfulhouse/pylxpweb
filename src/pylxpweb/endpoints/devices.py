@@ -53,8 +53,9 @@ class DeviceEndpoints(BaseEndpoint):
 
         Example:
             groups = await client.devices.get_parallel_group_details("4524850115")
-            for group in groups.parallelGroups:
-                print(f"Group: {group.parallelGroup}")
+            print(f"Total devices: {groups.total}")
+            for device in groups.devices:
+                print(f"  {device.serialNum}: {device.roleText}")
         """
         await self.client._ensure_authenticated()
 

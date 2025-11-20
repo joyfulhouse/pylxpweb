@@ -137,9 +137,13 @@ class TestLiveDeviceDiscovery:
             groups = await live_client.devices.get_parallel_group_details(serial_num)
             assert groups.success is True
 
-            if len(groups.parallelGroups) > 0:
-                for group in groups.parallelGroups:
-                    print(f"Parallel Group: {group.parallelGroup}, {len(group.devices)} device(s)")
+            if len(groups.devices) > 0:
+                print(f"Parallel group has {groups.total} device(s)")
+                if groups.parallelMidboxSn:
+                    print(f"  GridBOSS/MID: {groups.parallelMidboxSn}")
+                for device in groups.devices:
+                    serial_masked = f"{device.serialNum[:2]}****{device.serialNum[-2:]}"
+                    print(f"  Device: {serial_masked} - {device.roleText}")
 
 
 class TestLiveRuntimeData:
@@ -190,14 +194,15 @@ class TestLiveRuntimeData:
             plants = await live_client.plants.get_plants()
             plant_id = plants.rows[0].plantId
 
-            # Get first device with battery
+            # Get first device
             devices = await live_client.devices.get_devices(plant_id)
-            for device in devices.rows:
-                if device.withbatteryData:
-                    battery = await live_client.devices.get_battery_info(device.serialNum)
-                    assert battery.success is True
-                    print(f"Battery: SOC={battery.soc}%, {len(battery.batteryArray)} module(s)")
-                    break
+            device = devices.rows[0]
+
+            # Get battery info (skip GridBOSS devices)
+            if device.deviceType != 9:  # Not GridBOSS
+                battery = await live_client.devices.get_battery_info(device.serialNum)
+                assert battery.success is True
+                print(f"Battery: SOC={battery.soc}%, {len(battery.batteryArray)} module(s)")
 
 
 class TestLiveDeviceControlSafe:

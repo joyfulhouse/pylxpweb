@@ -280,18 +280,49 @@ class InverterDevice(BaseModel):
         return _obfuscate_serial(value)
 
 
-class ParallelGroupDevice(BaseModel):
-    """Parallel group device information."""
+class ParallelGroupDeviceItem(BaseModel):
+    """Device in a parallel group from getParallelGroupDetails endpoint."""
 
-    parallelGroup: str
-    devices: list[InverterDevice]
+    serialNum: str
+    deviceType: int
+    subDeviceType: int
+    phase: int
+    dtc: int
+    machineType: int
+    parallelIndex: str
+    parallelNumText: str
+    lost: bool
+    roleText: str
+    # Optional runtime data fields (present for inverters, not for GridBOSS)
+    vpv1: int | None = None
+    ppv1: int | None = None
+    vpv2: int | None = None
+    ppv2: int | None = None
+    vpv3: int | None = None
+    ppv3: int | None = None
+    soc: int | None = None
+    vBat: int | None = None
+    pCharge: int | None = None
+    pDisCharge: int | None = None
+    peps: int | None = None
+
+    @field_serializer("serialNum")
+    def serialize_serial(self, value: str) -> str:
+        """Obfuscate serial number in serialized output."""
+        return _obfuscate_serial(value)
 
 
 class ParallelGroupDetailsResponse(BaseModel):
-    """Parallel group details API response."""
+    """Parallel group details API response.
+
+    Returns devices in a parallel group including GridBOSS (if present) and inverters.
+    """
 
     success: bool
-    parallelGroups: list[ParallelGroupDevice]
+    deviceType: int
+    parallelMidboxSn: str | None = None
+    total: int
+    devices: list[ParallelGroupDeviceItem]
 
 
 class InverterListResponse(BaseModel):
