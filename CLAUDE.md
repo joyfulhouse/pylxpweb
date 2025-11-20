@@ -571,3 +571,4 @@ gh secret set LUXPOWER_BASE_URL --body "$LUXPOWER_BASE_URL"
 - ✅ Comprehensive test examples
 - Our code repository is at joyfulhouse/pylxpweb
 - Always verify that unit and integration tests run before pushing to code repository like github.
+- code should not reference files or folders in `.gitignore` - for example `research` contains sample data, if it is required for creating test fixtures, copy the data into the codebase at the appropriate location, in this case, `tests/samples`
