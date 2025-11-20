@@ -12,7 +12,7 @@ import pytest
 from aioresponses import aioresponses
 
 from pylxpweb import LuxpowerClient
-from pylxpweb.exceptions import LuxpowerAuthError
+from pylxpweb.exceptions import LuxpowerAuthError, LuxpowerConnectionError
 
 # Import fixtures
 
@@ -100,7 +100,7 @@ class TestPlantDiscovery:
         )
 
         async with LuxpowerClient("testuser", "testpass") as client:
-            response = await client.plants.get_plants()
+            response = await client.api.plants.get_plants()
             assert response.total == 1
             assert len(response.rows) == 1
             plant = response.rows[0]
@@ -230,7 +230,7 @@ class TestDeviceDiscovery:
         )
 
         async with LuxpowerClient("testuser", "testpass") as client:
-            response = await client.devices.get_devices(99999)
+            response = await client.api.devices.get_devices(99999)
             assert response.success is True
             assert len(response.rows) == 3  # 2 inverters + 1 GridBOSS
 
@@ -256,7 +256,7 @@ class TestRuntimeData:
         )
 
         async with LuxpowerClient("testuser", "testpass") as client:
-            response = await client.devices.get_inverter_runtime("1234567890")
+            response = await client.api.devices.get_inverter_runtime("1234567890")
             assert response.success is True
             assert response.serialNum == "1234567890"
             assert response.soc == 71
@@ -281,7 +281,7 @@ class TestRuntimeData:
         )
 
         async with LuxpowerClient("testuser", "testpass") as client:
-            response = await client.devices.get_inverter_energy("1234567890")
+            response = await client.api.devices.get_inverter_energy("1234567890")
             assert response.success is True
             assert response.serialNum == "1234567890"
             assert response.soc == 71
@@ -304,7 +304,7 @@ class TestRuntimeData:
         )
 
         async with LuxpowerClient("testuser", "testpass") as client:
-            response = await client.devices.get_battery_info("1234567890")
+            response = await client.api.devices.get_battery_info("1234567890")
             assert response.success is True
             assert response.serialNum == "1234567890"
             assert response.soc == 71
@@ -333,10 +333,10 @@ class TestCaching:
 
         async with LuxpowerClient("testuser", "testpass") as client:
             # First call
-            response1 = await client.devices.get_inverter_runtime("1234567890")
+            response1 = await client.api.devices.get_inverter_runtime("1234567890")
 
             # Second call should use cache
-            response2 = await client.devices.get_inverter_runtime("1234567890")
+            response2 = await client.api.devices.get_inverter_runtime("1234567890")
 
             assert response1.soc == response2.soc
             assert response1.serverTime == response2.serverTime
@@ -436,3 +436,92 @@ class TestSessionManagement:
 
             # Injected session should not be closed
             assert not session.closed
+
+
+class TestErrorHandlingExtended:
+    """Extended error handling tests for better coverage."""
+
+    @pytest.mark.asyncio
+    async def test_login_with_missing_fields(
+        self,
+        mocked_api: aioresponses,
+    ) -> None:
+        """Test login response with missing required fields."""
+        from pydantic import ValidationError
+
+        # Mock incomplete login response
+        mocked_api.post(
+            f"{BASE_URL}/WManage/api/login",
+            payload={"success": True},  # Missing all user data
+            status=200,
+        )
+
+        client = LuxpowerClient("testuser", "testpass")
+        try:
+            # Should raise validation error
+            with pytest.raises(ValidationError):
+                await client.login()
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_request_with_network_error(
+        self,
+        mocked_api: aioresponses,
+        login_response: dict[str, Any],
+    ) -> None:
+        """Test handling of network errors."""
+        import aiohttp
+
+        mocked_api.post(f"{BASE_URL}/WManage/api/login", payload=login_response)
+        mocked_api.post(
+            f"{BASE_URL}/WManage/api/plantOverview/list/viewer",
+            exception=aiohttp.ClientConnectorError(
+                connection_key=None, os_error=OSError("Connection refused")
+            ),
+        )
+
+        async with LuxpowerClient("testuser", "testpass") as client:
+            with pytest.raises(LuxpowerConnectionError):
+                await client.api.plants.get_plants()
+
+    @pytest.mark.asyncio
+    async def test_cache_invalidation(
+        self,
+        mocked_api: aioresponses,
+        login_response: dict[str, Any],
+        runtime_response: dict[str, Any],
+    ) -> None:
+        """Test cache TTL behavior."""
+        import asyncio
+        from datetime import timedelta
+
+        mocked_api.post(f"{BASE_URL}/WManage/api/login", payload=login_response)
+        # Mock runtime endpoint twice
+        mocked_api.post(
+            f"{BASE_URL}/WManage/api/inverter/getInverterRuntime",
+            payload=runtime_response,
+        )
+        mocked_api.post(
+            f"{BASE_URL}/WManage/api/inverter/getInverterRuntime",
+            payload={**runtime_response, "soc": 75},  # Different value
+        )
+
+        async with LuxpowerClient("testuser", "testpass") as client:
+            # Reduce cache TTL for testing
+            client._cache_ttl_config["inverter_runtime"] = timedelta(milliseconds=100)
+
+            # First call - cache miss
+            result1 = await client.api.devices.get_inverter_runtime("1234567890")
+            assert result1.soc == 71
+
+            # Second call - cache hit
+            result2 = await client.api.devices.get_inverter_runtime("1234567890")
+            assert result2.soc == 71  # Same as cached
+
+            # Wait for cache to expire
+            await asyncio.sleep(0.15)
+
+            # Third call - cache miss (expired)
+            result3 = await client.api.devices.get_inverter_runtime("1234567890")
+            assert result3.soc == 75  # New value

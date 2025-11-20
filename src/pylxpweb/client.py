@@ -24,6 +24,7 @@ from urllib.parse import urljoin
 import aiohttp
 from aiohttp import ClientTimeout
 
+from .api_namespace import APINamespace
 from .endpoints import (
     AnalyticsEndpoints,
     ControlEndpoints,
@@ -117,7 +118,10 @@ class LuxpowerClient:
         self._current_backoff_delay: float = 0.0
         self._consecutive_errors: int = 0
 
-        # Endpoint modules (lazy-loaded)
+        # API namespace (new v0.2.0 interface)
+        self._api_namespace: APINamespace | None = None
+
+        # Endpoint modules (lazy-loaded) - kept for backward compatibility during transition
         self._plants_endpoints: PlantEndpoints | None = None
         self._devices_endpoints: DeviceEndpoints | None = None
         self._control_endpoints: ControlEndpoints | None = None
@@ -165,7 +169,38 @@ class LuxpowerClient:
         if self._session and not self._session.closed and self._owns_session:
             await self._session.close()
 
-    # Endpoint Module Properties
+    # API Namespace (v0.2.0+)
+
+    @property
+    def api(self) -> APINamespace:
+        """Access all API endpoints through the api namespace.
+
+        This is the recommended way to access API endpoints in v0.2.0+.
+        It provides a clear separation between:
+        - Low-level API calls: `client.api.plants.get_plants()`
+        - High-level object interface: `client.get_station(plant_id)` (coming in Phase 1)
+
+        Returns:
+            APINamespace: The API namespace providing access to all endpoint groups.
+
+        Example:
+            ```python
+            async with LuxpowerClient(username, password) as client:
+                # Access plants endpoint
+                plants = await client.api.plants.get_plants()
+
+                # Access devices endpoint
+                runtime = await client.api.devices.get_inverter_runtime(serial)
+
+                # Access control endpoint
+                await client.api.control.start_quick_charge(serial)
+            ```
+        """
+        if self._api_namespace is None:
+            self._api_namespace = APINamespace(self)
+        return self._api_namespace
+
+    # Endpoint Module Properties (Deprecated - use client.api.* instead)
 
     @property
     def plants(self) -> PlantEndpoints:
