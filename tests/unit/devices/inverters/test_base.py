@@ -351,3 +351,252 @@ class TestInverterBatteries:
         assert len(inverter.batteries) == 2
         assert battery1 in inverter.batteries
         assert battery2 in inverter.batteries
+
+
+class TestInverterControlOperations:
+    """Test inverter control operations (universal controls)."""
+
+    @pytest.mark.asyncio
+    async def test_read_parameters(self, mock_client: LuxpowerClient) -> None:
+        """Test reading inverter parameters."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock control API
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.parameters = {"reg_21": 512, "FUNC_SET_TO_STANDBY": True}
+        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+
+        # Read parameters
+        params = await inverter.read_parameters(21, 1)
+
+        # Verify API call
+        mock_client.api.control.read_parameters.assert_called_once_with("1234567890", 21, 1)
+
+        # Verify returned data
+        assert params == {"reg_21": 512, "FUNC_SET_TO_STANDBY": True}
+
+    @pytest.mark.asyncio
+    async def test_write_parameters(self, mock_client: LuxpowerClient) -> None:
+        """Test writing inverter parameters."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock control API
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_response)
+
+        # Write parameters
+        result = await inverter.write_parameters({21: 512})
+
+        # Verify API call
+        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {21: 512})
+
+        # Verify success
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_standby_mode_to_standby(self, mock_client: LuxpowerClient) -> None:
+        """Test setting inverter to standby mode."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock control API
+        mock_client.api.control = Mock()
+
+        # Mock read response - bit 9 currently set (power on)
+        mock_read_response = Mock()
+        mock_read_response.parameters = {"reg_21": 512}  # Bit 9 set (1 << 9 = 512)
+        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
+
+        # Mock write response
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+
+        # Set to standby (should clear bit 9)
+        result = await inverter.set_standby_mode(True)
+
+        # Verify read call
+        mock_client.api.control.read_parameters.assert_called_once_with("1234567890", 21, 1)
+
+        # Verify write call - bit 9 should be cleared (0)
+        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {21: 0})
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_standby_mode_to_power_on(self, mock_client: LuxpowerClient) -> None:
+        """Test powering on inverter from standby."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock control API
+        mock_client.api.control = Mock()
+
+        # Mock read response - bit 9 currently clear (standby)
+        mock_read_response = Mock()
+        mock_read_response.parameters = {"reg_21": 0}
+        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
+
+        # Mock write response
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+
+        # Power on (should set bit 9)
+        result = await inverter.set_standby_mode(False)
+
+        # Verify write call - bit 9 should be set (512)
+        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {21: 512})
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_battery_soc_limits(self, mock_client: LuxpowerClient) -> None:
+        """Test reading battery SOC limits."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock control API
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.parameters = {
+            "HOLD_DISCHG_CUT_OFF_SOC_EOD": 15,
+            "HOLD_SOC_LOW_LIMIT_EPS_DISCHG": 20,
+        }
+        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+
+        # Get SOC limits
+        limits = await inverter.get_battery_soc_limits()
+
+        # Verify API call
+        mock_client.api.control.read_parameters.assert_called_once_with("1234567890", 105, 2)
+
+        # Verify returned data
+        assert limits == {"on_grid_limit": 15, "off_grid_limit": 20}
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_both(self, mock_client: LuxpowerClient) -> None:
+        """Test setting both SOC limits."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock control API
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_response)
+
+        # Set both limits
+        result = await inverter.set_battery_soc_limits(on_grid_limit=20, off_grid_limit=15)
+
+        # Verify API call with both parameters
+        mock_client.api.control.write_parameters.assert_called_once_with(
+            "1234567890", {105: 20, 106: 15}
+        )
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_on_grid_only(self, mock_client: LuxpowerClient) -> None:
+        """Test setting only on-grid SOC limit."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock control API
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_response)
+
+        # Set only on-grid limit
+        result = await inverter.set_battery_soc_limits(on_grid_limit=25)
+
+        # Verify API call with only on-grid parameter
+        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {105: 25})
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_off_grid_only(self, mock_client: LuxpowerClient) -> None:
+        """Test setting only off-grid SOC limit."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock control API
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_response)
+
+        # Set only off-grid limit
+        result = await inverter.set_battery_soc_limits(off_grid_limit=10)
+
+        # Verify API call with only off-grid parameter
+        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {106: 10})
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_validation_on_grid_too_low(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Test on-grid SOC limit validation - too low."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Try to set on-grid limit below 10%
+        with pytest.raises(ValueError, match="on_grid_limit must be between 10 and 90%"):
+            await inverter.set_battery_soc_limits(on_grid_limit=5)
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_validation_on_grid_too_high(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Test on-grid SOC limit validation - too high."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Try to set on-grid limit above 90%
+        with pytest.raises(ValueError, match="on_grid_limit must be between 10 and 90%"):
+            await inverter.set_battery_soc_limits(on_grid_limit=95)
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_validation_off_grid_too_low(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Test off-grid SOC limit validation - too low."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Try to set off-grid limit below 0%
+        with pytest.raises(ValueError, match="off_grid_limit must be between 0 and 100%"):
+            await inverter.set_battery_soc_limits(off_grid_limit=-5)
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_validation_off_grid_too_high(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Test off-grid SOC limit validation - too high."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Try to set off-grid limit above 100%
+        with pytest.raises(ValueError, match="off_grid_limit must be between 0 and 100%"):
+            await inverter.set_battery_soc_limits(off_grid_limit=105)

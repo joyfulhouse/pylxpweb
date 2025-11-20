@@ -192,3 +192,133 @@ class BaseInverter(BaseDevice):
             updated_batteries.append(battery)
 
         self.batteries = updated_batteries
+
+    # ============================================================================
+    # Control Operations - Universal inverter controls
+    # ============================================================================
+
+    async def read_parameters(
+        self, start_register: int = 0, point_number: int = 127
+    ) -> dict[str, Any]:
+        """Read configuration parameters from inverter.
+
+        Args:
+            start_register: Starting register address
+            point_number: Number of registers to read
+
+        Returns:
+            Dictionary of parameter name to value mappings
+
+        Example:
+            >>> params = await inverter.read_parameters(21, 1)
+            >>> params["FUNC_SET_TO_STANDBY"]
+            True
+        """
+        response = await self._client.api.control.read_parameters(
+            self.serial_number, start_register, point_number
+        )
+        return response.parameters
+
+    async def write_parameters(self, parameters: dict[int, int]) -> bool:
+        """Write configuration parameters to inverter.
+
+        Args:
+            parameters: Dict of register address to value
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> # Set register 21 bit 9 to enable (standby off)
+            >>> await inverter.write_parameters({21: 512})  # Bit 9 set
+        """
+        response = await self._client.api.control.write_parameters(self.serial_number, parameters)
+        return response.success
+
+    async def set_standby_mode(self, standby: bool) -> bool:
+        """Enable or disable standby mode.
+
+        Universal control: All inverters support standby mode.
+
+        Args:
+            standby: True to enter standby (power off), False for normal operation
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_standby_mode(False)  # Power on
+            True
+        """
+        from pylxpweb.constants import FUNC_EN_BIT_SET_TO_STANDBY, FUNC_EN_REGISTER
+
+        # Read current function enable register
+        params = await self.read_parameters(FUNC_EN_REGISTER, 1)
+        current_value = params.get(f"reg_{FUNC_EN_REGISTER}", 0)
+
+        # Bit logic: 0=Standby, 1=Power On (inverse of parameter)
+        if standby:
+            # Clear bit 9 to enter standby
+            new_value = current_value & ~(1 << FUNC_EN_BIT_SET_TO_STANDBY)
+        else:
+            # Set bit 9 to power on
+            new_value = current_value | (1 << FUNC_EN_BIT_SET_TO_STANDBY)
+
+        return await self.write_parameters({FUNC_EN_REGISTER: new_value})
+
+    async def get_battery_soc_limits(self) -> dict[str, int]:
+        """Get battery SOC discharge limits.
+
+        Universal control: All inverters have SOC limits.
+
+        Returns:
+            Dictionary with on_grid_limit and off_grid_limit (0-100%)
+
+        Example:
+            >>> limits = await inverter.get_battery_soc_limits()
+            >>> limits
+            {'on_grid_limit': 10, 'off_grid_limit': 20}
+        """
+
+        params = await self.read_parameters(105, 2)
+        return {
+            "on_grid_limit": params.get("HOLD_DISCHG_CUT_OFF_SOC_EOD", 10),
+            "off_grid_limit": params.get("HOLD_SOC_LOW_LIMIT_EPS_DISCHG", 10),
+        }
+
+    async def set_battery_soc_limits(
+        self, on_grid_limit: int | None = None, off_grid_limit: int | None = None
+    ) -> bool:
+        """Set battery SOC discharge limits.
+
+        Universal control: All inverters have SOC protection.
+
+        Args:
+            on_grid_limit: On-grid discharge cutoff SOC (10-90%)
+            off_grid_limit: Off-grid/EPS discharge cutoff SOC (0-100%)
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_battery_soc_limits(on_grid_limit=15, off_grid_limit=20)
+            True
+        """
+        from pylxpweb.constants import HOLD_DISCHG_CUT_OFF_SOC_EOD, HOLD_SOC_LOW_LIMIT_EPS_DISCHG
+
+        params_to_write = {}
+
+        if on_grid_limit is not None:
+            if not 10 <= on_grid_limit <= 90:
+                raise ValueError("on_grid_limit must be between 10 and 90%")
+            params_to_write[HOLD_DISCHG_CUT_OFF_SOC_EOD] = on_grid_limit
+
+        if off_grid_limit is not None:
+            if not 0 <= off_grid_limit <= 100:
+                raise ValueError("off_grid_limit must be between 0 and 100%")
+            params_to_write[HOLD_SOC_LOW_LIMIT_EPS_DISCHG] = off_grid_limit
+
+        if not params_to_write:
+            return True
+
+        return await self.write_parameters(params_to_write)
