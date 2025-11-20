@@ -32,6 +32,7 @@ def mock_client() -> LuxpowerClient:
     client = Mock(spec=LuxpowerClient)
     client.api = Mock()
     client.api.inverters = Mock()
+    client.api.batteries = Mock()
     return client
 
 
@@ -70,6 +71,20 @@ def sample_energy() -> EnergyInfo:
     )
 
 
+@pytest.fixture
+def sample_battery_info():
+    """Load sample battery info data."""
+    import json
+    from pathlib import Path
+
+    from pylxpweb.models import BatteryInfo
+
+    sample_path = Path(__file__).parents[1] / "batteries" / "samples" / "battery_44300E0585.json"
+    with open(sample_path) as f:
+        data = json.load(f)
+    return BatteryInfo.model_validate(data)
+
+
 class TestBaseInverterInitialization:
     """Test BaseInverter initialization."""
 
@@ -103,8 +118,9 @@ class TestInverterRefresh:
         mock_client: LuxpowerClient,
         sample_runtime: InverterRuntime,
         sample_energy: EnergyInfo,
+        sample_battery_info,
     ) -> None:
-        """Test refresh fetches both runtime and energy data."""
+        """Test refresh fetches runtime, energy, and battery data."""
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
@@ -112,6 +128,7 @@ class TestInverterRefresh:
         # Mock API responses
         mock_client.api.inverters.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
         mock_client.api.inverters.get_inverter_energy = AsyncMock(return_value=sample_energy)
+        mock_client.api.batteries.get_battery_info = AsyncMock(return_value=sample_battery_info)
 
         # Refresh
         await inverter.refresh()
@@ -119,53 +136,59 @@ class TestInverterRefresh:
         # Verify API calls
         mock_client.api.inverters.get_inverter_runtime.assert_called_once_with("1234567890")
         mock_client.api.inverters.get_inverter_energy.assert_called_once_with("1234567890")
+        mock_client.api.batteries.get_battery_info.assert_called_once_with("1234567890")
 
         # Verify data stored
         assert inverter.runtime is sample_runtime
         assert inverter.energy is sample_energy
+        assert len(inverter.batteries) == 3  # Sample has 3 batteries
         assert inverter._last_refresh is not None
 
     @pytest.mark.asyncio
     async def test_refresh_handles_runtime_error(
-        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo, sample_battery_info
     ) -> None:
         """Test refresh handles runtime API error gracefully."""
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        # Mock runtime error, energy success
+        # Mock runtime error, energy and battery success
         mock_client.api.inverters.get_inverter_runtime = AsyncMock(
             side_effect=Exception("API Error")
         )
         mock_client.api.inverters.get_inverter_energy = AsyncMock(return_value=sample_energy)
+        mock_client.api.batteries.get_battery_info = AsyncMock(return_value=sample_battery_info)
 
         await inverter.refresh()
 
-        # Runtime should be None (error), energy should be set
+        # Runtime should be None (error), energy and batteries should be set
         assert inverter.runtime is None
         assert inverter.energy is sample_energy
+        assert len(inverter.batteries) == 3
 
     @pytest.mark.asyncio
     async def test_refresh_handles_energy_error(
-        self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
+        self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime, sample_battery_info
     ) -> None:
         """Test refresh handles energy API error gracefully."""
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        # Mock runtime success, energy error
+        # Mock runtime success, energy error, battery success
         mock_client.api.inverters.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
         mock_client.api.inverters.get_inverter_energy = AsyncMock(
             side_effect=Exception("API Error")
         )
+        mock_client.api.batteries.get_battery_info = AsyncMock(return_value=sample_battery_info)
 
         await inverter.refresh()
 
-        # Runtime should be set, energy should be None (error)
+        # Runtime and batteries should be set, energy should be None (error)
         assert inverter.runtime is sample_runtime
         assert inverter.energy is None
+        assert len(inverter.batteries) == 3
 
 
 class TestInverterDeviceInfo:

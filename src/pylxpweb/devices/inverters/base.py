@@ -55,19 +55,20 @@ class BaseInverter(BaseDevice):
         self.batteries: list[Any] = []  # Will be Battery objects
 
     async def refresh(self) -> None:
-        """Refresh runtime and energy data from API.
+        """Refresh runtime, energy, and battery data from API.
 
-        This method fetches both runtime and energy data concurrently
+        This method fetches runtime, energy, and battery data concurrently
         for optimal performance.
         """
         import asyncio
 
-        # Fetch runtime and energy data concurrently
+        # Fetch all data concurrently
         runtime_task = self._client.api.inverters.get_inverter_runtime(self.serial_number)
         energy_task = self._client.api.inverters.get_inverter_energy(self.serial_number)
+        battery_task = self._client.api.batteries.get_battery_info(self.serial_number)
 
-        runtime_data, energy_data = await asyncio.gather(
-            runtime_task, energy_task, return_exceptions=True
+        runtime_data, energy_data, battery_data = await asyncio.gather(
+            runtime_task, energy_task, battery_task, return_exceptions=True
         )
 
         # Update runtime if successful
@@ -77,6 +78,10 @@ class BaseInverter(BaseDevice):
         # Update energy if successful
         if not isinstance(energy_data, Exception):
             self.energy = energy_data
+
+        # Update batteries if successful
+        if not isinstance(battery_data, Exception) and battery_data.batteryArray:
+            await self._update_batteries(battery_data.batteryArray)
 
         self._last_refresh = datetime.now()
 
@@ -160,3 +165,30 @@ class BaseInverter(BaseDevice):
         if self.runtime is None:
             return None
         return getattr(self.runtime, "soc", None)
+
+    async def _update_batteries(self, battery_modules: list[Any]) -> None:
+        """Update battery objects from API data.
+
+        Args:
+            battery_modules: List of BatteryModule objects from API
+        """
+        from ..battery import Battery
+
+        # Create Battery objects for each module
+        # Use batteryKey to match existing batteries or create new ones
+        battery_map = {b.battery_key: b for b in self.batteries}
+        updated_batteries = []
+
+        for module in battery_modules:
+            battery_key = module.batteryKey
+
+            # Reuse existing Battery object or create new one
+            if battery_key in battery_map:
+                battery = battery_map[battery_key]
+                battery.data = module  # Update data
+            else:
+                battery = Battery(client=self._client, battery_data=module)
+
+            updated_batteries.append(battery)
+
+        self.batteries = updated_batteries
