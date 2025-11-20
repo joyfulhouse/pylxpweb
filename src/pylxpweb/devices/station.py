@@ -335,6 +335,7 @@ class Station(BaseDevice):
         4. Discovers MID devices and assigns to parallel groups
         """
         from .inverters.generic import GenericInverter
+        from .mid_device import MIDDevice
         from .parallel_group import ParallelGroup
 
         try:
@@ -411,12 +412,30 @@ class Station(BaseDevice):
                     if not serial_num:
                         continue
 
-                    # Skip GridBOSS/MID devices (deviceType 9) - they're not inverters
-                    # TODO: Create MIDDevice class in future and assign to parallel group
+                    # Get parallel group name
+                    parallel_group_name = device_data.parallelGroup
+
+                    # Handle GridBOSS/MID devices (deviceType 9)
                     if device_type == 9:
-                        _LOGGER.debug(
-                            "Skipping GridBOSS/MID device %s - not an inverter", serial_num
+                        mid_device = MIDDevice(
+                            client=self._client, serial_number=serial_num, model=model_text
                         )
+
+                        # Assign MID device to parallel group
+                        if parallel_group_name:
+                            for group in self.parallel_groups:
+                                if group.name == parallel_group_name:
+                                    group.mid_device = mid_device
+                                    _LOGGER.debug(
+                                        "Assigned MID device %s to parallel group '%s'",
+                                        serial_num,
+                                        parallel_group_name,
+                                    )
+                                    break
+                        else:
+                            _LOGGER.warning(
+                                "MID device %s has no parallel group assignment", serial_num
+                            )
                         continue
 
                     # Create inverter object
@@ -424,9 +443,7 @@ class Station(BaseDevice):
                         client=self._client, serial_number=serial_num, model=model_text
                     )
 
-                    # Assign to parallel group or standalone based on group membership
-                    parallel_group_name = device_data.parallelGroup
-
+                    # Assign inverter to parallel group or standalone
                     if parallel_group_name:
                         # Find matching parallel group
                         group_found = False
@@ -453,8 +470,6 @@ class Station(BaseDevice):
                         # Standalone inverter
                         self.standalone_inverters.append(inverter)
                         _LOGGER.debug("Assigned inverter %s as standalone", serial_num)
-
-            # TODO: Phase 3 - Load MID devices and assign to parallel groups
 
         except Exception:
             # If device loading fails, log and continue
