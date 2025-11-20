@@ -1,7 +1,7 @@
 # Gap Analysis: pylxpweb vs Home Assistant EG4 Web Monitor Integration
 
-**Date**: 2025-01-20
-**Analyzed**: pylxpweb 0.2 vs research/eg4_web_monitor HA integration
+**Date**: 2025-01-20 (Updated: 2025-11-20)
+**Analyzed**: pylxpweb 0.2 vs research/eg4_web_monitor HA integration (v2.2.7)
 **Status**: Core library at ~33% completeness for full HA integration support
 
 ---
@@ -10,10 +10,17 @@
 
 The Home Assistant EG4 Web Monitor integration in `research/eg4_web_monitor/` is a mature, production-ready custom component with 250+ entities across 7 platforms. Our pylxpweb library has successfully implemented the core API methods and device hierarchy but requires additional convenience methods, station configuration support, and enhanced caching to fully support a Home Assistant integration.
 
+**Recent Updates** (v2.2.6-v2.2.7, November 2025):
+- ✅ Battery Charge/Discharge Current Control (HOLD_LEAD_ACID_CHARGE_RATE / DISCHARGE_RATE)
+- ✅ Advanced power management for throttling prevention
+- ✅ Comprehensive documentation with automation examples
+- ✅ EntityCategory.CONFIG support for configuration entities
+
 **Key Findings**:
 - ✅ All critical API endpoints implemented
 - ✅ Device hierarchy working (Station → ParallelGroup → Inverters → Batteries)
 - ✅ Control operations functional (via HybridInverter)
+- ✅ Battery charge/discharge current control (NEW in v2.2.6)
 - ⚠️ Missing convenience wrapper methods (can use generic methods)
 - ⚠️ Missing station configuration methods (DST, plant settings)
 - ⚠️ Cache management needs enhancement (device-specific invalidation)
@@ -30,7 +37,7 @@ The Home Assistant EG4 Web Monitor integration in `research/eg4_web_monitor/` is
 |----------|-------------|----------|
 | **Sensor** | 231+ | Power, voltage, energy, SOC, temperature, status codes |
 | **Switch** | 7 | Quick charge, EPS, working modes, DST |
-| **Number** | 7 | SOC limits, AC charge power, PV charge power |
+| **Number** | 9 | SOC limits, AC charge power, PV charge power, battery charge/discharge current |
 | **Select** | 1 | Operating mode (Normal/Standby) |
 | **Button** | 3 | Device refresh, battery refresh, station refresh |
 
@@ -146,12 +153,63 @@ get_cache_stats()                     # Cache hit/miss statistics
 | **AC Charge SOC Limit** | Number | HybridInverter.`set_ac_charge(soc_limit=val)` | ✅ Implemented |
 | **On-Grid SOC Cut-Off** | Number | BaseInverter.`set_battery_soc_limits(on_grid=val)` | ✅ Implemented |
 | **Off-Grid SOC Cut-Off** | Number | BaseInverter.`set_battery_soc_limits(off_grid=val)` | ✅ Implemented |
+| **Battery Charge Current** | Number | `write_parameter(..., HOLD_LEAD_ACID_CHARGE_RATE, val)` | ✅ Can implement |
+| **Battery Discharge Current** | Number | `write_parameter(..., HOLD_LEAD_ACID_DISCHARGE_RATE, val)` | ✅ Can implement |
 | **DST Configuration** | Switch | Not implemented | ❌ Missing |
 | **Microgrid Mode** | Switch | `control_function(..., "FUNC_MICROGRID_MODE", bool)` | ⚠️ Generic method |
 | **Battery Lock Mode** | Switch | `control_function(..., "FUNC_BAT_LOCK_MODE", bool)` | ⚠️ Generic method |
 | **Power Limit Mode** | Switch | `control_function(..., "FUNC_POWER_LIMIT_MODE", bool)` | ⚠️ Generic method |
 
 **Summary**: All controls are *technically* possible with pylxpweb's current methods, but HA provides more convenient wrapper methods.
+
+### New Battery Charge/Discharge Control (v2.2.6+)
+
+The EG4 Web Monitor integration added comprehensive battery charge/discharge current control in version 2.2.6 (November 2025). This enables advanced power management scenarios:
+
+**Battery Charge Current Control**:
+- Parameter: `HOLD_LEAD_ACID_CHARGE_RATE`
+- Range: 0-250 Amperes (A)
+- Purpose: Control maximum current to charge batteries
+- Use Cases:
+  - Prevent inverter throttling during high solar production
+  - Maximize grid export during peak rate periods
+  - Manage battery health with gentle charging
+  - Time-of-use rate optimization
+
+**Battery Discharge Current Control**:
+- Parameter: `HOLD_LEAD_ACID_DISCHARGE_RATE`
+- Range: 0-250 Amperes (A)
+- Purpose: Control maximum current to discharge from batteries
+- Use Cases:
+  - Preserve battery capacity during grid outages
+  - Extend battery lifespan with conservative discharge
+  - Manage peak load scenarios
+  - Emergency power management
+
+**Implementation Pattern**:
+```python
+# Write parameter via API
+response = await client.api.write_parameter(
+    inverter_sn=serial,
+    hold_param="HOLD_LEAD_ACID_CHARGE_RATE",
+    value_text=str(80),  # 80A = ~4kW at 48V nominal
+)
+
+# Response format
+{
+    "success": True/False,
+    "message": "Error message if failed"
+}
+```
+
+**Key Features**:
+- Integer values only (0-250 A)
+- Real-time parameter synchronization across all inverters
+- EntityCategory.CONFIG for configuration-type entities
+- Comprehensive validation and error handling
+- Integration with parameter refresh system
+
+**Documentation Reference**: `research/eg4_web_monitor/docs/BATTERY_CURRENT_CONTROL.md`
 
 ---
 

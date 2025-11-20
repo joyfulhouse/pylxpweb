@@ -569,3 +569,162 @@ class ControlEndpoints(BaseEndpoint):
             combined.update(range3.parameters)
 
         return combined
+
+    # ============================================================================
+    # Battery Current Control (Added in v0.3)
+    # ============================================================================
+
+    async def set_battery_charge_current(
+        self,
+        inverter_sn: str,
+        amperes: int,
+        *,
+        validate_battery_limits: bool = True,
+    ) -> SuccessResponse:
+        """Set battery charge current limit.
+
+        Controls the maximum current allowed to charge batteries.
+
+        Common use cases:
+        - Prevent inverter throttling during high solar production
+        - Time-of-use optimization (reduce charge during peak rates)
+        - Battery health management (gentle charging)
+        - Weather-based automation (reduce on sunny days, maximize on cloudy)
+
+        Power Calculation (48V nominal system):
+        - 50A = ~2.4kW
+        - 100A = ~4.8kW
+        - 150A = ~7.2kW
+        - 200A = ~9.6kW
+        - 250A = ~12kW
+
+        Args:
+            inverter_sn: Inverter serial number
+            amperes: Charge current limit (0-250 A)
+            validate_battery_limits: Warn if value exceeds typical battery limits
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If amperes not in valid range (0-250 A)
+
+        Warning:
+            CRITICAL: Never exceed your battery's maximum charge current rating.
+            Check battery manufacturer specifications before setting high values.
+            Monitor battery temperature during high current operations.
+
+        Example:
+            >>> # Prevent throttling on sunny days (limit to ~4kW charge at 48V)
+            >>> await client.control.set_battery_charge_current("1234567890", 80)
+            SuccessResponse(success=True)
+
+            >>> # Maximum charge on cloudy days
+            >>> await client.control.set_battery_charge_current("1234567890", 200)
+            SuccessResponse(success=True)
+        """
+        import logging
+
+        if not (0 <= amperes <= 250):
+            raise ValueError(f"Battery charge current must be between 0-250 A, got {amperes}")
+
+        if validate_battery_limits and amperes > 200:
+            logging.warning(
+                "Setting battery charge current to %d A. "
+                "Ensure this does not exceed your battery's maximum rating. "
+                "Typical limits: 200A for 10kWh, 150A for 7.5kWh, 100A for 5kWh.",
+                amperes,
+            )
+
+        return await self.write_parameter(inverter_sn, "HOLD_LEAD_ACID_CHARGE_RATE", str(amperes))
+
+    async def set_battery_discharge_current(
+        self,
+        inverter_sn: str,
+        amperes: int,
+        *,
+        validate_battery_limits: bool = True,
+    ) -> SuccessResponse:
+        """Set battery discharge current limit.
+
+        Controls the maximum current allowed to discharge from batteries.
+
+        Common use cases:
+        - Preserve battery capacity during grid outages
+        - Extend battery lifespan (conservative discharge)
+        - Emergency power management
+        - Peak load management
+
+        Args:
+            inverter_sn: Inverter serial number
+            amperes: Discharge current limit (0-250 A)
+            validate_battery_limits: Warn if value exceeds typical battery limits
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If amperes not in valid range (0-250 A)
+
+        Warning:
+            Never exceed your battery's maximum discharge current rating.
+            Check battery manufacturer specifications.
+
+        Example:
+            >>> # Conservative discharge for battery longevity
+            >>> await client.control.set_battery_discharge_current("1234567890", 150)
+            SuccessResponse(success=True)
+
+            >>> # Minimal discharge during grid outage
+            >>> await client.control.set_battery_discharge_current("1234567890", 50)
+            SuccessResponse(success=True)
+        """
+        import logging
+
+        if not (0 <= amperes <= 250):
+            raise ValueError(f"Battery discharge current must be between 0-250 A, got {amperes}")
+
+        if validate_battery_limits and amperes > 200:
+            logging.warning(
+                "Setting battery discharge current to %d A. "
+                "Ensure this does not exceed your battery's maximum rating.",
+                amperes,
+            )
+
+        return await self.write_parameter(
+            inverter_sn, "HOLD_LEAD_ACID_DISCHARGE_RATE", str(amperes)
+        )
+
+    async def get_battery_charge_current(self, inverter_sn: str) -> int:
+        """Get current battery charge current limit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            int: Current charge current limit in Amperes (0-250 A)
+
+        Example:
+            >>> current = await client.control.get_battery_charge_current("1234567890")
+            >>> print(f"Charge limit: {current} A (~{current * 0.048:.1f} kW at 48V)")
+            Charge limit: 200 A (~9.6 kW at 48V)
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        return int(params.get("HOLD_LEAD_ACID_CHARGE_RATE", 200))
+
+    async def get_battery_discharge_current(self, inverter_sn: str) -> int:
+        """Get current battery discharge current limit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            int: Current discharge current limit in Amperes (0-250 A)
+
+        Example:
+            >>> current = await client.control.get_battery_discharge_current("1234567890")
+            >>> print(f"Discharge limit: {current} A")
+            Discharge limit: 200 A
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        return int(params.get("HOLD_LEAD_ACID_DISCHARGE_RATE", 200))
