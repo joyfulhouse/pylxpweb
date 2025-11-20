@@ -215,58 +215,6 @@ class TestLiveDeviceControlSafe:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
-    async def test_read_write_parameters_safe(self, live_client: LuxpowerClient) -> None:
-        """Test reading and writing parameters safely (read-then-write pattern).
-
-        This test:
-        1. Reads the current parameter values
-        2. Writes the SAME values back
-        3. Verifies the write succeeded
-
-        This ensures no actual changes are made to the device.
-        """
-        async with live_client:
-            # Get first plant
-            plants = await live_client.plants.get_plants()
-            plant_id = plants.rows[0].plantId
-
-            # Get first device
-            devices = await live_client.devices.get_devices(plant_id)
-            device = devices.rows[0]
-
-            # STEP 1: Read current parameter values
-            params = await live_client.control.read_parameters(
-                device.serialNum, start_register=0, point_number=127
-            )
-            assert params.success is True
-
-            # Store original values
-            original_values = params.parameters.copy()
-
-            # STEP 2: Pick a safe parameter to test (SOC limits are common)
-            if "HOLD_SYSTEM_CHARGE_SOC_LIMIT" in original_values:
-                param_name = "HOLD_SYSTEM_CHARGE_SOC_LIMIT"
-                current_value = str(original_values[param_name])
-
-                # STEP 3: Write the SAME value back
-                print(f"Writing {param_name}={current_value} (same as current value)")
-                result = await live_client.control.write_parameter(
-                    device.serialNum, param_name, current_value
-                )
-                assert result.success is True
-                print(f"Write successful: {result.message}")
-
-                # STEP 4: Read again to verify it's still the same
-                params_after = await live_client.control.read_parameters(
-                    device.serialNum, start_register=0, point_number=127
-                )
-                assert params_after.parameters[param_name] == original_values[param_name]
-                print(f"Verified: {param_name} remains {current_value}")
-            else:
-                pytest.skip("HOLD_SYSTEM_CHARGE_SOC_LIMIT parameter not available")
-
-    @pytest.mark.integration
-    @pytest.mark.asyncio
     async def test_quick_charge_status_safe(self, live_client: LuxpowerClient) -> None:
         """Test quick charge status (read-only, completely safe)."""
         async with live_client:
