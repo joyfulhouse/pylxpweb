@@ -338,38 +338,65 @@ class Station(BaseDevice):
         from .parallel_group import ParallelGroup
 
         try:
-            import asyncio
+            import logging
 
-            # Fetch parallel group details and device list concurrently
-            group_data, devices_response = await asyncio.gather(
-                self._client.api.devices.get_parallel_group_details(str(self.id)),
-                self._client.api.devices.get_devices(self.id),  # Expects int
-                return_exceptions=True,
-            )
+            _LOGGER = logging.getLogger(__name__)
 
-            # Create parallel groups if they exist (handle potential exception)
-            if isinstance(group_data, Exception):
-                # Log but don't raise - parallel groups may not be available
-                import logging
+            # Step 1: Get device list first
+            devices_response = await self._client.api.devices.get_devices(self.id)
 
-                _LOGGER = logging.getLogger(__name__)
-                error_msg = str(group_data)
-                if "userSnDismatch" in error_msg:
-                    _LOGGER.debug(
-                        "Parallel group details not available (userSnDismatch) - "
-                        "this is normal for accounts without parallel inverter configuration"
+            # Step 2: Find GridBOSS/MID device (deviceType == 9) to query parallel groups
+            gridboss_serial = None
+            if hasattr(devices_response, "rows") and devices_response.rows:
+                for device in devices_response.rows:
+                    if device.deviceType == 9:  # GridBOSS/MID device
+                        gridboss_serial = device.serialNum
+                        _LOGGER.debug("Found GridBOSS device: %s", gridboss_serial)
+                        break
+
+            # Step 3: Query parallel group details if GridBOSS exists
+            group_data = None
+            if gridboss_serial:
+                try:
+                    group_data = await self._client.api.devices.get_parallel_group_details(
+                        gridboss_serial
                     )
-                else:
-                    _LOGGER.debug("Could not load parallel group details: %s", error_msg)
-            elif group_data and isinstance(group_data, dict):
-                groups_list = group_data.get("groups", [])
-                for group_info in groups_list:
-                    group = await ParallelGroup.from_api_data(
-                        client=self._client, station=self, group_data=group_info
+                except Exception as e:
+                    _LOGGER.debug("Could not load parallel group details: %s", str(e))
+                    group_data = None
+
+            # Step 4: Create parallel groups from devices with parallelGroup field
+            if group_data and hasattr(group_data, "devices") and group_data.devices:
+                # Group devices by their parallelGroup field
+                groups_by_name: dict[str, list] = {}
+                for device in group_data.devices:
+                    # Get parallel group name from device list (not from group_data)
+                    device_info = next(
+                        (d for d in devices_response.rows if d.serialNum == device.serialNum),
+                        None,
+                    )
+                    if device_info and device_info.parallelGroup:
+                        group_name = device_info.parallelGroup
+                        if group_name not in groups_by_name:
+                            groups_by_name[group_name] = []
+                        groups_by_name[group_name].append(device)
+
+                # Create ParallelGroup objects
+                for group_name, devices in groups_by_name.items():
+                    # Use first device serial as reference
+                    first_serial = devices[0].serialNum if devices else ""
+                    group = ParallelGroup(
+                        client=self._client,
+                        station=self,
+                        name=group_name,
+                        first_device_serial=first_serial,
                     )
                     self.parallel_groups.append(group)
+                    _LOGGER.debug(
+                        "Created parallel group '%s' with %d devices", group_name, len(devices)
+                    )
 
-            # Process devices response (handle potential exception)
+            # Step 5: Process devices and assign to groups or standalone
             if (
                 not isinstance(devices_response, BaseException)
                 and hasattr(devices_response, "rows")
@@ -377,10 +404,19 @@ class Station(BaseDevice):
             ):
                 for device_data in devices_response.rows:
                     serial_num = device_data.serialNum
+                    device_type = device_data.deviceType
                     # Use deviceTypeText as the model name (e.g., "18KPV", "Grid Boss")
                     model_text = getattr(device_data, "deviceTypeText", "Unknown")
 
                     if not serial_num:
+                        continue
+
+                    # Skip GridBOSS/MID devices (deviceType 9) - they're not inverters
+                    # TODO: Create MIDDevice class in future and assign to parallel group
+                    if device_type == 9:
+                        _LOGGER.debug(
+                            "Skipping GridBOSS/MID device %s - not an inverter", serial_num
+                        )
                         continue
 
                     # Create inverter object
@@ -398,15 +434,25 @@ class Station(BaseDevice):
                             if group.name == parallel_group_name:
                                 group.inverters.append(inverter)
                                 group_found = True
+                                _LOGGER.debug(
+                                    "Assigned inverter %s to parallel group '%s'",
+                                    serial_num,
+                                    parallel_group_name,
+                                )
                                 break
 
-                        # If parallel group not found (e.g., API error loading groups),
-                        # treat as standalone
+                        # If parallel group not found, treat as standalone
                         if not group_found:
                             self.standalone_inverters.append(inverter)
+                            _LOGGER.debug(
+                                "Parallel group '%s' not found for %s - treating as standalone",
+                                parallel_group_name,
+                                serial_num,
+                            )
                     else:
                         # Standalone inverter
                         self.standalone_inverters.append(inverter)
+                        _LOGGER.debug("Assigned inverter %s as standalone", serial_num)
 
             # TODO: Phase 3 - Load MID devices and assign to parallel groups
 
