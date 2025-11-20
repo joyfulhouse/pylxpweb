@@ -19,20 +19,26 @@ To run these tests:
 from __future__ import annotations
 
 import os
-
-# Import redaction helper
 import sys
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
+from dotenv import load_dotenv
 
+# Load .env file before importing anything else
+env_path = Path(__file__).parent.parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+
+# Import after loading .env
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from conftest import redact_sensitive
 
-from pylxpweb import LuxpowerClient
+from conftest import redact_sensitive  # noqa: E402
 
-# Load credentials from environment
+from pylxpweb import LuxpowerClient  # noqa: E402
+
+# Load credentials from environment (after .env is loaded)
 LUXPOWER_USERNAME = os.getenv("LUXPOWER_USERNAME")
 LUXPOWER_PASSWORD = os.getenv("LUXPOWER_PASSWORD")
 LUXPOWER_BASE_URL = os.getenv("LUXPOWER_BASE_URL", "https://monitor.eg4electronics.com")
