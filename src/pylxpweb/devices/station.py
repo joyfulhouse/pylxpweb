@@ -333,10 +333,8 @@ class Station(BaseDevice):
         2. Creates ParallelGroup objects
         3. Discovers inverters and assigns to groups or standalone list
         4. Discovers MID devices and assigns to parallel groups
-
-        Note: Actual device objects will be created in Phase 2 when
-        inverter classes are implemented.
         """
+        from .inverters.generic import GenericInverter
         from .parallel_group import ParallelGroup
 
         try:
@@ -352,12 +350,39 @@ class Station(BaseDevice):
                     )
                     self.parallel_groups.append(group)
 
-            # TODO: Phase 2 - Load inverters and assign to groups
-            # TODO: Phase 2 - Load standalone inverters
-            # TODO: Phase 3 - Load MID devices
+            # Get all devices for this station
+            devices_response = await self._client.api.devices.get_devices(str(self.id))
+
+            if devices_response and devices_response.get("rows"):
+                for device_data in devices_response["rows"]:
+                    serial_num = device_data.get("serialNum")
+                    model_text = device_data.get("model", "Unknown")
+
+                    if not serial_num:
+                        continue
+
+                    # Create inverter object
+                    inverter = GenericInverter(
+                        client=self._client, serial_number=serial_num, model=model_text
+                    )
+
+                    # Assign to parallel group or standalone based on group membership
+                    parallel_group_name = device_data.get("parallelGroup")
+
+                    if parallel_group_name:
+                        # Find matching parallel group
+                        for group in self.parallel_groups:
+                            if group.name == parallel_group_name:
+                                group.inverters.append(inverter)
+                                break
+                    else:
+                        # Standalone inverter
+                        self.standalone_inverters.append(inverter)
+
+            # TODO: Phase 3 - Load MID devices and assign to parallel groups
 
         except Exception:
-            # If parallel group loading fails, log and continue
+            # If device loading fails, log and continue
             # Station can still function with empty device lists
             import logging
 

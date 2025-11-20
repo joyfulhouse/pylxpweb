@@ -57,9 +57,7 @@ def sample_energy() -> EnergyInfo:
 class TestGenericInverterInitialization:
     """Test GenericInverter initialization."""
 
-    def test_generic_inverter_initialization(
-        self, mock_client: LuxpowerClient
-    ) -> None:
+    def test_generic_inverter_initialization(self, mock_client: LuxpowerClient) -> None:
         """Test GenericInverter can be instantiated."""
         inverter = GenericInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
@@ -155,13 +153,9 @@ class TestGenericInverterModels:
         "model",
         ["FlexBOSS21", "FlexBOSS18", "18KPV", "12KPV", "XP"],
     )
-    def test_supports_all_standard_models(
-        self, mock_client: LuxpowerClient, model: str
-    ) -> None:
+    def test_supports_all_standard_models(self, mock_client: LuxpowerClient, model: str) -> None:
         """Test GenericInverter supports all standard models."""
-        inverter = GenericInverter(
-            client=mock_client, serial_number="1234567890", model=model
-        )
+        inverter = GenericInverter(client=mock_client, serial_number="1234567890", model=model)
 
         assert inverter.model == model
         assert inverter.to_entities() == []  # No data yet
