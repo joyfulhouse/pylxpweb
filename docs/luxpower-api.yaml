@@ -369,8 +369,18 @@ paths:
     post:
       tags:
         - Device Discovery
-      summary: Get parallel group device hierarchy
-      description: Retrieve detailed parallel group structure including GridBOSS and inverters
+      summary: Get parallel group device hierarchy for a specific device
+      description: |
+        Retrieve detailed parallel group structure including GridBOSS and inverters.
+
+        **Important**: This endpoint requires a device serial number (not plantId).
+        Use the GridBOSS/MID device serial or any inverter serial in the parallel group.
+
+        **Response includes**:
+        - Flat array of devices in the parallel group
+        - GridBOSS serial number (if present)
+        - Device roles (Primary, Midbox, etc.)
+        - Optional runtime metrics for inverters
       operationId: getParallelGroupDetails
       requestBody:
         required: true
@@ -379,12 +389,12 @@ paths:
             schema:
               type: object
               required:
-                - plantId
+                - serialNum
               properties:
-                plantId:
-                  type: integer
-                  description: Plant/station ID
-                  example: 12345
+                serialNum:
+                  type: string
+                  description: Serial number of GridBOSS or any device in the parallel group
+                  example: "4524850115"
       responses:
         '200':
           description: Parallel group details
