@@ -63,24 +63,24 @@ class BaseInverter(BaseDevice):
         import asyncio
 
         # Fetch all data concurrently
-        runtime_task = self._client.api.inverters.get_inverter_runtime(self.serial_number)
-        energy_task = self._client.api.inverters.get_inverter_energy(self.serial_number)
-        battery_task = self._client.api.batteries.get_battery_info(self.serial_number)
+        runtime_task = self._client.api.devices.get_inverter_runtime(self.serial_number)
+        energy_task = self._client.api.devices.get_inverter_energy(self.serial_number)
+        battery_task = self._client.api.devices.get_battery_info(self.serial_number)
 
         runtime_data, energy_data, battery_data = await asyncio.gather(
             runtime_task, energy_task, battery_task, return_exceptions=True
         )
 
         # Update runtime if successful
-        if not isinstance(runtime_data, Exception):
+        if not isinstance(runtime_data, BaseException):
             self.runtime = runtime_data
 
         # Update energy if successful
-        if not isinstance(energy_data, Exception):
+        if not isinstance(energy_data, BaseException):
             self.energy = energy_data
 
         # Update batteries if successful
-        if not isinstance(battery_data, Exception) and battery_data.batteryArray:
+        if not isinstance(battery_data, BaseException) and battery_data.batteryArray:
             await self._update_batteries(battery_data.batteryArray)
 
         self._last_refresh = datetime.now()

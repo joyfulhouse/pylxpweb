@@ -20,7 +20,7 @@ from .exceptions import (
     LuxpowerError,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = [
     "LuxpowerClient",
     "LuxpowerError",

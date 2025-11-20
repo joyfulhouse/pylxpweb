@@ -126,17 +126,17 @@ class TestInverterRefresh:
         )
 
         # Mock API responses
-        mock_client.api.inverters.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
-        mock_client.api.inverters.get_inverter_energy = AsyncMock(return_value=sample_energy)
-        mock_client.api.batteries.get_battery_info = AsyncMock(return_value=sample_battery_info)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
+        mock_client.api.devices.get_inverter_energy = AsyncMock(return_value=sample_energy)
+        mock_client.api.devices.get_battery_info = AsyncMock(return_value=sample_battery_info)
 
         # Refresh
         await inverter.refresh()
 
         # Verify API calls
-        mock_client.api.inverters.get_inverter_runtime.assert_called_once_with("1234567890")
-        mock_client.api.inverters.get_inverter_energy.assert_called_once_with("1234567890")
-        mock_client.api.batteries.get_battery_info.assert_called_once_with("1234567890")
+        mock_client.api.devices.get_inverter_runtime.assert_called_once_with("1234567890")
+        mock_client.api.devices.get_inverter_energy.assert_called_once_with("1234567890")
+        mock_client.api.devices.get_battery_info.assert_called_once_with("1234567890")
 
         # Verify data stored
         assert inverter.runtime is sample_runtime
@@ -154,11 +154,9 @@ class TestInverterRefresh:
         )
 
         # Mock runtime error, energy and battery success
-        mock_client.api.inverters.get_inverter_runtime = AsyncMock(
-            side_effect=Exception("API Error")
-        )
-        mock_client.api.inverters.get_inverter_energy = AsyncMock(return_value=sample_energy)
-        mock_client.api.batteries.get_battery_info = AsyncMock(return_value=sample_battery_info)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock(side_effect=Exception("API Error"))
+        mock_client.api.devices.get_inverter_energy = AsyncMock(return_value=sample_energy)
+        mock_client.api.devices.get_battery_info = AsyncMock(return_value=sample_battery_info)
 
         await inverter.refresh()
 
@@ -177,11 +175,9 @@ class TestInverterRefresh:
         )
 
         # Mock runtime success, energy error, battery success
-        mock_client.api.inverters.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
-        mock_client.api.inverters.get_inverter_energy = AsyncMock(
-            side_effect=Exception("API Error")
-        )
-        mock_client.api.batteries.get_battery_info = AsyncMock(return_value=sample_battery_info)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
+        mock_client.api.devices.get_inverter_energy = AsyncMock(side_effect=Exception("API Error"))
+        mock_client.api.devices.get_battery_info = AsyncMock(return_value=sample_battery_info)
 
         await inverter.refresh()
 

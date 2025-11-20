@@ -343,7 +343,7 @@ class Station(BaseDevice):
             # Fetch parallel group details and device list concurrently
             group_data, devices_response = await asyncio.gather(
                 self._client.api.devices.get_parallel_group_details(str(self.id)),
-                self._client.api.devices.get_devices(str(self.id)),
+                self._client.api.devices.get_devices(self.id),  # Expects int
                 return_exceptions=True,
             )
 
@@ -361,10 +361,11 @@ class Station(BaseDevice):
                     self.parallel_groups.append(group)
 
             # Process devices response (handle potential exception)
-            if isinstance(devices_response, Exception):
-                devices_response = None
-
-            if devices_response and hasattr(devices_response, "rows") and devices_response.rows:
+            if (
+                not isinstance(devices_response, BaseException)
+                and hasattr(devices_response, "rows")
+                and devices_response.rows
+            ):
                 for device_data in devices_response.rows:
                     serial_num = device_data.serialNum
                     model_text = getattr(device_data, "model", "Unknown")
