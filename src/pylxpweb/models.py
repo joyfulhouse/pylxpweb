@@ -533,6 +533,72 @@ class BatteryInfo(BaseModel):
     batteryArray: list[BatteryModule]
 
 
+class BatteryListItem(BaseModel):
+    """Simplified battery item from getBatteryInfoForSet endpoint."""
+
+    batteryKey: str
+    batterySn: str
+    batIndex: int
+    lost: bool
+
+
+class BatteryListResponse(BaseModel):
+    """Response from getBatteryInfoForSet endpoint.
+
+    This endpoint returns a simplified list of batteries without detailed metrics.
+    Use get_battery_info() for full battery metrics.
+    """
+
+    success: bool
+    serialNum: str
+    totalNumber: int
+    batteryArray: list[BatteryListItem]
+
+
+class InverterDetail(BaseModel):
+    """Inverter detail information."""
+
+    deviceText: str
+    fwCode: str
+    fwCodeText: str
+
+
+class InverterInfo(BaseModel):
+    """Detailed inverter configuration and device information.
+
+    This endpoint returns static device configuration details,
+    not runtime data. Use get_inverter_runtime() for real-time metrics.
+    """
+
+    success: bool
+    lost: bool
+    datalogSn: str
+    serialNum: str
+    deviceType: int
+    phase: int
+    dtc: int
+    voltClass: int
+    fwVersion: int
+    hardwareVersion: int
+    subDeviceType: int
+    allowExport2Grid: bool
+    powerRating: int
+    machineType: int
+    deviceTypeText: str
+    inverterDetail: InverterDetail
+    deviceInfo: str
+    address: int
+    powerRatingText: str
+    batteryType: BatteryType
+    status: int
+    statusText: str
+
+    @field_serializer("serialNum", "datalogSn")
+    def serialize_serial(self, value: str) -> str:
+        """Obfuscate serial numbers in serialized output."""
+        return _obfuscate_serial(value)
+
+
 # GridBOSS/MID Device Models
 
 

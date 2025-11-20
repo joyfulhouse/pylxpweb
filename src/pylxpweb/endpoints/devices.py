@@ -15,7 +15,9 @@ from typing import TYPE_CHECKING
 from pylxpweb.endpoints.base import BaseEndpoint
 from pylxpweb.models import (
     BatteryInfo,
+    BatteryListResponse,
     EnergyInfo,
+    InverterInfo,
     InverterOverviewResponse,
     InverterRuntime,
     MidboxRuntime,
@@ -37,26 +39,28 @@ class DeviceEndpoints(BaseEndpoint):
         """
         super().__init__(client)
 
-    async def get_parallel_group_details(self, plant_id: int) -> ParallelGroupDetailsResponse:
-        """Get parallel group device hierarchy for a plant.
+    async def get_parallel_group_details(self, serial_num: str) -> ParallelGroupDetailsResponse:
+        """Get parallel group device hierarchy for a specific device.
+
+        Note: This endpoint requires a device serial number, not a plant ID.
+        Use the GridBOSS/MID device serial number for parallel group details.
 
         Args:
-            plant_id: Plant/station ID
+            serial_num: Serial number of GridBOSS or any device in the parallel group
 
         Returns:
             ParallelGroupDetailsResponse: Parallel group structure
 
         Example:
-            groups = await client.devices.get_parallel_group_details(12345)
-            for group in groups.rows:
-                print(f"Group ID: {group.groupId}")
-                print(f"Inverters: {len(group.inverters)}")
+            groups = await client.devices.get_parallel_group_details("4524850115")
+            for group in groups.parallelGroups:
+                print(f"Group: {group.parallelGroup}")
         """
         await self.client._ensure_authenticated()
 
-        data = {"plantId": plant_id}
+        data = {"serialNum": serial_num}
 
-        cache_key = self._get_cache_key("parallel_groups", plantId=plant_id)
+        cache_key = self._get_cache_key("parallel_groups", serialNum=serial_num)
         response = await self.client._request(
             "POST",
             "/WManage/api/inverterOverview/getParallelGroupDetails",
@@ -99,6 +103,39 @@ class DeviceEndpoints(BaseEndpoint):
             cache_endpoint="device_discovery",
         )
         return InverterOverviewResponse.model_validate(response)
+
+    async def get_inverter_info(self, serial_num: str) -> InverterInfo:
+        """Get detailed inverter configuration and device information.
+
+        This endpoint returns static device configuration, firmware versions,
+        and hardware details. For real-time operational data, use get_inverter_runtime().
+
+        Args:
+            serial_num: Inverter serial number
+
+        Returns:
+            InverterInfo: Detailed device configuration
+
+        Example:
+            info = await client.devices.get_inverter_info("1234567890")
+            print(f"Device: {info.deviceTypeText}")
+            print(f"Firmware: {info.inverterDetail.fwCode}")
+            print(f"Power Rating: {info.powerRatingText}")
+            print(f"Battery Type: {info.batteryType}")
+        """
+        await self.client._ensure_authenticated()
+
+        data = {"serialNum": serial_num}
+
+        cache_key = self._get_cache_key("inverter_info", serialNum=serial_num)
+        response = await self.client._request(
+            "POST",
+            "/WManage/api/inverter/getInverterInfo",
+            data=data,
+            cache_key=cache_key,
+            cache_endpoint="device_discovery",  # Static data, cache like device discovery
+        )
+        return InverterInfo.model_validate(response)
 
     async def get_inverter_runtime(self, serial_num: str) -> InverterRuntime:
         """Get real-time runtime data for an inverter.
@@ -223,6 +260,39 @@ class DeviceEndpoints(BaseEndpoint):
             cache_endpoint="battery_info",
         )
         return BatteryInfo.model_validate(response)
+
+    async def get_battery_list(self, serial_num: str) -> BatteryListResponse:
+        """Get simplified battery list for an inverter.
+
+        This endpoint returns only battery identification and status without detailed metrics.
+        Use get_battery_info() for full battery metrics including voltage, current, SOC, etc.
+
+        Args:
+            serial_num: Inverter serial number
+
+        Returns:
+            BatteryListResponse: Simplified battery list with keys and status
+
+        Example:
+            batteries = await client.devices.get_battery_list("1234567890")
+            print(f"Total batteries: {batteries.totalNumber}")
+            for battery in batteries.batteryArray:
+                status = "Online" if not battery.lost else "Offline"
+                print(f"  Battery {battery.batIndex}: {battery.batterySn} ({status})")
+        """
+        await self.client._ensure_authenticated()
+
+        data = {"serialNum": serial_num}
+
+        cache_key = self._get_cache_key("battery_list", serialNum=serial_num)
+        response = await self.client._request(
+            "POST",
+            "/WManage/api/battery/getBatteryInfoForSet",
+            data=data,
+            cache_key=cache_key,
+            cache_endpoint="battery_info",
+        )
+        return BatteryListResponse.model_validate(response)
 
     async def get_midbox_runtime(self, serial_num: str) -> MidboxRuntime:
         """Get GridBOSS/MID device runtime data.

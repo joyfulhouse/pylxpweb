@@ -125,8 +125,16 @@ class TestLiveDeviceDiscovery:
             plants = await live_client.plants.get_plants()
             plant_id = plants.rows[0].plantId
 
+            # Get devices to find a serial number
+            devices = await live_client.devices.get_devices(plant_id)
+            if len(devices.rows) == 0:
+                pytest.skip("No devices found to test parallel groups")
+
+            # Use first device serial number
+            serial_num = devices.rows[0].serialNum
+
             # Get parallel groups
-            groups = await live_client.devices.get_parallel_group_details(plant_id)
+            groups = await live_client.devices.get_parallel_group_details(serial_num)
             assert groups.success is True
 
             if len(groups.parallelGroups) > 0:
