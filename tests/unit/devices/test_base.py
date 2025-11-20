@@ -7,7 +7,7 @@ functionality for all device types (inverters, batteries, MID devices).
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 

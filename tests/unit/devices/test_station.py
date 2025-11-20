@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from pylxpweb import LuxpowerClient
-from pylxpweb.devices.models import DeviceInfo, Entity
+from pylxpweb.devices.models import DeviceInfo
 from pylxpweb.devices.station import Location, Station
 
 
@@ -177,9 +177,7 @@ class TestAllBatteriesProperty:
 class TestStationHAIntegration:
     """Test Home Assistant integration methods."""
 
-    def test_to_device_info(
-        self, mock_client: LuxpowerClient, sample_location: Location
-    ) -> None:
+    def test_to_device_info(self, mock_client: LuxpowerClient, sample_location: Location) -> None:
         """Test Station device info generation."""
         station = Station(
             client=mock_client,
@@ -198,9 +196,7 @@ class TestStationHAIntegration:
         assert device_info.model == "Solar Station"
         assert ("pylxpweb", "station_12345") in device_info.identifiers
 
-    def test_to_entities(
-        self, mock_client: LuxpowerClient, sample_location: Location
-    ) -> None:
+    def test_to_entities(self, mock_client: LuxpowerClient, sample_location: Location) -> None:
         """Test Station entity generation."""
         station = Station(
             client=mock_client,
@@ -221,3 +217,177 @@ class TestStationHAIntegration:
         entity_ids = [e.unique_id for e in entities]
         assert any("total_production_today" in uid for uid in entity_ids)
         assert any("total_power" in uid for uid in entity_ids)
+
+
+class TestStationFactoryMethods:
+    """Test Station factory methods for loading from API."""
+
+    @pytest.mark.asyncio
+    async def test_load_station(self, mock_client: LuxpowerClient) -> None:
+        """Test loading a station from API."""
+        # Mock API responses
+        plant_data = {
+            "plantId": 12345,
+            "name": "Test Station",
+            "address": "123 Solar St",
+            "lat": 40.7128,
+            "lng": -74.0060,
+            "country": "USA",
+            "timezone": "America/New_York",
+            "createDate": "2024-01-01T00:00:00Z",
+        }
+
+        # Mock the API calls
+        mock_client.api.plants.get_plant_details = AsyncMock(return_value=plant_data)
+        mock_client.api.devices.get_parallel_group_details = AsyncMock(return_value={"groups": []})
+
+        # Load station
+        station = await Station.load(mock_client, 12345)
+
+        # Verify station was created correctly
+        assert station.id == 12345
+        assert station.name == "Test Station"
+        assert station.location.address == "123 Solar St"
+        assert station.location.latitude == 40.7128
+        assert station.location.longitude == -74.0060
+        assert station.location.country == "USA"
+        assert station.timezone == "America/New_York"
+
+        # Verify API was called
+        mock_client.api.plants.get_plant_details.assert_called_once_with(12345)
+        mock_client.api.devices.get_parallel_group_details.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_load_all_stations(self, mock_client: LuxpowerClient) -> None:
+        """Test loading all stations from API."""
+        from pylxpweb.models import PlantInfo, PlantListResponse
+
+        # Mock plant list response with all required fields
+        plants = [
+            PlantInfo(
+                id=1,
+                plantId=1,
+                name="Station 1",
+                address="Address 1",
+                createDate="2024-01-01",
+                nominalPower=10000,
+                country="USA",
+                currentTimezoneWithMinute=-480,
+                timezone="America/Los_Angeles",
+                daylightSavingTime=True,
+                noticeFault=True,
+                noticeWarn=True,
+                noticeEmail="test@example.com",
+                noticeEmail2="",
+                contactPerson="John Doe",
+                contactPhone="555-1234",
+            ),
+            PlantInfo(
+                id=2,
+                plantId=2,
+                name="Station 2",
+                address="Address 2",
+                createDate="2024-01-01",
+                nominalPower=15000,
+                country="USA",
+                currentTimezoneWithMinute=-480,
+                timezone="America/Los_Angeles",
+                daylightSavingTime=True,
+                noticeFault=True,
+                noticeWarn=True,
+                noticeEmail="test2@example.com",
+                noticeEmail2="",
+                contactPerson="Jane Doe",
+                contactPhone="555-5678",
+            ),
+        ]
+        plants_response = PlantListResponse(rows=plants, total=2)
+
+        # Mock API calls
+        mock_client.api.plants.get_plants = AsyncMock(return_value=plants_response)
+
+        # Mock load for each station
+        async def mock_load(client: LuxpowerClient, plant_id: int) -> Station:
+            location = Location(
+                address=f"Address {plant_id}",
+                latitude=0.0,
+                longitude=0.0,
+                country="USA",
+            )
+            return Station(
+                client=client,
+                plant_id=plant_id,
+                name=f"Station {plant_id}",
+                location=location,
+                timezone="UTC",
+                created_date=datetime(2024, 1, 1),
+            )
+
+        with patch.object(Station, "load", side_effect=mock_load):
+            stations = await Station.load_all(mock_client)
+
+        # Verify all stations loaded
+        assert len(stations) == 2
+        assert stations[0].id == 1
+        assert stations[0].name == "Station 1"
+        assert stations[1].id == 2
+        assert stations[1].name == "Station 2"
+
+    @pytest.mark.asyncio
+    async def test_load_devices_with_parallel_groups(
+        self, mock_client: LuxpowerClient, sample_location: Location
+    ) -> None:
+        """Test _load_devices creates parallel groups."""
+        station = Station(
+            client=mock_client,
+            plant_id=12345,
+            name="Test Station",
+            location=sample_location,
+            timezone="America/New_York",
+            created_date=datetime(2024, 1, 1),
+        )
+
+        # Mock parallel group API response
+        group_data = {
+            "groups": [
+                {"parallelGroup": "A", "parallelFirstDeviceSn": "1111111111"},
+                {"parallelGroup": "B", "parallelFirstDeviceSn": "2222222222"},
+            ]
+        }
+        mock_client.api.devices.get_parallel_group_details = AsyncMock(return_value=group_data)
+
+        # Load devices
+        await station._load_devices()
+
+        # Verify parallel groups created
+        assert len(station.parallel_groups) == 2
+        assert station.parallel_groups[0].name == "A"
+        assert station.parallel_groups[0].first_device_serial == "1111111111"
+        assert station.parallel_groups[1].name == "B"
+        assert station.parallel_groups[1].first_device_serial == "2222222222"
+
+    @pytest.mark.asyncio
+    async def test_load_devices_handles_api_errors(
+        self, mock_client: LuxpowerClient, sample_location: Location
+    ) -> None:
+        """Test _load_devices handles API errors gracefully."""
+        station = Station(
+            client=mock_client,
+            plant_id=12345,
+            name="Test Station",
+            location=sample_location,
+            timezone="America/New_York",
+            created_date=datetime(2024, 1, 1),
+        )
+
+        # Mock API error
+        mock_client.api.devices.get_parallel_group_details = AsyncMock(
+            side_effect=Exception("API Error")
+        )
+
+        # Should not raise, just log warning
+        await station._load_devices()
+
+        # Station should still be usable with empty device lists
+        assert station.parallel_groups == []
+        assert station.standalone_inverters == []

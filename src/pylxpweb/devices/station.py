@@ -123,10 +123,12 @@ class Station(BaseDevice):
         """
         batteries = []
         for inverter in self.all_inverters:
-            if hasattr(inverter, "batteries") and inverter.batteries:
-                # Handle both list and async property
-                if isinstance(inverter.batteries, list):
-                    batteries.extend(inverter.batteries)
+            if (
+                hasattr(inverter, "batteries")
+                and inverter.batteries
+                and isinstance(inverter.batteries, list)
+            ):
+                batteries.extend(inverter.batteries)
         return batteries
 
     async def refresh(self) -> None:
@@ -157,9 +159,12 @@ class Station(BaseDevice):
 
         # Refresh MID devices
         for group in self.parallel_groups:
-            if hasattr(group, "mid_device") and group.mid_device:
-                if hasattr(group.mid_device, "refresh"):
-                    tasks.append(group.mid_device.refresh())
+            if (
+                hasattr(group, "mid_device")
+                and group.mid_device
+                and hasattr(group.mid_device, "refresh")
+            ):
+                tasks.append(group.mid_device.refresh())
 
         # Execute concurrently, ignore exceptions (partial failure OK)
         if tasks:
@@ -178,9 +183,12 @@ class Station(BaseDevice):
 
         for inverter in self.all_inverters:
             # Refresh if needed
-            if hasattr(inverter, "needs_refresh") and inverter.needs_refresh:
-                if hasattr(inverter, "refresh"):
-                    await inverter.refresh()
+            if (
+                hasattr(inverter, "needs_refresh")
+                and inverter.needs_refresh
+                and hasattr(inverter, "refresh")
+            ):
+                await inverter.refresh()
 
             # Sum energy data
             if hasattr(inverter, "energy") and inverter.energy:
@@ -238,3 +246,121 @@ class Station(BaseDevice):
         )
 
         return entities
+
+    @classmethod
+    async def load(cls, client: LuxpowerClient, plant_id: int) -> Station:
+        """Load a station from the API with all devices.
+
+        Args:
+            client: LuxpowerClient instance
+            plant_id: Plant/station ID to load
+
+        Returns:
+            Station instance with device hierarchy loaded
+
+        Example:
+            ```python
+            station = await Station.load(client, plant_id=12345)
+            print(f"Loaded {len(station.all_inverters)} inverters")
+            ```
+        """
+        from datetime import datetime
+
+        # Get plant details from API
+        plant_data = await client.api.plants.get_plant_details(plant_id)
+
+        # Create Location from plant data
+        location = Location(
+            address=plant_data.get("address", ""),
+            latitude=plant_data.get("lat", 0.0),
+            longitude=plant_data.get("lng", 0.0),
+            country=plant_data.get("country", ""),
+        )
+
+        # Parse creation date
+        created_date_str = plant_data.get("createDate", "")
+        try:
+            created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            created_date = datetime.now()
+
+        # Create station instance
+        station = cls(
+            client=client,
+            plant_id=plant_id,
+            name=plant_data.get("name", f"Station {plant_id}"),
+            location=location,
+            timezone=plant_data.get("timezone", "UTC"),
+            created_date=created_date,
+        )
+
+        # Load device hierarchy
+        await station._load_devices()
+
+        return station
+
+    @classmethod
+    async def load_all(cls, client: LuxpowerClient) -> list[Station]:
+        """Load all stations accessible by the current user.
+
+        Args:
+            client: LuxpowerClient instance
+
+        Returns:
+            List of Station instances with device hierarchies loaded
+
+        Example:
+            ```python
+            stations = await Station.load_all(client)
+            for station in stations:
+                print(f"{station.name}: {len(station.all_inverters)} inverters")
+            ```
+        """
+        # Get all plants from API
+        plants_response = await client.api.plants.get_plants()
+
+        # Load each station concurrently
+        import asyncio
+
+        tasks = [cls.load(client, plant.plantId) for plant in plants_response.rows]
+        return await asyncio.gather(*tasks)
+
+    async def _load_devices(self) -> None:
+        """Load device hierarchy from API.
+
+        This method:
+        1. Gets parallel group configuration
+        2. Creates ParallelGroup objects
+        3. Discovers inverters and assigns to groups or standalone list
+        4. Discovers MID devices and assigns to parallel groups
+
+        Note: Actual device objects will be created in Phase 2 when
+        inverter classes are implemented.
+        """
+        from .parallel_group import ParallelGroup
+
+        try:
+            # Get parallel group details from API
+            group_data = await self._client.api.devices.get_parallel_group_details(str(self.id))
+
+            # Create parallel groups if they exist
+            if group_data and isinstance(group_data, dict):
+                groups_list = group_data.get("groups", [])
+                for group_info in groups_list:
+                    group = await ParallelGroup.from_api_data(
+                        client=self._client, station=self, group_data=group_info
+                    )
+                    self.parallel_groups.append(group)
+
+            # TODO: Phase 2 - Load inverters and assign to groups
+            # TODO: Phase 2 - Load standalone inverters
+            # TODO: Phase 3 - Load MID devices
+
+        except Exception:
+            # If parallel group loading fails, log and continue
+            # Station can still function with empty device lists
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Failed to load devices for station %s", self.id, exc_info=True
+            )
