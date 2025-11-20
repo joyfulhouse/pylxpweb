@@ -338,11 +338,21 @@ class Station(BaseDevice):
         from .parallel_group import ParallelGroup
 
         try:
-            # Get parallel group details from API
-            group_data = await self._client.api.devices.get_parallel_group_details(str(self.id))
+            import asyncio
 
-            # Create parallel groups if they exist
-            if group_data and isinstance(group_data, dict):
+            # Fetch parallel group details and device list concurrently
+            group_data, devices_response = await asyncio.gather(
+                self._client.api.devices.get_parallel_group_details(str(self.id)),
+                self._client.api.devices.get_devices(str(self.id)),
+                return_exceptions=True,
+            )
+
+            # Create parallel groups if they exist (handle potential exception)
+            if (
+                not isinstance(group_data, Exception)
+                and group_data
+                and isinstance(group_data, dict)
+            ):
                 groups_list = group_data.get("groups", [])
                 for group_info in groups_list:
                     group = await ParallelGroup.from_api_data(
@@ -350,8 +360,9 @@ class Station(BaseDevice):
                     )
                     self.parallel_groups.append(group)
 
-            # Get all devices for this station
-            devices_response = await self._client.api.devices.get_devices(str(self.id))
+            # Process devices response (handle potential exception)
+            if isinstance(devices_response, Exception):
+                devices_response = None
 
             if devices_response and devices_response.get("rows"):
                 for device_data in devices_response["rows"]:

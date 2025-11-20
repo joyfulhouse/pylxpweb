@@ -356,6 +356,10 @@ class TestStationFactoryMethods:
         }
         mock_client.api.devices.get_parallel_group_details = AsyncMock(return_value=group_data)
 
+        # Mock devices API response (required for optimized concurrent call)
+        devices_data = {"success": True, "rows": []}
+        mock_client.api.devices.get_devices = AsyncMock(return_value=devices_data)
+
         # Load devices
         await station._load_devices()
 
