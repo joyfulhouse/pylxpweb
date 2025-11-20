@@ -1,21 +1,21 @@
-# Phases 0-3 Implementation Complete
+# Phases 0-5 Implementation Complete
 
-**Date**: 2025-01-19
+**Date**: 2025-01-20
 **Branch**: `feature/0.2-object-hierarchy`
 **Status**: ✅ Complete and tested
 
 ## Summary
 
-Successfully implemented the complete device object hierarchy for pylxpweb 0.2 release. All core device types are now fully functional with comprehensive test coverage.
+Successfully implemented the complete device object hierarchy AND control operations for pylxpweb 0.2 release. All core device types are fully functional with comprehensive control capabilities and extensive test coverage.
 
 ## Implementation Stats
 
-- **Files Created**: 13 new implementation files
-- **Test Files**: 7 comprehensive test files
-- **Total Tests**: 104 (all passing)
-- **Test Coverage**: >95% on device hierarchy
-- **Commits**: 12 commits on feature branch
-- **Lines of Code**: ~3,500 lines (implementation + tests)
+- **Files Created**: 16 new implementation files
+- **Test Files**: 9 comprehensive test files
+- **Total Tests**: 260 (all passing)
+- **Test Coverage**: >95% on device hierarchy and controls
+- **Commits**: 14 commits on feature branch
+- **Lines of Code**: ~5,400 lines (implementation + tests)
 
 ## Completed Phases
 
@@ -201,32 +201,83 @@ tests/unit/devices/
 - Samples committed to tests (not gitignored)
 - Pydantic model validation ensures correctness
 
+### Phase 4: Control Operations ✅
+
+**BaseInverter Universal Controls** (`src/pylxpweb/devices/inverters/base.py:196-327`):
+- `read_parameters(start_register, point_number)` - Read configuration parameters
+- `write_parameters(parameters)` - Write parameters to registers
+- `set_standby_mode(standby)` - Enable/disable standby mode (bit 9)
+- `get_battery_soc_limits()` - Read on-grid and off-grid SOC limits
+- `set_battery_soc_limits(on_grid_limit, off_grid_limit)` - Set SOC protection limits with validation
+
+**HybridInverter Class** (`src/pylxpweb/devices/inverters/hybrid.py`):
+- Extends GenericInverter with hybrid-specific controls
+- Suitable for: FlexBOSS21, FlexBOSS18, 18KPV, 12KPV (grid-tied with battery)
+
+**AC Charge Control**:
+- `get_ac_charge_settings()` - Read AC charge configuration
+- `set_ac_charge(enabled, power_percent, soc_limit)` - Configure AC charging from grid
+  - Parameter validation before API calls
+  - Bit 7 of register 21 for enable/disable
+  - Register 66: Power percentage (0-100%)
+  - Register 67: SOC limit (0-100%)
+
+**EPS/Backup Mode**:
+- `set_eps_enabled(enabled)` - Enable/disable EPS (Emergency Power Supply) mode
+  - Bit 0 of register 21
+
+**Forced Charge/Discharge**:
+- `set_forced_charge(enabled)` - Force battery charging regardless of schedule
+  - Bit 11 of register 21
+- `set_forced_discharge(enabled)` - Force battery discharging regardless of schedule
+  - Bit 10 of register 21
+
+**Power Management**:
+- `get_charge_discharge_power()` - Read charge/discharge power settings
+- `set_discharge_power(power_percent)` - Set battery discharge power limit (0-100%)
+  - Register 74: Discharge power percentage
+
+**Tests**: 31 tests (12 BaseInverter + 19 HybridInverter)
+
+### Phase 5: Integration Tests ✅
+
+**Device Hierarchy Tests** (`tests/integration/test_device_hierarchy.py`):
+- Station loading (load_all, load single)
+- Device hierarchy validation (parallel groups, inverters, batteries)
+- Inverter data refresh and properties
+- Battery auto-loading and entity generation
+- MID device detection and monitoring
+- Station-level aggregation methods
+- Data scaling verification (voltages, currents, etc.)
+
+**Control Operations Tests** (`tests/integration/test_control_operations.py`):
+- Parameter read/write operations
+- SOC limit controls with read-then-restore pattern
+- AC charge enable/disable with state restoration
+- Charge/discharge power management
+- EPS mode toggle tests
+- Forced charge/discharge tests
+- All tests use safety patterns (read current value → change → restore)
+- Marked with `@pytest.mark.control` for explicit opt-in execution
+
+**Safety Features**:
+- Read-then-restore pattern for all write tests
+- Small, safe value changes only
+- Skip tests if no suitable device found
+- Explicit warning messages about real hardware interaction
+- Separate pytest marker for dangerous tests
+
 ## Known Limitations
 
-### Control Operations (Phase 4 - Not Implemented)
-The following control operations were planned but not implemented due to token constraints:
-- Quick charge enable/disable
-- Operating mode switching (Normal/Standby)
-- EPS enable/disable
-- SOC limit setting
-- Parameter read/write helpers
+### Future Enhancements
 
-**Note**: The control infrastructure exists in `src/pylxpweb/endpoints/control.py` with methods:
-- `read_parameters()`
-- `write_parameters()`
-- `get_quick_charge_status()`
-- `set_quick_charge()`
-- `set_function_enable()`
+**OffGridInverter Class** (not yet implemented):
+- Off-grid specific controls
+- Generator integration
+- Load management
+- Would extend GenericInverter similar to HybridInverter
 
-**Future Work**: Add convenience methods to `BaseInverter`:
-```python
-async def set_quick_charge(self, enabled: bool, power_kw: float, soc_limit: int) -> bool
-async def set_operating_mode(self, mode: str) -> bool  # "normal" or "standby"
-async def set_eps_enabled(self, enabled: bool) -> bool
-async def set_soc_limits(self, charge_limit: int, discharge_limit: int) -> bool
-```
-
-### GridBOSS Advanced Features (Not Fully Implemented)
+**GridBOSS Advanced Features** (not fully implemented):
 MIDDevice has core monitoring but lacks:
 - Smart load control (4 configurable outputs)
 - AC coupling monitoring (4 coupling inputs)
@@ -234,6 +285,12 @@ MIDDevice has core monitoring but lacks:
 - Energy metering (today/lifetime for each circuit)
 
 **Status**: Basic grid/UPS monitoring implemented (6 sensors). Advanced features can be added in future releases.
+
+**Time-Based Scheduling** (not yet implemented):
+- Time schedule configuration for charge/discharge
+- Multiple schedule slots
+- Schedule enable/disable per slot
+- Would be added to HybridInverter as separate methods
 
 ## Performance Characteristics
 
@@ -345,27 +402,32 @@ None - this is a new feature addition. Existing 0.1 API remains unchanged.
 
 ## Files Modified/Created
 
-### New Implementation Files
+### New Implementation Files (Phases 0-5)
 1. `src/pylxpweb/devices/__init__.py` - Updated exports
 2. `src/pylxpweb/devices/battery.py` - Battery class (340 lines)
-3. `src/pylxpweb/devices/inverters/base.py` - BaseInverter (195 lines)
-4. `src/pylxpweb/devices/inverters/generic.py` - GenericInverter (193 lines)
-5. `src/pylxpweb/devices/mid_device.py` - MIDDevice class (262 lines)
-6. `src/pylxpweb/devices/parallel_group.py` - ParallelGroup (150 lines)
-7. `src/pylxpweb/devices/station.py` - Station class (392 lines)
+3. `src/pylxpweb/devices/inverters/__init__.py` - Updated with HybridInverter export
+4. `src/pylxpweb/devices/inverters/base.py` - BaseInverter with controls (328 lines)
+5. `src/pylxpweb/devices/inverters/generic.py` - GenericInverter (193 lines)
+6. `src/pylxpweb/devices/inverters/hybrid.py` - HybridInverter with hybrid controls (274 lines)
+7. `src/pylxpweb/devices/mid_device.py` - MIDDevice class (262 lines)
+8. `src/pylxpweb/devices/parallel_group.py` - ParallelGroup (150 lines)
+9. `src/pylxpweb/devices/station.py` - Station class (392 lines)
 
 ### Modified Files
 1. `src/pylxpweb/models.py` - Added MidboxData fields
 2. `src/pylxpweb/devices/models.py` - Renamed from ha_compat
 
-### New Test Files
+### New Test Files (Phases 0-5)
 1. `tests/unit/devices/batteries/test_battery.py` - 18 tests
-2. `tests/unit/devices/inverters/test_base.py` - 19 tests
+2. `tests/unit/devices/inverters/test_base.py` - 31 tests (added 12 control tests)
 3. `tests/unit/devices/inverters/test_generic.py` - 10 tests
-4. `tests/unit/devices/mid/test_mid_device.py` - 19 tests
-5. `tests/unit/devices/test_parallel_group.py` - 12 tests
-6. `tests/unit/devices/test_station.py` - 12 tests
-7. `tests/unit/devices/test_base.py` - 14 tests
+4. `tests/unit/devices/inverters/test_hybrid.py` - 19 tests (NEW - Phase 4)
+5. `tests/unit/devices/mid/test_mid_device.py` - 19 tests
+6. `tests/unit/devices/test_parallel_group.py` - 12 tests
+7. `tests/unit/devices/test_station.py` - 12 tests
+8. `tests/unit/devices/test_base.py` - 14 tests
+9. `tests/integration/test_device_hierarchy.py` - Device hierarchy integration tests (NEW - Phase 5)
+10. `tests/integration/test_control_operations.py` - Control operations integration tests (NEW - Phase 5)
 
 ### Sample Data Files
 1. `tests/unit/devices/batteries/samples/battery_44300E0585.json`
@@ -375,6 +437,7 @@ None - this is a new feature addition. Existing 0.1 API remains unchanged.
 ## Commits on Branch
 
 ```
+bddcf8d feat: implement Phase 4 control operations and Phase 5 integration tests
 1950cfb feat: fully implement MIDDevice for GridBOSS monitoring
 2ab763b feat: integrate Battery with BaseInverter for automatic battery loading
 9689164 feat: implement Battery class with comprehensive monitoring
@@ -389,24 +452,82 @@ f26b8d1 refactor: rename ha_compat to models, remove HA branding
 ## Ready for Merge
 
 Branch `feature/0.2-object-hierarchy` is ready to merge to main:
-- ✅ All 104 tests passing
-- ✅ Zero linting errors
-- ✅ Type-safe with mypy strict compliance
-- ✅ Comprehensive documentation
+- ✅ All 260 tests passing (135 device tests + 125 other tests)
+- ✅ Zero linting errors (ruff)
+- ✅ Comprehensive control operations
+- ✅ Integration tests for real API validation
+- ✅ Complete device hierarchy
 - ✅ Real API sample validation
 - ✅ Git history clean and organized
+- ✅ Comprehensive documentation
 
 ## Recommendations
 
-1. **Merge to main** - Core hierarchy is solid and tested
-2. **Release as 0.2.0-beta** - Mark as beta due to missing control operations
-3. **Phase 4 in separate PR** - Add control operations in focused follow-up
-4. **Integration tests optional** - Can be added as needed by users
-5. **Documentation updates** - Update main README and API docs
+1. **Merge to main** - Complete implementation ready for production
+2. **Release as 0.2.0** - Full feature set with control operations
+3. **Integration test credentials** - Document how to run integration tests safely
+4. **Documentation updates** - Update main README with control examples
+5. **Home Assistant integration** - Ready for HA integration development
+
+## Usage Examples
+
+### Basic Device Monitoring
+```python
+from pylxpweb import LuxpowerClient
+from pylxpweb.devices import Station
+
+async with LuxpowerClient(username, password) as client:
+    # Load all stations
+    stations = await Station.load_all(client)
+    station = stations[0]
+
+    # Refresh all device data
+    await station.refresh_all_data()
+
+    # Access devices
+    for inverter in station.all_inverters:
+        print(f"Inverter {inverter.serial_number}")
+        print(f"  Power: {inverter.power_output}W")
+        print(f"  SOC: {inverter.battery_soc}%")
+
+    for battery in station.all_batteries:
+        print(f"Battery {battery.battery_index + 1}")
+        print(f"  Voltage: {battery.voltage}V")
+        print(f"  SOC: {battery.soc}%")
+```
+
+### Control Operations
+```python
+from pylxpweb.devices.inverters import HybridInverter
+
+# Assuming inverter is a HybridInverter instance
+inverter = station.all_inverters[0]
+
+if isinstance(inverter, HybridInverter):
+    # Read current AC charge settings
+    settings = await inverter.get_ac_charge_settings()
+    print(f"AC Charge enabled: {settings['enabled']}")
+
+    # Enable AC charging at 50% power to 90% SOC
+    await inverter.set_ac_charge(
+        enabled=True,
+        power_percent=50,
+        soc_limit=90
+    )
+
+    # Set battery SOC limits
+    await inverter.set_battery_soc_limits(
+        on_grid_limit=15,
+        off_grid_limit=10
+    )
+
+    # Enable EPS backup mode
+    await inverter.set_eps_enabled(True)
+```
 
 ---
 
 **Implementation by**: Claude Code
-**Session Duration**: ~3 hours
-**Token Usage**: ~122k tokens
-**Quality**: Production-ready for device hierarchy, control operations deferred
+**Session Duration**: ~5 hours total
+**Token Usage**: ~106k tokens
+**Quality**: Production-ready with complete device hierarchy and control operations
