@@ -323,6 +323,71 @@ class LuxpowerClient:
             return self._response_cache[cache_key].get("response")
         return None
 
+    # ============================================================================
+    # Public Cache Management Methods
+    # ============================================================================
+
+    def clear_cache(self) -> None:
+        """Clear all cached API responses.
+
+        This forces fresh data retrieval on the next API calls.
+        Useful when you know data has changed and need immediate updates.
+
+        Example:
+            >>> client.clear_cache()
+            >>> # Next API calls will fetch fresh data
+        """
+        self._response_cache.clear()
+        _LOGGER.debug("Cache cleared (%d entries removed)", len(self._response_cache))
+
+    def invalidate_cache_for_device(self, serial_num: str) -> None:
+        """Invalidate all cached responses for a specific device.
+
+        Args:
+            serial_num: Device serial number (inverter, battery, or GridBOSS)
+
+        Example:
+            >>> # After changing device settings
+            >>> client.invalidate_cache_for_device("1234567890")
+            >>> # Next calls for this device will fetch fresh data
+        """
+        keys_to_remove = [key for key in self._response_cache if serial_num in key]
+
+        for key in keys_to_remove:
+            del self._response_cache[key]
+
+        _LOGGER.debug(
+            "Cache invalidated for device %s (%d entries removed)",
+            serial_num,
+            len(keys_to_remove),
+        )
+
+    def get_cache_stats(self) -> dict[str, int | dict[str, int]]:
+        """Get cache statistics.
+
+        Returns:
+            dict with statistics:
+                - total_entries: Number of cached responses
+                - endpoints: Dict of endpoint types to entry counts
+
+        Example:
+            >>> stats = client.get_cache_stats()
+            >>> print(f"Cache size: {stats['total_entries']}")
+            >>> for endpoint, count in stats['endpoints'].items():
+            >>>     print(f"  {endpoint}: {count} entries")
+        """
+        endpoints: dict[str, int] = {}
+
+        for key in self._response_cache:
+            # Extract endpoint type from cache key (format: "endpoint:params")
+            endpoint = key.split(":")[0] if ":" in key else key
+            endpoints[endpoint] = endpoints.get(endpoint, 0) + 1
+
+        return {
+            "total_entries": len(self._response_cache),
+            "endpoints": endpoints,
+        }
+
     async def _request(
         self,
         method: str,
