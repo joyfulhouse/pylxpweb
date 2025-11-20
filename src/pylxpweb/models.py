@@ -636,24 +636,41 @@ class InverterInfo(BaseModel):
 class MidboxData(BaseModel):
     """GridBOSS/MID device runtime data.
 
-    Note: Voltages, currents, and frequency require scaling (�100).
+    Note: Voltages are in decivolts (÷10), currents in centiamps (÷100),
+    frequency in centihertz (÷100). Power values are in watts (no scaling).
     """
 
     status: int
     serverTime: str
     deviceTime: str
-    # Grid voltages (�100 for volts)
+    # Grid voltages (�10 for volts, e.g., 2418 = 241.8V)
     gridRmsVolt: int
     upsRmsVolt: int
     genRmsVolt: int
     gridL1RmsVolt: int
     gridL2RmsVolt: int
-    # Grid currents (�100 for amps)
+    upsL1RmsVolt: int
+    upsL2RmsVolt: int
+    genL1RmsVolt: int
+    genL2RmsVolt: int
+    # Currents (�100 for amps)
     gridL1RmsCurr: int
     gridL2RmsCurr: int
+    loadL1RmsCurr: int
+    loadL2RmsCurr: int
+    genL1RmsCurr: int
+    genL2RmsCurr: int
+    upsL1RmsCurr: int
+    upsL2RmsCurr: int
     # Power (watts, no scaling)
     gridL1ActivePower: int
     gridL2ActivePower: int
+    loadL1ActivePower: int
+    loadL2ActivePower: int
+    genL1ActivePower: int
+    genL2ActivePower: int
+    upsL1ActivePower: int
+    upsL2ActivePower: int
     hybridPower: int
     # Smart port status
     smartPort1Status: int
