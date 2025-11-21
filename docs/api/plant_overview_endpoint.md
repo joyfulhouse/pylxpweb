@@ -58,7 +58,7 @@ curl 'https://monitor.eg4electronics.com/WManage/api/plantOverview/list/viewer' 
       "plantId": 19147,
       "name": "123 Main St",
       "createDateText": "2025-05-05",
-      "address": "6245 North Willard Avenue",
+      "address": "123 Example Street",
       "timezoneHourOffset": -8,
       "timezoneMinuteOffset": 0,
       "statusText": "normal",

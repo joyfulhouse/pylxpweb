@@ -4,19 +4,9 @@ This directory contains human-readable register map documentation for various Lu
 
 ## Available Register Maps
 
-### 18KPV (LXP 18K-Hybrid Gen4)
-- **File**: [`18KPV_1234567890.md`](18KPV_1234567890.md)
-- **Device Type**: 18KPV
-- **Register Ranges**: 0-274
-- **Total Parameters**: 488
-- **Total Register Blocks**: 209
+*No register maps are currently available in this directory.*
 
-### GridBoss (Grid Boss 18K-Hybrid)
-- **File**: [`GridBoss_0987654321.md`](GridBoss_0987654321.md)
-- **Device Type**: Grid Boss
-- **Register Ranges**: 0-380, 2032-2158
-- **Total Parameters**: 579
-- **Total Register Blocks**: 241
+Register maps contain device-specific information and should be generated for your own devices using the utilities described below. Example register maps have been moved to the `docs/claude/` directory (which is excluded from version control) to protect privacy.
 
 ## Table Format
 
