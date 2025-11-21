@@ -116,8 +116,11 @@ class TestSOCLimits:
         stations = await Station.load_all(client)
         inverter = stations[0].all_inverters[0]
 
+        # Refresh parameters first
+        await inverter.refresh(include_parameters=True)
+
         # Read SOC limits
-        limits = await inverter.get_battery_soc_limits()
+        limits = inverter.battery_soc_limits
 
         # Should have both on-grid and off-grid limits
         assert "on_grid_limit" in limits
@@ -142,8 +145,9 @@ class TestSOCLimits:
         stations = await Station.load_all(client)
         inverter = stations[0].all_inverters[0]
 
-        # Read current limits
-        original_limits = await inverter.get_battery_soc_limits()
+        # Refresh parameters and read current limits
+        await inverter.refresh(include_parameters=True)
+        original_limits = inverter.battery_soc_limits
         # Convert to int if string
         on_grid_val = original_limits["on_grid_limit"]
         original_on_grid = int(on_grid_val) if isinstance(on_grid_val, str) else on_grid_val

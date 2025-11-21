@@ -188,8 +188,9 @@ class TestACChargeGetOperations:
         if not hybrid_inverter:
             pytest.skip("No hybrid-capable inverter available for testing")
 
-        # Read AC charge power
-        power = await hybrid_inverter.get_ac_charge_power()
+        # Refresh parameters and read AC charge power
+        await hybrid_inverter.refresh(include_parameters=True)
+        power = hybrid_inverter.ac_charge_power_limit
 
         # Should return a float
         assert isinstance(power, (int, float))
@@ -246,8 +247,9 @@ class TestSOCLimitGetOperations:
         if not inverter:
             pytest.skip("No inverter available for testing")
 
-        # Read battery SOC limits
-        limits = await inverter.get_battery_soc_limits()
+        # Refresh parameters and read battery SOC limits
+        await inverter.refresh(include_parameters=True)
+        limits = inverter.battery_soc_limits
 
         # Should return a dict with on_grid_limit and off_grid_limit
         assert isinstance(limits, dict)
