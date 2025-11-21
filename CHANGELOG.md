@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2025-11-20
+
+### Fixed
+
+- **Device Model Information** (Issue #18) - Fixed device model names not being properly populated on inverter objects:
+  - Changed `Station._load_devices()` to use `deviceTypeText` field from `InverterOverviewItem` API response
+  - Previous code incorrectly tried to use `deviceTypeText4APP` which doesn't exist on that endpoint
+  - Model is now reliably available immediately after `Station.load()` with human-readable names like "18KPV", "FlexBOSS21", "Grid Boss"
+  - Added `model` property to `BaseDevice` and override in `BaseInverter` for consistent access
+  - Added 5 new unit tests and 1 integration test to verify model property behavior
+  - Model remains stable after refresh operations (not affected by runtime data)
+
+### Changed
+
+- **Model Property**: Changed from simple attribute to computed property with fallback to "Unknown" if not set
+
+### Testing
+
+- ✅ **Unit tests**: 48 passed in test_base.py (5 new model property tests)
+- ✅ **Integration tests**: 1 new test verifies model is set correctly from API and remains stable
+- ✅ **All quality checks passing**: ruff, mypy strict mode, pytest
+
 ## [0.2.5] - 2025-11-20
 
 ### Fixed

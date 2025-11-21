@@ -218,6 +218,31 @@ class TestInverterData:
         if inverter.runtime:
             assert device_info.sw_version
 
+    async def test_inverter_model_is_set_on_load(self, client: LuxpowerClient) -> None:
+        """Test inverter model is properly set during Station.load() (Issue #18)."""
+        stations = await Station.load_all(client)
+        station = stations[0]
+        inverters = station.all_inverters
+
+        assert len(inverters) > 0
+
+        for inverter in inverters:
+            # Model should be set immediately after load (before refresh)
+            assert inverter.model is not None
+            assert inverter.model != ""
+            assert inverter.model != "Unknown"
+
+            # Model should be a human-readable name (not hex code)
+            # Common models: "18KPV", "FlexBOSS21", "FlexBOSS 12K", etc.
+            assert not inverter.model.startswith("0x"), (
+                f"Model should be human-readable, got hex code: {inverter.model}"
+            )
+
+            # Model should remain the same after refresh
+            model_before_refresh = inverter.model
+            await inverter.refresh()
+            assert inverter.model == model_before_refresh, "Model should not change after refresh"
+
 
 @pytest.mark.asyncio
 class TestBatteryData:

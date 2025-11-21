@@ -408,8 +408,9 @@ class Station(BaseDevice):
                 for device_data in devices_response.rows:
                     serial_num = device_data.serialNum
                     device_type = device_data.deviceType
-                    # Use deviceTypeText as the model name (e.g., "18KPV", "Grid Boss")
-                    model_text = getattr(device_data, "deviceTypeText", "Unknown")
+                    # Use deviceTypeText as the model name (e.g., "18KPV", "FlexBOSS21")
+                    # This provides the human-readable model name
+                    model_text = device_data.deviceTypeText
 
                     if not serial_num:
                         continue
