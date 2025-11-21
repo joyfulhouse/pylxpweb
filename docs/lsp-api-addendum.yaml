@@ -1,0 +1,470 @@
+# LSP Inverter API Addendum
+#
+# This file contains additional endpoints discovered for LSP (Large-Scale PV) inverters.
+# These endpoints should be integrated into docs/luxpower-api.yaml
+#
+# Discovery Source: solarcloudsystem.com HAR analysis (November 2025)
+# Verification: monitor.eg4electronics.com endpoint testing
+# All 7 endpoints confirmed working on both platforms
+
+tags:
+  - name: LSP Devices
+    description: |-
+      Large-Scale PV inverter endpoints for commercial installations.
+
+      **LSP Device Characteristics**:
+      - Multi-string PV input (12+ strings typical)
+      - Multi-string DC output (12+ strings typical)
+      - Multi-group device hierarchy (GroupA, GroupB, GroupC, etc.)
+      - Simplified BMS integration
+      - Commercial/utility-scale installations
+
+      **Firmware Format**: DAAA-XXYYZZ (e.g., DAAA-080C08)
+
+      **Compatibility**: All LSP endpoints work on both solarcloudsystem.com and monitor.eg4electronics.com
+
+paths:
+  /web/monitor/lsp/overview/treeJson:
+    post:
+      tags:
+        - LSP Devices
+      summary: Get LSP device hierarchy tree
+      description: |-
+        Retrieve hierarchical device structure for LSP installations.
+
+        **Returns**: Tree structure with:
+        - Overview node (root)
+        - Parallel groups (GroupA, GroupB, GroupC, etc.)
+        - Inverters within each group
+
+        **Multi-Group Architecture**:
+        - Commercial installations typically have 3-5 groups
+        - Each group contains 5-10 inverters
+        - Total: 15-50 inverters per plant common
+
+        **Comparison with Standard API**:
+        - Standard: `/api/inverterOverview/getParallelGroupDetails` (flat array)
+        - LSP: `/web/monitor/lsp/overview/treeJson` (nested hierarchy)
+      operationId: getLSPTreeJson
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - plantId
+              properties:
+                plantId:
+                  type: integer
+                  description: Plant/station ID
+                  example: 15804
+      responses:
+        '200':
+          description: LSP device hierarchy tree
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LSPTreeNode'
+              example:
+                - id: "OVERVIEW"
+                  text: "Overview"
+                  type: "OVERVIEW"
+                  urlSuffix: "overview"
+                  iconCls: "icon-overview"
+                  children:
+                    - id: "A"
+                      text: "GroupA"
+                      type: "GROUP"
+                      urlSuffix: "group"
+                      iconCls: "icon-group"
+                      children:
+                        - id: "1514025010"
+                          text: "1514025010"
+                          type: "INVERTER"
+                          urlSuffix: "inverter"
+                          iconCls: "icon-inverter"
+
+  /api/lsp/inverter/getInverterRuntime:
+    post:
+      tags:
+        - LSP Devices
+      summary: Get LSP inverter runtime data
+      description: |-
+        Retrieve real-time operational metrics for LSP inverters.
+
+        **Differences from Standard Runtime**:
+        - Simplified field set (total PV power only, not per-string)
+        - BMS-prefixed battery metrics (bmsSoc, bmsVbat, bmsIbat)
+        - No grid voltage/frequency/current fields
+        - Server time and device time fields
+        - Firmware format: DAAA-XXYYZZ
+
+        **Use with Per-String Endpoints**:
+        - This endpoint provides aggregate power metrics
+        - Use `/web/monitor/lsp/inverter/getSolarInput` for per-string PV data
+        - Use `/web/monitor/lsp/inverter/getDcOutput` for per-string DC output data
+      operationId: getLSPInverterRuntime
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - serialNum
+              properties:
+                serialNum:
+                  type: string
+                  description: LSP inverter serial number
+                  example: "1514025002"
+      responses:
+        '200':
+          description: LSP inverter runtime data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LSPInverterRuntime'
+
+  /web/monitor/lsp/inverter/getSolarInput:
+    post:
+      tags:
+        - LSP Devices
+      summary: Get per-string solar PV input data
+      description: |-
+        Retrieve voltage and power for each PV input string.
+
+        **Data Format**:
+        - Values are pre-formatted with units (e.g., "2V", "0kW")
+        - **No scaling required** - ready for display
+        - Supports 12+ PV strings (commercial-scale)
+
+        **Use Case**:
+        - Detailed PV array monitoring
+        - String fault detection
+        - Performance comparison across strings
+        - Imbalance detection
+      operationId: getLSPSolarInput
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - serialNum
+              properties:
+                serialNum:
+                  type: string
+                  description: LSP inverter serial number
+                  example: "1514025002"
+      responses:
+        '200':
+          description: Per-string solar input data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LSPSolarInput'
+
+  /web/monitor/lsp/inverter/getDcOutput:
+    post:
+      tags:
+        - LSP Devices
+      summary: Get per-string DC output data
+      description: |-
+        Retrieve voltage and power for each DC output string.
+
+        **Data Format**:
+        - Values are pre-formatted with units (e.g., "5V", "0kW")
+        - **No scaling required** - ready for display
+        - Supports 12+ DC output strings
+
+        **Use Case**:
+        - DC output monitoring
+        - String performance tracking
+        - Multi-output inverter configurations
+      operationId: getLSPDcOutput
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - serialNum
+              properties:
+                serialNum:
+                  type: string
+                  description: LSP inverter serial number
+                  example: "1514025002"
+      responses:
+        '200':
+          description: Per-string DC output data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LSPDcOutput'
+
+  /api/lsp/inverter/getInverterEnergyInfo:
+    post:
+      tags:
+        - LSP Devices
+      summary: Get LSP inverter energy statistics
+      description: |-
+        Retrieve energy production statistics for LSP inverters.
+
+        **Note**: Likely similar structure to standard `/api/inverter/getInverterEnergyInfo`
+        but for LSP device types.
+      operationId: getLSPInverterEnergyInfo
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - serialNum
+              properties:
+                serialNum:
+                  type: string
+                  description: LSP inverter serial number
+                  example: "1514025002"
+      responses:
+        '200':
+          description: LSP inverter energy statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnergyInfo'
+
+  /api/lsp/inverterChart/dayMultiLine:
+    post:
+      tags:
+        - LSP Devices
+      summary: Get LSP day chart data (multi-line)
+      description: |-
+        Retrieve time-series chart data for multiple metrics over a specific day.
+
+        **Use Case**: Multi-line charts showing PV production, power output,
+        and battery state over 24 hours.
+      operationId: getLSPDayMultiLine
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - serialNum
+                - dateText
+              properties:
+                serialNum:
+                  type: string
+                  description: LSP inverter serial number
+                  example: "1514025002"
+                dateText:
+                  type: string
+                  format: date
+                  description: Date in YYYY-MM-DD format
+                  example: "2025-11-20"
+      responses:
+        '200':
+          description: Day chart data
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Time-series data for charting
+
+  /api/lsp/inverterChart/monthColumn:
+    post:
+      tags:
+        - LSP Devices
+      summary: Get LSP month chart data (column)
+      description: |-
+        Retrieve daily energy breakdown for a specific month (column chart format).
+
+        **Use Case**: Daily energy production visualization for the specified month.
+      operationId: getLSPMonthColumn
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - serialNum
+                - year
+                - month
+              properties:
+                serialNum:
+                  type: string
+                  description: LSP inverter serial number
+                  example: "1514025002"
+                year:
+                  type: integer
+                  description: Year
+                  example: 2025
+                month:
+                  type: integer
+                  description: Month (1-12)
+                  minimum: 1
+                  maximum: 12
+                  example: 11
+      responses:
+        '200':
+          description: Month chart data
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Daily energy data for charting
+
+components:
+  schemas:
+    LSPTreeNode:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Node identifier (OVERVIEW, group letter, or serial number)
+          example: "A"
+        text:
+          type: string
+          description: Display text for node
+          example: "GroupA"
+        type:
+          type: string
+          enum: [OVERVIEW, GROUP, INVERTER]
+          description: Node type in hierarchy
+        urlSuffix:
+          type: string
+          description: URL path suffix for this node type
+          example: "group"
+        iconCls:
+          type: string
+          description: CSS class for icon
+          example: "icon-group"
+        children:
+          type: array
+          description: Child nodes (groups or inverters)
+          items:
+            $ref: '#/components/schemas/LSPTreeNode'
+
+    LSPInverterRuntime:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        serialNum:
+          type: string
+          description: LSP inverter serial number
+          example: "1514025002"
+        fwCode:
+          type: string
+          description: Firmware code (DAAA-XXYYZZ format for LSP)
+          example: "DAAA-080C08"
+        lost:
+          type: boolean
+          description: Communication lost flag
+          example: false
+        hasRuntimeData:
+          type: boolean
+          description: Runtime data availability
+          example: true
+        statusText:
+          type: string
+          enum: [normal, fault, offline]
+          description: Device status
+          example: "normal"
+        serverTime:
+          type: string
+          format: date-time
+          description: Server timestamp
+          example: "2025-11-21 01:12:09"
+        deviceTime:
+          type: string
+          format: date-time
+          description: Device local timestamp
+          example: "2025-11-21 02:12:09"
+        ppv:
+          type: integer
+          description: Total PV power (watts)
+          example: 1
+        pout:
+          type: integer
+          description: Total output power (watts)
+          example: 0
+        selfConsumption:
+          type: boolean
+          description: Self-consumption mode flag
+          example: false
+        pBat:
+          type: integer
+          description: Battery power (watts, negative = charging)
+          example: -1
+        bmsSoc:
+          type: integer
+          description: BMS-reported State of Charge (%)
+          example: 5
+        bmsVbat:
+          type: integer
+          description: BMS-reported battery voltage (scaled by 100, e.g., 5127 = 51.27V)
+          example: 5127
+        bmsIbat:
+          type: integer
+          description: BMS-reported battery current (scaled by 100)
+          example: 0
+
+    LSPSolarInput:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Total number of PV strings
+          example: 12
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              string:
+                type: integer
+                description: String number (1-indexed)
+                example: 1
+              vpv:
+                type: string
+                description: PV voltage (pre-formatted with unit)
+                example: "2V"
+              ppv:
+                type: string
+                description: PV power (pre-formatted with unit)
+                example: "0kW"
+
+    LSPDcOutput:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Total number of DC output strings
+          example: 12
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              string:
+                type: integer
+                description: String number (1-indexed)
+                example: 1
+              vout:
+                type: string
+                description: DC output voltage (pre-formatted with unit)
+                example: "5V"
+              pout:
+                type: string
+                description: DC output power (pre-formatted with unit)
+                example: "0kW"

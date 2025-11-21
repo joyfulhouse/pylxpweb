@@ -53,38 +53,38 @@ async def main():
         password="your_password",
         base_url="https://monitor.eg4electronics.com"  # or us.luxpowertek.com, eu.luxpowertek.com
     ) as client:
-        # Get all stations/plants
-        plants = await client.get_plants()
-        print(f"Found {len(plants)} stations")
+        # Get all stations/plants using the API namespace
+        plants = await client.api.plants.get_plants()
+        print(f"Found {len(plants.rows)} stations")
 
         # Select first station
-        plant = plants[0]
-        plant_id = plant["plantId"]
+        plant = plants.rows[0]
+        plant_id = plant.plantId
 
         # Get devices for this station
-        devices = await client.get_devices(plant_id)
+        devices = await client.api.devices.get_devices(str(plant_id))
 
         # Get runtime data for each inverter
-        for device in devices:
-            if device["type"] == "inverter":
-                serial = device["serialNum"]
+        for device in devices.rows:
+            if device.deviceType == 6:  # Inverter type
+                serial = device.serialNum
 
-                # Get real-time data
-                runtime = await client.get_inverter_runtime(serial)
-                energy = await client.get_inverter_energy(serial)
+                # Get real-time data using API namespace
+                runtime = await client.api.devices.get_inverter_runtime(serial)
+                energy = await client.api.devices.get_inverter_energy_info(serial)
 
                 print(f"\nInverter {serial}:")
-                print(f"  AC Power: {runtime['pac']}W")
-                print(f"  Battery SOC: {runtime['soc']}%")
-                print(f"  Daily Energy: {energy['eToday']}kWh")
-                print(f"  Grid Power: {runtime['pToGrid']}W")
+                print(f"  AC Power: {runtime.pac}W")
+                print(f"  Battery SOC: {runtime.soc}%")
+                print(f"  Daily Energy: {energy.eToday}kWh")
+                print(f"  Grid Power: {runtime.pToGrid}W")
 
                 # Get battery information
-                batteries = await client.get_battery_info(serial)
-                for battery in batteries.get("batteryArray", []):
-                    key = battery["batteryKey"]
-                    soc = battery["soc"]
-                    voltage = battery["voltage"] / 100  # Scale voltage
+                batteries = await client.api.devices.get_battery_info(serial)
+                for battery_module in batteries.batteryArray:
+                    key = battery_module.batteryKey
+                    soc = battery_module.soc
+                    voltage = battery_module.totalVoltage / 100  # Scale voltage
                     print(f"  Battery {key}: {soc}% @ {voltage}V")
 
 asyncio.run(main())

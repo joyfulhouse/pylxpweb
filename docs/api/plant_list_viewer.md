@@ -86,7 +86,7 @@ curl 'https://monitor.eg4electronics.com/WManage/web/config/plant/list/viewer' \
       "noticeEmail2": "",
       "contactPerson": "",
       "contactPhone": "",
-      "address": "6245 North Willard Avenue"
+      "address": "123 Example Street"
     }
   ]
 }
@@ -194,7 +194,7 @@ This is **more efficient** than retrieving all plants and filtering client-side.
 **Search by Plant Name or Address**:
 ```json
 {
-  "searchText": "North"  // Matches "North Willard"
+  "searchText": "Example"  // Matches "Example Street"
 }
 ```
 

@@ -1,0 +1,277 @@
+"""Unit tests for control endpoint helper methods."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from pylxpweb import LuxpowerClient
+from pylxpweb.models import ParameterReadResponse, SuccessResponse
+
+
+@pytest.fixture
+def mock_client() -> LuxpowerClient:
+    """Create a mock client for testing."""
+    client = Mock(spec=LuxpowerClient)
+    client.api = Mock()
+    client.api.control = Mock()
+    return client
+
+
+class TestBatteryBackupHelpers:
+    """Test battery backup (EPS) convenience methods."""
+
+    @pytest.mark.asyncio
+    async def test_enable_battery_backup(self) -> None:
+        """Test enable_battery_backup convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.enable_battery_backup("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_EPS_EN", True, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_disable_battery_backup(self) -> None:
+        """Test disable_battery_backup convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.disable_battery_backup("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_EPS_EN", False, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_get_battery_backup_status(self) -> None:
+        """Test get_battery_backup_status method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {"FUNC_EPS_EN": True}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status
+        status = await control.get_battery_backup_status("1234567890")
+
+        # Verify read_parameters was called
+        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
+        assert status is True
+
+    @pytest.mark.asyncio
+    async def test_get_battery_backup_status_disabled(self) -> None:
+        """Test get_battery_backup_status when EPS is disabled."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {"FUNC_EPS_EN": False}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status
+        status = await control.get_battery_backup_status("1234567890")
+
+        assert status is False
+
+    @pytest.mark.asyncio
+    async def test_get_battery_backup_status_missing_field(self) -> None:
+        """Test get_battery_backup_status when field is missing."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response without FUNC_EPS_EN
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status (should default to False)
+        status = await control.get_battery_backup_status("1234567890")
+
+        assert status is False
+
+
+class TestStandbyModeHelpers:
+    """Test standby mode convenience methods."""
+
+    @pytest.mark.asyncio
+    async def test_enable_normal_mode(self) -> None:
+        """Test enable_normal_mode convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.enable_normal_mode("1234567890")
+
+        # Verify control_function was called correctly
+        # Note: FUNC_SET_TO_STANDBY = True means NOT in standby (normal mode)
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_SET_TO_STANDBY", True, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_enable_standby_mode(self) -> None:
+        """Test enable_standby_mode convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.enable_standby_mode("1234567890")
+
+        # Verify control_function was called correctly
+        # Note: FUNC_SET_TO_STANDBY = False means standby mode is active
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_SET_TO_STANDBY", False, client_type="WEB"
+        )
+        assert result.success is True
+
+
+class TestPeakShavingHelpers:
+    """Test grid peak shaving convenience methods."""
+
+    @pytest.mark.asyncio
+    async def test_enable_grid_peak_shaving(self) -> None:
+        """Test enable_grid_peak_shaving convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.enable_grid_peak_shaving("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_GRID_PEAK_SHAVING", True, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_disable_grid_peak_shaving(self) -> None:
+        """Test disable_grid_peak_shaving convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.disable_grid_peak_shaving("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_GRID_PEAK_SHAVING", False, client_type="WEB"
+        )
+        assert result.success is True
+
+
+class TestBulkParameterRead:
+    """Test bulk parameter reading method."""
+
+    @pytest.mark.asyncio
+    async def test_read_device_parameters_ranges(self) -> None:
+        """Test reading all parameter ranges concurrently."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters for three ranges
+        mock_range1 = Mock(spec=ParameterReadResponse)
+        mock_range1.parameters = {"HOLD_AC_CHARGE_POWER_CMD": 50, "FUNC_EPS_EN": True}
+
+        mock_range2 = Mock(spec=ParameterReadResponse)
+        mock_range2.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 90}
+
+        mock_range3 = Mock(spec=ParameterReadResponse)
+        mock_range3.parameters = {"HOLD_DISCHG_POWER_CMD": 80}
+
+        control.read_parameters = AsyncMock(side_effect=[mock_range1, mock_range2, mock_range3])
+
+        # Read all ranges
+        combined = await control.read_device_parameters_ranges("1234567890")
+
+        # Verify all three read_parameters calls
+        assert control.read_parameters.call_count == 3
+        control.read_parameters.assert_any_call("1234567890", 0, 127)
+        control.read_parameters.assert_any_call("1234567890", 127, 127)
+        control.read_parameters.assert_any_call("1234567890", 240, 127)
+
+        # Verify combined parameters
+        assert combined["HOLD_AC_CHARGE_POWER_CMD"] == 50
+        assert combined["FUNC_EPS_EN"] is True
+        assert combined["HOLD_SYSTEM_CHARGE_SOC_LIMIT"] == 90
+        assert combined["HOLD_DISCHG_POWER_CMD"] == 80
+
+    @pytest.mark.asyncio
+    async def test_read_device_parameters_ranges_with_errors(self) -> None:
+        """Test handling errors in bulk parameter read."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters with one error
+        mock_range1 = Mock(spec=ParameterReadResponse)
+        mock_range1.parameters = {"HOLD_AC_CHARGE_POWER_CMD": 50}
+
+        control.read_parameters = AsyncMock(
+            side_effect=[mock_range1, Exception("Network error"), mock_range1]
+        )
+
+        # Read all ranges (should not raise exception)
+        combined = await control.read_device_parameters_ranges("1234567890")
+
+        # Verify we got data from successful calls only
+        assert "HOLD_AC_CHARGE_POWER_CMD" in combined
+        assert len(combined) > 0

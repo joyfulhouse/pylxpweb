@@ -325,3 +325,73 @@ class DeviceEndpoints(BaseEndpoint):
             cache_endpoint="midbox_runtime",
         )
         return MidboxRuntime.model_validate(response)
+
+    # ============================================================================
+    # Convenience Methods
+    # ============================================================================
+
+    async def get_all_device_data(
+        self, plant_id: int
+    ) -> dict[str, InverterOverviewResponse | dict[str, InverterRuntime] | dict[str, BatteryInfo]]:
+        """Get all device discovery and runtime data in a single call.
+
+        This method combines multiple API calls into one convenient method:
+        1. Device discovery (get_devices)
+        2. Runtime data for all inverters (get_inverter_runtime)
+        3. Battery info for all inverters (get_battery_info)
+
+        All API calls are made concurrently for optimal performance.
+
+        Args:
+            plant_id: Station/plant ID
+
+        Returns:
+            dict: Combined data with keys:
+                - "devices": InverterOverviewResponse (device hierarchy)
+                - "runtime": dict[serial_num, InverterRuntime] (runtime data)
+                - "batteries": dict[serial_num, BatteryInfo] (battery data)
+
+        Example:
+            >>> data = await client.devices.get_all_device_data(12345)
+            >>> devices = data["devices"]
+            >>> for inverter in devices.inverters:
+            >>>     runtime = data["runtime"].get(inverter["serialNum"])
+            >>>     if runtime:
+            >>>         print(f"Inverter {inverter['serialNum']}: {runtime.pac}W")
+        """
+        import asyncio
+
+        # Get device list first
+        devices = await self.get_devices(plant_id)
+
+        # Extract all inverter serial numbers (excluding MID devices)
+        inverter_serials: list[str] = []
+        for device in devices.rows:
+            # Filter for actual inverters (not GridBOSS/MID devices)
+            if "Grid Boss" not in device.deviceTypeText:
+                inverter_serials.append(device.serialNum)
+
+        # Fetch runtime and battery data concurrently for all inverters
+        runtime_tasks = [self.get_inverter_runtime(sn) for sn in inverter_serials]
+        battery_tasks = [self.get_battery_info(sn) for sn in inverter_serials]
+
+        runtime_results = await asyncio.gather(*runtime_tasks, return_exceptions=True)
+        battery_results = await asyncio.gather(*battery_tasks, return_exceptions=True)
+
+        # Build result dictionaries
+        runtime_data: dict[str, InverterRuntime] = {}
+        battery_data: dict[str, BatteryInfo] = {}
+
+        for sn, runtime in zip(inverter_serials, runtime_results, strict=True):
+            if not isinstance(runtime, BaseException):
+                runtime_data[sn] = runtime
+
+        for sn, battery in zip(inverter_serials, battery_results, strict=True):
+            if not isinstance(battery, BaseException):
+                battery_data[sn] = battery
+
+        return {
+            "devices": devices,
+            "runtime": runtime_data,
+            "batteries": battery_data,
+        }

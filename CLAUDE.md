@@ -1,573 +1,498 @@
-# CLAUDE.md
+# CLAUDE.md - Development Guidelines for pylxpweb
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+**Last Updated**: 2025-11-20
+**Version**: 0.2.1
+**Purpose**: Guide Claude Code development in this repository
 
 ## Project Overview
 
-**pylxpweb** is a Python client library for Luxpower/EG4 inverters and solar equipment, enabling programmatic access to the web monitoring API at `https://monitor.eg4electronics.com`.
+**pylxpweb** is a Python client library for Luxpower/EG4 solar inverters and energy storage systems. It provides programmatic access to the Luxpower/EG4 web monitoring API with a focus on type safety, async operations, and Home Assistant integration readiness.
 
-This project is based on extensive research from:
-- **EG4 Web Monitor Home Assistant Integration** (`research/eg4_web_monitor/`) - Production-quality reference implementation
-- **EG4 Inverter HA Integration** (`research/eg4_inverter_ha/`) - Earlier implementation for comparison
+**Key Features**:
+- Complete API coverage (authentication, discovery, runtime data, energy stats, control operations)
+- Object-oriented device hierarchy (Station → ParallelGroup → Inverter → BatteryBank → Battery)
+- 100% feature parity with EG4 Web Monitor HA integration
+- Async/await throughout with concurrent operations
+- Type-safe with mypy strict mode (Pydantic v2 models)
+- Production-ready: 288+ tests, >81% coverage, zero linting errors
 
-**CRITICAL**: The `research/` directory contains **REFERENCE MATERIALS ONLY** and should **NEVER** be included in:
-- Test execution or test discovery
-- Code evaluation or linting
-- Documentation generation
-- Package building or distribution
-- Any production code imports
+**Repository**: `joyfulhouse/pylxpweb`
 
-The research materials are for understanding existing implementations and API behavior only.
+## Quick Reference
 
-## Project Goals
-
-1. Create a standalone Python library (`pylxpweb`) for Luxpower/EG4 API access
-2. Document the complete Luxpower API based on `monitor.eg4electronics.com` endpoints
-3. Provide comprehensive documentation in `docs/` directory
-4. Enable integration with Home Assistant and other automation platforms
-
-## Repository Structure
-
+### Device Hierarchy
 ```
-pylxpweb/
-├── docs/                        # Project documentation (PRIORITY 1)
-│   ├── api/                     # API endpoint documentation
-│   │   └── LUXPOWER_API.md     # Complete API reference (to be created)
-│   ├── architecture/            # System design documentation
-│   └── examples/                # Usage examples
-│
-├── research/                    # RESEARCH ONLY - DO NOT USE IN PRODUCTION
-│   ├── *.py                     # Research/testing scripts (test_endpoints.py, etc.)
-│   ├── eg4_web_monitor/         # Complete HA integration (primary reference)
-│   │   ├── custom_components/   # Production integration code
-│   │   │   └── eg4_web_monitor/
-│   │   │       ├── eg4_inverter_api/  # API client implementation
-│   │   │       │   ├── client.py       # Reference API client
-│   │   │       │   └── samples/        # Sample API responses
-│   │   │       ├── coordinator.py      # Data coordinator pattern
-│   │   │       ├── sensor.py           # Sensor implementations
-│   │   │       ├── switch.py           # Switch entities
-│   │   │       ├── number.py           # Number entities (SOC limits, power)
-│   │   │       ├── select.py           # Select entities (operating mode)
-│   │   │       └── button.py           # Button entities (refresh)
-│   │   └── tests/               # Comprehensive test suite
-│   ├── eg4_inverter_ha/         # Earlier HA implementation
-│   └── com.thermacell.liv/      # Unrelated project (ignore)
-│
-├── pylxpweb/                    # Main Python package (to be created)
-│   ├── __init__.py
-│   ├── client.py                # API client class
-│   ├── auth.py                  # Authentication handler
-│   ├── devices.py               # Device management
-│   ├── models.py                # Data models
-│   └── exceptions.py            # Custom exceptions
-│
-└── tests/                       # Test suite (to be created)
-    ├── unit/                    # Unit tests
-    └── integration/             # Integration tests
+Station (Plant)
+├── Parallel Group (0-N) - Multi-inverter configurations
+│   ├── MID Device (GridBOSS) - Optional, 0-1 per group
+│   └── Inverters (1-N)
+│       └── Battery Bank - Aggregate battery data
+│           └── Batteries (0-N) - Individual battery modules
+└── Standalone Inverters (0-N) - Single inverter setups
+```
+
+### Regional API Endpoints
+| Region | Base URL | Use For |
+|--------|----------|---------|
+| US (EG4) | `https://monitor.eg4electronics.com` | EG4-branded devices (default) |
+| US (Luxpower) | `https://us.luxpowertek.com` | Luxpower-branded devices (US) |
+| EU (Luxpower) | `https://eu.luxpowertek.com` | Luxpower-branded devices (EU) |
+
+### Data Scaling (CRITICAL)
+| Type | Scaling | Example |
+|------|---------|---------|
+| Voltage (Inverter) | ÷100 | 5100 → 51.00V |
+| Voltage (Battery Bank) | ÷10 | 539 → 53.9V |
+| Voltage (Individual Battery) | ÷100 | 5394 → 53.94V |
+| Voltage (Cell) | ÷1000 | 3364 → 3.364V |
+| Current | ÷100 | 1500 → 15.00A |
+| Frequency | ÷100 | 5998 → 59.98Hz |
+| Temperature | Direct | 39 → 39°C |
+| Power | Direct | 1030 → 1030W |
+| Energy (API) | ÷10 | 90 → 9.0 kWh |
+
+**WARNING**: Note different voltage scaling for battery bank vs individual batteries!
+
+## Development Standards
+
+### Code Quality Requirements
+1. **Type Hints**: All functions must have complete type annotations
+   - Use `from __future__ import annotations` for forward references
+   - mypy strict mode enforced (`mypy src/pylxpweb/ --strict`)
+
+2. **Async/Await**: All I/O operations must be async
+   - Use `aiohttp` for HTTP requests
+   - Use `asyncio.gather()` for concurrent operations
+   - No blocking operations in async code
+
+3. **Error Handling**:
+   - Custom exceptions in `src/pylxpweb/exceptions.py`
+   - Specific types: `AuthenticationError`, `ConnectionError`, `LuxpowerAPIError`
+   - Proper exception hierarchy with contextual error messages
+
+4. **Testing**:
+   - Target: >90% code coverage (currently >81%)
+   - Use `pytest` with `pytest-asyncio`
+   - Mock external API calls in unit tests (`tests/unit/`)
+   - Real API tests in `tests/integration/` (requires credentials)
+
+5. **Code Style**:
+   - Format: `ruff check --fix && ruff format`
+   - Lint: `ruff check src/ tests/`
+   - Google-style docstrings for all public APIs
+
+### Pre-Commit Workflow (REQUIRED)
+Before any commit, automatically run:
+```bash
+# 1. Format and lint
+ruff check --fix && ruff format
+
+# 2. Type checking
+mypy src/pylxpweb/ --strict
+
+# 3. Tests with coverage
+pytest tests/unit/ --cov=pylxpweb --cov-report=term-missing
+
+# All checks must pass before committing
 ```
 
 ## API Architecture
 
-### Base Configuration
-- **Base URLs**: Multiple regional endpoints available
-  - `https://us.luxpowertek.com` - US region (Luxpower)
-  - `https://eu.luxpowertek.com` - EU region (Luxpower)
-  - `https://monitor.eg4electronics.com` - US region (EG4 Electronics)
-  - Additional regional endpoints may exist
-- **Authentication**: `/WManage/api/login` (POST)
-- **Session Management**: Cookie-based with 2-hour expiration
-- **Protocol**: HTTPS REST API with JSON payloads
-- **Default**: Use `https://monitor.eg4electronics.com` for EG4 devices in North America
-
-### Key API Endpoints
-
-From the research materials, the following endpoints are validated:
-
+### Key Endpoints (Complete List)
 **Authentication**:
-- `POST /WManage/api/login` - Authenticate and establish session
-  - Request: `{"account": str, "password": str}`
-  - Response: Sets `JSESSIONID` cookie
-  - Session duration: ~2 hours
+- `POST /WManage/api/login` - Session duration: ~2 hours
 
-**Station/Plant Discovery**:
-- `POST /WManage/web/config/plant/list/viewer` - List available stations
-  - Returns: Array of plant objects with `plantId`, `name`, location info
-  - Example response in `research/eg4_web_monitor/custom_components/eg4_web_monitor/eg4_inverter_api/samples/plants.json`
-
-**Device Discovery**:
-- `POST /WManage/api/inverterOverview/getParallelGroupDetails` - Get device hierarchy
-  - Request: `{"plantId": int}`
-  - Returns: Parallel groups, inverters, GridBOSS devices
-
-- `POST /WManage/api/inverterOverview/list` - List all devices in station
-  - Request: `{"plantId": int}`
-  - Returns: Device list with serial numbers, models, status
+**Discovery**:
+- `POST /WManage/web/config/plant/list/viewer` - List stations
+- `POST /WManage/api/inverterOverview/getParallelGroupDetails` - Device hierarchy (requires GridBOSS serial)
+- `POST /WManage/api/inverterOverview/list` - Flat device list
 
 **Runtime Data**:
-- `POST /WManage/api/inverter/getInverterRuntime` - Inverter real-time data
-  - Request: `{"serialNum": str}`
-  - Returns: Power, voltage, current, temperature, frequency, SOC
-  - Example: `research/.../samples/runtime_*.json`
-  - **Data Scaling**: Values are scaled (e.g., 5100 = 51.00V, divide by 100)
-
+- `POST /WManage/api/inverter/getInverterRuntime` - Real-time inverter data
 - `POST /WManage/api/inverter/getInverterEnergyInfo` - Energy statistics
-  - Request: `{"serialNum": str}`
-  - Returns: Daily, monthly, lifetime energy production
+- `POST /WManage/api/battery/getBatteryInfo` - Battery bank + `batteryArray` with individual modules
+- `POST /WManage/api/midbox/getMidboxRuntime` - GridBOSS data
 
-- `POST /WManage/api/battery/getBatteryInfo` - Battery information
-  - Request: `{"serialNum": str}`
-  - Returns: Battery status + `batteryArray` with individual batteries
-  - Each battery has `batteryKey` for unique identification
+**Control**:
+- `POST /WManage/web/maintain/remoteRead/read` - Read parameters (127 registers max per call)
+- `POST /WManage/web/maintain/remoteSet/write` - Write parameters
 
-- `POST /WManage/api/midbox/getMidboxRuntime` - GridBOSS/MID device data
-  - Request: `{"serialNum": str}`
-  - Returns: Grid management, load, smart ports, generator status
+### API Call Pattern (Per Refresh Cycle)
 
-**Control Endpoints**:
-- `POST /WManage/web/maintain/inverter/param/read` - Read parameters
-  - Request: `{"serialNum": str, "paramIds": [int]}`
-  - Returns: Current parameter values
+**Station Discovery** (once per session): 4 calls
+- 2x `/WManage/web/config/plant/list/viewer`
+- 1x `/WManage/api/inverterOverview/list`
+- 1x `/WManage/api/inverterOverview/getParallelGroupDetails` (if GridBOSS present)
 
-- `POST /WManage/web/maintain/inverter/param/write` - Write parameters
-  - Request: `{"serialNum": str, "data": {paramId: value}}`
-  - Controls: Quick charge, EPS mode, SOC limits, operating mode
+**Data Refresh** (every 30 seconds): 3-4 calls per inverter
+- 1x `/WManage/api/inverter/getInverterRuntime`
+- 1x `/WManage/api/inverter/getInverterEnergyInfo`
+- 1x `/WManage/api/battery/getBatteryInfo`
+- 1x `/WManage/api/midbox/getMidboxRuntime` (if MID device present)
 
-### Device Hierarchy
+**Parameter Refresh** (hourly): 3 calls per inverter
+- 1x read registers 0-127
+- 1x read registers 127-254
+- 1x read registers 240-367
 
-```
-Station/Plant (plantId)
-└── Parallel Group
-    ├── MID Device (GridBOSS) - Optional, 0 or 1
-    └── Inverters (1 to N)
-        └── Batteries (0 to N) - Individual battery modules
-```
+**Total API calls for 1 inverter + 1 MID device**:
+- Discovery: 4 calls (once)
+- Per cycle: 7 calls (4 data + 3 parameters)
+- Per hour: ~487 calls (4 + 120×4 + 3)
 
-### Device Types
+### Session Management
+- Cookie-based (`JSESSIONID`)
+- Expiration: ~2 hours
+- Auto-reauthentication on 401/403
+- Support session injection (Platinum tier requirement)
 
-**Standard Inverters** (FlexBOSS21, FlexBOSS18, 18KPV, 12KPV, XP):
-- Runtime data: power, voltage, current, temperature
-- Energy data: daily, monthly, lifetime production
-- Battery data: SOC, charge/discharge power
-- Control: Quick charge, EPS mode, SOC limits
+## Implementation Patterns
 
-**GridBOSS/MID Devices**:
-- Grid management and interconnection
-- Smart load ports (configurable outputs)
-- AC coupling support
-- Generator monitoring
-- UPS functionality
-
-**Individual Batteries**:
-- Accessed via `batteryArray` in battery info response
-- Unique `batteryKey` for identification
-- Metrics: Voltage, current, SOC, SoH, temperature, cycles
-- Cell voltage monitoring and delta calculation
-
-### Data Scaling
-
-The API returns scaled integer values that must be divided to get actual values:
-
-- **Voltage**: Divide by 100 (e.g., 5100 → 51.00V)
-- **Current**: Divide by 100 (e.g., 1500 → 15.00A)
-- **Power**: Already in watts (e.g., 1030 → 1030W)
-- **Frequency**: Divide by 100 (e.g., 5998 → 59.98Hz)
-- **Temperature**: Direct value in Celsius
-- **Cell Voltage**: Divide by 1000 (e.g., 3300 → 3.300V)
-
-## Development Commands
-
-### Endpoint Discovery
-```bash
-# Test which API endpoint works with your credentials
-# Configure .env first (see .env.example)
-python research/test_endpoints.py
-```
-
-### Testing
-```bash
-# Run all tests
-pytest tests/
-
-# Run with coverage
-pytest tests/ --cov=pylxpweb --cov-report=term-missing
-
-# Run specific test file
-pytest tests/test_client.py -v
-
-# Run integration tests (requires credentials in .env)
-pytest tests/integration/ -v
-```
-
-### Code Quality
-```bash
-# Format code
-ruff check --fix && ruff format
-
-# Type checking (strict mode)
-mypy pylxpweb/ --strict
-
-# Lint code
-ruff check pylxpweb/ tests/
-```
-
-### Building
-```bash
-# Install in development mode
-pip install -e .
-
-# Build package
-python -m build
-
-# Install from built package
-pip install dist/pylxpweb-*.whl
-```
-
-## Code Standards
-
-This project follows strict quality standards similar to Home Assistant's Platinum tier:
-
-1. **Type Hints**: All functions must have complete type annotations
-   - Use `from __future__ import annotations` for forward references
-   - Enable mypy strict mode
-
-2. **Async/Await**: All I/O operations must be async
-   - Use `aiohttp` for HTTP requests
-   - Use `asyncio` for concurrent operations
-   - No blocking operations in async code
-
-3. **Error Handling**:
-   - Define custom exceptions in `exceptions.py`
-   - Use specific exception types (AuthError, ConnectionError, APIError)
-   - Proper exception hierarchy
-
-4. **Testing**:
-   - Target >90% code coverage
-   - Use `pytest` with `pytest-asyncio`
-   - Mock external API calls in unit tests
-   - Real API tests in `tests/integration/`
-
-5. **Documentation**:
-   - Google-style docstrings for all public classes/methods
-   - Keep `docs/` updated with API findings
-   - Document all discovered endpoints
-
-## Documentation Requirements
-
-### Priority 1: Luxpower API Documentation
-
-Create `docs/api/LUXPOWER_API.md` with comprehensive documentation:
-
-1. **Authentication Flow**
-   - Login endpoint and request/response format
-   - Session management (cookies, expiration)
-   - Re-authentication handling
-
-2. **Endpoint Catalog**
-   - Complete list of all endpoints
-   - Request/response schemas
-   - Example requests and responses
-   - Required headers and parameters
-
-3. **Data Scaling Reference**
-   - Document all scaling factors
-   - Conversion formulas
-   - Units for each metric
-
-4. **Device Discovery Flow**
-   - Station/plant enumeration
-   - Device hierarchy traversal
-   - Serial number formats
-
-5. **Control Parameters**
-   - Parameter IDs and meanings
-   - Value ranges and validation
-   - Write operation behavior
-
-6. **Error Codes and Handling**
-   - API error responses
-   - HTTP status codes
-   - Retry strategies
-
-### Research Materials Usage
-
-When documenting the API, reference:
-
-1. **Sample API Responses**: `research/eg4_web_monitor/.../samples/*.json`
-   - `runtime_*.json` - Real-time inverter data
-   - `battery_*.json` - Battery information
-   - `plants.json` - Station list
-   - `midbox_*.json` - GridBOSS data
-
-2. **Reference Implementation**: `research/eg4_web_monitor/.../client.py`
-   - Authentication patterns
-   - Session management
-   - Caching strategies
-   - Error handling
-
-3. **Entity Implementations**: `research/eg4_web_monitor/.../sensor.py`
-   - Data scaling examples
-   - Field mappings
-   - Unit conversions
-
-## Example Client Interface
-
-Based on research materials, the client should provide this interface:
-
+### Factory Pattern (Device Loading)
 ```python
-from pylxpweb import LuxpowerClient, AuthenticationError
+# Load all stations
+stations = await Station.load_all(client)
 
-async def main():
-    # Support multiple regional endpoints
-    # Default: https://monitor.eg4electronics.com
-    # EU: https://eu.luxpowertek.com
-    # US Luxpower: https://us.luxpowertek.com
-    async with LuxpowerClient(
-        username,
-        password,
-        base_url="https://monitor.eg4electronics.com"  # Configurable
-    ) as client:
-        # Authenticate automatically on first call
-        plants = await client.get_plants()
+# Load specific station
+station = await Station.load(client, plant_id=12345)
 
-        # Select a plant/station
-        plant = plants[0]
-        devices = await client.get_devices(plant["plantId"])
+# Access devices
+for inverter in station.all_inverters:
+    await inverter.refresh()  # Concurrent: runtime + energy + battery
 
-        # Get device data
-        for device in devices:
-            if device["type"] == "inverter":
-                runtime = await client.get_inverter_runtime(device["serialNum"])
-                energy = await client.get_inverter_energy(device["serialNum"])
+    # Access battery bank aggregate data
+    if inverter.battery_bank:
+        print(f"Total capacity: {inverter.battery_bank.max_capacity} Ah")
+        print(f"SOC: {inverter.battery_bank.soc}%")
 
-                print(f"Inverter {device['serialNum']}")
-                print(f"  Power: {runtime['pac']}W")
-                print(f"  SOC: {runtime['soc']}%")
-                print(f"  Daily Energy: {energy['eToday']}kWh")
+        # Access individual batteries
+        for battery in inverter.battery_bank.batteries:
+            print(f"Battery {battery.battery_index + 1}: {battery.soc}%")
 ```
 
-## Architecture Principles
+### Concurrent Operations
+```python
+# Station refresh - all devices concurrently
+await station.refresh_all_data()
 
-Follow these design patterns from the research implementation:
+# Inverter refresh - runtime, energy, battery concurrently
+await inverter.refresh()
 
-1. **Async-First**: All API calls use async/await
-2. **Session Management**: Reuse aiohttp.ClientSession
-3. **Session Injection**: Support injected session (Platinum tier requirement)
-4. **Caching Strategy**:
-   - Device discovery: 15 minutes
-   - Battery info: 5 minutes
-   - Parameters: 2 minutes
-   - Runtime data: 20 seconds
-5. **Retry Logic**: Exponential backoff with jitter
-6. **Timeout Handling**: 30-second default timeout
-7. **Error Granularity**: Specific exceptions for auth, network, API errors
+# ParallelGroup refresh - all inverters concurrently
+await group.refresh()
+```
 
-## Important Notes
+## Critical Implementation Notes
 
-1. **Base URLs**: Multiple regional endpoints available:
-   - US (Luxpower): `https://us.luxpowertek.com`
-   - EU (Luxpower): `https://eu.luxpowertek.com`
-   - US (EG4): `https://monitor.eg4electronics.com`
-   - Base URL should be configurable by user
-2. **Session Duration**: ~2 hours, implement auto-reauthentication
-3. **Data Scaling**: Must divide voltage/current/frequency by 100
-4. **Battery Keys**: Use `batteryKey` from API for unique battery identification
-5. **Serial Numbers**: 10-digit numeric strings (e.g., "1234567890")
-6. **GridBOSS Detection**: Different sensor sets for MID vs standard inverters
+### 1. Parallel Group Detection
+The `getParallelGroupDetails` endpoint requires a **GridBOSS serial number** (not station ID):
+```python
+# WRONG: Using station ID
+await client.api.devices.get_parallel_group_details(str(station.id))  # ❌ userSnDismatch
+
+# CORRECT: Using GridBOSS serial
+gridboss_serial = "4524850115"  # deviceType == 9
+await client.api.devices.get_parallel_group_details(gridboss_serial)  # ✅
+```
+
+**Graceful Handling**: If no GridBOSS found, devices treated as standalone (no errors).
+
+### 2. Battery Voltage Scaling (CRITICAL!)
+Different scaling factors for different battery data:
+- **Battery Bank aggregate**: ÷10 (e.g., 539 → 53.9V)
+- **Individual Battery**: ÷100 (e.g., 5394 → 53.94V)
+- **Cell Voltage**: ÷1000 (e.g., 3364 → 3.364V)
+
+**Rationale**: API returns different precision for aggregate vs individual data.
+
+### 3. BatteryBank Design Decision
+- **Purpose**: Represents aggregate battery system data (total capacity, charge/discharge power, overall SOC)
+- **Data Source**: Created from `getBatteryInfo` response header
+- **Structure**: Contains `batteries[]` list of individual Battery objects
+- **Home Assistant**: Entities not currently generated (aggregate data available via inverter sensors)
+- **Properties**: `status`, `soc`, `voltage`, `charge_power`, `discharge_power`, `max_capacity`, `current_capacity`, `battery_count`
+
+### 4. GridBOSS/MID Devices
+- Device type: `deviceType == 9`
+- Use separate endpoint: `getMidboxRuntime` (not `getInverterRuntime`)
+- Assigned to `parallel_group.mid_device` property
+- Standard inverter endpoints return no data for GridBOSS
+
+### 5. Parameter Reading
+API limit: **127 registers per call**. For full parameter range, make 3 calls:
+```python
+# Standard 3-range approach (per HA integration)
+params1 = await inverter.read_parameters(0, 127)    # Base parameters
+params2 = await inverter.read_parameters(127, 127)  # Extended 1
+params3 = await inverter.read_parameters(240, 127)  # Extended 2
+```
 
 ## Testing Strategy
 
-### Unit Tests
-- Mock all HTTP requests using `aiohttp.test_utils`
-- Test authentication flow
-- Test data parsing and scaling
-- Test error handling
+### Test Organization
+```
+tests/
+├── unit/ (288 tests)
+│   ├── endpoints/ - API endpoint tests
+│   ├── devices/ - Device hierarchy tests
+│   │   ├── inverters/ - BaseInverter, GenericInverter, HybridInverter
+│   │   ├── batteries/ - Battery class
+│   │   ├── mid/ - MIDDevice
+│   │   ├── test_battery_bank.py - BatteryBank (13 tests)
+│   │   └── test_station.py, test_parallel_group.py
+│   └── samples/ - Real API responses (committed)
+└── integration/ - Live API tests (requires credentials in .env)
+```
 
-### Integration Tests
-- Require real credentials in `tests/secrets.py`
-- Test against live API
-- Validate response formats
-- Verify data accuracy
+### Sample Data Strategy
+- Real API samples copied from `research/` directory to `tests/unit/*/samples/`
+- Samples committed (not gitignored)
+- Pydantic model validation ensures correctness
+- **CRITICAL**: Do not reference `research/` in production code
 
-### Test Configuration
-
-**Credentials**: Create `.env` file in project root:
+### Integration Test Credentials
 ```bash
-# Copy example file
-cp .env.example .env
-
-# Edit .env with your credentials
+# .env file (gitignored)
 LUXPOWER_USERNAME=your_username
 LUXPOWER_PASSWORD=your_password
 LUXPOWER_BASE_URL=https://monitor.eg4electronics.com
+
+# Run integration tests
+pytest tests/integration/ -v -m integration
 ```
 
-**Endpoint Discovery**: Use `scripts/test_endpoints.py` to find which endpoint works for your account.
+### Test Fixtures (Pydantic Models)
+Use `model_construct()` to bypass validation for test data:
+```python
+# Correct approach for test fixtures
+device = InverterOverviewItem.model_construct(
+    serialNum="1234567890",
+    statusText="Online",
+    deviceType=6,
+    # ... all required fields
+)
+```
 
-**Note**: `.env` is in `.gitignore` - never commit credentials
+## Research Materials (REFERENCE ONLY)
 
-## Pre-Commit Workflow
+The `research/` directory contains reference materials and should **NEVER** be:
+- Included in test execution or discovery
+- Referenced by production code imports
+- Included in documentation generation
+- Included in package building/distribution
 
-Before any commit, automatically run:
-1. `ruff check --fix && ruff format`
-2. `mypy --strict src/pylxpweb/`
-3. `pytest tests/ --cov=pylxpweb`
-4. All checks must pass before committing
+**Proper Usage**:
+- Copy sample data to `tests/unit/*/samples/` for fixtures
+- Reference for understanding API behavior
+- Compare implementation approaches
 
-## GitHub & CI/CD
+## Package Structure
 
-### Repository
-- **GitHub Repository**: `joyfulhouse/pylxpweb`
-- **Package Manager**: `uv` (required for all dependency management)
+```
+pylxpweb/
+├── docs/                   # Project documentation
+│   ├── api/                # API endpoint documentation
+│   ├── claude/             # Claude Code session notes (gitignored)
+│   └── inverters/          # Device-specific documentation
+├── src/pylxpweb/           # Main package
+│   ├── __init__.py
+│   ├── client.py           # LuxpowerClient
+│   ├── endpoints/          # API endpoints (plants, devices, control)
+│   ├── devices/            # Device hierarchy
+│   │   ├── station.py      # Station (top-level)
+│   │   ├── parallel_group.py  # ParallelGroup
+│   │   ├── battery_bank.py    # BatteryBank (aggregate)
+│   │   ├── battery.py         # Battery (individual)
+│   │   ├── mid_device.py      # MIDDevice (GridBOSS)
+│   │   └── inverters/         # BaseInverter, GenericInverter, HybridInverter
+│   ├── models.py           # Pydantic data models
+│   ├── constants.py        # Constants and register definitions
+│   └── exceptions.py       # Custom exceptions
+├── tests/                  # Test suite (288+ tests)
+│   ├── unit/               # Unit tests (mock API)
+│   └── integration/        # Integration tests (live API)
+├── research/               # REFERENCE ONLY (not in package)
+└── pyproject.toml          # Package config (uv-based)
+```
 
-### CI/CD Pipeline Structure
+## CI/CD Pipeline
+
+### GitHub Actions Workflows
 
 **CI Workflow** (`.github/workflows/ci.yml`):
-```
-Lint & Type Check (parallel) ─┐
-Unit Tests (parallel)         ─┼─> Integration Tests ─> CI Success
-                               │
-                               └─> (all must pass)
-```
-
-Triggers: Push to main/master, Pull Requests, Manual Dispatch
-
-1. **Lint & Type Check** (10 min timeout):
-   - Uses: `actions/checkout@v5`, `astral-sh/setup-uv@v7`
-   - Python: 3.13 (via `uv python install 3.13`)
-   - `ruff check src/ tests/`
-   - `ruff format --check src/ tests/`
-   - `mypy --strict src/pylxpweb/`
-
-2. **Unit Tests** (15 min timeout):
-   - Uses: `actions/checkout@v5`, `astral-sh/setup-uv@v7`
-   - Python: 3.13 (via `uv python install 3.13`)
-   - `pytest tests/unit/ --cov=pylxpweb --cov-report=term-missing --cov-report=xml --cov-report=html -v`
-   - Upload coverage to Codecov (`codecov/codecov-action@v5`)
-   - Upload coverage HTML and pytest results (30-day retention via `upload-artifact@v5`)
-
-3. **Integration Tests** (20 min timeout):
-   - Depends on: Lint & Unit Tests passing
-   - Uses: `actions/checkout@v5`, `astral-sh/setup-uv@v7`
-   - Python: 3.13 (via `uv python install 3.13`)
-   - Environment: `integration-test` (for secrets)
-   - Skips for Dependabot PRs (no secret access)
-   - `pytest tests/integration/ -v -m integration`
-   - Environment variables: LUXPOWER_USERNAME, LUXPOWER_PASSWORD, LUXPOWER_BASE_URL
-
-4. **CI Success**:
-   - Final validation gate
-   - Checks all upstream jobs passed
+- Triggers: Push to main/master, PRs, manual dispatch
+- Jobs: Lint & Type Check (parallel), Unit Tests (parallel) → Integration Tests → CI Success
+- Python: 3.13 via `uv python install 3.13`
+- Integration tests skip for Dependabot PRs (no secret access)
 
 **Publish Workflow** (`.github/workflows/publish.yml`):
-```
-Lint ─┐
-Test  ─┼─> Integration Tests ─> Build ─> TestPyPI ─> PyPI
-       │
-       └─> (all must pass)
-```
-
-Triggers: GitHub releases (`published`), Manual dispatch (choose testpypi/pypi)
-
-1. **Lint & Type Check** (10 min timeout):
-   - Uses: `actions/checkout@v5`, `astral-sh/setup-uv@v7`
-   - Python: 3.13 (via `uv python install 3.13`)
-   - Same checks as CI workflow
-
-2. **Unit Tests** (15 min timeout):
-   - Uses: `actions/checkout@v5`, `astral-sh/setup-uv@v7`
-   - Python: 3.13 (via `uv python install 3.13`)
-   - `pytest tests/unit/ --cov=pylxpweb --cov-report=term-missing --cov-report=xml --junitxml=pytest.xml`
-
-3. **Integration Tests** (20 min timeout):
-   - Depends on: Lint & Unit Tests passing
-   - Environment: `integration-tests`
-   - Same setup as CI workflow
-
-4. **Build Package** (10 min timeout):
-   - Depends on: All quality checks passing
-   - `uv build` - Creates wheel and sdist
-   - `uv run twine check dist/*` - Validates package
-   - Upload artifacts: `python-package-distributions` (7-day retention via `upload-artifact@v5`)
-
-5. **Publish to TestPyPI** (10 min timeout):
-   - Environment: `testpypi`
-   - Permissions: `id-token: write` (OIDC authentication)
-   - Uses: `pypa/gh-action-pypi-publish@release/v1`
-   - Repository: `https://test.pypi.org/legacy/`
-   - Creates summary with test install command
-
-6. **Publish to PyPI** (10 min timeout):
-   - Depends on: Build & TestPyPI success
-   - Environment: `pypi`
-   - Permissions: `id-token: write` (OIDC authentication)
-   - Uses: `pypa/gh-action-pypi-publish@release/v1`
-   - Creates summary with PyPI link and install command
+- Triggers: GitHub releases (`published`), manual dispatch
+- Flow: Lint → Test → Integration → Build → TestPyPI → PyPI
+- OIDC authentication (no API tokens required)
+- Trusted publishers configured on PyPI/TestPyPI
 
 **Dependabot** (`.github/dependabot.yml`):
-- **GitHub Actions**: Weekly updates (Mondays), max 5 PRs, uses latest `@v5`/`@v6`/`@v7` versions
-- **Python (uv ecosystem)**: Weekly updates (Mondays), max 10 PRs
-  - Groups: `development-dependencies` and `production-dependencies`
-  - Update types: Minor and patch updates grouped together
-  - Reviewer: `bryanli` (ensures uv compatibility)
-- Commit messages: `chore(deps): ...` format
+- GitHub Actions: Weekly updates (Mondays), max 5 PRs
+- Python (uv): Weekly updates (Mondays), max 10 PRs
+- Groups: `development-dependencies` and `production-dependencies`
 
-### GitHub Secrets Configuration
-
-Required secrets (stored in GitHub repository settings):
+### GitHub Secrets Required
 - `LUXPOWER_USERNAME` - API username for integration tests
-- `LUXPOWER_PASSWORD` - API password for integration tests
-- `LUXPOWER_BASE_URL` - API base URL (default: https://monitor.eg4electronics.com)
+- `LUXPOWER_PASSWORD` - API password
+- `LUXPOWER_BASE_URL` - API base URL
 
-Configure via `gh` CLI:
+## Current Implementation Status (v0.2.1)
+
+### Completed Features ✅
+- **API Coverage**: Complete endpoint coverage (auth, discovery, runtime, control)
+- **Device Hierarchy**: Station, ParallelGroup, Inverter, BatteryBank, Battery, MIDDevice
+- **Parallel Groups**: Proper detection using GridBOSS serial number
+- **BatteryBank**: Aggregate battery data with individual battery array
+- **Control Operations**: Read/write parameters, control functions
+- **Concurrent Operations**: Station, Inverter, ParallelGroup refresh
+- **Type Safety**: mypy strict mode, Pydantic v2 models
+- **Test Coverage**: 288 tests, >81% coverage
+
+### Recent Changes (2025-11-20)
+- Added BatteryBank class for aggregate battery data
+- Fixed parallel group detection (use GridBOSS serial, not station ID)
+- Added comprehensive BatteryBank unit tests (13 tests, 100% coverage)
+- Updated API documentation with complete device hierarchy
+- Documented API call patterns (discovery, data refresh, parameter sync)
+- Fixed test fixtures using `model_construct()` for Pydantic models
+- All tests passing, zero linting/type errors
+
+### Known Limitations
+- **BatteryBank Entities**: Not generated for Home Assistant (design decision to avoid entity proliferation)
+- **Parallel Groups**: May not be detected if no GridBOSS present (graceful degradation)
+- **Parameter Ranges**: Requires 3 separate API calls (127 register limit per call)
+
+## Inter-Session Context
+
+### Current Branch
+- `feature/0.2-object-hierarchy`
+- Status: ✅ Ready for merge (all tests passing, zero errors)
+
+### Design Decisions & Rationale
+1. **BatteryBank as separate class**: Represents aggregate data from `getBatteryInfo` header, distinct from individual battery modules in `batteryArray`
+2. **No BatteryBank HA entities**: Aggregate data accessible via inverter sensors, avoids excessive entity count
+3. **Parallel Group detection**: Requires GridBOSS serial (deviceType == 9), graceful fallback if not found
+4. **Voltage scaling differences**: API uses different precision for aggregate (÷10) vs individual (÷100) battery data
+5. **Session injection**: Supported for HA Platinum tier compliance
+
+### Important Commands
 ```bash
-gh secret set LUXPOWER_USERNAME --body "$LUXPOWER_USERNAME"
-gh secret set LUXPOWER_PASSWORD --body "$LUXPOWER_PASSWORD"
-gh secret set LUXPOWER_BASE_URL --body "$LUXPOWER_BASE_URL"
+# Development
+uv sync --all-extras --dev
+uv run pytest tests/unit/
+uv run mypy src/pylxpweb/ --strict
+uv run ruff check --fix && uv run ruff format
+
+# Integration tests (requires .env)
+uv run pytest tests/integration/ -v -m integration
+
+# Coverage
+uv run pytest tests/unit/ --cov=pylxpweb --cov-report=term-missing
+
+# Package building
+uv build
+uv run twine check dist/*
 ```
 
-### PyPI Publishing
+## Documentation Requirements
 
-**Trusted Publishers** (recommended):
-- Configure OIDC trusted publisher on PyPI/TestPyPI
-- No API tokens required
-- More secure than API tokens
+### API Documentation
+Keep `docs/api/LUXPOWER_API.md` updated with:
+- New endpoint discoveries
+- Request/response schemas
+- Data scaling reference
+- Error codes and handling
+- Example requests/responses
 
-**Publishing Flow**:
-1. Create GitHub release
-2. CI runs all quality checks
-3. Build distribution artifacts
-4. Publish to TestPyPI (test environment)
-5. If successful, publish to PyPI (production)
+### Session Notes
+Store Claude Code session documentation in `docs/claude/` (gitignored):
+- Implementation summaries
+- Analysis reports
+- Session histories
+- Optimization recommendations
 
-### Best Practices
+### Code Documentation
+- Google-style docstrings for all public APIs
+- Inline comments for complex logic
+- Type hints throughout (enforced by mypy strict)
 
-1. **Concurrency Control**: Cancel in-progress runs for duplicate workflow executions
-2. **Dependency Caching**: Use uv's built-in cache with lock file tracking
-3. **Artifact Preservation**: Test and coverage reports (30 days), build artifacts (7 days)
-4. **Secret Masking**: GitHub automatically masks credentials in logs
-5. **Staged Validation**: Integration tests only run after all other checks pass
-6. **OIDC Authentication**: Use trusted publishers instead of API tokens
-7. **Environment Protection**: Use GitHub environments for deployment protection rules
+## Release Process
 
-## Current Status
+1. Update version in `src/pylxpweb/__init__.py` and `pyproject.toml`
+2. Update `CHANGELOG.md` with version notes
+3. Ensure all tests pass (`pytest tests/unit/`)
+4. Ensure all quality checks pass (mypy, ruff)
+5. Create GitHub release (triggers publish workflow)
+6. Workflow: Build → TestPyPI → PyPI (OIDC authentication)
 
-**Phase**: Initial Setup
+## Security & Privacy
 
-**To Be Created**:
-- [ ] Main package structure (`pylxpweb/`)
-- [ ] Core client implementation
-- [ ] Authentication handler
-- [ ] Data models
-- [ ] Test suite
-- [ ] API documentation (`docs/api/LUXPOWER_API.md`)
-- [ ] Usage examples
-- [ ] README.md
+### Sensitive Information Policy
 
-**Available Resources**:
-- ✅ Complete reference implementation in `research/eg4_web_monitor/`
-- ✅ Sample API responses in `research/.../samples/`
-- ✅ Production-quality code patterns
-- ✅ Comprehensive test examples
-- Our code repository is at joyfulhouse/pylxpweb
-- Always verify that unit and integration tests run before pushing to code repository like github.
+**CRITICAL**: Never commit sensitive information to the repository unless it's in `.gitignore`.
+
+**Prohibited in committed files**:
+- Real street addresses or physical locations
+- Actual serial numbers (use placeholder values like "1234567890", "0000000000")
+- Passwords or credentials
+- API keys or tokens
+- Personal identifiable information (PII)
+
+**Safe Practices**:
+- Use `.env` file for credentials (gitignored)
+- Use placeholder serial numbers in documentation
+- Redact addresses in sample API responses (use "123 Example St" or similar)
+- Use fake plant names (e.g., "Test Station", "Demo Plant")
+- Sanitize all examples and test fixtures before committing
+
+**Example - Safe Documentation**:
+```python
+# ✅ CORRECT: Placeholder values
+serial_number = "1234567890"
+plant_name = "Example Station"
+location = "123 Main St, Anytown, USA"
+
+# ❌ WRONG: Real values
+serial_number = "4512670118"  # Actual device
+plant_name = "6245 N WILLARD"  # Real address
+```
+
+**Before committing**:
+1. Review all changes for sensitive data
+2. Check documentation examples
+3. Verify test fixtures are sanitized
+4. Ensure `.env` and secrets are gitignored
+
+## Best Practices
+
+### When Adding New Features
+1. Start with API endpoint discovery/testing
+2. Add Pydantic model for response data
+3. Implement endpoint method with type hints
+4. Add comprehensive unit tests
+5. Add integration test (if applicable)
+6. Update documentation
+7. Run full quality checks before commit
+
+### When Fixing Bugs
+1. Write failing test reproducing bug
+2. Implement fix
+3. Verify test now passes
+4. Add regression test if needed
+5. Update documentation if behavior changes
+
+### When Reviewing Code
+1. Check type hints completeness
+2. Verify async/await usage
+3. Confirm error handling
+4. Review test coverage
+5. Validate documentation updates
+
+---
+
+**Remember**: This is a standalone library usable beyond Home Assistant. Keep HA-specific features (entity platforms, config flow, data coordinators) in the HA integration, not in pylxpweb.

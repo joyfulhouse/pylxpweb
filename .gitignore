@@ -67,9 +67,6 @@ credentials.json
 # Research materials (reference only - do not include in distribution)
 research/
 
-# Claude Code session documents
-docs/claude/
-
 # macOS system files
 .DS_Store
 **/.DS_Store
@@ -87,3 +84,6 @@ docs/.doctrees/
 *.bak
 *.swp
 .DS_Store
+test_api_debug.py
+test_full_data_check.py
+full_data_check_output.txt
