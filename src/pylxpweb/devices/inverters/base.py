@@ -6,8 +6,9 @@ inverter implementations must inherit from.
 
 from __future__ import annotations
 
+import asyncio
 from abc import abstractmethod
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from pylxpweb.models import OperatingMode
@@ -56,41 +57,166 @@ class BaseInverter(BaseDevice):
         # Battery bank (contains aggregate data and individual batteries)
         self.battery_bank: Any | None = None  # Will be BatteryBank object
 
-    async def refresh(self) -> None:
-        """Refresh runtime, energy, and battery data from API.
+        # Parameters (configuration registers, refreshed hourly)
+        self.parameters: dict[str, Any] | None = None
 
-        This method fetches runtime, energy, and battery data concurrently
-        for optimal performance.
+        # ===== Cache Management =====
+        # Parameters cache time tracking
+        self._parameters_cache_time: datetime | None = None
+        self._parameters_cache_ttl = timedelta(hours=1)  # 1-hour TTL for parameters
+        self._parameters_cache_lock = asyncio.Lock()
+
+        # Runtime data cache
+        self._runtime_cache_time: datetime | None = None
+        self._runtime_cache_ttl = timedelta(seconds=30)  # 30-second TTL for runtime
+        self._runtime_cache_lock = asyncio.Lock()
+
+        # Energy data cache
+        self._energy_cache_time: datetime | None = None
+        self._energy_cache_ttl = timedelta(minutes=5)  # 5-minute TTL for energy
+        self._energy_cache_lock = asyncio.Lock()
+
+        # Battery data cache
+        self._battery_cache_time: datetime | None = None
+        self._battery_cache_ttl = timedelta(seconds=30)  # 30-second TTL for battery
+        self._battery_cache_lock = asyncio.Lock()
+
+    async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
+        """Refresh runtime, energy, battery, and optionally parameters from API.
+
+        This method fetches data concurrently for optimal performance.
+        Results are cached with different TTLs based on update frequency.
+
+        Args:
+            force: If True, bypass cache and force fresh data from API
+            include_parameters: If True, also refresh parameters (default: False)
         """
-        import asyncio
+        # Prepare tasks to fetch only expired/missing data
+        tasks = []
+        task_types = []
 
-        # Fetch all data concurrently
-        runtime_task = self._client.api.devices.get_inverter_runtime(self.serial_number)
-        energy_task = self._client.api.devices.get_inverter_energy(self.serial_number)
-        battery_task = self._client.api.devices.get_battery_info(self.serial_number)
+        now = datetime.now()
 
-        runtime_data, energy_data, battery_data = await asyncio.gather(
-            runtime_task, energy_task, battery_task, return_exceptions=True
+        # Runtime data (30s TTL)
+        runtime_expired = (
+            force
+            or self._runtime_cache_time is None
+            or (now - self._runtime_cache_time) > self._runtime_cache_ttl
         )
+        if runtime_expired:
+            tasks.append(self._fetch_runtime())
+            task_types.append("runtime")
 
-        # Update runtime if successful
-        if not isinstance(runtime_data, BaseException):
-            self.runtime = runtime_data
+        # Energy data (5min TTL)
+        energy_expired = (
+            force
+            or self._energy_cache_time is None
+            or (now - self._energy_cache_time) > self._energy_cache_ttl
+        )
+        if energy_expired:
+            tasks.append(self._fetch_energy())
+            task_types.append("energy")
 
-        # Update energy if successful
-        if not isinstance(energy_data, BaseException):
-            self.energy = energy_data
+        # Battery data (30s TTL)
+        battery_expired = (
+            force
+            or self._battery_cache_time is None
+            or (now - self._battery_cache_time) > self._battery_cache_ttl
+        )
+        if battery_expired:
+            tasks.append(self._fetch_battery())
+            task_types.append("battery")
 
-        # Update batteries and battery bank if successful
-        if not isinstance(battery_data, BaseException):
-            # Create/update battery bank with aggregate data
-            await self._update_battery_bank(battery_data)
+        # Parameters (1hr TTL) - only fetch if explicitly requested or expired
+        parameters_expired = (
+            force
+            or self._parameters_cache_time is None
+            or (now - self._parameters_cache_time) > self._parameters_cache_ttl
+        )
+        if include_parameters and parameters_expired:
+            tasks.append(self._fetch_parameters())
+            task_types.append("parameters")
 
-            # Update individual batteries
-            if battery_data.batteryArray:
-                await self._update_batteries(battery_data.batteryArray)
+        # Execute all needed fetches concurrently
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         self._last_refresh = datetime.now()
+
+    async def _fetch_runtime(self) -> None:
+        """Fetch runtime data with caching."""
+        async with self._runtime_cache_lock:
+            try:
+                runtime_data = await self._client.api.devices.get_inverter_runtime(
+                    self.serial_number
+                )
+                self.runtime = runtime_data
+                self._runtime_cache_time = datetime.now()
+            except Exception:
+                # Keep existing cached data on error
+                pass
+
+    async def _fetch_energy(self) -> None:
+        """Fetch energy data with caching."""
+        async with self._energy_cache_lock:
+            try:
+                energy_data = await self._client.api.devices.get_inverter_energy(self.serial_number)
+                self.energy = energy_data
+                self._energy_cache_time = datetime.now()
+            except Exception:
+                # Keep existing cached data on error
+                pass
+
+    async def _fetch_battery(self) -> None:
+        """Fetch battery data with caching."""
+        async with self._battery_cache_lock:
+            try:
+                battery_data = await self._client.api.devices.get_battery_info(self.serial_number)
+
+                # Create/update battery bank with aggregate data
+                await self._update_battery_bank(battery_data)
+
+                # Update individual batteries
+                if battery_data.batteryArray:
+                    await self._update_batteries(battery_data.batteryArray)
+
+                self._battery_cache_time = datetime.now()
+            except Exception:
+                # Keep existing cached data on error
+                pass
+
+    async def _fetch_parameters(self) -> None:
+        """Fetch all parameters with caching.
+
+        Fetches parameters from all 3 register ranges concurrently:
+        - Range 1: Registers 0-126 (base parameters)
+        - Range 2: Registers 127-253 (extended parameters 1)
+        - Range 3: Registers 240-366 (extended parameters 2)
+        """
+        async with self._parameters_cache_lock:
+            try:
+                # Fetch all 3 register ranges concurrently
+                range_tasks = [
+                    self._client.api.control.read_parameters(self.serial_number, 0, 127),
+                    self._client.api.control.read_parameters(self.serial_number, 127, 127),
+                    self._client.api.control.read_parameters(self.serial_number, 240, 127),
+                ]
+
+                responses = await asyncio.gather(*range_tasks, return_exceptions=True)
+
+                # Merge all parameter dictionaries
+                all_parameters: dict[str, Any] = {}
+                for response in responses:
+                    if not isinstance(response, BaseException):
+                        all_parameters.update(response.parameters)
+
+                # Only update if we got at least some parameters
+                if all_parameters:
+                    self.parameters = all_parameters
+                    self._parameters_cache_time = datetime.now()
+            except Exception:
+                # Keep existing cached data on error
+                pass
 
     def to_device_info(self) -> DeviceInfo:
         """Convert to device info model.
@@ -245,6 +371,12 @@ class BaseInverter(BaseDevice):
     ) -> dict[str, Any]:
         """Read configuration parameters from inverter.
 
+        .. deprecated:: 0.3.0
+            Use :meth:`refresh(include_parameters=True) <refresh>` to populate
+            the :attr:`parameters` property, then access parameters directly
+            from :attr:`parameters` or via property accessors like
+            :attr:`ac_charge_power_limit`.
+
         Args:
             start_register: Starting register address
             point_number: Number of registers to read
@@ -253,10 +385,26 @@ class BaseInverter(BaseDevice):
             Dictionary of parameter name to value mappings
 
         Example:
+            >>> # OLD (deprecated):
             >>> params = await inverter.read_parameters(21, 1)
             >>> params["FUNC_SET_TO_STANDBY"]
             True
+            >>>
+            >>> # NEW (recommended):
+            >>> await inverter.refresh(include_parameters=True)
+            >>> inverter.parameters["FUNC_SET_TO_STANDBY"]
+            True
         """
+        import warnings
+
+        warnings.warn(
+            "read_parameters() is deprecated. Use refresh(include_parameters=True) "
+            "to populate the 'parameters' property, then access via inverter.parameters "
+            "or property accessors like inverter.ac_charge_power_limit.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         response = await self._client.api.control.read_parameters(
             self.serial_number, start_register, point_number
         )
@@ -276,6 +424,11 @@ class BaseInverter(BaseDevice):
             >>> await inverter.write_parameters({21: 512})  # Bit 9 set
         """
         response = await self._client.api.control.write_parameters(self.serial_number, parameters)
+
+        # Invalidate parameter cache on successful write
+        if response.success:
+            self._parameters_cache_time = None
+
         return response.success
 
     async def set_standby_mode(self, standby: bool) -> bool:
@@ -307,10 +460,17 @@ class BaseInverter(BaseDevice):
             # Set bit 9 to power on
             new_value = current_value | (1 << FUNC_EN_BIT_SET_TO_STANDBY)
 
-        return await self.write_parameters({FUNC_EN_REGISTER: new_value})
+        result = await self.write_parameters({FUNC_EN_REGISTER: new_value})
 
-    async def get_battery_soc_limits(self) -> dict[str, int]:
-        """Get battery SOC discharge limits.
+        # Invalidate parameter cache on successful write
+        if result:
+            self._parameters_cache_time = None
+
+        return result
+
+    @property
+    def battery_soc_limits(self) -> dict[str, int]:
+        """Get battery SOC discharge limits from cached parameters.
 
         Universal control: All inverters have SOC limits.
 
@@ -318,15 +478,16 @@ class BaseInverter(BaseDevice):
             Dictionary with on_grid_limit and off_grid_limit (0-100%)
 
         Example:
-            >>> limits = await inverter.get_battery_soc_limits()
+            >>> limits = inverter.battery_soc_limits
             >>> limits
             {'on_grid_limit': 10, 'off_grid_limit': 20}
         """
+        if self.parameters is None:
+            return {"on_grid_limit": 10, "off_grid_limit": 10}
 
-        params = await self.read_parameters(105, 2)
         return {
-            "on_grid_limit": params.get("HOLD_DISCHG_CUT_OFF_SOC_EOD", 10),
-            "off_grid_limit": params.get("HOLD_SOC_LOW_LIMIT_EPS_DISCHG", 10),
+            "on_grid_limit": int(self.parameters.get("HOLD_DISCHG_CUT_OFF_SOC_EOD", 10)),
+            "off_grid_limit": int(self.parameters.get("HOLD_SOC_LOW_LIMIT_EPS_DISCHG", 10)),
         }
 
     async def set_battery_soc_limits(
@@ -369,6 +530,10 @@ class BaseInverter(BaseDevice):
                 str(off_grid_limit),
             )
             success = success and result.success
+
+        # Invalidate parameter cache on successful write
+        if success:
+            self._parameters_cache_time = None
 
         return success
 
@@ -450,10 +615,16 @@ class BaseInverter(BaseDevice):
         result = await self._client.api.control.write_parameter(
             self.serial_number, "HOLD_AC_CHARGE_POWER_CMD", str(power_kw)
         )
+
+        # Invalidate parameter cache on successful write
+        if result.success:
+            self._parameters_cache_time = None
+
         return result.success
 
-    async def get_ac_charge_power(self) -> float:
-        """Get current AC charge power limit.
+    @property
+    def ac_charge_power_limit(self) -> float:
+        """Get current AC charge power limit from cached parameters.
 
         Universal control: All inverters support AC charging.
 
@@ -461,12 +632,13 @@ class BaseInverter(BaseDevice):
             Current power limit in kilowatts
 
         Example:
-            >>> power = await inverter.get_ac_charge_power()
+            >>> power = inverter.ac_charge_power_limit
             >>> power
             5.0
         """
-        params = await self.read_parameters(66, 1)
-        value = params.get("HOLD_AC_CHARGE_POWER_CMD", 0.0)
+        if self.parameters is None:
+            return 0.0
+        value = self.parameters.get("HOLD_AC_CHARGE_POWER_CMD", 0.0)
         # API returns kW values directly
         return float(value)
 
@@ -499,10 +671,16 @@ class BaseInverter(BaseDevice):
         result = await self._client.api.control.write_parameter(
             self.serial_number, "HOLD_FORCED_CHG_POWER_CMD", str(power_kw)
         )
+
+        # Invalidate parameter cache on successful write
+        if result.success:
+            self._parameters_cache_time = None
+
         return result.success
 
-    async def get_pv_charge_power(self) -> int:
-        """Get current PV (forced) charge power limit.
+    @property
+    def pv_charge_power_limit(self) -> int:
+        """Get current PV (forced) charge power limit from cached parameters.
 
         Universal control: All inverters support PV charging.
 
@@ -510,12 +688,13 @@ class BaseInverter(BaseDevice):
             Current power limit in kilowatts (integer)
 
         Example:
-            >>> power = await inverter.get_pv_charge_power()
+            >>> power = inverter.pv_charge_power_limit
             >>> power
             10
         """
-        params = await self._client.api.control.read_device_parameters_ranges(self.serial_number)
-        value = params.get("HOLD_FORCED_CHG_POWER_CMD", 0)
+        if self.parameters is None:
+            return 0
+        value = self.parameters.get("HOLD_FORCED_CHG_POWER_CMD", 0)
         # API returns integer kW values directly
         return int(value)
 
@@ -550,10 +729,16 @@ class BaseInverter(BaseDevice):
         result = await self._client.api.control.write_parameter(
             self.serial_number, "_12K_HOLD_GRID_PEAK_SHAVING_POWER", str(power_kw)
         )
+
+        # Invalidate parameter cache on successful write
+        if result.success:
+            self._parameters_cache_time = None
+
         return result.success
 
-    async def get_grid_peak_shaving_power(self) -> float:
-        """Get current grid peak shaving power limit.
+    @property
+    def grid_peak_shaving_power_limit(self) -> float:
+        """Get current grid peak shaving power limit from cached parameters.
 
         Universal control: Most inverters support peak shaving.
 
@@ -561,12 +746,13 @@ class BaseInverter(BaseDevice):
             Current power limit in kilowatts
 
         Example:
-            >>> power = await inverter.get_grid_peak_shaving_power()
+            >>> power = inverter.grid_peak_shaving_power_limit
             >>> power
             7.0
         """
-        params = await self._client.api.control.read_device_parameters_ranges(self.serial_number)
-        value = params.get("_12K_HOLD_GRID_PEAK_SHAVING_POWER", 0.0)
+        if self.parameters is None:
+            return 0.0
+        value = self.parameters.get("_12K_HOLD_GRID_PEAK_SHAVING_POWER", 0.0)
         # API returns kW values directly
         return float(value)
 
@@ -598,10 +784,16 @@ class BaseInverter(BaseDevice):
         result = await self._client.api.control.write_parameter(
             self.serial_number, "HOLD_AC_CHARGE_SOC_LIMIT", str(soc_percent)
         )
+
+        # Invalidate parameter cache on successful write
+        if result.success:
+            self._parameters_cache_time = None
+
         return result.success
 
-    async def get_ac_charge_soc_limit(self) -> int:
-        """Get current AC charge stop SOC limit.
+    @property
+    def ac_charge_soc_limit(self) -> int:
+        """Get current AC charge stop SOC limit from cached parameters.
 
         Universal control: All inverters support AC charge SOC limits.
 
@@ -609,12 +801,13 @@ class BaseInverter(BaseDevice):
             Current SOC limit percentage
 
         Example:
-            >>> limit = await inverter.get_ac_charge_soc_limit()
+            >>> limit = inverter.ac_charge_soc_limit
             >>> limit
             90
         """
-        params = await self.read_parameters(67, 1)
-        return int(params.get("HOLD_AC_CHARGE_SOC_LIMIT", 100))
+        if self.parameters is None:
+            return 100
+        return int(self.parameters.get("HOLD_AC_CHARGE_SOC_LIMIT", 100))
 
     # ============================================================================
     # Battery Current Control (Issue #13)
@@ -641,6 +834,11 @@ class BaseInverter(BaseDevice):
         result = await self._client.api.control.set_battery_charge_current(
             self.serial_number, current_amps
         )
+
+        # Invalidate parameter cache on successful write
+        if result.success:
+            self._parameters_cache_time = None
+
         return result.success
 
     async def set_battery_discharge_current(self, current_amps: int) -> bool:
@@ -664,10 +862,16 @@ class BaseInverter(BaseDevice):
         result = await self._client.api.control.set_battery_discharge_current(
             self.serial_number, current_amps
         )
+
+        # Invalidate parameter cache on successful write
+        if result.success:
+            self._parameters_cache_time = None
+
         return result.success
 
-    async def get_battery_charge_current(self) -> int:
-        """Get current battery charge current limit.
+    @property
+    def battery_charge_current_limit(self) -> int:
+        """Get current battery charge current limit from cached parameters.
 
         Universal control: All inverters support charge current limits.
 
@@ -675,14 +879,17 @@ class BaseInverter(BaseDevice):
             Current limit in amperes
 
         Example:
-            >>> current = await inverter.get_battery_charge_current()
+            >>> current = inverter.battery_charge_current_limit
             >>> current
             100
         """
-        return await self._client.api.control.get_battery_charge_current(self.serial_number)
+        if self.parameters is None:
+            return 0
+        return int(self.parameters.get("HOLD_LEAD_ACID_CHARGE_RATE", 0))
 
-    async def get_battery_discharge_current(self) -> int:
-        """Get current battery discharge current limit.
+    @property
+    def battery_discharge_current_limit(self) -> int:
+        """Get current battery discharge current limit from cached parameters.
 
         Universal control: All inverters support discharge current limits.
 
@@ -690,11 +897,13 @@ class BaseInverter(BaseDevice):
             Current limit in amperes
 
         Example:
-            >>> current = await inverter.get_battery_discharge_current()
+            >>> current = inverter.battery_discharge_current_limit
             >>> current
             120
         """
-        return await self._client.api.control.get_battery_discharge_current(self.serial_number)
+        if self.parameters is None:
+            return 0
+        return int(self.parameters.get("HOLD_LEAD_ACID_DISCHARGE_RATE", 0))
 
     # ============================================================================
     # Operating Mode Control (Issue #14)
@@ -727,7 +936,13 @@ class BaseInverter(BaseDevice):
         from pylxpweb.models import OperatingMode as OM
 
         standby = mode == OM.STANDBY
-        return await self.set_standby_mode(standby)
+        result = await self.set_standby_mode(standby)
+
+        # Invalidate parameter cache on successful write
+        if result:
+            self._parameters_cache_time = None
+
+        return result
 
     async def get_operating_mode(self) -> OperatingMode:
         """Get current operating mode.

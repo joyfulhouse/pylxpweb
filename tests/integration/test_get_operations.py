@@ -202,8 +202,11 @@ class TestACChargeGetOperations:
         if not hybrid_inverter:
             pytest.skip("No hybrid-capable inverter available for testing")
 
-        # Read AC charge SOC limit
-        soc_limit = await hybrid_inverter.get_ac_charge_soc_limit()
+        # First refresh parameters to populate the cache
+        await hybrid_inverter.refresh(include_parameters=True)
+
+        # Read AC charge SOC limit from cached parameters
+        soc_limit = hybrid_inverter.ac_charge_soc_limit
 
         # Should return an integer between 0-100
         assert isinstance(soc_limit, int)

@@ -498,20 +498,14 @@ class TestInverterControlOperations:
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        # Mock control API
-        mock_client.api.control = Mock()
-        mock_response = Mock()
-        mock_response.parameters = {
+        # Set cached parameters
+        inverter.parameters = {
             "HOLD_DISCHG_CUT_OFF_SOC_EOD": 15,
             "HOLD_SOC_LOW_LIMIT_EPS_DISCHG": 20,
         }
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
 
-        # Get SOC limits
-        limits = await inverter.get_battery_soc_limits()
-
-        # Verify API call
-        mock_client.api.control.read_parameters.assert_called_once_with("1234567890", 105, 2)
+        # Get SOC limits from property
+        limits = inverter.battery_soc_limits
 
         # Verify returned data
         assert limits == {"on_grid_limit": 15, "off_grid_limit": 20}
