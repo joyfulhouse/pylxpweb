@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pylxpweb import LuxpowerClient, OperatingMode  # noqa: E402
 from pylxpweb.devices import Station  # noqa: E402
-from pylxpweb.devices.inverters import BaseInverter, HybridInverter  # noqa: E402
+from pylxpweb.devices.inverters import BaseInverter  # noqa: E402
 
 # Load credentials from environment
 LUXPOWER_USERNAME = os.getenv("LUXPOWER_USERNAME")
@@ -70,12 +70,14 @@ async def inverter(station: Station | None) -> BaseInverter | None:
 
 
 @pytest.fixture
-async def hybrid_inverter(station: Station | None) -> HybridInverter | None:
-    """Get first hybrid inverter from station."""
+async def hybrid_inverter(station: Station | None) -> BaseInverter | None:
+    """Get first inverter with hybrid capabilities (18KPV, FlexBOSS, etc)."""
     if not station:
         return None
+    # Look for inverters with hybrid-capable models
+    hybrid_models = ["18kpv", "flexboss", "12kpv", "xp"]
     for inv in station.all_inverters:
-        if isinstance(inv, HybridInverter):
+        if any(model in inv.model.lower() for model in hybrid_models):
             return inv
     return None
 
@@ -177,53 +179,36 @@ class TestBatteryCurrentGetOperations:
         print(f"\nInverter {inverter.serial_number} discharge current limit: {current}A")
 
 
-class TestHybridInverterGetOperations:
-    """Test Hybrid Inverter GET operations (read-only, safe)."""
+class TestACChargeGetOperations:
+    """Test AC Charge GET operations (read-only, safe)."""
 
     @pytest.mark.asyncio
-    async def test_get_ac_charge_settings(self, hybrid_inverter: HybridInverter | None):
-        """Test getting AC charge settings."""
+    async def test_get_ac_charge_power(self, hybrid_inverter: BaseInverter | None):
+        """Test getting AC charge power setting."""
         if not hybrid_inverter:
-            pytest.skip("No hybrid inverter available for testing")
+            pytest.skip("No hybrid-capable inverter available for testing")
 
-        # Read AC charge settings
-        settings = await hybrid_inverter.get_ac_charge_settings()
+        # Read AC charge power
+        power = await hybrid_inverter.get_ac_charge_power()
 
-        # Should return a dict with expected keys
-        assert isinstance(settings, dict)
-        assert "enabled" in settings
-        assert isinstance(settings["enabled"], bool)
-
-        if "power" in settings:
-            assert isinstance(settings["power"], int)
-            print(f"\nAC charge power: {settings['power']}W")
-
-        if "soc_limit" in settings:
-            assert isinstance(settings["soc_limit"], int)
-            assert 0 <= settings["soc_limit"] <= 100
-            print(f"\nAC charge SOC limit: {settings['soc_limit']}%")
-
-        print(f"\nHybrid inverter {hybrid_inverter.serial_number} AC charge enabled: {settings['enabled']}")
+        # Should return a float
+        assert isinstance(power, (int, float))
+        assert power >= 0
+        print(f"\nInverter {hybrid_inverter.serial_number} AC charge power: {power}W")
 
     @pytest.mark.asyncio
-    async def test_get_charge_discharge_power(self, hybrid_inverter: HybridInverter | None):
-        """Test getting charge/discharge power settings."""
+    async def test_get_ac_charge_soc_limit(self, hybrid_inverter: BaseInverter | None):
+        """Test getting AC charge SOC limit setting."""
         if not hybrid_inverter:
-            pytest.skip("No hybrid inverter available for testing")
+            pytest.skip("No hybrid-capable inverter available for testing")
 
-        # Read charge/discharge power
-        power = await hybrid_inverter.get_charge_discharge_power()
+        # Read AC charge SOC limit
+        soc_limit = await hybrid_inverter.get_ac_charge_soc_limit()
 
-        # Should return a dict with charge and discharge power
-        assert isinstance(power, dict)
-
-        if "charge_power" in power:
-            assert isinstance(power["charge_power"], int)
-            print(f"\nCharge power: {power['charge_power']}W")
-
-        if "discharge_power" in power:
-            assert isinstance(power["discharge_power"], int)
-            print(f"\nDischarge power: {power['discharge_power']}W")
+        # Should return an integer between 0-100
+        assert isinstance(soc_limit, int)
+        assert 0 <= soc_limit <= 100
+        print(f"\nInverter {hybrid_inverter.serial_number} AC charge SOC limit: {soc_limit}%")
 
 
 class TestParameterReadOperations:
