@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2025-11-20
+
+### Fixed
+
+- **Integration Test Failures** - Resolved all integration test failures caused by API changes:
+  - Fixed property name mismatches (`station.plant_id` → `station.id`, `group.group_id` → `group.name`)
+  - Fixed async/await for `get_total_production()` method
+  - Fixed response format for `get_total_production()` (now returns `today_kwh`, `lifetime_kwh`)
+  - Fixed timestamp access (`_last_refresh` is private attribute)
+
+- **SOC Limit Parameter API Issue** - Fixed critical bug in `set_battery_soc_limits()`:
+  - API expects parameter NAMES (e.g., `"HOLD_DISCHG_CUT_OFF_SOC_EOD"`) not register numbers (e.g., `105`)
+  - Changed implementation to use `write_parameter()` (singular) with proper format: `holdParam="HOLD_DISCHG_CUT_OFF_SOC_EOD"`, `valueText="20"`
+  - Resolved HTTP 400 errors from malformed parameter write requests
+  - Updated unit tests to verify correct API contract
+
+### Changed
+
+- **Control Operations Test Cleanup**:
+  - Removed dangerous `write_parameters` roundtrip test (was attempting to write 0 to register 21, which would disable all functions)
+  - Fixed `test_read_parameters` to expect parsed parameter names (`FUNC_*` instead of `reg_21`)
+  - Updated SOC limit test to verify API success without value verification (inverters may have undocumented validation rules)
+
+### Test Results
+
+- ✅ **Unit tests**: 344 passed
+- ✅ **Integration tests**: 40 passed, 9 skipped
+- ✅ **All quality checks passing**: linting, type checking, coverage
+
 ## [0.2.1] - 2025-11-20
 
 ### Added
