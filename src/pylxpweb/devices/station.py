@@ -6,8 +6,9 @@ installation with inverters, batteries, and optional MID devices.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from pylxpweb.models import InverterOverviewItem, ParallelGroupDeviceItem
@@ -15,8 +16,14 @@ from pylxpweb.models import InverterOverviewItem, ParallelGroupDeviceItem
 from .base import BaseDevice
 from .models import DeviceInfo, Entity
 
+_LOGGER = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
+
+    from .battery import Battery
+    from .inverters.base import BaseInverter
+    from .parallel_group import ParallelGroup
 
 
 @dataclass
@@ -74,6 +81,8 @@ class Station(BaseDevice):
         location: Location,
         timezone: str,
         created_date: datetime,
+        current_timezone_with_minute: int | None = None,
+        daylight_saving_time: bool = False,
     ) -> None:
         """Initialize station.
 
@@ -82,8 +91,10 @@ class Station(BaseDevice):
             plant_id: Unique plant/station identifier
             name: Human-readable station name
             location: Geographic location information
-            timezone: Timezone string (e.g., "America/New_York")
+            timezone: Timezone string (e.g., "GMT -8")
             created_date: Station creation timestamp
+            current_timezone_with_minute: Actual timezone offset in minutes (e.g., -420 for PDT)
+            daylight_saving_time: DST flag from API (may be incorrect)
         """
         # BaseDevice expects serial_number, but stations use plant_id
         # We'll use str(plant_id) as the "serial number" for consistency
@@ -92,45 +103,213 @@ class Station(BaseDevice):
         self.id = plant_id
         self.name = name
         self.location = location
-        self.timezone = timezone
+        self.timezone = timezone  # "GMT -8" (base timezone)
         self.created_date = created_date
 
+        # Timezone precision fields
+        self.current_timezone_with_minute = current_timezone_with_minute  # -420 = GMT-7 (PDT)
+        self.daylight_saving_time = daylight_saving_time  # API's DST flag (may be wrong)
+
+        # Computed DST status (based on offset analysis)
+        self._actual_dst_active: bool | None = None
+
         # Device collections (loaded by _load_devices)
-        self.parallel_groups: list[Any] = []  # Will be ParallelGroup objects
-        self.standalone_inverters: list[Any] = []  # Will be BaseInverter objects
-        self.weather: Any | None = None  # Weather data (optional)
+        self.parallel_groups: list[ParallelGroup] = []
+        self.standalone_inverters: list[BaseInverter] = []
+        self.weather: dict[str, Any] | None = None  # Weather data (optional)
+
+    def detect_dst_status(self) -> bool | None:
+        """Detect if DST is currently active by comparing base timezone with actual offset.
+
+        This method compares the base timezone (e.g., "GMT -8" for PST) with the
+        actual current offset from currentTimezoneWithMinute to determine if DST is active.
+
+        Returns:
+            True if DST is active, False if not, None if cannot determine.
+
+        Example:
+            Base timezone: "GMT -8" (PST = UTC-8)
+            Current offset: -420 minutes = -7 hours (PDT = UTC-7)
+            Result: DST is active (difference of 1 hour)
+        """
+        try:
+            if self.current_timezone_with_minute is None or not self.timezone:
+                return None
+
+            # Parse base timezone to get standard offset
+            if "GMT" in self.timezone:
+                offset_str = self.timezone.replace("GMT", "").strip()
+                base_hours = int(offset_str)  # e.g., -8 for PST
+            else:
+                _LOGGER.debug("Cannot parse base timezone '%s'", self.timezone)
+                return None
+
+            # Convert current offset from minutes to hours
+            current_hours = self.current_timezone_with_minute / 60.0  # e.g., -420 / 60 = -7
+
+            # DST is active if current offset is ahead of base offset
+            # Examples:
+            #   PST: base=-8, DST active: current=-7 (difference = +1)
+            #   JST: base=+9, DST active: current=+10 (difference = +1)
+            #
+            # DST moves clocks forward, so current > base means DST is active
+            difference = current_hours - base_hours
+
+            # DST is active if difference is positive and >= 0.5 hours
+            dst_active = difference >= 0.5
+
+            if dst_active:
+                _LOGGER.debug(
+                    "Station %s: DST detected as ACTIVE (base: GMT%+d, current: GMT%+.1f, "
+                    "diff: %+.1fh)",
+                    self.id,
+                    base_hours,
+                    current_hours,
+                    difference,
+                )
+            else:
+                _LOGGER.debug(
+                    "Station %s: DST detected as INACTIVE (base: GMT%+d, current: GMT%+.1f, "
+                    "diff: %+.1fh)",
+                    self.id,
+                    base_hours,
+                    current_hours,
+                    difference,
+                )
+
+            return dst_active
+
+        except Exception as e:
+            _LOGGER.debug("Error detecting DST status: %s", e)
+            return None
+
+    async def sync_dst_setting(self) -> bool:
+        """Synchronize DST setting with API if mismatch detected.
+
+        This method:
+        1. Detects actual DST status from timezone offset
+        2. Compares with API's daylightSavingTime flag
+        3. Updates API if mismatch found
+
+        Returns:
+            True if setting was synced (or already correct), False if sync failed.
+        """
+        actual_dst = self.detect_dst_status()
+
+        if actual_dst is None:
+            _LOGGER.debug("Station %s: Cannot determine DST status, skipping sync", self.id)
+            return False
+
+        # Check if API setting matches detected status
+        if actual_dst == self.daylight_saving_time:
+            _LOGGER.debug("Station %s: DST setting already correct (%s)", self.id, actual_dst)
+            return True
+
+        # Mismatch detected - update API
+        _LOGGER.warning(
+            "Station %s: DST mismatch detected! API reports %s but offset indicates %s. "
+            "Updating API setting...",
+            self.id,
+            self.daylight_saving_time,
+            actual_dst,
+        )
+
+        try:
+            success = await self.set_daylight_saving_time(actual_dst)
+            if success:
+                self.daylight_saving_time = actual_dst
+                _LOGGER.info(
+                    "Station %s: Successfully updated DST setting to %s", self.id, actual_dst
+                )
+            else:
+                _LOGGER.error("Station %s: Failed to update DST setting", self.id)
+            return success
+
+        except Exception as e:
+            _LOGGER.error("Station %s: Error syncing DST setting: %s", self.id, e)
+            return False
+
+    def get_current_date(self) -> str | None:
+        """Get current date in station's timezone as YYYY-MM-DD string.
+
+        This method uses currentTimezoneWithMinute (most accurate) as the primary
+        source, falling back to parsing the timezone string if unavailable.
+
+        Returns:
+            Date string in YYYY-MM-DD format, or None if timezone cannot be determined.
+
+        Example:
+            currentTimezoneWithMinute: -420 (7 hours behind UTC)
+            Current UTC: 2025-11-21 08:00
+            Result: "2025-11-21" (01:00 PST, same date)
+
+            currentTimezoneWithMinute: -420
+            Current UTC: 2025-11-22 06:30
+            Result: "2025-11-21" (23:30 PST, previous date)
+        """
+        try:
+            # Primary: Use currentTimezoneWithMinute (most accurate, includes DST)
+            if self.current_timezone_with_minute is not None:
+                tz = timezone(timedelta(minutes=self.current_timezone_with_minute))
+                result = datetime.now(tz).strftime("%Y-%m-%d")
+                _LOGGER.debug(
+                    "Station %s: Date in timezone (offset %+d min): %s",
+                    self.id,
+                    self.current_timezone_with_minute,
+                    result,
+                )
+                return result
+
+            # Fallback: Parse base timezone string
+            if self.timezone and "GMT" in self.timezone:
+                offset_str = self.timezone.replace("GMT", "").strip()
+                if offset_str:
+                    offset_hours = int(offset_str)
+                    tz = timezone(timedelta(hours=offset_hours))
+                    result = datetime.now(tz).strftime("%Y-%m-%d")
+                    _LOGGER.debug(
+                        "Station %s: Date using base timezone %s: %s",
+                        self.id,
+                        self.timezone,
+                        result,
+                    )
+                    return result
+
+            # Last resort: UTC
+            _LOGGER.debug("Station %s: No timezone info available, using UTC", self.id)
+            return datetime.now(UTC).strftime("%Y-%m-%d")
+
+        except Exception as e:
+            _LOGGER.debug("Error getting current date for station %s: %s", self.id, e)
+            return None
 
     @property
-    def all_inverters(self) -> list[Any]:
+    def all_inverters(self) -> list[BaseInverter]:
         """Get all inverters (parallel + standalone).
 
         Returns:
             List of all inverter objects in this station.
         """
-        inverters = []
+        inverters: list[BaseInverter] = []
         # Add inverters from parallel groups
         for group in self.parallel_groups:
-            if hasattr(group, "inverters"):
-                inverters.extend(group.inverters)
+            inverters.extend(group.inverters)
         # Add standalone inverters
         inverters.extend(self.standalone_inverters)
         return inverters
 
     @property
-    def all_batteries(self) -> list[Any]:
+    def all_batteries(self) -> list[Battery]:
         """Get all batteries from all inverters.
 
         Returns:
             List of all battery objects across all inverters.
         """
-        batteries = []
+
+        batteries: list[Battery] = []
         for inverter in self.all_inverters:
-            if (
-                hasattr(inverter, "batteries")
-                and inverter.batteries
-                and isinstance(inverter.batteries, list)
-            ):
-                batteries.extend(inverter.batteries)
+            if inverter.battery_bank and inverter.battery_bank.batteries:
+                batteries.extend(inverter.battery_bank.batteries)
         return batteries
 
     async def refresh(self) -> None:
@@ -145,12 +324,25 @@ class Station(BaseDevice):
     async def refresh_all_data(self) -> None:
         """Refresh runtime data for all devices concurrently.
 
-        This method refreshes:
-        - All inverters (runtime and energy data)
-        - All MID devices
-        - Does NOT reload device hierarchy (use load() for that)
+        This method:
+        1. Checks if cache should be invalidated (hour boundaries)
+        2. Refreshes all inverters (runtime and energy data)
+        3. Refreshes all MID devices
+        4. Does NOT reload device hierarchy (use load() for that)
+
+        Cache Invalidation:
+            Automatically clears API caches within 5 minutes of hour boundaries
+            to ensure fresh data at midnight (daily energy reset).
         """
         import asyncio
+
+        # Check if cache invalidation is needed before refreshing
+        if self._client.should_invalidate_cache():
+            _LOGGER.info(
+                "Station %s: Cache invalidation needed before hour boundary, clearing all caches",
+                self.id,
+            )
+            self._client.clear_all_caches()
 
         tasks = []
 
@@ -173,6 +365,38 @@ class Station(BaseDevice):
             await asyncio.gather(*tasks, return_exceptions=True)
 
         self._last_refresh = datetime.now()
+
+    async def _warm_parameter_cache(self) -> None:
+        """Pre-fetch parameters for all inverters to eliminate first-access latency.
+
+        This optimization fetches parameters concurrently for all inverters during
+        initial station load, eliminating the ~300ms latency on first property access.
+
+        Called automatically by Station.load() and Station.load_all().
+
+        Benefits:
+        - First access to properties like `ac_charge_power_limit` is instant (<1ms)
+        - Reduces perceived latency in Home Assistant on integration startup
+        - All parameter properties return immediately (already cached)
+
+        Trade-offs:
+        - Adds 3 API calls per inverter on startup (parameter ranges 0-127, 127-254, 240-367)
+        - Increases initial load time by ~300ms (concurrent, not per-inverter)
+        - May fetch data that's never accessed
+        """
+        import asyncio
+
+        tasks = []
+
+        # Refresh parameters for all inverters concurrently
+        for inverter in self.all_inverters:
+            if hasattr(inverter, "refresh"):
+                # include_parameters=True triggers parameter fetch
+                tasks.append(inverter.refresh(include_parameters=True))
+
+        # Execute concurrently, ignore exceptions (partial failure OK)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def get_total_production(self) -> dict[str, float]:
         """Calculate total energy production across all inverters.
@@ -286,7 +510,7 @@ class Station(BaseDevice):
         except (ValueError, AttributeError):
             created_date = datetime.now()
 
-        # Create station instance
+        # Create station instance with timezone fields
         station = cls(
             client=client,
             plant_id=plant_id,
@@ -294,10 +518,22 @@ class Station(BaseDevice):
             location=location,
             timezone=plant_data.get("timezone", "UTC"),
             created_date=created_date,
+            current_timezone_with_minute=plant_data.get("currentTimezoneWithMinute"),
+            daylight_saving_time=plant_data.get("daylightSavingTime", False),
         )
+
+        # Detect and sync DST setting if needed
+        try:
+            await station.sync_dst_setting()
+        except Exception as e:
+            _LOGGER.warning("Station %s: Failed to sync DST setting during load: %s", plant_id, e)
 
         # Load device hierarchy
         await station._load_devices()
+
+        # Warm parameter cache for better initial performance (optimization)
+        # This pre-fetches parameters for all inverters to eliminate first-access latency
+        await station._warm_parameter_cache()
 
         return station
 

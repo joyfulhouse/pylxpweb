@@ -402,12 +402,17 @@ class InverterOverviewResponse(BaseModel):
 class InverterRuntime(BaseModel):
     """Inverter runtime data.
 
-    Note: Many values require scaling:
-    - Voltage: divide by 100
-    - Current: divide by 100
-    - Frequency: divide by 100
+    Raw values from API. Use property methods for scaled values.
+
+    Scaling applied by property methods:
+    - Most voltages: ÷10 (vpv1-3, vacr/s/t, vepsr/s/t, vBat)
+    - Bus voltages: ÷100 (vBus1, vBus2)
+    - Frequency: ÷100 (fac, feps, genFreq)
+    - Currents: ÷100 (maxChgCurr, maxDischgCurr)
     - Power: no scaling (direct watts)
     - Temperature: no scaling (direct Celsius)
+
+    See: constants.INVERTER_RUNTIME_SCALING for complete mapping
     """
 
     success: bool
@@ -550,16 +555,24 @@ class EnergyInfo(BaseModel):
 class BatteryModule(BaseModel):
     """Individual battery module information.
 
-    Note: Cell voltages are in millivolts (�1000 for volts).
+    Raw values from API. Use Battery class properties for scaled values.
+
+    Scaling (applied by Battery class):
+    - totalVoltage: ÷100 (5305 → 53.05V)
+    - current: ÷10 (60 → 6.0A) **CRITICAL: Not ÷100**
+    - batMaxCellVoltage/batMinCellVoltage: ÷1000 (3317 → 3.317V)
+    - batMaxCellTemp/batMinCellTemp: ÷10 (240 → 24.0°C)
+
+    See: constants.BATTERY_MODULE_SCALING for complete mapping
     """
 
     batteryKey: str
     batterySn: str
     batIndex: int
     lost: bool
-    # Voltage (�100 for volts)
+    # Voltage (÷100 for volts)
     totalVoltage: int
-    # Current (�100 for amps)
+    # Current (÷10 for amps) **CRITICAL: Not ÷100**
     current: int
     soc: int
     soh: int

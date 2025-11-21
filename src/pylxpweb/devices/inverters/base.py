@@ -7,6 +7,7 @@ inverter implementations must inherit from.
 from __future__ import annotations
 
 import asyncio
+import logging
 from abc import abstractmethod
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -15,6 +16,8 @@ from pylxpweb.models import OperatingMode
 
 from ..base import BaseDevice
 from ..models import DeviceInfo, Entity
+
+_LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
@@ -81,6 +84,13 @@ class BaseInverter(BaseDevice):
         self._battery_cache_ttl = timedelta(seconds=30)  # 30-second TTL for battery
         self._battery_cache_lock = asyncio.Lock()
 
+        # ===== Monotonic Value Tracking =====
+        # Track last valid energy values to enforce monotonic behavior
+        # and detect date boundary crossings for daily resets
+        self._last_energy_today: float | None = None
+        self._last_energy_lifetime: float | None = None
+        self._last_energy_date: str | None = None  # YYYY-MM-DD in station timezone
+
     async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
         """Refresh runtime, energy, battery, and optionally parameters from API.
 
@@ -117,13 +127,18 @@ class BaseInverter(BaseDevice):
             tasks.append(self._fetch_energy())
             task_types.append("energy")
 
-        # Battery data (30s TTL)
+        # Battery data (30s TTL) - Lazy loading optimization
+        # Only fetch if we have batteries OR haven't checked yet (first fetch)
         battery_expired = (
             force
             or self._battery_cache_time is None
             or (now - self._battery_cache_time) > self._battery_cache_ttl
         )
-        if battery_expired:
+        should_fetch_battery = battery_expired and (
+            self.battery_bank is None  # Haven't checked yet
+            or (self.battery_bank and self.battery_bank.battery_count > 0)  # Has batteries
+        )
+        if should_fetch_battery:
             tasks.append(self._fetch_battery())
             task_types.append("battery")
 
@@ -277,29 +292,148 @@ class BaseInverter(BaseDevice):
             return 0.0
         return float(getattr(self.runtime, "pinv", 0))
 
-    @property
-    def total_energy_today(self) -> float:
-        """Get total energy produced today in kWh.
+    def _should_reset_daily_energy(self) -> bool:
+        """Check if daily energy should reset based on date boundary crossing.
+
+        This method detects when the date changes (midnight in station timezone)
+        and signals that daily energy values should be reset to 0.
 
         Returns:
-            Energy produced today in kWh, or 0.0 if no data.
+            True if date boundary crossed and daily values should reset, False otherwise.
+        """
+        # Get station reference (walk up the device hierarchy)
+        station = None
+        if hasattr(self, "_client") and hasattr(self._client, "_stations"):
+            # Try to find station that contains this inverter
+            # Note: This is a bit of a hack, but Station doesn't have a back-reference
+            # In production, you'd pass station reference during initialization
+            for s in getattr(self._client, "_stations", []):
+                if self in s.all_inverters:
+                    station = s
+                    break
+
+        if station is None:
+            # Can't determine station, allow graceful degradation
+            return False
+
+        current_date = station.get_current_date()
+        if current_date is None:
+            # Can't determine date, don't force reset
+            return False
+
+        if self._last_energy_date is None:
+            # First time, just set the date
+            self._last_energy_date = current_date
+            return False
+
+        if current_date != self._last_energy_date:
+            # Date changed! Reset needed
+            _LOGGER.info(
+                "Inverter %s: Date boundary crossed from %s to %s",
+                self.serial_number,
+                self._last_energy_date,
+                current_date,
+            )
+            self._last_energy_date = current_date
+            return True
+
+        return False
+
+    @property
+    def total_energy_today(self) -> float:
+        """Get total energy produced today in kWh with monotonic enforcement.
+
+        This property enforces monotonic behavior:
+        - Within same day: value never decreases (rejects API stale data)
+        - Date boundary: forces reset to 0 (prevents stale cache issues)
+
+        Returns:
+            Energy produced today in kWh, enforcing monotonic behavior.
+
+        See Also:
+            docs/SCALING_GUIDE.md - Date boundary handling and monotonic values
         """
         if self.energy is None:
             return 0.0
-        # todayYielding is in Wh, divide by 1000 for kWh
-        return float(getattr(self.energy, "todayYielding", 0)) / 1000.0
+
+        # Get raw value from API (in Wh)
+        raw_value = float(getattr(self.energy, "todayYielding", 0))
+        current_value_kwh = raw_value / 1000.0  # Convert Wh to kWh
+
+        # Check for date boundary reset
+        if self._should_reset_daily_energy():
+            _LOGGER.info(
+                "Inverter %s: Date boundary detected, resetting daily energy from %.2f to 0.0 "
+                "(API reported %.2f)",
+                self.serial_number,
+                self._last_energy_today if self._last_energy_today is not None else 0.0,
+                current_value_kwh,
+            )
+            self._last_energy_today = 0.0
+            return 0.0
+
+        # Enforce monotonic behavior within same day
+        if self._last_energy_today is not None:
+            if current_value_kwh < self._last_energy_today:
+                # API returned lower value - reject and maintain previous
+                _LOGGER.debug(
+                    "Inverter %s: Rejecting daily energy decrease (%.2f -> %.2f), maintaining %.2f",
+                    self.serial_number,
+                    self._last_energy_today,
+                    current_value_kwh,
+                    self._last_energy_today,
+                )
+                return self._last_energy_today
+
+            # Allow reset to 0 (manual reset or API reset)
+            if current_value_kwh == 0.0 and self._last_energy_today > 0.0:
+                _LOGGER.info(
+                    "Inverter %s: Allowing manual reset to 0 for daily energy",
+                    self.serial_number,
+                )
+
+        # Update last valid state
+        self._last_energy_today = current_value_kwh
+        return current_value_kwh
 
     @property
     def total_energy_lifetime(self) -> float:
-        """Get total energy produced lifetime in kWh.
+        """Get total energy produced lifetime in kWh with monotonic enforcement.
+
+        Lifetime energy should NEVER decrease - it's truly monotonic.
+        This property rejects any API values lower than the last known value.
 
         Returns:
-            Total lifetime energy in kWh, or 0.0 if no data.
+            Total lifetime energy in kWh, enforcing strictly monotonic behavior.
+
+        See Also:
+            docs/SCALING_GUIDE.md - Lifetime sensor classification
         """
         if self.energy is None:
             return 0.0
-        # totalYielding is in Wh, divide by 1000 for kWh
-        return float(getattr(self.energy, "totalYielding", 0)) / 1000.0
+
+        # Get raw value from API (in Wh)
+        raw_value = float(getattr(self.energy, "totalYielding", 0))
+        current_value_kwh = raw_value / 1000.0  # Convert Wh to kWh
+
+        # Lifetime energy should NEVER decrease
+        if (
+            self._last_energy_lifetime is not None
+            and current_value_kwh < self._last_energy_lifetime
+        ):
+            # Reject decrease for lifetime sensor
+            _LOGGER.debug(
+                "Inverter %s: Rejecting lifetime energy decrease (%.2f -> %.2f), maintaining %.2f",
+                self.serial_number,
+                self._last_energy_lifetime,
+                current_value_kwh,
+                self._last_energy_lifetime,
+            )
+            return self._last_energy_lifetime
+
+        # Update last valid state
+        self._last_energy_lifetime = current_value_kwh
+        return current_value_kwh
 
     @property
     def battery_soc(self) -> int | None:
@@ -431,6 +565,58 @@ class BaseInverter(BaseDevice):
 
         return response.success
 
+    def _get_parameter(
+        self,
+        key: str,
+        default: int | float | bool = 0,
+        cast: type[int] | type[float] | type[bool] = int,
+    ) -> int | float | bool:
+        """Get parameter value from cache with default and type casting.
+
+        This method reads from the cached `self.parameters` dictionary, which is
+        populated by `refresh(include_parameters=True)` with a 1-hour TTL.
+
+        **NO API CALLS ARE MADE** - this is purely a cache lookup.
+
+        The cache is automatically refreshed on parameter writes and can be
+        manually invalidated via `self._parameters_cache_time = None`.
+
+        Helper method to:
+        - Reduce code repetition in property accessors
+        - Provide consistent default handling
+        - Enable type-safe parameter access
+        - Support model-specific overrides (for inverters with different mappings)
+
+        Args:
+            key: Parameter key name (e.g., "HOLD_AC_CHARGE_POWER_CMD")
+            default: Default value if parameter not found or cache is empty
+            cast: Type to cast the value to (int, float, or bool)
+
+        Returns:
+            Parameter value cast to specified type, or default if not found
+
+        Note:
+            Subclasses can override this method to map standard parameter names
+            to model-specific names if needed for different inverter types.
+
+        Example:
+            >>> # Cache hit (no API call)
+            >>> self._get_parameter("HOLD_AC_CHARGE_POWER_CMD", 0.0, float)
+            5.0
+            >>> self._get_parameter("FUNC_EPS_EN", False, bool)
+            True
+        """
+        if self.parameters is None:
+            return cast(default)
+
+        value = self.parameters.get(key, default)
+
+        # Handle bool explicitly since bool(0) is False but we want the actual bool value
+        if cast is bool and isinstance(value, bool):
+            return value
+
+        return cast(value) if value is not None else cast(default)
+
     async def set_standby_mode(self, standby: bool) -> bool:
         """Enable or disable standby mode.
 
@@ -482,12 +668,9 @@ class BaseInverter(BaseDevice):
             >>> limits
             {'on_grid_limit': 10, 'off_grid_limit': 20}
         """
-        if self.parameters is None:
-            return {"on_grid_limit": 10, "off_grid_limit": 10}
-
         return {
-            "on_grid_limit": int(self.parameters.get("HOLD_DISCHG_CUT_OFF_SOC_EOD", 10)),
-            "off_grid_limit": int(self.parameters.get("HOLD_SOC_LOW_LIMIT_EPS_DISCHG", 10)),
+            "on_grid_limit": int(self._get_parameter("HOLD_DISCHG_CUT_OFF_SOC_EOD", 10, int)),
+            "off_grid_limit": int(self._get_parameter("HOLD_SOC_LOW_LIMIT_EPS_DISCHG", 10, int)),
         }
 
     async def set_battery_soc_limits(
@@ -636,11 +819,7 @@ class BaseInverter(BaseDevice):
             >>> power
             5.0
         """
-        if self.parameters is None:
-            return 0.0
-        value = self.parameters.get("HOLD_AC_CHARGE_POWER_CMD", 0.0)
-        # API returns kW values directly
-        return float(value)
+        return self._get_parameter("HOLD_AC_CHARGE_POWER_CMD", 0.0, float)
 
     # ============================================================================
     # PV Charge Power Control (Issue #10)
@@ -692,11 +871,7 @@ class BaseInverter(BaseDevice):
             >>> power
             10
         """
-        if self.parameters is None:
-            return 0
-        value = self.parameters.get("HOLD_FORCED_CHG_POWER_CMD", 0)
-        # API returns integer kW values directly
-        return int(value)
+        return int(self._get_parameter("HOLD_FORCED_CHG_POWER_CMD", 0, int))
 
     # ============================================================================
     # Grid Peak Shaving Control (Issue #11)
@@ -750,11 +925,7 @@ class BaseInverter(BaseDevice):
             >>> power
             7.0
         """
-        if self.parameters is None:
-            return 0.0
-        value = self.parameters.get("_12K_HOLD_GRID_PEAK_SHAVING_POWER", 0.0)
-        # API returns kW values directly
-        return float(value)
+        return self._get_parameter("_12K_HOLD_GRID_PEAK_SHAVING_POWER", 0.0, float)
 
     # ============================================================================
     # AC Charge SOC Limit Control (Issue #12)
@@ -805,9 +976,7 @@ class BaseInverter(BaseDevice):
             >>> limit
             90
         """
-        if self.parameters is None:
-            return 100
-        return int(self.parameters.get("HOLD_AC_CHARGE_SOC_LIMIT", 100))
+        return int(self._get_parameter("HOLD_AC_CHARGE_SOC_LIMIT", 100, int))
 
     # ============================================================================
     # Battery Current Control (Issue #13)
@@ -883,9 +1052,7 @@ class BaseInverter(BaseDevice):
             >>> current
             100
         """
-        if self.parameters is None:
-            return 0
-        return int(self.parameters.get("HOLD_LEAD_ACID_CHARGE_RATE", 0))
+        return int(self._get_parameter("HOLD_LEAD_ACID_CHARGE_RATE", 0, int))
 
     @property
     def battery_discharge_current_limit(self) -> int:
@@ -901,9 +1068,7 @@ class BaseInverter(BaseDevice):
             >>> current
             120
         """
-        if self.parameters is None:
-            return 0
-        return int(self.parameters.get("HOLD_LEAD_ACID_DISCHARGE_RATE", 0))
+        return int(self._get_parameter("HOLD_LEAD_ACID_DISCHARGE_RATE", 0, int))
 
     # ============================================================================
     # Operating Mode Control (Issue #14)

@@ -65,8 +65,8 @@ class TestBatteryProperties:
         """Test current property returns scaled value."""
         battery = Battery(client=mock_client, battery_data=sample_battery_module)
 
-        # Sample data has current=147, should be 1.47A
-        assert battery.current == pytest.approx(1.47, rel=0.01)
+        # Sample data has current=147, should be 14.7A (÷10, not ÷100!)
+        assert battery.current == pytest.approx(14.7, rel=0.01)
 
     def test_power_property(
         self, mock_client: LuxpowerClient, sample_battery_module: BatteryModule
@@ -74,8 +74,8 @@ class TestBatteryProperties:
         """Test power property calculates V * I."""
         battery = Battery(client=mock_client, battery_data=sample_battery_module)
 
-        # Power = 53.81V * 1.47A = ~79.1W
-        assert battery.power == pytest.approx(79.1, abs=1.0)
+        # Power = 53.81V * 14.7A = ~791.0W (corrected with ÷10 scaling)
+        assert battery.power == pytest.approx(791.0, abs=1.0)
 
     def test_soc_property(
         self, mock_client: LuxpowerClient, sample_battery_module: BatteryModule

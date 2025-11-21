@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pylxpweb.constants import ScaleFactor, apply_scale
+
 from .base import BaseDevice
 from .models import DeviceInfo, Entity
 
@@ -92,7 +94,7 @@ class BatteryBank(BaseDevice):
         Returns:
             Battery voltage (scaled from vBat ÷10).
         """
-        return float(self.data.vBat) / 10.0
+        return apply_scale(self.data.vBat, ScaleFactor.SCALE_10)
 
     @property
     def charge_power(self) -> int:
