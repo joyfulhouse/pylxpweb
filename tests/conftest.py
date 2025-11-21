@@ -108,6 +108,16 @@ def pytest_runtest_call(item):
         yield
 
 
+# Pytest hook to add longer delay for DATAFRAME_TIMEOUT errors
+def pytest_runtest_makereport(item, call):
+    """Add custom retry delay for DATAFRAME_TIMEOUT errors."""
+    if call.excinfo is not None and "DATAFRAME_TIMEOUT" in str(call.excinfo.value):
+        # Mark this test for longer retry delay
+        import time
+
+        time.sleep(300)  # Wait 5 minutes before retry
+
+
 # Load sample API responses
 SAMPLES_DIR = Path(__file__).parent / "samples"
 

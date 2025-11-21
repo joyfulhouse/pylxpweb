@@ -459,6 +459,27 @@ class LuxpowerClient:
                 self._handle_request_success()
                 return json_data
 
+        except aiohttp.ContentTypeError as err:
+            # Session expired and API returned HTML login page instead of JSON
+            self._handle_request_error(err)
+            _LOGGER.warning(
+                "Got HTML response instead of JSON (session expired), attempting to re-authenticate"
+            )
+            try:
+                await self.login()
+                _LOGGER.info("Re-authentication successful, retrying request")
+                # Retry the request with the new session
+                return await self._request(
+                    method,
+                    endpoint,
+                    data=data,
+                    cache_key=cache_key,
+                    cache_endpoint=cache_endpoint,
+                )
+            except Exception as login_err:
+                _LOGGER.error("Re-authentication failed: %s", login_err)
+                raise LuxpowerAuthError("Authentication failed - session expired") from err
+
         except aiohttp.ClientResponseError as err:
             self._handle_request_error(err)
             if err.status == 401:
