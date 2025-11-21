@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2025-11-21
+
+### Added
+
+- **TTL-Based Caching** - Comprehensive caching system for inverter data to reduce API calls:
+  - Runtime data: 30-second cache (inverter metrics refresh frequently)
+  - Energy statistics: 5-minute cache (daily/monthly totals change slowly)
+  - Battery data: 30-second cache (battery metrics refresh frequently)
+  - Parameters: 1-hour cache (parameter settings change infrequently)
+  - Automatic cache invalidation on successful parameter writes
+  - 10 new unit tests for caching behavior validation
+
+### Changed
+
+- **Parameter Architecture Refactored** - Major API improvement for parameter access:
+  - Converted async parameter getter methods to synchronous properties (e.g., `await inverter.get_ac_charge_power()` → `inverter.ac_charge_power_limit`)
+  - Properties: `ac_charge_power_limit`, `pv_charge_power_limit`, `battery_soc_limits`, `battery_charge_amps`, `battery_discharge_amps`, `time_slot_limits`, `quick_charge_discharge_limits`
+  - Parameters automatically fetched on first access or when cache expires
+  - Integrated parameter fetching into `refresh()` cycle with `include_parameters=True` flag
+  - Deprecated `read_parameters()` method with migration guidance to properties
+
+- **Concurrent Parameter Fetching** - Added `_fetch_parameters()` internal method:
+  - Fetches all 3 register ranges (0-127, 127-254, 240-367) concurrently using `asyncio.gather()`
+  - Reduces parameter fetch time from ~1.5s sequential to ~0.5s parallel
+  - Integrated into cache refresh logic
+
+### Fixed
+
+- **Integration Test Compatibility** - Updated integration tests to use new property-based API:
+  - Replaced `await inverter.get_battery_soc_limits()` with `inverter.battery_soc_limits` property
+  - Replaced `await inverter.get_ac_charge_power()` with `inverter.ac_charge_power_limit` property
+  - Added `await inverter.refresh(include_parameters=True)` before accessing properties
+  - All integration tests passing with new architecture
+
+### Migration Guide
+
+**Breaking Change**: Parameter getter methods replaced with properties.
+
+Before (v0.2.6):
+```python
+await inverter.refresh()
+soc_limits = await inverter.get_battery_soc_limits()
+ac_power = await inverter.get_ac_charge_power()
+```
+
+After (v0.2.7):
+```python
+await inverter.refresh(include_parameters=True)  # Optional: fetch parameters during refresh
+soc_limits = inverter.battery_soc_limits  # Property access (auto-fetches if needed)
+ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
+```
+
+### Testing
+
+- ✅ **Unit tests**: 10 new caching tests in `test_caching.py`, all passing
+- ✅ **Integration tests**: Updated for new property syntax, all passing
+- ✅ **All quality checks passing**: ruff, mypy strict mode, pytest
+
 ## [0.2.6] - 2025-11-20
 
 ### Fixed
