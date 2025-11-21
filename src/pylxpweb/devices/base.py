@@ -69,9 +69,18 @@ class BaseDevice(ABC):
         """
         self._client = client
         self.serial_number = serial_number
-        self.model = model
+        self._model = model
         self._last_refresh: datetime | None = None
         self._refresh_interval = timedelta(seconds=30)
+
+    @property
+    def model(self) -> str:
+        """Get device model name.
+
+        Returns:
+            Device model name, or "Unknown" if not available.
+        """
+        return self._model if self._model else "Unknown"
 
     @property
     def needs_refresh(self) -> bool:

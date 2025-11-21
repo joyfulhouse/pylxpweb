@@ -119,6 +119,19 @@ class BaseInverter(BaseDevice):
         ...
 
     @property
+    def model(self) -> str:
+        """Get inverter model name.
+
+        Returns the human-readable model name from deviceTypeText provided
+        during initialization. This is set during Station.load() from the
+        inverterOverview/list API response.
+
+        Returns:
+            Inverter model name (e.g., "18KPV", "FlexBOSS21"), or "Unknown" if unavailable.
+        """
+        return self._model if self._model else "Unknown"
+
+    @property
     def has_data(self) -> bool:
         """Check if inverter has valid runtime data.
 

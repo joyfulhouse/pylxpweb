@@ -226,6 +226,41 @@ class TestInverterDeviceInfo:
 class TestInverterProperties:
     """Test inverter convenience properties."""
 
+    def test_model_property_with_valid_model(self, mock_client: LuxpowerClient) -> None:
+        """Test model property returns the model set during initialization."""
+        inverter = ConcreteInverter(client=mock_client, serial_number="1234567890", model="18KPV")
+        assert inverter.model == "18KPV"
+
+    def test_model_property_with_flexboss_model(self, mock_client: LuxpowerClient) -> None:
+        """Test model property with FlexBOSS model name."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        assert inverter.model == "FlexBOSS21"
+
+    def test_model_property_with_empty_string(self, mock_client: LuxpowerClient) -> None:
+        """Test model property returns 'Unknown' when model is empty string."""
+        inverter = ConcreteInverter(client=mock_client, serial_number="1234567890", model="")
+        assert inverter.model == "Unknown"
+
+    def test_model_property_with_unknown(self, mock_client: LuxpowerClient) -> None:
+        """Test model property with 'Unknown' model."""
+        inverter = ConcreteInverter(client=mock_client, serial_number="1234567890", model="Unknown")
+        # Should return "Unknown" as-is since it's a valid string
+        assert inverter.model == "Unknown"
+
+    def test_model_property_not_affected_by_runtime(
+        self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
+    ) -> None:
+        """Test model property is not affected by runtime.modelText (which is hex code)."""
+        inverter = ConcreteInverter(client=mock_client, serial_number="1234567890", model="18KPV")
+        inverter.runtime = sample_runtime
+
+        # Model should remain "18KPV" regardless of runtime.modelText (which is "0x1098600")
+        assert inverter.model == "18KPV"
+        # Verify runtime has modelText (just to confirm test setup)
+        assert sample_runtime.modelText == "0x1098600"
+
     def test_has_data_with_runtime(
         self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
     ) -> None:
