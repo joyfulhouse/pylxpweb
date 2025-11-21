@@ -95,8 +95,7 @@ class TestObjectHierarchyLoading:
             assert station.location is not None
             assert station.location.address  # Address should be present
             print(f"  Location: {station.location.address}")
-            if station.location.latitude != 0 or station.location.longitude != 0:
-                print(f"  Coordinates: {station.location.latitude}, {station.location.longitude}")
+            # Note: API does not provide latitude/longitude coordinates
 
             # Check parallel groups (may be empty)
             print(f"  Parallel Groups: {len(station.parallel_groups)}")
@@ -412,7 +411,7 @@ class TestDataConsistency:
             print(f"  SOC: {battery.soc}%")
             print(f"  SOH: {battery.soh}%")
             print(f"  Voltage: {battery.voltage}V")
-            print(f"  Temperature: {battery.temperature}°C")
+            print(f"  Max cell temp: {battery.max_cell_temp}°C")
             print(f"  Cycle count: {battery.cycle_count}")
 
             # Validate ranges
@@ -421,8 +420,8 @@ class TestDataConsistency:
             assert 30 < battery.voltage < 80, (
                 f"Voltage {battery.voltage}V seems wrong for 48V system"
             )
-            assert -20 < battery.temperature < 80, (
-                f"Temperature {battery.temperature}°C seems wrong"
+            assert -20 < battery.max_cell_temp < 80, (
+                f"Max cell temperature {battery.max_cell_temp}°C seems wrong"
             )
             assert battery.cycle_count >= 0, f"Cycle count {battery.cycle_count} is negative"
 
@@ -590,9 +589,16 @@ class TestErrorHandling:
         print("\n=== Testing Missing Data Handling ===")
         print(f"has_data before refresh: {inverter.has_data}")
 
-        # Should handle missing data gracefully
-        assert inverter.power_output == 0 or inverter.runtime is None
-        assert inverter.total_energy_today >= 0 or inverter.energy is None
+        # Should handle missing or present data gracefully
+        # If runtime is None, power_output should be 0 (default)
+        # If runtime exists, power_output can be any value
+        if inverter.runtime is None:
+            assert inverter.power_output == 0
+
+        # If energy is None, total_energy_today should be 0 (default)
+        # If energy exists, total_energy_today can be any non-negative value
+        if inverter.energy is None:
+            assert inverter.total_energy_today == 0
 
         # Entities should still be generated (may have None values)
         entities = inverter.to_entities()

@@ -70,6 +70,7 @@ class LuxpowerClient:
         verify_ssl: bool = True,
         timeout: int = 30,
         session: aiohttp.ClientSession | None = None,
+        iana_timezone: str | None = None,
     ) -> None:
         """Initialize the Luxpower API client.
 
@@ -78,16 +79,19 @@ class LuxpowerClient:
             password: API password for authentication
             base_url: Base URL for the API (default: EG4 Electronics endpoint)
             verify_ssl: Whether to verify SSL certificates
-            timeout: Request timeout in seconds
-            session: Optional aiohttp.ClientSession to use for requests.
-                    If not provided, a new session will be created.
-                    Platinum tier requirement: Support websession injection.
+            timeout: Request timeout in seconds (default: 30)
+            session: Optional aiohttp ClientSession for session injection
+            iana_timezone: Optional IANA timezone (e.g., "America/Los_Angeles")
+                for DST auto-detection. If not provided, DST auto-detection
+                will be disabled. This is required because the API doesn't
+                provide sufficient location data to reliably determine timezone.
         """
         self.username = username
         self.password = password
         self.base_url = base_url.rstrip("/")
         self.verify_ssl = verify_ssl
         self.timeout = ClientTimeout(total=timeout)
+        self.iana_timezone = iana_timezone
 
         # Session management
         self._session: aiohttp.ClientSession | None = session
@@ -117,6 +121,9 @@ class LuxpowerClient:
         }
         self._current_backoff_delay: float = 0.0
         self._consecutive_errors: int = 0
+
+        # Cache invalidation for boundary handling
+        self._last_cache_invalidation: datetime | None = None
 
         # API namespace (new v0.2.0 interface)
         self._api_namespace: APINamespace | None = None
@@ -515,3 +522,93 @@ class LuxpowerClient:
         if not self._session_expires or datetime.now() >= self._session_expires:
             _LOGGER.info("Session expired or missing, re-authenticating")
             await self.login()
+
+    # Cache Invalidation for Date/Hour Boundaries
+
+    def should_invalidate_cache(self) -> bool:
+        """Check if cache should be invalidated for hour/date boundaries.
+
+        This implements proactive cache clearing within 5 minutes of the top
+        of each hour to ensure fresh data at date boundaries (midnight).
+
+        Returns:
+            True if cache should be cleared now, False otherwise.
+
+        Algorithm:
+            1. Within 5 minutes of hour boundary (XX:55-XX:59): Consider invalidation
+            2. First run: Invalidate immediately if within window
+            3. Hour crossed: Always invalidate
+            4. Rate limit: Minimum 10 minutes between invalidations
+
+        See Also:
+            docs/SCALING_GUIDE.md - Cache invalidation strategy
+        """
+        now = datetime.now()
+        minutes_to_hour = 60 - now.minute
+
+        # Outside the 5-minute window before hour boundary
+        if minutes_to_hour > 5:
+            return False
+
+        # First run - invalidate if within window
+        if self._last_cache_invalidation is None:
+            _LOGGER.debug(
+                "First run within %d minutes of hour boundary, will invalidate cache",
+                minutes_to_hour,
+            )
+            return True
+
+        # Check if we've crossed into a new hour
+        last_hour = self._last_cache_invalidation.hour
+        current_hour = now.hour
+        if current_hour != last_hour:
+            _LOGGER.debug(
+                "Hour boundary crossed from %d:xx to %d:xx, will invalidate cache",
+                last_hour,
+                current_hour,
+            )
+            return True
+
+        # Within 5-minute window but haven't invalidated recently
+        time_since_last = now - self._last_cache_invalidation
+        min_interval = timedelta(minutes=10)
+        should_invalidate = time_since_last >= min_interval
+
+        if should_invalidate:
+            _LOGGER.debug(
+                "Within %d minutes of hour boundary and %s since last invalidation, "
+                "will invalidate cache",
+                minutes_to_hour,
+                time_since_last,
+            )
+
+        return should_invalidate
+
+    def clear_all_caches(self) -> None:
+        """Clear all API response caches.
+
+        This method clears:
+        - Response cache (runtime, energy, battery data)
+        - Endpoint-specific caches (if accessible)
+
+        Call this before hour boundaries to ensure fresh data at date rollover.
+
+        See Also:
+            should_invalidate_cache() - Determines when to call this method
+        """
+        # Clear main response cache
+        self._response_cache.clear()
+
+        # Clear endpoint caches if available
+        if self._api_namespace:
+            if hasattr(self.api.devices, "_response_cache"):
+                self.api.devices._response_cache.clear()
+            if hasattr(self.api.plants, "_response_cache"):
+                self.api.plants._response_cache.clear()
+
+        self._last_cache_invalidation = datetime.now()
+
+        _LOGGER.info(
+            "Cleared all API caches at %s to prevent date rollover issues",
+            self._last_cache_invalidation.strftime("%Y-%m-%d %H:%M:%S"),
+        )

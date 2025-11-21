@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pylxpweb.constants import scale_battery_value
+
 from .base import BaseDevice
 from .models import DeviceClass, DeviceInfo, Entity, StateClass
 
@@ -45,10 +47,44 @@ class Battery(BaseDevice):
         # Use batteryKey as serial_number for BaseDevice
         super().__init__(client, battery_data.batteryKey, "Battery Module")
 
-        self.battery_key = battery_data.batteryKey
-        self.battery_sn = battery_data.batterySn
-        self.battery_index = battery_data.batIndex
-        self.data = battery_data
+        self._battery_key = battery_data.batteryKey
+        self._battery_sn = battery_data.batterySn
+        self._battery_index = battery_data.batIndex
+        self._data = battery_data
+
+    # Public accessors for backward compatibility
+    @property
+    def battery_key(self) -> str:
+        """Get battery key identifier."""
+        return self._battery_key
+
+    @property
+    def battery_sn(self) -> str:
+        """Get battery serial number."""
+        return self._battery_sn
+
+    @property
+    def battery_index(self) -> int:
+        """Get battery index position."""
+        return self._battery_index
+
+    @property
+    def data(self) -> BatteryModule:
+        """Get raw battery data.
+
+        Note: Direct modification of this data is discouraged.
+        Use the provided setter methods or properties instead.
+        """
+        return self._data
+
+    @data.setter
+    def data(self, value: BatteryModule) -> None:
+        """Set raw battery data.
+
+        Args:
+            value: New BatteryModule data
+        """
+        self._data = value
 
     @property
     def voltage(self) -> float:
@@ -57,16 +93,16 @@ class Battery(BaseDevice):
         Returns:
             Battery voltage (scaled from totalVoltage ÷100).
         """
-        return float(self.data.totalVoltage) / 100.0
+        return scale_battery_value("totalVoltage", self._data.totalVoltage)
 
     @property
     def current(self) -> float:
         """Get battery current in amps.
 
         Returns:
-            Battery current (scaled from current ÷100).
+            Battery current (scaled from current ÷10). **CRITICAL: Not ÷100**
         """
-        return float(self.data.current) / 100.0
+        return scale_battery_value("current", self._data.current)
 
     @property
     def power(self) -> float:
@@ -84,7 +120,7 @@ class Battery(BaseDevice):
         Returns:
             State of charge percentage (0-100).
         """
-        return self.data.soc
+        return self._data.soc
 
     @property
     def soh(self) -> int:
@@ -93,7 +129,7 @@ class Battery(BaseDevice):
         Returns:
             State of health percentage (0-100).
         """
-        return self.data.soh
+        return self._data.soh
 
     @property
     def max_cell_temp(self) -> float:
@@ -102,7 +138,7 @@ class Battery(BaseDevice):
         Returns:
             Maximum cell temperature (scaled from batMaxCellTemp ÷10).
         """
-        return float(self.data.batMaxCellTemp) / 10.0
+        return scale_battery_value("batMaxCellTemp", self._data.batMaxCellTemp)
 
     @property
     def min_cell_temp(self) -> float:
@@ -111,7 +147,7 @@ class Battery(BaseDevice):
         Returns:
             Minimum cell temperature (scaled from batMinCellTemp ÷10).
         """
-        return float(self.data.batMinCellTemp) / 10.0
+        return scale_battery_value("batMinCellTemp", self._data.batMinCellTemp)
 
     @property
     def max_cell_voltage(self) -> float:
@@ -120,7 +156,7 @@ class Battery(BaseDevice):
         Returns:
             Maximum cell voltage (scaled from batMaxCellVoltage ÷1000).
         """
-        return float(self.data.batMaxCellVoltage) / 1000.0
+        return scale_battery_value("batMaxCellVoltage", self._data.batMaxCellVoltage)
 
     @property
     def min_cell_voltage(self) -> float:
@@ -129,7 +165,7 @@ class Battery(BaseDevice):
         Returns:
             Minimum cell voltage (scaled from batMinCellVoltage ÷1000).
         """
-        return float(self.data.batMinCellVoltage) / 1000.0
+        return scale_battery_value("batMinCellVoltage", self._data.batMinCellVoltage)
 
     @property
     def cell_voltage_delta(self) -> float:
@@ -147,7 +183,7 @@ class Battery(BaseDevice):
         Returns:
             Number of charge/discharge cycles.
         """
-        return self.data.cycleCnt
+        return self._data.cycleCnt
 
     @property
     def firmware_version(self) -> str:
@@ -156,7 +192,7 @@ class Battery(BaseDevice):
         Returns:
             Firmware version string.
         """
-        return self.data.fwVersionText
+        return self._data.fwVersionText
 
     @property
     def is_lost(self) -> bool:
@@ -165,7 +201,7 @@ class Battery(BaseDevice):
         Returns:
             True if battery is not communicating.
         """
-        return self.data.lost
+        return self._data.lost
 
     async def refresh(self) -> None:
         """Refresh battery data.
@@ -184,8 +220,8 @@ class Battery(BaseDevice):
             DeviceInfo with battery metadata.
         """
         return DeviceInfo(
-            identifiers={("pylxpweb", f"battery_{self.battery_key}")},
-            name=f"Battery {self.battery_index + 1} ({self.battery_sn})",
+            identifiers={("pylxpweb", f"battery_{self._battery_key}")},
+            name=f"Battery {self._battery_index + 1} ({self._battery_sn})",
             manufacturer="EG4/Luxpower",
             model="Battery Module",
             sw_version=self.firmware_version,
@@ -198,12 +234,15 @@ class Battery(BaseDevice):
             List of Entity objects representing sensors for this battery.
         """
         entities = []
+        # Use properties for consistent access
+        battery_key = self.battery_key
+        battery_num = self.battery_index + 1
 
         # Voltage
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_voltage",
-                name=f"Battery {self.battery_index + 1} Voltage",
+                unique_id=f"{battery_key}_voltage",
+                name=f"Battery {battery_num} Voltage",
                 device_class=DeviceClass.VOLTAGE,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="V",
@@ -214,8 +253,8 @@ class Battery(BaseDevice):
         # Current
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_current",
-                name=f"Battery {self.battery_index + 1} Current",
+                unique_id=f"{battery_key}_current",
+                name=f"Battery {battery_num} Current",
                 device_class=DeviceClass.CURRENT,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="A",
@@ -226,8 +265,8 @@ class Battery(BaseDevice):
         # Power
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_power",
-                name=f"Battery {self.battery_index + 1} Power",
+                unique_id=f"{battery_key}_power",
+                name=f"Battery {battery_num} Power",
                 device_class=DeviceClass.POWER,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="W",
@@ -238,8 +277,8 @@ class Battery(BaseDevice):
         # State of Charge
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_soc",
-                name=f"Battery {self.battery_index + 1} SOC",
+                unique_id=f"{battery_key}_soc",
+                name=f"Battery {battery_num} SOC",
                 device_class=DeviceClass.BATTERY,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="%",
@@ -250,8 +289,8 @@ class Battery(BaseDevice):
         # State of Health
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_soh",
-                name=f"Battery {self.battery_index + 1} SOH",
+                unique_id=f"{battery_key}_soh",
+                name=f"Battery {battery_num} SOH",
                 device_class=DeviceClass.BATTERY,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="%",
@@ -262,8 +301,8 @@ class Battery(BaseDevice):
         # Maximum Cell Temperature
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_max_cell_temp",
-                name=f"Battery {self.battery_index + 1} Max Cell Temperature",
+                unique_id=f"{battery_key}_max_cell_temp",
+                name=f"Battery {battery_num} Max Cell Temperature",
                 device_class=DeviceClass.TEMPERATURE,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="°C",
@@ -274,8 +313,8 @@ class Battery(BaseDevice):
         # Minimum Cell Temperature
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_min_cell_temp",
-                name=f"Battery {self.battery_index + 1} Min Cell Temperature",
+                unique_id=f"{battery_key}_min_cell_temp",
+                name=f"Battery {battery_num} Min Cell Temperature",
                 device_class=DeviceClass.TEMPERATURE,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="°C",
@@ -286,8 +325,8 @@ class Battery(BaseDevice):
         # Maximum Cell Voltage
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_max_cell_voltage",
-                name=f"Battery {self.battery_index + 1} Max Cell Voltage",
+                unique_id=f"{battery_key}_max_cell_voltage",
+                name=f"Battery {battery_num} Max Cell Voltage",
                 device_class=DeviceClass.VOLTAGE,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="V",
@@ -298,8 +337,8 @@ class Battery(BaseDevice):
         # Minimum Cell Voltage
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_min_cell_voltage",
-                name=f"Battery {self.battery_index + 1} Min Cell Voltage",
+                unique_id=f"{battery_key}_min_cell_voltage",
+                name=f"Battery {battery_num} Min Cell Voltage",
                 device_class=DeviceClass.VOLTAGE,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="V",
@@ -310,8 +349,8 @@ class Battery(BaseDevice):
         # Cell Voltage Delta (imbalance indicator)
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_cell_voltage_delta",
-                name=f"Battery {self.battery_index + 1} Cell Voltage Delta",
+                unique_id=f"{battery_key}_cell_voltage_delta",
+                name=f"Battery {battery_num} Cell Voltage Delta",
                 device_class=DeviceClass.VOLTAGE,
                 state_class=StateClass.MEASUREMENT,
                 unit_of_measurement="V",
@@ -322,8 +361,8 @@ class Battery(BaseDevice):
         # Cycle Count
         entities.append(
             Entity(
-                unique_id=f"{self.battery_key}_cycle_count",
-                name=f"Battery {self.battery_index + 1} Cycle Count",
+                unique_id=f"{battery_key}_cycle_count",
+                name=f"Battery {battery_num} Cycle Count",
                 device_class=None,  # No standard device class for cycle count
                 state_class=StateClass.TOTAL_INCREASING,
                 unit_of_measurement="cycles",

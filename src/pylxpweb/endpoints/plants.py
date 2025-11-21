@@ -83,14 +83,13 @@ class PlantEndpoints(BaseEndpoint):
                 - name: Station name
                 - nominalPower: Solar PV power rating (W)
                 - timezone: Timezone string (e.g., "GMT -8")
+                - currentTimezoneWithMinute: Timezone offset in minutes
                 - daylightSavingTime: DST enabled (boolean)
-                - continent: Continent enum value
-                - region: Region enum value
-                - country: Country enum value
-                - longitude: Geographic coordinate
-                - latitude: Geographic coordinate
+                - country: Country name
                 - createDate: Plant creation date
                 - address: Physical address
+
+            Note: Latitude and longitude coordinates are NOT included in the API response.
 
         Raises:
             LuxpowerAPIError: If plant not found or API error occurs

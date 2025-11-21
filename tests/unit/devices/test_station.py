@@ -31,24 +31,25 @@ def sample_location() -> Location:
     """Create a sample location."""
     return Location(
         address="123 Solar St, City, State 12345",
-        latitude=40.7128,
-        longitude=-74.0060,
         country="United States",
     )
 
 
 @pytest.fixture
 def sample_plant_data() -> dict:
-    """Sample plant data for testing."""
+    """Sample plant data for testing.
+
+    Note: API does not include lat/lng fields - coordinates are not provided.
+    """
     return {
         "plantId": 12345,
         "name": "Test Solar Station",
         "timezone": "America/New_York",
         "createDate": "2024-01-01T00:00:00",
         "address": "123 Solar St",
-        "lat": 40.7128,
-        "lng": -74.0060,
         "country": "US",
+        "currentTimezoneWithMinute": -300,
+        "daylightSavingTime": False,
     }
 
 
@@ -100,14 +101,10 @@ class TestLocationClass:
         """Test creating a Location."""
         location = Location(
             address="123 Main St",
-            latitude=40.0,
-            longitude=-74.0,
             country="USA",
         )
 
         assert location.address == "123 Main St"
-        assert location.latitude == 40.0
-        assert location.longitude == -74.0
         assert location.country == "USA"
 
 
@@ -227,16 +224,16 @@ class TestStationFactoryMethods:
         """Test loading a station from API."""
         from pylxpweb.models import InverterOverviewResponse
 
-        # Mock API responses
+        # Mock API responses (matching actual API format - no lat/lng)
         plant_data = {
             "plantId": 12345,
             "name": "Test Station",
             "address": "123 Solar St",
-            "lat": 40.7128,
-            "lng": -74.0060,
             "country": "USA",
             "timezone": "America/New_York",
             "createDate": "2024-01-01T00:00:00Z",
+            "currentTimezoneWithMinute": -300,
+            "daylightSavingTime": False,
         }
 
         # Mock devices response (no devices)
@@ -245,6 +242,7 @@ class TestStationFactoryMethods:
         # Mock the API calls
         mock_client.api.plants.get_plant_details = AsyncMock(return_value=plant_data)
         mock_client.api.devices.get_devices = AsyncMock(return_value=devices_response)
+        mock_client.api.plants.set_daylight_saving_time = AsyncMock(return_value={"success": True})
 
         # Load station
         station = await Station.load(mock_client, 12345)
@@ -253,8 +251,6 @@ class TestStationFactoryMethods:
         assert station.id == 12345
         assert station.name == "Test Station"
         assert station.location.address == "123 Solar St"
-        assert station.location.latitude == 40.7128
-        assert station.location.longitude == -74.0060
         assert station.location.country == "USA"
         assert station.timezone == "America/New_York"
 
@@ -315,8 +311,6 @@ class TestStationFactoryMethods:
         async def mock_load(client: LuxpowerClient, plant_id: int) -> Station:
             location = Location(
                 address=f"Address {plant_id}",
-                latitude=0.0,
-                longitude=0.0,
                 country="USA",
             )
             return Station(

@@ -6,8 +6,10 @@ installation with inverters, batteries, and optional MID devices.
 
 from __future__ import annotations
 
+import logging
+import zoneinfo
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from pylxpweb.models import InverterOverviewItem, ParallelGroupDeviceItem
@@ -15,8 +17,14 @@ from pylxpweb.models import InverterOverviewItem, ParallelGroupDeviceItem
 from .base import BaseDevice
 from .models import DeviceInfo, Entity
 
+_LOGGER = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
+
+    from .battery import Battery
+    from .inverters.base import BaseInverter
+    from .parallel_group import ParallelGroup
 
 
 @dataclass
@@ -25,14 +33,13 @@ class Location:
 
     Attributes:
         address: Street address
-        latitude: Latitude coordinate
-        longitude: Longitude coordinate
         country: Country name or code
+
+    Note:
+        Latitude and longitude are not provided by the API.
     """
 
     address: str
-    latitude: float
-    longitude: float
     country: str
 
 
@@ -74,6 +81,8 @@ class Station(BaseDevice):
         location: Location,
         timezone: str,
         created_date: datetime,
+        current_timezone_with_minute: int | None = None,
+        daylight_saving_time: bool = False,
     ) -> None:
         """Initialize station.
 
@@ -82,8 +91,11 @@ class Station(BaseDevice):
             plant_id: Unique plant/station identifier
             name: Human-readable station name
             location: Geographic location information
-            timezone: Timezone string (e.g., "America/New_York")
+            timezone: Timezone string (e.g., "GMT -8")
             created_date: Station creation timestamp
+            current_timezone_with_minute: Timezone offset in HHMM format
+                (e.g., -700 for PDT = -7:00)
+            daylight_saving_time: DST flag from API (may be incorrect)
         """
         # BaseDevice expects serial_number, but stations use plant_id
         # We'll use str(plant_id) as the "serial number" for consistency
@@ -92,45 +104,230 @@ class Station(BaseDevice):
         self.id = plant_id
         self.name = name
         self.location = location
-        self.timezone = timezone
+        self.timezone = timezone  # "GMT -8" (base timezone)
         self.created_date = created_date
 
+        # Timezone precision fields
+        self.current_timezone_with_minute = current_timezone_with_minute  # -700 = GMT-7:00 (PDT)
+        self.daylight_saving_time = daylight_saving_time  # API's DST flag (may be wrong)
+
+        # Computed DST status (based on offset analysis)
+        self._actual_dst_active: bool | None = None
+
         # Device collections (loaded by _load_devices)
-        self.parallel_groups: list[Any] = []  # Will be ParallelGroup objects
-        self.standalone_inverters: list[Any] = []  # Will be BaseInverter objects
-        self.weather: Any | None = None  # Weather data (optional)
+        self.parallel_groups: list[ParallelGroup] = []
+        self.standalone_inverters: list[BaseInverter] = []
+        self.weather: dict[str, Any] | None = None  # Weather data (optional)
+
+    def detect_dst_status(self) -> bool | None:
+        """Detect if DST should be currently active based on system time and timezone.
+
+        This method uses Python's zoneinfo to determine if DST should be active
+        at the current date/time for the station's timezone. This is necessary because
+        the API's currentTimezoneWithMinute is not independent - it's calculated from
+        the base timezone + DST flag, creating circular logic.
+
+        IMPORTANT: This method requires an IANA timezone to be configured on the
+        LuxpowerClient (via the iana_timezone parameter). The API does not provide
+        sufficient location data to reliably determine the IANA timezone automatically.
+
+        Returns:
+            True if DST should be active, False if not, None if cannot determine
+            (no IANA timezone configured or invalid timezone).
+
+        Example:
+            # Client configured with IANA timezone
+            client = LuxpowerClient(username, password, iana_timezone="America/Los_Angeles")
+            station = await Station.load(client, plant_id)
+            dst_active = station.detect_dst_status()  # Returns True/False
+
+            # Client without IANA timezone
+            client = LuxpowerClient(username, password)
+            station = await Station.load(client, plant_id)
+            dst_active = station.detect_dst_status()  # Returns None (disabled)
+        """
+        try:
+            # Check if IANA timezone is configured
+            iana_timezone = getattr(self._client, "iana_timezone", None)
+            if not iana_timezone:
+                _LOGGER.debug(
+                    "Station %s: DST detection disabled (no IANA timezone configured)",
+                    self.id,
+                )
+                return None
+
+            # Validate timezone string
+            try:
+                tz = zoneinfo.ZoneInfo(iana_timezone)
+            except zoneinfo.ZoneInfoNotFoundError:
+                _LOGGER.error(
+                    "Station %s: Invalid IANA timezone '%s'",
+                    self.id,
+                    iana_timezone,
+                )
+                return None
+
+            # Check if DST is active using zoneinfo
+            now = datetime.now(tz)
+            dst_offset = now.dst()
+            dst_active = dst_offset is not None and dst_offset.total_seconds() > 0
+
+            _LOGGER.debug(
+                "Station %s: DST detected using %s: %s (offset: %s)",
+                self.id,
+                iana_timezone,
+                "ACTIVE" if dst_active else "INACTIVE",
+                now.strftime("%z"),
+            )
+
+            return dst_active
+
+        except Exception as e:
+            _LOGGER.debug("Station %s: Error detecting DST status: %s", self.id, e)
+            return None
+
+    async def sync_dst_setting(self) -> bool:
+        """Synchronize DST setting with API if mismatch detected.
+
+        This method:
+        1. Detects actual DST status using configured IANA timezone
+        2. Compares with API's daylightSavingTime flag
+        3. Updates API if mismatch found
+
+        IMPORTANT: This method requires an IANA timezone to be configured on the
+        LuxpowerClient. If not configured, sync will be skipped.
+
+        Returns:
+            True if setting was synced (or already correct), False if sync failed
+            or if DST detection is disabled (no IANA timezone configured).
+        """
+        actual_dst = self.detect_dst_status()
+
+        if actual_dst is None:
+            _LOGGER.debug(
+                "Station %s: DST detection disabled or failed, skipping sync",
+                self.id,
+            )
+            return False
+
+        # Check if API setting matches detected status
+        if actual_dst == self.daylight_saving_time:
+            _LOGGER.debug("Station %s: DST setting already correct (%s)", self.id, actual_dst)
+            return True
+
+        # Mismatch detected - update API
+        _LOGGER.warning(
+            "Station %s: DST mismatch detected! API reports %s but offset indicates %s. "
+            "Updating API setting...",
+            self.id,
+            self.daylight_saving_time,
+            actual_dst,
+        )
+
+        try:
+            success = await self.set_daylight_saving_time(actual_dst)
+            if success:
+                self.daylight_saving_time = actual_dst
+                _LOGGER.info(
+                    "Station %s: Successfully updated DST setting to %s", self.id, actual_dst
+                )
+            else:
+                _LOGGER.error("Station %s: Failed to update DST setting", self.id)
+            return success
+
+        except Exception as e:
+            _LOGGER.error("Station %s: Error syncing DST setting: %s", self.id, e)
+            return False
+
+    def get_current_date(self) -> str | None:
+        """Get current date in station's timezone as YYYY-MM-DD string.
+
+        This method uses currentTimezoneWithMinute (most accurate) as the primary
+        source, falling back to parsing the timezone string if unavailable.
+
+        Returns:
+            Date string in YYYY-MM-DD format, or None if timezone cannot be determined.
+
+        Example:
+            currentTimezoneWithMinute: -420 (7 hours behind UTC)
+            Current UTC: 2025-11-21 08:00
+            Result: "2025-11-21" (01:00 PST, same date)
+
+            currentTimezoneWithMinute: -420
+            Current UTC: 2025-11-22 06:30
+            Result: "2025-11-21" (23:30 PST, previous date)
+        """
+        try:
+            # Primary: Use currentTimezoneWithMinute (most accurate, includes DST)
+            # Note: This field is in HHMM format (e.g., -800 = -8:00), not literal minutes
+            if self.current_timezone_with_minute is not None:
+                # Parse HHMM format: -800 = -8 hours, 00 minutes
+                value = self.current_timezone_with_minute
+                hours = abs(value) // 100
+                minutes = abs(value) % 100
+                total_minutes = -(hours * 60 + minutes) if value < 0 else (hours * 60 + minutes)
+
+                tz = timezone(timedelta(minutes=total_minutes))
+                result = datetime.now(tz).strftime("%Y-%m-%d")
+                _LOGGER.debug(
+                    "Station %s: Date in timezone (offset %+d HHMM = %+d min): %s",
+                    self.id,
+                    self.current_timezone_with_minute,
+                    total_minutes,
+                    result,
+                )
+                return result
+
+            # Fallback: Parse base timezone string
+            if self.timezone and "GMT" in self.timezone:
+                offset_str = self.timezone.replace("GMT", "").strip()
+                if offset_str:
+                    offset_hours = int(offset_str)
+                    tz = timezone(timedelta(hours=offset_hours))
+                    result = datetime.now(tz).strftime("%Y-%m-%d")
+                    _LOGGER.debug(
+                        "Station %s: Date using base timezone %s: %s",
+                        self.id,
+                        self.timezone,
+                        result,
+                    )
+                    return result
+
+            # Last resort: UTC
+            _LOGGER.debug("Station %s: No timezone info available, using UTC", self.id)
+            return datetime.now(UTC).strftime("%Y-%m-%d")
+
+        except Exception as e:
+            _LOGGER.debug("Error getting current date for station %s: %s", self.id, e)
+            return None
 
     @property
-    def all_inverters(self) -> list[Any]:
+    def all_inverters(self) -> list[BaseInverter]:
         """Get all inverters (parallel + standalone).
 
         Returns:
             List of all inverter objects in this station.
         """
-        inverters = []
+        inverters: list[BaseInverter] = []
         # Add inverters from parallel groups
         for group in self.parallel_groups:
-            if hasattr(group, "inverters"):
-                inverters.extend(group.inverters)
+            inverters.extend(group.inverters)
         # Add standalone inverters
         inverters.extend(self.standalone_inverters)
         return inverters
 
     @property
-    def all_batteries(self) -> list[Any]:
+    def all_batteries(self) -> list[Battery]:
         """Get all batteries from all inverters.
 
         Returns:
             List of all battery objects across all inverters.
         """
-        batteries = []
+
+        batteries: list[Battery] = []
         for inverter in self.all_inverters:
-            if (
-                hasattr(inverter, "batteries")
-                and inverter.batteries
-                and isinstance(inverter.batteries, list)
-            ):
-                batteries.extend(inverter.batteries)
+            if inverter.battery_bank and inverter.battery_bank.batteries:
+                batteries.extend(inverter.battery_bank.batteries)
         return batteries
 
     async def refresh(self) -> None:
@@ -145,12 +342,25 @@ class Station(BaseDevice):
     async def refresh_all_data(self) -> None:
         """Refresh runtime data for all devices concurrently.
 
-        This method refreshes:
-        - All inverters (runtime and energy data)
-        - All MID devices
-        - Does NOT reload device hierarchy (use load() for that)
+        This method:
+        1. Checks if cache should be invalidated (hour boundaries)
+        2. Refreshes all inverters (runtime and energy data)
+        3. Refreshes all MID devices
+        4. Does NOT reload device hierarchy (use load() for that)
+
+        Cache Invalidation:
+            Automatically clears API caches within 5 minutes of hour boundaries
+            to ensure fresh data at midnight (daily energy reset).
         """
         import asyncio
+
+        # Check if cache invalidation is needed before refreshing
+        if self._client.should_invalidate_cache():
+            _LOGGER.info(
+                "Station %s: Cache invalidation needed before hour boundary, clearing all caches",
+                self.id,
+            )
+            self._client.clear_all_caches()
 
         tasks = []
 
@@ -173,6 +383,38 @@ class Station(BaseDevice):
             await asyncio.gather(*tasks, return_exceptions=True)
 
         self._last_refresh = datetime.now()
+
+    async def _warm_parameter_cache(self) -> None:
+        """Pre-fetch parameters for all inverters to eliminate first-access latency.
+
+        This optimization fetches parameters concurrently for all inverters during
+        initial station load, eliminating the ~300ms latency on first property access.
+
+        Called automatically by Station.load() and Station.load_all().
+
+        Benefits:
+        - First access to properties like `ac_charge_power_limit` is instant (<1ms)
+        - Reduces perceived latency in Home Assistant on integration startup
+        - All parameter properties return immediately (already cached)
+
+        Trade-offs:
+        - Adds 3 API calls per inverter on startup (parameter ranges 0-127, 127-254, 240-367)
+        - Increases initial load time by ~300ms (concurrent, not per-inverter)
+        - May fetch data that's never accessed
+        """
+        import asyncio
+
+        tasks = []
+
+        # Refresh parameters for all inverters concurrently
+        for inverter in self.all_inverters:
+            if hasattr(inverter, "refresh"):
+                # include_parameters=True triggers parameter fetch
+                tasks.append(inverter.refresh(include_parameters=True))
+
+        # Execute concurrently, ignore exceptions (partial failure OK)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def get_total_production(self) -> dict[str, float]:
         """Calculate total energy production across all inverters.
@@ -274,8 +516,6 @@ class Station(BaseDevice):
         # Create Location from plant data
         location = Location(
             address=plant_data.get("address", ""),
-            latitude=plant_data.get("lat", 0.0),
-            longitude=plant_data.get("lng", 0.0),
             country=plant_data.get("country", ""),
         )
 
@@ -286,7 +526,7 @@ class Station(BaseDevice):
         except (ValueError, AttributeError):
             created_date = datetime.now()
 
-        # Create station instance
+        # Create station instance with timezone fields
         station = cls(
             client=client,
             plant_id=plant_id,
@@ -294,10 +534,22 @@ class Station(BaseDevice):
             location=location,
             timezone=plant_data.get("timezone", "UTC"),
             created_date=created_date,
+            current_timezone_with_minute=plant_data.get("currentTimezoneWithMinute"),
+            daylight_saving_time=plant_data.get("daylightSavingTime", False),
         )
+
+        # Detect and sync DST setting if needed
+        try:
+            await station.sync_dst_setting()
+        except Exception as e:
+            _LOGGER.warning("Station %s: Failed to sync DST setting during load: %s", plant_id, e)
 
         # Load device hierarchy
         await station._load_devices()
+
+        # Warm parameter cache for better initial performance (optimization)
+        # This pre-fetches parameters for all inverters to eliminate first-access latency
+        await station._warm_parameter_cache()
 
         return station
 

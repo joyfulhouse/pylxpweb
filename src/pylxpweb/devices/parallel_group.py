@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
 
+    from .inverters.base import BaseInverter
+    from .mid_device import MIDDevice
     from .station import Station
 
 
@@ -60,8 +62,8 @@ class ParallelGroup:
         self.first_device_serial = first_device_serial
 
         # Device collections (loaded by factory methods)
-        self.inverters: list[Any] = []  # Will be BaseInverter objects
-        self.mid_device: Any | None = None  # Will be MIDDevice object if present
+        self.inverters: list[BaseInverter] = []
+        self.mid_device: MIDDevice | None = None
 
     async def refresh(self) -> None:
         """Refresh runtime data for all devices in group.
