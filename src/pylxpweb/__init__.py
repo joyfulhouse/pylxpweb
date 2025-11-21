@@ -18,6 +18,23 @@ Usage:
             for station in stations:
                 for inverter in station.all_inverters:
                     await inverter.refresh()
+
+    DST auto-correction (optional):
+        from pylxpweb import LuxpowerClient
+        from pylxpweb.devices import Station
+
+        # Configure with IANA timezone for DST detection
+        async with LuxpowerClient(
+            username,
+            password,
+            iana_timezone="America/Los_Angeles"
+        ) as client:
+            station = await Station.load(client, plant_id)
+
+            # Optionally sync DST setting (convenience method)
+            # This does NOT run automatically - you must call it explicitly
+            if user_wants_dst_sync:
+                await station.sync_dst_setting()
 """
 
 from __future__ import annotations

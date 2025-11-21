@@ -187,12 +187,22 @@ class Station(BaseDevice):
             return None
 
     async def sync_dst_setting(self) -> bool:
-        """Synchronize DST setting with API if mismatch detected.
+        """Convenience method to synchronize DST setting with API if mismatch detected.
+
+        This is a convenience method that implementing applications can call to
+        automatically correct the API's DST flag based on the configured IANA timezone.
+        It does NOT run automatically - the application must explicitly call it.
+
+        Use case examples:
+        - Home Assistant: Add a config option "Auto-correct DST" and call this method
+          when enabled
+        - CLI tools: Provide a --sync-dst flag to trigger this method
+        - Periodic tasks: Call during daily maintenance windows
 
         This method:
         1. Detects actual DST status using configured IANA timezone
         2. Compares with API's daylightSavingTime flag
-        3. Updates API if mismatch found
+        3. Updates API if mismatch found (only if needed)
 
         IMPORTANT: This method requires an IANA timezone to be configured on the
         LuxpowerClient. If not configured, sync will be skipped.
@@ -200,6 +210,14 @@ class Station(BaseDevice):
         Returns:
             True if setting was synced (or already correct), False if sync failed
             or if DST detection is disabled (no IANA timezone configured).
+
+        Example:
+            ```python
+            # In Home Assistant integration config flow
+            if user_config.get("auto_correct_dst"):
+                station = await Station.load(client, plant_id)
+                await station.sync_dst_setting()
+            ```
         """
         actual_dst = self.detect_dst_status()
 
@@ -537,12 +555,6 @@ class Station(BaseDevice):
             current_timezone_with_minute=plant_data.get("currentTimezoneWithMinute"),
             daylight_saving_time=plant_data.get("daylightSavingTime", False),
         )
-
-        # Detect and sync DST setting if needed
-        try:
-            await station.sync_dst_setting()
-        except Exception as e:
-            _LOGGER.warning("Station %s: Failed to sync DST setting during load: %s", plant_id, e)
 
         # Load device hierarchy
         await station._load_devices()

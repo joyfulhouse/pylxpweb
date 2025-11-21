@@ -175,15 +175,19 @@ async def test_invalid_plant_id(live_client: LuxpowerClient) -> None:
 
 @pytest.mark.asyncio
 async def test_dst_auto_detection_and_sync(live_client: LuxpowerClient) -> None:
-    """Test automatic DST detection and synchronization during Station.load().
+    """Test manual DST detection and synchronization using sync_dst_setting().
+
+    This test verifies the convenience method that applications can use to
+    automatically correct DST settings. It does NOT run automatically.
 
     This test:
     1. Gets current API DST flag
     2. Calculates expected DST status based on timezone offset
     3. Deliberately sets API DST flag to WRONG value
-    4. Loads station (triggers auto-detection and sync)
-    5. Verifies API DST flag was auto-corrected
-    6. Restores original state
+    4. Loads station (does NOT auto-correct)
+    5. Manually calls sync_dst_setting() to correct DST
+    6. Verifies API DST flag was corrected
+    7. Restores original state
     """
     from pylxpweb.devices.station import Station
 
@@ -234,21 +238,31 @@ async def test_dst_auto_detection_and_sync(live_client: LuxpowerClient) -> None:
         # Step 2: Clear client cache to ensure fresh load
         live_client.clear_cache()
 
-        # Step 3: Load station - this should trigger auto-detection and sync
-        print(f"\nLoading station (should auto-correct DST to {expected_dst})...")
+        # Step 3: Load station (does NOT auto-correct)
+        print(f"\nLoading station (DST should still be WRONG: {wrong_dst})...")
         station = await Station.load(live_client, plant_id)
 
-        # Step 4: Verify station detected and corrected the DST mismatch
+        # Step 4: Verify station loaded with WRONG DST value (no auto-correction)
         print("\nStation loaded:")
         print(f"  Station DST flag: {station.daylight_saving_time}")
         print(f"  Station detected DST: {station.detect_dst_status()}")
 
-        # Verify station's internal flag was updated
-        assert station.daylight_saving_time == expected_dst, (
-            f"Station DST flag should be {expected_dst} but got {station.daylight_saving_time}"
+        # Station should have the wrong value (no auto-correction during load)
+        assert station.daylight_saving_time == wrong_dst, (
+            f"Station DST flag should still be {wrong_dst} (no auto-correction)"
         )
 
-        # Step 5: Verify API was updated
+        # Step 5: Manually call sync_dst_setting() to correct DST
+        print(f"\nManually calling sync_dst_setting() to correct DST to {expected_dst}...")
+        sync_result = await station.sync_dst_setting()
+        assert sync_result is True, "sync_dst_setting() should return True on success"
+
+        # Step 6: Verify station's internal flag was updated
+        assert station.daylight_saving_time == expected_dst, (
+            f"Station DST flag should now be {expected_dst} after sync"
+        )
+
+        # Step 7: Verify API was updated
         after_sync = await live_client.plants.get_plant_details(str(plant_id))
         print(f"  API DST flag after sync: {after_sync['daylightSavingTime']}")
 
@@ -256,7 +270,7 @@ async def test_dst_auto_detection_and_sync(live_client: LuxpowerClient) -> None:
             f"API DST flag should be {expected_dst} but got {after_sync['daylightSavingTime']}"
         )
 
-        print("\n✅ DST auto-correction successful!")
+        print("\n✅ Manual DST sync successful!")
 
     finally:
         # ALWAYS restore to the CORRECT DST value (not the original which may be wrong)
@@ -319,9 +333,14 @@ async def test_dst_sync_when_already_correct(live_client: LuxpowerClient) -> Non
         # Clear cache
         live_client.clear_cache()
 
-        # Load station - should detect that DST is already correct
+        # Load station with correct DST flag
         print("Loading station with correct DST flag...")
-        _ = await Station.load(live_client, plant_id)  # Triggers DST sync
+        station = await Station.load(live_client, plant_id)
+
+        # Manually call sync_dst_setting() - should be a no-op
+        print("Calling sync_dst_setting() (should be no-op)...")
+        sync_result = await station.sync_dst_setting()
+        assert sync_result is True, "sync_dst_setting() should return True when already correct"
 
         # Verify no unnecessary API update
         after_load = await live_client.plants.get_plant_details(str(plant_id))
