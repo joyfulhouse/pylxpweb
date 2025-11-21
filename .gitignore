@@ -68,6 +68,9 @@ credentials.json
 # Research materials (reference only - do not include in distribution)
 research/
 
+# Claude Code session notes and analysis (may contain sensitive information)
+docs/claude/
+
 # macOS system files
 .DS_Store
 **/.DS_Store
