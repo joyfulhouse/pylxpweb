@@ -7,6 +7,7 @@ installation with inverters, batteries, and optional MID devices.
 from __future__ import annotations
 
 import logging
+import zoneinfo
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -32,14 +33,13 @@ class Location:
 
     Attributes:
         address: Street address
-        latitude: Latitude coordinate
-        longitude: Longitude coordinate
         country: Country name or code
+
+    Note:
+        Latitude and longitude are not provided by the API.
     """
 
     address: str
-    latitude: float
-    longitude: float
     country: str
 
 
@@ -93,7 +93,8 @@ class Station(BaseDevice):
             location: Geographic location information
             timezone: Timezone string (e.g., "GMT -8")
             created_date: Station creation timestamp
-            current_timezone_with_minute: Actual timezone offset in minutes (e.g., -420 for PDT)
+            current_timezone_with_minute: Timezone offset in HHMM format
+                (e.g., -700 for PDT = -7:00)
             daylight_saving_time: DST flag from API (may be incorrect)
         """
         # BaseDevice expects serial_number, but stations use plant_id
@@ -107,7 +108,7 @@ class Station(BaseDevice):
         self.created_date = created_date
 
         # Timezone precision fields
-        self.current_timezone_with_minute = current_timezone_with_minute  # -420 = GMT-7 (PDT)
+        self.current_timezone_with_minute = current_timezone_with_minute  # -700 = GMT-7:00 (PDT)
         self.daylight_saving_time = daylight_saving_time  # API's DST flag (may be wrong)
 
         # Computed DST status (based on offset analysis)
@@ -119,85 +120,94 @@ class Station(BaseDevice):
         self.weather: dict[str, Any] | None = None  # Weather data (optional)
 
     def detect_dst_status(self) -> bool | None:
-        """Detect if DST is currently active by comparing base timezone with actual offset.
+        """Detect if DST should be currently active based on system time and timezone.
 
-        This method compares the base timezone (e.g., "GMT -8" for PST) with the
-        actual current offset from currentTimezoneWithMinute to determine if DST is active.
+        This method uses Python's zoneinfo to determine if DST should be active
+        at the current date/time for the station's timezone. This is necessary because
+        the API's currentTimezoneWithMinute is not independent - it's calculated from
+        the base timezone + DST flag, creating circular logic.
+
+        IMPORTANT: This method requires an IANA timezone to be configured on the
+        LuxpowerClient (via the iana_timezone parameter). The API does not provide
+        sufficient location data to reliably determine the IANA timezone automatically.
 
         Returns:
-            True if DST is active, False if not, None if cannot determine.
+            True if DST should be active, False if not, None if cannot determine
+            (no IANA timezone configured or invalid timezone).
 
         Example:
-            Base timezone: "GMT -8" (PST = UTC-8)
-            Current offset: -420 minutes = -7 hours (PDT = UTC-7)
-            Result: DST is active (difference of 1 hour)
+            # Client configured with IANA timezone
+            client = LuxpowerClient(username, password, iana_timezone="America/Los_Angeles")
+            station = await Station.load(client, plant_id)
+            dst_active = station.detect_dst_status()  # Returns True/False
+
+            # Client without IANA timezone
+            client = LuxpowerClient(username, password)
+            station = await Station.load(client, plant_id)
+            dst_active = station.detect_dst_status()  # Returns None (disabled)
         """
         try:
-            if self.current_timezone_with_minute is None or not self.timezone:
+            # Check if IANA timezone is configured
+            iana_timezone = getattr(self._client, "iana_timezone", None)
+            if not iana_timezone:
+                _LOGGER.debug(
+                    "Station %s: DST detection disabled (no IANA timezone configured)",
+                    self.id,
+                )
                 return None
 
-            # Parse base timezone to get standard offset
-            if "GMT" in self.timezone:
-                offset_str = self.timezone.replace("GMT", "").strip()
-                base_hours = int(offset_str)  # e.g., -8 for PST
-            else:
-                _LOGGER.debug("Cannot parse base timezone '%s'", self.timezone)
+            # Validate timezone string
+            try:
+                tz = zoneinfo.ZoneInfo(iana_timezone)
+            except zoneinfo.ZoneInfoNotFoundError:
+                _LOGGER.error(
+                    "Station %s: Invalid IANA timezone '%s'",
+                    self.id,
+                    iana_timezone,
+                )
                 return None
 
-            # Convert current offset from minutes to hours
-            current_hours = self.current_timezone_with_minute / 60.0  # e.g., -420 / 60 = -7
+            # Check if DST is active using zoneinfo
+            now = datetime.now(tz)
+            dst_offset = now.dst()
+            dst_active = dst_offset is not None and dst_offset.total_seconds() > 0
 
-            # DST is active if current offset is ahead of base offset
-            # Examples:
-            #   PST: base=-8, DST active: current=-7 (difference = +1)
-            #   JST: base=+9, DST active: current=+10 (difference = +1)
-            #
-            # DST moves clocks forward, so current > base means DST is active
-            difference = current_hours - base_hours
-
-            # DST is active if difference is positive and >= 0.5 hours
-            dst_active = difference >= 0.5
-
-            if dst_active:
-                _LOGGER.debug(
-                    "Station %s: DST detected as ACTIVE (base: GMT%+d, current: GMT%+.1f, "
-                    "diff: %+.1fh)",
-                    self.id,
-                    base_hours,
-                    current_hours,
-                    difference,
-                )
-            else:
-                _LOGGER.debug(
-                    "Station %s: DST detected as INACTIVE (base: GMT%+d, current: GMT%+.1f, "
-                    "diff: %+.1fh)",
-                    self.id,
-                    base_hours,
-                    current_hours,
-                    difference,
-                )
+            _LOGGER.debug(
+                "Station %s: DST detected using %s: %s (offset: %s)",
+                self.id,
+                iana_timezone,
+                "ACTIVE" if dst_active else "INACTIVE",
+                now.strftime("%z"),
+            )
 
             return dst_active
 
         except Exception as e:
-            _LOGGER.debug("Error detecting DST status: %s", e)
+            _LOGGER.debug("Station %s: Error detecting DST status: %s", self.id, e)
             return None
 
     async def sync_dst_setting(self) -> bool:
         """Synchronize DST setting with API if mismatch detected.
 
         This method:
-        1. Detects actual DST status from timezone offset
+        1. Detects actual DST status using configured IANA timezone
         2. Compares with API's daylightSavingTime flag
         3. Updates API if mismatch found
 
+        IMPORTANT: This method requires an IANA timezone to be configured on the
+        LuxpowerClient. If not configured, sync will be skipped.
+
         Returns:
-            True if setting was synced (or already correct), False if sync failed.
+            True if setting was synced (or already correct), False if sync failed
+            or if DST detection is disabled (no IANA timezone configured).
         """
         actual_dst = self.detect_dst_status()
 
         if actual_dst is None:
-            _LOGGER.debug("Station %s: Cannot determine DST status, skipping sync", self.id)
+            _LOGGER.debug(
+                "Station %s: DST detection disabled or failed, skipping sync",
+                self.id,
+            )
             return False
 
         # Check if API setting matches detected status
@@ -249,13 +259,21 @@ class Station(BaseDevice):
         """
         try:
             # Primary: Use currentTimezoneWithMinute (most accurate, includes DST)
+            # Note: This field is in HHMM format (e.g., -800 = -8:00), not literal minutes
             if self.current_timezone_with_minute is not None:
-                tz = timezone(timedelta(minutes=self.current_timezone_with_minute))
+                # Parse HHMM format: -800 = -8 hours, 00 minutes
+                value = self.current_timezone_with_minute
+                hours = abs(value) // 100
+                minutes = abs(value) % 100
+                total_minutes = -(hours * 60 + minutes) if value < 0 else (hours * 60 + minutes)
+
+                tz = timezone(timedelta(minutes=total_minutes))
                 result = datetime.now(tz).strftime("%Y-%m-%d")
                 _LOGGER.debug(
-                    "Station %s: Date in timezone (offset %+d min): %s",
+                    "Station %s: Date in timezone (offset %+d HHMM = %+d min): %s",
                     self.id,
                     self.current_timezone_with_minute,
+                    total_minutes,
                     result,
                 )
                 return result
@@ -498,8 +516,6 @@ class Station(BaseDevice):
         # Create Location from plant data
         location = Location(
             address=plant_data.get("address", ""),
-            latitude=plant_data.get("lat", 0.0),
-            longitude=plant_data.get("lng", 0.0),
             country=plant_data.get("country", ""),
         )
 

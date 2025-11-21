@@ -616,6 +616,7 @@ async def live_client():
     - LUXPOWER_USERNAME
     - LUXPOWER_PASSWORD
     - LUXPOWER_BASE_URL (optional, defaults to https://monitor.eg4electronics.com)
+    - LUXPOWER_IANA_TIMEZONE (optional, defaults to America/Los_Angeles)
 
     Skips test if credentials are not configured.
     """
@@ -634,11 +635,14 @@ async def live_client():
     username = os.getenv("LUXPOWER_USERNAME")
     password = os.getenv("LUXPOWER_PASSWORD")
     base_url = os.getenv("LUXPOWER_BASE_URL", "https://monitor.eg4electronics.com")
+    iana_timezone = os.getenv("LUXPOWER_IANA_TIMEZONE", "America/Los_Angeles")
 
     if not username or not password:
         pytest.skip("Live API credentials not configured (LUXPOWER_USERNAME, LUXPOWER_PASSWORD)")
 
-    async with LuxpowerClient(username, password, base_url=base_url) as client:
+    async with LuxpowerClient(
+        username, password, base_url=base_url, iana_timezone=iana_timezone
+    ) as client:
         yield client
 
 

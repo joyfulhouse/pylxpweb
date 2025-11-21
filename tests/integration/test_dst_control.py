@@ -2,6 +2,8 @@
 
 # Import redaction helper
 import sys
+import zoneinfo
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,35 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from pylxpweb import LuxpowerClient
+
+
+async def ensure_correct_dst(client: LuxpowerClient, plant_id: str) -> bool:
+    """Ensure the API's DST flag matches the actual DST status for the timezone.
+
+    Uses the client's configured IANA timezone to determine correct DST status.
+    Returns the correct DST value.
+    """
+    details = await client.plants.get_plant_details(plant_id)
+
+    # Check if IANA timezone is configured
+    if not client.iana_timezone:
+        return details["daylightSavingTime"]  # Can't determine, return current
+
+    # Check if DST should be active using configured timezone
+    try:
+        tz = zoneinfo.ZoneInfo(client.iana_timezone)
+        now = datetime.now(tz)
+        dst_offset = now.dst()
+        expected_dst = dst_offset is not None and dst_offset.total_seconds() > 0
+    except zoneinfo.ZoneInfoNotFoundError:
+        return details["daylightSavingTime"]  # Invalid timezone, return current
+
+    # Update if wrong
+    current_dst = details["daylightSavingTime"]
+    if current_dst != expected_dst:
+        await client.plants.set_daylight_saving_time(plant_id, expected_dst)
+
+    return expected_dst
 
 
 @pytest.mark.asyncio
@@ -36,20 +67,18 @@ async def test_get_plant_details(live_client: LuxpowerClient) -> None:
 async def test_dst_toggle(live_client: LuxpowerClient) -> None:
     """Test toggling DST on and off.
 
-    IMPORTANT: This test reads the current state, toggles it, then restores
-    the CURRENT state from the API (not a cached value) to ensure the live
-    system is always left in its original configuration.
+    IMPORTANT: This test ensures DST is correct before starting, then tests
+    the API's ability to toggle the value and restore it to the correct value.
     """
     plants = await live_client.plants.get_plants()
     plant_id = str(plants.rows[0].plantId)
 
-    # Get current DST status from API
-    details = await live_client.plants.get_plant_details(plant_id)
-    original_dst = details["daylightSavingTime"]
+    # Ensure DST is correct before starting
+    correct_dst = await ensure_correct_dst(live_client, plant_id)
 
     try:
-        # Toggle DST
-        new_dst = not original_dst
+        # Toggle DST to opposite value
+        new_dst = not correct_dst
         result = await live_client.plants.set_daylight_saving_time(plant_id, new_dst)
 
         assert result["success"] is True
@@ -59,58 +88,54 @@ async def test_dst_toggle(live_client: LuxpowerClient) -> None:
         assert updated["daylightSavingTime"] == new_dst
 
     finally:
-        # ALWAYS restore by reading current state from API first
-        # This ensures we restore the actual original value, not a cached one
+        # ALWAYS restore to the CORRECT DST value (not just the original)
         current_details = await live_client.plants.get_plant_details(plant_id)
 
-        # Only restore if current state differs from original
-        if current_details["daylightSavingTime"] != original_dst:
-            await live_client.plants.set_daylight_saving_time(plant_id, original_dst)
+        # Only restore if current state differs from correct value
+        if current_details["daylightSavingTime"] != correct_dst:
+            await live_client.plants.set_daylight_saving_time(plant_id, correct_dst)
 
             # Verify restoration
             final = await live_client.plants.get_plant_details(plant_id)
-            assert final["daylightSavingTime"] == original_dst
+            assert final["daylightSavingTime"] == correct_dst
 
 
 @pytest.mark.asyncio
 async def test_update_plant_config(live_client: LuxpowerClient) -> None:
     """Test updating plant configuration with hybrid approach.
 
-    IMPORTANT: This test reads the current state, toggles it, then restores
-    the CURRENT state from the API (not a cached value) to ensure the live
-    system is always left in its original configuration.
+    IMPORTANT: This test ensures DST is correct before starting, then tests
+    the API's update_plant_config method and restores the correct value.
     """
     plants = await live_client.plants.get_plants()
     plant_id = str(plants.rows[0].plantId)
 
-    # Get current config from API
-    details = await live_client.plants.get_plant_details(plant_id)
-    original_dst = details["daylightSavingTime"]
+    # Ensure DST is correct before starting
+    correct_dst = await ensure_correct_dst(live_client, plant_id)
 
     try:
         # Update DST via update_plant_config
         result = await live_client.plants.update_plant_config(
-            plant_id, daylightSavingTime=not original_dst
+            plant_id, daylightSavingTime=not correct_dst
         )
 
         assert result["success"] is True
 
         # Verify change
         updated = await live_client.plants.get_plant_details(plant_id)
-        assert updated["daylightSavingTime"] == (not original_dst)
+        assert updated["daylightSavingTime"] == (not correct_dst)
 
     finally:
-        # ALWAYS restore by reading current state from API first
-        # This ensures we restore the actual original value, not a cached one
+        # ALWAYS restore to the CORRECT DST value
         current_details = await live_client.plants.get_plant_details(plant_id)
 
-        # Only restore if current state differs from original
-        if current_details["daylightSavingTime"] != original_dst:
-            await live_client.plants.update_plant_config(plant_id, daylightSavingTime=original_dst)
+        # Only restore if current state differs from correct value
+        if current_details["daylightSavingTime"] != correct_dst:
+            await live_client.plants.update_plant_config(plant_id, daylightSavingTime=correct_dst)
 
             # Verify restoration
             final = await live_client.plants.get_plant_details(plant_id)
-            assert final["daylightSavingTime"] == original_dst
+            assert final["daylightSavingTime"] == correct_dst
 
 
 @pytest.mark.asyncio
@@ -169,35 +194,30 @@ async def test_dst_auto_detection_and_sync(live_client: LuxpowerClient) -> None:
     details = await live_client.plants.get_plant_details(str(plant_id))
     original_dst = details["daylightSavingTime"]
     timezone_str = details["timezone"]
-    current_tz_minutes = details.get("currentTimezoneWithMinute")
 
-    # Calculate expected DST status based on offset comparison
-    expected_dst = None
-    if current_tz_minutes is not None and "GMT" in timezone_str:
-        try:
-            # Parse base timezone
-            offset_str = timezone_str.replace("GMT", "").strip()
-            base_hours = int(offset_str)
+    # Calculate expected DST status using client's IANA timezone
+    if not live_client.iana_timezone:
+        pytest.skip("No IANA timezone configured for client")
 
-            # Convert current offset to hours
-            current_hours = current_tz_minutes / 60.0
+    try:
+        import zoneinfo
+        from datetime import datetime
 
-            # DST is active if current offset is ahead of base offset
-            difference = current_hours - base_hours
-            expected_dst = difference >= 0.5
+        # Check if DST is active using client's IANA timezone
+        tz = zoneinfo.ZoneInfo(live_client.iana_timezone)
+        now = datetime.now(tz)
+        dst_offset = now.dst()
+        expected_dst = dst_offset is not None and dst_offset.total_seconds() > 0
 
-            print("\nTimezone Analysis:")
-            print(f"  Base timezone: {timezone_str} ({base_hours} hours)")
-            print(f"  Current offset: {current_tz_minutes} minutes ({current_hours} hours)")
-            print(f"  Difference: {difference} hours")
-            print(f"  Expected DST: {expected_dst}")
-            print(f"  API reports DST: {original_dst}")
-        except Exception as e:
-            print(f"Could not calculate expected DST: {e}")
-            pytest.skip(f"Cannot calculate expected DST for timezone {timezone_str}")
-
-    if expected_dst is None:
-        pytest.skip("Cannot determine expected DST status from timezone data")
+        print("\nTimezone Analysis:")
+        print(f"  API timezone: {timezone_str}")
+        print(f"  Configured IANA: {live_client.iana_timezone}")
+        print(f"  Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"  Expected DST (via zoneinfo): {expected_dst}")
+        print(f"  API reports DST: {original_dst}")
+    except Exception as e:
+        print(f"Could not calculate expected DST: {e}")
+        pytest.skip(f"Cannot calculate expected DST: {e}")
 
     try:
         # Step 1: Deliberately set API DST flag to WRONG value
@@ -239,17 +259,18 @@ async def test_dst_auto_detection_and_sync(live_client: LuxpowerClient) -> None:
         print("\n✅ DST auto-correction successful!")
 
     finally:
-        # ALWAYS restore original state by reading current value first
+        # ALWAYS restore to the CORRECT DST value (not the original which may be wrong)
+        # This ensures subsequent tests work with correct timezone data
         current_details = await live_client.plants.get_plant_details(str(plant_id))
 
-        # Only restore if current state differs from original
-        if current_details["daylightSavingTime"] != original_dst:
-            print(f"\nRestoring original DST flag: {original_dst}")
-            await live_client.plants.set_daylight_saving_time(str(plant_id), original_dst)
+        # Restore to the expected (correct) DST value, not the original
+        if current_details["daylightSavingTime"] != expected_dst:
+            print(f"\nEnsuring DST flag is correct: {expected_dst}")
+            await live_client.plants.set_daylight_saving_time(str(plant_id), expected_dst)
 
-            # Verify restoration
+            # Verify
             final = await live_client.plants.get_plant_details(str(plant_id))
-            assert final["daylightSavingTime"] == original_dst
+            assert final["daylightSavingTime"] == expected_dst
 
 
 @pytest.mark.asyncio

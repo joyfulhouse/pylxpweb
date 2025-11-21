@@ -70,6 +70,7 @@ class LuxpowerClient:
         verify_ssl: bool = True,
         timeout: int = 30,
         session: aiohttp.ClientSession | None = None,
+        iana_timezone: str | None = None,
     ) -> None:
         """Initialize the Luxpower API client.
 
@@ -78,16 +79,19 @@ class LuxpowerClient:
             password: API password for authentication
             base_url: Base URL for the API (default: EG4 Electronics endpoint)
             verify_ssl: Whether to verify SSL certificates
-            timeout: Request timeout in seconds
-            session: Optional aiohttp.ClientSession to use for requests.
-                    If not provided, a new session will be created.
-                    Platinum tier requirement: Support websession injection.
+            timeout: Request timeout in seconds (default: 30)
+            session: Optional aiohttp ClientSession for session injection
+            iana_timezone: Optional IANA timezone (e.g., "America/Los_Angeles")
+                for DST auto-detection. If not provided, DST auto-detection
+                will be disabled. This is required because the API doesn't
+                provide sufficient location data to reliably determine timezone.
         """
         self.username = username
         self.password = password
         self.base_url = base_url.rstrip("/")
         self.verify_ssl = verify_ssl
         self.timeout = ClientTimeout(total=timeout)
+        self.iana_timezone = iana_timezone
 
         # Session management
         self._session: aiohttp.ClientSession | None = session

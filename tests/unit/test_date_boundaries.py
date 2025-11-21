@@ -30,7 +30,7 @@ class TestStationDateDetection:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country=""),
             timezone="GMT -8",
             created_date=datetime.now(),
         )
@@ -53,7 +53,7 @@ class TestStationDateDetection:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country=""),
             timezone="GMT +9",
             created_date=datetime.now(),
         )
@@ -74,7 +74,7 @@ class TestStationDateDetection:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country=""),
             timezone="Invalid/Timezone",
             created_date=datetime.now(),
         )
@@ -94,7 +94,7 @@ class TestStationDateDetection:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country=""),
             timezone="",
             created_date=datetime.now(),
         )
@@ -114,7 +114,7 @@ class TestStationDateDetection:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country=""),
             timezone="GMT -8",  # PST
             created_date=datetime.now(),
             current_timezone_with_minute=-420,  # PDT (7 hours behind UTC)
@@ -135,89 +135,127 @@ class TestStationDSTDetection:
     """Test Station.detect_dst_status() method for DST detection."""
 
     def test_dst_active_pacific_time(self):
-        """Test DST detection when DST is active (PDT)."""
+        """Test DST detection when DST is active (PDT) - uses system time."""
+        import zoneinfo
+        from unittest.mock import patch
+
         client = Mock(spec=LuxpowerClient)
+        client.iana_timezone = "America/Los_Angeles"
         station = Station(
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country="United States"),
             timezone="GMT -8",  # PST base
             created_date=datetime.now(),
-            current_timezone_with_minute=-420,  # PDT (DST active)
+            current_timezone_with_minute=-700,  # HHMM: -7:00 (PDT, DST active)
         )
 
-        result = station.detect_dst_status()
+        # Mock datetime to return a date when DST is active (July 1, 2025)
+        tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+        summer_date = datetime(2025, 7, 1, 12, 0, 0, tzinfo=tz)
+        with patch("pylxpweb.devices.station.datetime") as mock_dt:
+            mock_dt.now.return_value = summer_date
+            result = station.detect_dst_status()
 
-        assert result is True  # DST is active (difference = -7 - (-8) = 1 hour)
+        assert result is True  # DST is active in July
 
     def test_dst_inactive_pacific_time(self):
-        """Test DST detection when DST is inactive (PST)."""
+        """Test DST detection when DST is inactive (PST) - uses system time."""
+        import zoneinfo
+        from unittest.mock import patch
+
         client = Mock(spec=LuxpowerClient)
+        client.iana_timezone = "America/Los_Angeles"
         station = Station(
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country="United States"),
             timezone="GMT -8",  # PST base
             created_date=datetime.now(),
-            current_timezone_with_minute=-480,  # PST (DST inactive)
+            current_timezone_with_minute=-800,  # HHMM: -8:00 (PST, DST inactive)
         )
 
-        result = station.detect_dst_status()
+        # Mock datetime to return a date when DST is inactive (January 1, 2025)
+        tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+        winter_date = datetime(2025, 1, 1, 12, 0, 0, tzinfo=tz)
+        with patch("pylxpweb.devices.station.datetime") as mock_dt:
+            mock_dt.now.return_value = winter_date
+            result = station.detect_dst_status()
 
-        assert result is False  # DST is inactive (difference = -8 - (-8) = 0)
+        assert result is False  # DST is inactive in January
 
     def test_dst_active_eastern_time(self):
-        """Test DST detection for Eastern Time when DST is active (EDT)."""
+        """Test DST detection for Eastern Time when DST is active (EDT) - uses system time."""
+        import zoneinfo
+        from unittest.mock import patch
+
         client = Mock(spec=LuxpowerClient)
+        client.iana_timezone = "America/New_York"
         station = Station(
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country="United States"),
             timezone="GMT -5",  # EST base
             created_date=datetime.now(),
-            current_timezone_with_minute=-240,  # EDT (DST active)
+            current_timezone_with_minute=-400,  # HHMM: -4:00 (EDT, DST active)
         )
 
-        result = station.detect_dst_status()
+        # Mock datetime to return a date when DST is active (July 1, 2025)
+        tz = zoneinfo.ZoneInfo("America/New_York")
+        summer_date = datetime(2025, 7, 1, 12, 0, 0, tzinfo=tz)
+        with patch("pylxpweb.devices.station.datetime") as mock_dt:
+            mock_dt.now.return_value = summer_date
+            result = station.detect_dst_status()
 
-        assert result is True  # DST is active (difference = -4 - (-5) = 1 hour)
+        assert result is True  # DST is active in July
 
     def test_dst_inactive_eastern_time(self):
-        """Test DST detection for Eastern Time when DST is inactive (EST)."""
+        """Test DST detection for Eastern Time when DST is inactive (EST) - uses system time."""
+        import zoneinfo
+        from unittest.mock import patch
+
         client = Mock(spec=LuxpowerClient)
+        client.iana_timezone = "America/New_York"
         station = Station(
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country="United States"),
             timezone="GMT -5",  # EST base
             created_date=datetime.now(),
-            current_timezone_with_minute=-300,  # EST (DST inactive)
+            current_timezone_with_minute=-500,  # HHMM: -5:00 (EST, DST inactive)
         )
 
-        result = station.detect_dst_status()
+        # Mock datetime to return a date when DST is inactive (January 1, 2025)
+        tz = zoneinfo.ZoneInfo("America/New_York")
+        winter_date = datetime(2025, 1, 1, 12, 0, 0, tzinfo=tz)
+        with patch("pylxpweb.devices.station.datetime") as mock_dt:
+            mock_dt.now.return_value = winter_date
+            result = station.detect_dst_status()
 
-        assert result is False  # DST is inactive (difference = -5 - (-5) = 0)
+        assert result is False  # DST is inactive in January
 
     def test_dst_europe_summer_time(self):
-        """Test DST detection for Central European Time (CEST)."""
+        """Test DST detection when no IANA timezone configured - returns None."""
         client = Mock(spec=LuxpowerClient)
+        # No iana_timezone configured - DST detection disabled
         station = Station(
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country="Germany"),
             timezone="GMT +1",  # CET base
             created_date=datetime.now(),
-            current_timezone_with_minute=120,  # CEST (DST active)
+            current_timezone_with_minute=200,  # HHMM: +2:00 (CEST, DST active)
         )
 
         result = station.detect_dst_status()
 
-        assert result is True  # DST is active (difference = 2 - 1 = 1 hour)
+        # No IANA timezone configured, should return None
+        assert result is None
 
     def test_dst_no_current_timezone_with_minute(self):
         """Test DST detection when currentTimezoneWithMinute is not available."""
@@ -226,7 +264,7 @@ class TestStationDSTDetection:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country=""),
             timezone="GMT -8",
             created_date=datetime.now(),
             current_timezone_with_minute=None,  # Not available
@@ -243,7 +281,7 @@ class TestStationDSTDetection:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country=""),
             timezone="Invalid/Timezone",
             created_date=datetime.now(),
             current_timezone_with_minute=-420,
@@ -260,7 +298,11 @@ class TestStationDSTSync:
     @pytest.mark.asyncio
     async def test_sync_corrects_wrong_dst_flag(self):
         """Test that sync_dst_setting corrects wrong API DST flag."""
+        import zoneinfo
+        from unittest.mock import patch
+
         client = Mock(spec=LuxpowerClient)
+        client.iana_timezone = "America/Los_Angeles"
 
         # Mock successful API call
         async def mock_set_dst(plant_id: int, enabled: bool) -> dict[str, bool]:
@@ -272,14 +314,19 @@ class TestStationDSTSync:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country="United States"),
             timezone="GMT -8",  # PST base
             created_date=datetime.now(),
-            current_timezone_with_minute=-420,  # PDT (DST active)
-            daylight_saving_time=False,  # WRONG - API says no DST but offset says yes
+            current_timezone_with_minute=-700,  # HHMM: -7:00 (PDT, DST active)
+            daylight_saving_time=False,  # WRONG - API says no DST but system time says yes
         )
 
-        result = await station.sync_dst_setting()
+        # Mock datetime to return a date when DST is active (July 1, 2025)
+        tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+        summer_date = datetime(2025, 7, 1, 12, 0, 0, tzinfo=tz)
+        with patch("pylxpweb.devices.station.datetime") as mock_dt:
+            mock_dt.now.return_value = summer_date
+            result = await station.sync_dst_setting()
 
         assert result is True
         assert station.daylight_saving_time is True  # Should be corrected
@@ -288,7 +335,11 @@ class TestStationDSTSync:
     @pytest.mark.asyncio
     async def test_sync_skips_when_correct(self):
         """Test that sync_dst_setting skips update when DST is already correct."""
+        import zoneinfo
+        from unittest.mock import patch
+
         client = Mock(spec=LuxpowerClient)
+        client.iana_timezone = "America/Los_Angeles"
 
         # Mock API call (should NOT be called)
         client.api.plants.set_daylight_saving_time = Mock()
@@ -297,14 +348,19 @@ class TestStationDSTSync:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country="United States"),
             timezone="GMT -8",  # PST base
             created_date=datetime.now(),
-            current_timezone_with_minute=-480,  # PST (DST inactive)
-            daylight_saving_time=False,  # CORRECT - matches offset
+            current_timezone_with_minute=-800,  # HHMM: -8:00 (PST, DST inactive)
+            daylight_saving_time=False,  # CORRECT - matches system time
         )
 
-        result = await station.sync_dst_setting()
+        # Mock datetime to return a date when DST is inactive (January 1, 2025)
+        tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+        winter_date = datetime(2025, 1, 1, 12, 0, 0, tzinfo=tz)
+        with patch("pylxpweb.devices.station.datetime") as mock_dt:
+            mock_dt.now.return_value = winter_date
+            result = await station.sync_dst_setting()
 
         assert result is True
         client.api.plants.set_daylight_saving_time.assert_not_called()
@@ -324,10 +380,10 @@ class TestStationDSTSync:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country=""),
             timezone="GMT -8",  # PST base
             created_date=datetime.now(),
-            current_timezone_with_minute=-420,  # PDT (DST active)
+            current_timezone_with_minute=-700,  # HHMM: -7:00 (PDT, DST active)
             daylight_saving_time=False,  # WRONG
         )
 
@@ -348,7 +404,7 @@ class TestStationDSTSync:
             client=client,
             plant_id=12345,
             name="Test Station",
-            location=Location(address="", latitude=0.0, longitude=0.0, country=""),
+            location=Location(address="", country=""),
             timezone="GMT -8",
             created_date=datetime.now(),
             current_timezone_with_minute=None,  # Cannot determine
