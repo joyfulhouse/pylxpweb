@@ -49,7 +49,7 @@ Station (Plant)
 | Frequency | ÷100 | 5998 → 59.98Hz |
 | Temperature | Direct | 39 → 39°C |
 | Power | Direct | 1030 → 1030W |
-| Energy (API) | ÷10 | 90 → 9.0 kWh |
+| Energy (API) | ÷10 | 184 → 18.4 kWh |
 
 **WARNING**: Note different voltage scaling for battery bank vs individual batteries!
 

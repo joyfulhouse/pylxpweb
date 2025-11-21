@@ -356,9 +356,11 @@ class BaseInverter(BaseDevice):
         if self.energy is None:
             return 0.0
 
-        # Get raw value from API (in Wh)
-        raw_value = float(getattr(self.energy, "todayYielding", 0))
-        current_value_kwh = raw_value / 1000.0  # Convert Wh to kWh
+        # Get raw value from API and scale to kWh using proper scaling helper
+        from pylxpweb.constants import scale_energy_value
+
+        raw_value = getattr(self.energy, "todayYielding", 0)
+        current_value_kwh = scale_energy_value("todayYielding", raw_value, to_kwh=True)
 
         # Check for date boundary reset
         if self._should_reset_daily_energy():
@@ -412,9 +414,11 @@ class BaseInverter(BaseDevice):
         if self.energy is None:
             return 0.0
 
-        # Get raw value from API (in Wh)
-        raw_value = float(getattr(self.energy, "totalYielding", 0))
-        current_value_kwh = raw_value / 1000.0  # Convert Wh to kWh
+        # Get raw value from API and scale to kWh using proper scaling helper
+        from pylxpweb.constants import scale_energy_value
+
+        raw_value = getattr(self.energy, "totalYielding", 0)
+        current_value_kwh = scale_energy_value("totalYielding", raw_value, to_kwh=True)
 
         # Lifetime energy should NEVER decrease
         if (

@@ -330,22 +330,22 @@ INPUT_P_EPS = (30, 31)  # EPS output power (W, 2 registers)
 INPUT_S_EPS = 32  # EPS status
 INPUT_P_TO_GRID = 33  # Export to grid power (W)
 INPUT_P_TO_USER = (34, 35)  # Load consumption power (W, 2 registers)
-INPUT_E_INV_ALL = 36  # Total inverter energy (kWh, /10)
-INPUT_E_REC_ALL = 37  # Total grid import energy (kWh, /10)
-INPUT_E_CHG_ALL = 38  # Total charge energy (kWh, /10)
-INPUT_E_DISCHG_ALL = 39  # Total discharge energy (kWh, /10)
-INPUT_E_EPS_ALL = 40  # Total EPS energy (kWh, /10)
-INPUT_E_TO_GRID_ALL = 41  # Total export energy (kWh, /10)
-INPUT_E_TO_USER_ALL = 42  # Total load energy (kWh, /10)
+INPUT_E_INV_ALL = 36  # Total inverter energy (Wh after /10, divide by 10 for Wh)
+INPUT_E_REC_ALL = 37  # Total grid import energy (Wh after /10, divide by 10 for Wh)
+INPUT_E_CHG_ALL = 38  # Total charge energy (Wh after /10, divide by 10 for Wh)
+INPUT_E_DISCHG_ALL = 39  # Total discharge energy (Wh after /10, divide by 10 for Wh)
+INPUT_E_EPS_ALL = 40  # Total EPS energy (Wh after /10, divide by 10 for Wh)
+INPUT_E_TO_GRID_ALL = 41  # Total export energy (Wh after /10, divide by 10 for Wh)
+INPUT_E_TO_USER_ALL = 42  # Total load energy (Wh after /10, divide by 10 for Wh)
 INPUT_V_BUS1 = 43  # Bus 1 voltage (V, /10)
 INPUT_V_BUS2 = 44  # Bus 2 voltage (V, /10)
-INPUT_E_INV_DAY = (45, 46)  # Daily inverter energy (kWh, /10, 2 registers)
-INPUT_E_REC_DAY = (47, 48)  # Daily grid import (kWh, /10, 2 registers)
-INPUT_E_CHG_DAY = (49, 50)  # Daily charge energy (kWh, /10, 2 registers)
-INPUT_E_DISCHG_DAY = (51, 52)  # Daily discharge energy (kWh, /10, 2 registers)
-INPUT_E_EPS_DAY = (53, 54)  # Daily EPS energy (kWh, /10, 2 registers)
-INPUT_E_TO_GRID_DAY = (55, 56)  # Daily export energy (kWh, /10, 2 registers)
-INPUT_E_TO_USER_DAY = (57, 58)  # Daily load energy (kWh, /10, 2 registers)
+INPUT_E_INV_DAY = (45, 46)  # Daily inverter energy (Wh after /10, 2 registers)
+INPUT_E_REC_DAY = (47, 48)  # Daily grid import (Wh after /10, 2 registers)
+INPUT_E_CHG_DAY = (49, 50)  # Daily charge energy (Wh after /10, 2 registers)
+INPUT_E_DISCHG_DAY = (51, 52)  # Daily discharge energy (Wh after /10, 2 registers)
+INPUT_E_EPS_DAY = (53, 54)  # Daily EPS energy (Wh after /10, 2 registers)
+INPUT_E_TO_GRID_DAY = (55, 56)  # Daily export energy (Wh after /10, 2 registers)
+INPUT_E_TO_USER_DAY = (57, 58)  # Daily load energy (Wh after /10, 2 registers)
 INPUT_V_BAT_LIMIT = 59  # Max charge voltage (V, /100)
 INPUT_I_BAT_LIMIT = 60  # Max charge current (A, /10)
 
@@ -1283,31 +1283,32 @@ INVERTER_RUNTIME_SCALING: dict[str, ScaleFactor] = {
 # ENERGY DATA SCALING
 # ============================================================================
 # Source: EnergyInfo model from getInverterEnergyInfo endpoint
-# All energy values from API are in Wh×10, need ÷10 to get Wh, then ÷1000 for kWh
+# All energy values from API are in 0.1 kWh units, need ÷10 to get kWh directly
+# Example: API returns 184 → 184 ÷ 10 = 18.4 kWh
 
 ENERGY_INFO_SCALING: dict[str, ScaleFactor] = {
-    # Daily Energy (÷10 to get Wh: 90 → 9.0 Wh → 0.009 kWh)
+    # Daily Energy (÷10 to get kWh: 184 → 18.4 kWh)
     "todayYielding": ScaleFactor.SCALE_10,
     "todayCharging": ScaleFactor.SCALE_10,
     "todayDischarging": ScaleFactor.SCALE_10,
     "todayGridImport": ScaleFactor.SCALE_10,
     "todayUsage": ScaleFactor.SCALE_10,
     "todayExport": ScaleFactor.SCALE_10,
-    # Monthly Energy (÷10 to get Wh)
+    # Monthly Energy (÷10 to get kWh)
     "monthYielding": ScaleFactor.SCALE_10,
     "monthCharging": ScaleFactor.SCALE_10,
     "monthDischarging": ScaleFactor.SCALE_10,
     "monthGridImport": ScaleFactor.SCALE_10,
     "monthUsage": ScaleFactor.SCALE_10,
     "monthExport": ScaleFactor.SCALE_10,
-    # Yearly Energy (÷10 to get Wh)
+    # Yearly Energy (÷10 to get kWh)
     "yearYielding": ScaleFactor.SCALE_10,
     "yearCharging": ScaleFactor.SCALE_10,
     "yearDischarging": ScaleFactor.SCALE_10,
     "yearGridImport": ScaleFactor.SCALE_10,
     "yearUsage": ScaleFactor.SCALE_10,
     "yearExport": ScaleFactor.SCALE_10,
-    # Lifetime Total Energy (÷10 to get Wh)
+    # Lifetime Total Energy (÷10 to get kWh)
     "totalYielding": ScaleFactor.SCALE_10,
     "totalCharging": ScaleFactor.SCALE_10,
     "totalDischarging": ScaleFactor.SCALE_10,
@@ -1579,28 +1580,28 @@ def scale_energy_value(field_name: str, value: int | float, to_kwh: bool = True)
 
     Args:
         field_name: Field name from EnergyInfo model
-        value: Raw API value
-        to_kwh: If True, convert to kWh; if False, return Wh
+        value: Raw API value (in 0.1 kWh units)
+        to_kwh: If True, return kWh; if False, return Wh
 
     Returns:
         Scaled value in kWh (if to_kwh=True) or Wh
 
     Example:
-        >>> scale_energy_value("todayYielding", 90, to_kwh=True)
-        0.009  # kWh
-        >>> scale_energy_value("todayYielding", 90, to_kwh=False)
-        9.0  # Wh
+        >>> scale_energy_value("todayYielding", 184, to_kwh=True)
+        18.4  # kWh
+        >>> scale_energy_value("todayYielding", 184, to_kwh=False)
+        18400.0  # Wh
     """
     if field_name not in ENERGY_INFO_SCALING:
         return float(value)
 
-    # Apply API scaling (÷10 to get Wh)
-    wh_value = apply_scale(value, ENERGY_INFO_SCALING[field_name])
+    # Apply API scaling (÷10 to get kWh directly - API uses 0.1 kWh units)
+    kwh_value = apply_scale(value, ENERGY_INFO_SCALING[field_name])
 
-    # Convert to kWh if requested
-    if to_kwh:
-        return wh_value / 1000.0
-    return wh_value
+    # Convert to Wh if requested
+    if not to_kwh:
+        return kwh_value * 1000.0
+    return kwh_value
 
 
 # ==============================================================================
