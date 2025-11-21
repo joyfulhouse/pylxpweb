@@ -289,8 +289,17 @@ async def collect_inverter_data(
                     "battery_index": battery.battery_index,
                     "voltage": battery.voltage,
                     "current": battery.current,
+                    "power": battery.power,
                     "soc": battery.soc,
-                    "cell_voltages": battery.cell_voltages,
+                    "soh": battery.soh,
+                    "max_cell_temp": battery.max_cell_temp,
+                    "min_cell_temp": battery.min_cell_temp,
+                    "max_cell_voltage": battery.max_cell_voltage,
+                    "min_cell_voltage": battery.min_cell_voltage,
+                    "cell_voltage_delta": battery.cell_voltage_delta,
+                    "cycle_count": battery.cycle_count,
+                    "firmware_version": battery.firmware_version,
+                    "is_lost": battery.is_lost,
                 }
                 bank_data["batteries"].append(battery_data)
 
