@@ -13,8 +13,8 @@ from pylxpweb.constants import (
     ENERGY_INFO_SCALING,
     INVERTER_RUNTIME_SCALING,
     ScaleFactor,
+    _get_scaling_for_field,
     apply_scale,
-    get_scaling_for_field,
     scale_battery_value,
     scale_energy_value,
     scale_runtime_value,
@@ -223,37 +223,38 @@ class TestEnergyScaling:
 
 
 class TestGetScalingForField:
-    """Test get_scaling_for_field() function."""
+    """Test _get_scaling_for_field() internal function."""
 
     def test_runtime_field_lookup(self) -> None:
         """Test runtime data field lookup."""
-        assert get_scaling_for_field("vpv1", "runtime") == ScaleFactor.SCALE_10
-        assert get_scaling_for_field("fac", "runtime") == ScaleFactor.SCALE_100
-        assert get_scaling_for_field("ppv1", "runtime") == ScaleFactor.SCALE_NONE
+        assert _get_scaling_for_field("vpv1", "runtime") == ScaleFactor.SCALE_10
+        assert _get_scaling_for_field("fac", "runtime") == ScaleFactor.SCALE_100
+        assert _get_scaling_for_field("ppv1", "runtime") == ScaleFactor.SCALE_NONE
 
     def test_battery_module_field_lookup(self) -> None:
         """Test battery module field lookup."""
-        assert get_scaling_for_field("totalVoltage", "battery_module") == ScaleFactor.SCALE_100
-        assert get_scaling_for_field("current", "battery_module") == ScaleFactor.SCALE_10
+        assert _get_scaling_for_field("totalVoltage", "battery_module") == ScaleFactor.SCALE_100
+        assert _get_scaling_for_field("current", "battery_module") == ScaleFactor.SCALE_10
         assert (
-            get_scaling_for_field("batMaxCellVoltage", "battery_module") == ScaleFactor.SCALE_1000
+            _get_scaling_for_field("batMaxCellVoltage", "battery_module")
+            == ScaleFactor.SCALE_1000
         )
-        assert get_scaling_for_field("soc", "battery_module") == ScaleFactor.SCALE_NONE
+        assert _get_scaling_for_field("soc", "battery_module") == ScaleFactor.SCALE_NONE
 
     def test_energy_field_lookup(self) -> None:
         """Test energy field lookup."""
-        assert get_scaling_for_field("todayYielding", "energy") == ScaleFactor.SCALE_10
-        assert get_scaling_for_field("totalExport", "energy") == ScaleFactor.SCALE_10
+        assert _get_scaling_for_field("todayYielding", "energy") == ScaleFactor.SCALE_10
+        assert _get_scaling_for_field("totalExport", "energy") == ScaleFactor.SCALE_10
 
     def test_invalid_field_raises_error(self) -> None:
         """Test invalid field raises KeyError."""
         with pytest.raises(KeyError):
-            get_scaling_for_field("invalidField", "runtime")
+            _get_scaling_for_field("invalidField", "runtime")
 
     def test_invalid_data_type_raises_error(self) -> None:
         """Test invalid data type raises KeyError."""
         with pytest.raises(KeyError):
-            get_scaling_for_field("vpv1", "invalid_type")  # type: ignore
+            _get_scaling_for_field("vpv1", "invalid_type")  # type: ignore
 
 
 class TestRealWorldData:
