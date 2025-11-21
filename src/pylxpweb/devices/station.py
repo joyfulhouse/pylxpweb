@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from pylxpweb.models import InverterOverviewItem, ParallelGroupDeviceItem
+
 from .base import BaseDevice
 from .models import DeviceInfo, Entity
 
@@ -369,18 +371,18 @@ class Station(BaseDevice):
             # Step 4: Create parallel groups from devices with parallelGroup field
             if group_data and hasattr(group_data, "devices") and group_data.devices:
                 # Group devices by their parallelGroup field
-                groups_by_name: dict[str, list] = {}
-                for device in group_data.devices:
+                groups_by_name: dict[str, list[ParallelGroupDeviceItem]] = {}
+                for pg_device in group_data.devices:
                     # Get parallel group name from device list (not from group_data)
-                    device_info = next(
-                        (d for d in devices_response.rows if d.serialNum == device.serialNum),
+                    device_info: InverterOverviewItem | None = next(
+                        (d for d in devices_response.rows if d.serialNum == pg_device.serialNum),
                         None,
                     )
                     if device_info and device_info.parallelGroup:
                         group_name = device_info.parallelGroup
                         if group_name not in groups_by_name:
                             groups_by_name[group_name] = []
-                        groups_by_name[group_name].append(device)
+                        groups_by_name[group_name].append(pg_device)
 
                 # Create ParallelGroup objects
                 for group_name, devices in groups_by_name.items():

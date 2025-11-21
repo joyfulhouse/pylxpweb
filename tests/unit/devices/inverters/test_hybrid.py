@@ -32,7 +32,7 @@ class TestHybridInverterInitialization:
         assert inverter.model == "FlexBOSS21"
         assert inverter.runtime is None
         assert inverter.energy is None
-        assert inverter.batteries == []
+        assert inverter.battery_bank is None
 
 
 class TestACChargeOperations:

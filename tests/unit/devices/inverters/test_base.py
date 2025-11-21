@@ -99,7 +99,7 @@ class TestBaseInverterInitialization:
         assert inverter._client is mock_client
         assert inverter.runtime is None
         assert inverter.energy is None
-        assert inverter.batteries == []
+        assert inverter.battery_bank is None
 
     def test_cannot_instantiate_base_inverter_directly(self, mock_client: LuxpowerClient) -> None:
         """Test that BaseInverter cannot be instantiated directly."""
@@ -141,7 +141,8 @@ class TestInverterRefresh:
         # Verify data stored
         assert inverter.runtime is sample_runtime
         assert inverter.energy is sample_energy
-        assert len(inverter.batteries) == 3  # Sample has 3 batteries
+        assert inverter.battery_bank is not None
+        assert len(inverter.battery_bank.batteries) == 3  # Sample has 3 batteries
         assert inverter._last_refresh is not None
 
     @pytest.mark.asyncio
@@ -163,7 +164,8 @@ class TestInverterRefresh:
         # Runtime should be None (error), energy and batteries should be set
         assert inverter.runtime is None
         assert inverter.energy is sample_energy
-        assert len(inverter.batteries) == 3
+        assert inverter.battery_bank is not None
+        assert len(inverter.battery_bank.batteries) == 3
 
     @pytest.mark.asyncio
     async def test_refresh_handles_energy_error(
@@ -184,7 +186,8 @@ class TestInverterRefresh:
         # Runtime and batteries should be set, energy should be None (error)
         assert inverter.runtime is sample_runtime
         assert inverter.energy is None
-        assert len(inverter.batteries) == 3
+        assert inverter.battery_bank is not None
+        assert len(inverter.battery_bank.batteries) == 3
 
 
 class TestInverterDeviceInfo:
@@ -322,31 +325,29 @@ class TestInverterProperties:
 
 
 class TestInverterBatteries:
-    """Test inverter battery management."""
+    """Test inverter battery bank management."""
 
-    def test_batteries_list_initialization(self, mock_client: LuxpowerClient) -> None:
-        """Test batteries list is initialized empty."""
+    def test_battery_bank_initialization(self, mock_client: LuxpowerClient) -> None:
+        """Test battery_bank is initialized as None."""
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        assert inverter.batteries == []
-        assert isinstance(inverter.batteries, list)
+        assert inverter.battery_bank is None
 
-    def test_batteries_can_be_populated(self, mock_client: LuxpowerClient) -> None:
-        """Test batteries list can be populated."""
+    def test_battery_bank_can_be_populated(self, mock_client: LuxpowerClient) -> None:
+        """Test battery_bank can be populated."""
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        # Add mock batteries
-        battery1 = Mock()
-        battery2 = Mock()
-        inverter.batteries = [battery1, battery2]
+        # Add mock battery bank
+        battery_bank = Mock()
+        battery_bank.batteries = [Mock(), Mock()]
+        inverter.battery_bank = battery_bank
 
-        assert len(inverter.batteries) == 2
-        assert battery1 in inverter.batteries
-        assert battery2 in inverter.batteries
+        assert inverter.battery_bank is battery_bank
+        assert len(inverter.battery_bank.batteries) == 2
 
 
 class TestInverterControlOperations:

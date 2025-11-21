@@ -10,11 +10,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .base import BaseDevice
-from .models import DeviceClass, DeviceInfo, Entity, StateClass
+from .models import DeviceInfo, Entity
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
     from pylxpweb.models import BatteryInfo
+
+    from .battery import Battery
 
 
 class BatteryBank(BaseDevice):
@@ -63,7 +65,7 @@ class BatteryBank(BaseDevice):
         self.data = battery_info
 
         # Individual battery modules in this bank
-        self.batteries: list = []  # Will be Battery objects
+        self.batteries: list[Battery] = []  # Will be Battery objects
 
     @property
     def status(self) -> str:
@@ -150,6 +152,10 @@ class BatteryBank(BaseDevice):
     def to_device_info(self) -> DeviceInfo:
         """Convert to device info model.
 
+        Note: BatteryBank entities are not currently exposed to Home Assistant.
+        Aggregate battery data is available through inverter sensors.
+        This method is preserved for potential future use.
+
         Returns:
             DeviceInfo with battery bank metadata.
         """
@@ -164,105 +170,18 @@ class BatteryBank(BaseDevice):
     def to_entities(self) -> list[Entity]:
         """Generate entities for this battery bank.
 
+        Note: BatteryBank entities are not currently generated for Home Assistant
+        to avoid excessive entity proliferation. Aggregate battery data is available
+        through inverter sensors, and individual battery data is available through
+        Battery entities.
+
+        This method is preserved for potential future use if aggregate battery
+        entities are needed.
+
         Returns:
-            List of Entity objects representing sensors for the battery bank.
+            Empty list (entities not currently generated).
         """
-        entities = []
-
-        # Status
-        entities.append(
-            Entity(
-                unique_id=f"{self.serial_number}_status",
-                name="Battery Bank Status",
-                device_class=None,
-                state_class=None,
-                unit_of_measurement=None,
-                value=self.status,
-            )
-        )
-
-        # SOC
-        entities.append(
-            Entity(
-                unique_id=f"{self.serial_number}_soc",
-                name="Battery Bank SOC",
-                device_class=DeviceClass.BATTERY,
-                state_class=StateClass.MEASUREMENT,
-                unit_of_measurement="%",
-                value=self.soc,
-            )
-        )
-
-        # Voltage
-        entities.append(
-            Entity(
-                unique_id=f"{self.serial_number}_voltage",
-                name="Battery Bank Voltage",
-                device_class=DeviceClass.VOLTAGE,
-                state_class=StateClass.MEASUREMENT,
-                unit_of_measurement="V",
-                value=self.voltage,
-            )
-        )
-
-        # Charge Power
-        entities.append(
-            Entity(
-                unique_id=f"{self.serial_number}_charge_power",
-                name="Battery Bank Charge Power",
-                device_class=DeviceClass.POWER,
-                state_class=StateClass.MEASUREMENT,
-                unit_of_measurement="W",
-                value=self.charge_power,
-            )
-        )
-
-        # Discharge Power
-        entities.append(
-            Entity(
-                unique_id=f"{self.serial_number}_discharge_power",
-                name="Battery Bank Discharge Power",
-                device_class=DeviceClass.POWER,
-                state_class=StateClass.MEASUREMENT,
-                unit_of_measurement="W",
-                value=self.discharge_power,
-            )
-        )
-
-        # Max Capacity
-        entities.append(
-            Entity(
-                unique_id=f"{self.serial_number}_max_capacity",
-                name="Battery Bank Max Capacity",
-                device_class=None,
-                state_class=StateClass.MEASUREMENT,
-                unit_of_measurement="Ah",
-                value=self.max_capacity,
-            )
-        )
-
-        # Current Capacity
-        entities.append(
-            Entity(
-                unique_id=f"{self.serial_number}_current_capacity",
-                name="Battery Bank Current Capacity",
-                device_class=None,
-                state_class=StateClass.MEASUREMENT,
-                unit_of_measurement="Ah",
-                value=self.current_capacity,
-            )
-        )
-
-        # Battery Count
-        entities.append(
-            Entity(
-                unique_id=f"{self.serial_number}_battery_count",
-                name="Battery Bank Module Count",
-                device_class=None,
-                state_class=None,
-                unit_of_measurement="modules",
-                value=self.battery_count,
-            )
-        )
-
-        return entities
+        # Return empty list - BatteryBank entities not needed for HA integration
+        # Aggregate data is accessible via inverter sensors
+        # Individual battery data is accessible via Battery entities
+        return []

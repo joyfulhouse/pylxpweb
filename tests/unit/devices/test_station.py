@@ -225,6 +225,8 @@ class TestStationFactoryMethods:
     @pytest.mark.asyncio
     async def test_load_station(self, mock_client: LuxpowerClient) -> None:
         """Test loading a station from API."""
+        from pylxpweb.models import InverterOverviewResponse
+
         # Mock API responses
         plant_data = {
             "plantId": 12345,
@@ -237,9 +239,12 @@ class TestStationFactoryMethods:
             "createDate": "2024-01-01T00:00:00Z",
         }
 
+        # Mock devices response (no devices)
+        devices_response = InverterOverviewResponse(success=True, total=0, rows=[])
+
         # Mock the API calls
         mock_client.api.plants.get_plant_details = AsyncMock(return_value=plant_data)
-        mock_client.api.devices.get_parallel_group_details = AsyncMock(return_value={"groups": []})
+        mock_client.api.devices.get_devices = AsyncMock(return_value=devices_response)
 
         # Load station
         station = await Station.load(mock_client, 12345)
@@ -255,7 +260,7 @@ class TestStationFactoryMethods:
 
         # Verify API was called
         mock_client.api.plants.get_plant_details.assert_called_once_with(12345)
-        mock_client.api.devices.get_parallel_group_details.assert_called_once()
+        mock_client.api.devices.get_devices.assert_called_once_with(12345)
 
     @pytest.mark.asyncio
     async def test_load_all_stations(self, mock_client: LuxpowerClient) -> None:
@@ -338,6 +343,13 @@ class TestStationFactoryMethods:
         self, mock_client: LuxpowerClient, sample_location: Location
     ) -> None:
         """Test _load_devices creates parallel groups."""
+        from pylxpweb.models import (
+            InverterOverviewItem,
+            InverterOverviewResponse,
+            ParallelGroupDetailsResponse,
+            ParallelGroupDeviceItem,
+        )
+
         station = Station(
             client=mock_client,
             plant_id=12345,
@@ -347,18 +359,144 @@ class TestStationFactoryMethods:
             created_date=datetime(2024, 1, 1),
         )
 
-        # Mock parallel group API response
-        group_data = {
-            "groups": [
-                {"parallelGroup": "A", "parallelFirstDeviceSn": "1111111111"},
-                {"parallelGroup": "B", "parallelFirstDeviceSn": "2222222222"},
-            ]
-        }
-        mock_client.api.devices.get_parallel_group_details = AsyncMock(return_value=group_data)
+        # Mock devices response with GridBOSS and inverters
+        # Use model_construct to bypass validation for test data
+        devices_response = InverterOverviewResponse(
+            success=True,
+            total=3,
+            rows=[
+                InverterOverviewItem.model_construct(
+                    serialNum="9999999999",
+                    statusText="Online",
+                    deviceType=9,  # GridBOSS
+                    subDeviceType=0,
+                    parallelGroup="",
+                    deviceTypeText="GridBOSS",
+                    phase=1,
+                    plantId=12345,
+                    plantName="Test Station",
+                    ppv=0,
+                    ppvText="0 W",
+                    pCharge=0,
+                    pChargeText="0 W",
+                    pDisCharge=0,
+                    pDisChargeText="0 W",
+                    pConsumption=0,
+                    pConsumptionText="0 W",
+                    soc="0 %",
+                    vBat=0,
+                    vBatText="0 V",
+                    totalYielding=0,
+                    totalYieldingText="0 kWh",
+                    totalDischarging=0,
+                    totalDischargingText="0 kWh",
+                    totalExport=0,
+                    totalExportText="0 kWh",
+                    totalUsage=0,
+                    totalUsageText="0 kWh",
+                    parallelIndex="",
+                ),
+                InverterOverviewItem.model_construct(
+                    serialNum="1111111111",
+                    statusText="Online",
+                    deviceType=6,  # Inverter
+                    subDeviceType=0,
+                    parallelGroup="A",
+                    deviceTypeText="18KPV",
+                    phase=1,
+                    plantId=12345,
+                    plantName="Test Station",
+                    ppv=0,
+                    ppvText="0 W",
+                    pCharge=0,
+                    pChargeText="0 W",
+                    pDisCharge=0,
+                    pDisChargeText="0 W",
+                    pConsumption=0,
+                    pConsumptionText="0 W",
+                    soc="0 %",
+                    vBat=0,
+                    vBatText="0 V",
+                    totalYielding=0,
+                    totalYieldingText="0 kWh",
+                    totalDischarging=0,
+                    totalDischargingText="0 kWh",
+                    totalExport=0,
+                    totalExportText="0 kWh",
+                    totalUsage=0,
+                    totalUsageText="0 kWh",
+                    parallelIndex="1",
+                ),
+                InverterOverviewItem.model_construct(
+                    serialNum="2222222222",
+                    statusText="Online",
+                    deviceType=6,  # Inverter
+                    subDeviceType=0,
+                    parallelGroup="B",
+                    deviceTypeText="18KPV",
+                    phase=1,
+                    plantId=12345,
+                    plantName="Test Station",
+                    ppv=0,
+                    ppvText="0 W",
+                    pCharge=0,
+                    pChargeText="0 W",
+                    pDisCharge=0,
+                    pDisChargeText="0 W",
+                    pConsumption=0,
+                    pConsumptionText="0 W",
+                    soc="0 %",
+                    vBat=0,
+                    vBatText="0 V",
+                    totalYielding=0,
+                    totalYieldingText="0 kWh",
+                    totalDischarging=0,
+                    totalDischargingText="0 kWh",
+                    totalExport=0,
+                    totalExportText="0 kWh",
+                    totalUsage=0,
+                    totalUsageText="0 kWh",
+                    parallelIndex="1",
+                ),
+            ],
+        )
 
-        # Mock devices API response (required for optimized concurrent call)
-        devices_data = {"success": True, "rows": []}
-        mock_client.api.devices.get_devices = AsyncMock(return_value=devices_data)
+        # Mock parallel group details response
+        # Use model_construct to bypass validation for test data
+        group_data = ParallelGroupDetailsResponse.model_construct(
+            success=True,
+            deviceType=6,
+            total=2,
+            devices=[
+                ParallelGroupDeviceItem.model_construct(
+                    serialNum="1111111111",
+                    deviceType=6,
+                    subDeviceType=0,
+                    phase=1,
+                    dtc="2024-01-01 00:00:00",
+                    machineType="18KPV",
+                    parallelIndex="1",
+                    parallelNumText="1",
+                    lost=False,
+                    roleText="Primary",
+                ),
+                ParallelGroupDeviceItem.model_construct(
+                    serialNum="2222222222",
+                    deviceType=6,
+                    subDeviceType=0,
+                    phase=1,
+                    dtc="2024-01-01 00:00:00",
+                    machineType="18KPV",
+                    parallelIndex="1",
+                    parallelNumText="1",
+                    lost=False,
+                    roleText="Primary",
+                ),
+            ],
+        )
+
+        mock_client.api.devices.get_devices = AsyncMock(return_value=devices_response)
+        mock_client.api.devices.get_parallel_group_details = AsyncMock(return_value=group_data)
 
         # Load devices
         await station._load_devices()
