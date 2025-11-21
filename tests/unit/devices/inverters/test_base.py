@@ -9,7 +9,7 @@ import pytest
 from pylxpweb import LuxpowerClient
 from pylxpweb.devices.inverters.base import BaseInverter
 from pylxpweb.devices.models import DeviceInfo, Entity
-from pylxpweb.models import EnergyInfo, InverterRuntime
+from pylxpweb.models import EnergyInfo, InverterRuntime, SuccessResponse
 
 
 class ConcreteInverter(BaseInverter):
@@ -602,3 +602,227 @@ class TestInverterControlOperations:
         # Try to set off-grid limit above 100%
         with pytest.raises(ValueError, match="off_grid_limit must be between 0 and 100%"):
             await inverter.set_battery_soc_limits(off_grid_limit=105)
+
+
+class TestWorkingModeControls:
+    """Test working mode control methods (Issue #16)."""
+
+    @pytest.mark.asyncio
+    async def test_enable_ac_charge_mode(self, mock_client: LuxpowerClient) -> None:
+        """Test enable_ac_charge_mode method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_response = Mock(spec=SuccessResponse)
+        mock_response.success = True
+        mock_client.api.control.enable_ac_charge_mode = AsyncMock(return_value=mock_response)
+
+        # Enable AC charge mode
+        result = await inverter.enable_ac_charge_mode()
+
+        # Verify correct endpoint call
+        mock_client.api.control.enable_ac_charge_mode.assert_called_once_with("1234567890")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_disable_ac_charge_mode(self, mock_client: LuxpowerClient) -> None:
+        """Test disable_ac_charge_mode method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_response = Mock(spec=SuccessResponse)
+        mock_response.success = True
+        mock_client.api.control.disable_ac_charge_mode = AsyncMock(return_value=mock_response)
+
+        # Disable AC charge mode
+        result = await inverter.disable_ac_charge_mode()
+
+        # Verify correct endpoint call
+        mock_client.api.control.disable_ac_charge_mode.assert_called_once_with("1234567890")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_ac_charge_mode_status(self, mock_client: LuxpowerClient) -> None:
+        """Test get_ac_charge_mode_status method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_client.api.control.get_ac_charge_mode_status = AsyncMock(return_value=True)
+
+        # Get AC charge mode status
+        status = await inverter.get_ac_charge_mode_status()
+
+        # Verify correct endpoint call
+        mock_client.api.control.get_ac_charge_mode_status.assert_called_once_with("1234567890")
+        assert status is True
+
+    @pytest.mark.asyncio
+    async def test_enable_pv_charge_priority(self, mock_client: LuxpowerClient) -> None:
+        """Test enable_pv_charge_priority method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_response = Mock(spec=SuccessResponse)
+        mock_response.success = True
+        mock_client.api.control.enable_pv_charge_priority = AsyncMock(return_value=mock_response)
+
+        # Enable PV charge priority
+        result = await inverter.enable_pv_charge_priority()
+
+        # Verify correct endpoint call
+        mock_client.api.control.enable_pv_charge_priority.assert_called_once_with("1234567890")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_disable_pv_charge_priority(self, mock_client: LuxpowerClient) -> None:
+        """Test disable_pv_charge_priority method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_response = Mock(spec=SuccessResponse)
+        mock_response.success = True
+        mock_client.api.control.disable_pv_charge_priority = AsyncMock(return_value=mock_response)
+
+        # Disable PV charge priority
+        result = await inverter.disable_pv_charge_priority()
+
+        # Verify correct endpoint call
+        mock_client.api.control.disable_pv_charge_priority.assert_called_once_with("1234567890")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_pv_charge_priority_status(self, mock_client: LuxpowerClient) -> None:
+        """Test get_pv_charge_priority_status method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_client.api.control.get_pv_charge_priority_status = AsyncMock(return_value=True)
+
+        # Get PV charge priority status
+        status = await inverter.get_pv_charge_priority_status()
+
+        # Verify correct endpoint call
+        mock_client.api.control.get_pv_charge_priority_status.assert_called_once_with("1234567890")
+        assert status is True
+
+    @pytest.mark.asyncio
+    async def test_enable_forced_discharge(self, mock_client: LuxpowerClient) -> None:
+        """Test enable_forced_discharge method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_response = Mock(spec=SuccessResponse)
+        mock_response.success = True
+        mock_client.api.control.enable_forced_discharge = AsyncMock(return_value=mock_response)
+
+        # Enable forced discharge
+        result = await inverter.enable_forced_discharge()
+
+        # Verify correct endpoint call
+        mock_client.api.control.enable_forced_discharge.assert_called_once_with("1234567890")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_disable_forced_discharge(self, mock_client: LuxpowerClient) -> None:
+        """Test disable_forced_discharge method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_response = Mock(spec=SuccessResponse)
+        mock_response.success = True
+        mock_client.api.control.disable_forced_discharge = AsyncMock(return_value=mock_response)
+
+        # Disable forced discharge
+        result = await inverter.disable_forced_discharge()
+
+        # Verify correct endpoint call
+        mock_client.api.control.disable_forced_discharge.assert_called_once_with("1234567890")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_forced_discharge_status(self, mock_client: LuxpowerClient) -> None:
+        """Test get_forced_discharge_status method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_client.api.control.get_forced_discharge_status = AsyncMock(return_value=True)
+
+        # Get forced discharge status
+        status = await inverter.get_forced_discharge_status()
+
+        # Verify correct endpoint call
+        mock_client.api.control.get_forced_discharge_status.assert_called_once_with("1234567890")
+        assert status is True
+
+    @pytest.mark.asyncio
+    async def test_enable_peak_shaving_mode(self, mock_client: LuxpowerClient) -> None:
+        """Test enable_peak_shaving_mode method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_response = Mock(spec=SuccessResponse)
+        mock_response.success = True
+        mock_client.api.control.enable_peak_shaving_mode = AsyncMock(return_value=mock_response)
+
+        # Enable peak shaving mode
+        result = await inverter.enable_peak_shaving_mode()
+
+        # Verify correct endpoint call
+        mock_client.api.control.enable_peak_shaving_mode.assert_called_once_with("1234567890")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_disable_peak_shaving_mode(self, mock_client: LuxpowerClient) -> None:
+        """Test disable_peak_shaving_mode method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_response = Mock(spec=SuccessResponse)
+        mock_response.success = True
+        mock_client.api.control.disable_peak_shaving_mode = AsyncMock(return_value=mock_response)
+
+        # Disable peak shaving mode
+        result = await inverter.disable_peak_shaving_mode()
+
+        # Verify correct endpoint call
+        mock_client.api.control.disable_peak_shaving_mode.assert_called_once_with("1234567890")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_peak_shaving_mode_status(self, mock_client: LuxpowerClient) -> None:
+        """Test get_peak_shaving_mode_status method."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Mock the control endpoint method
+        mock_client.api.control.get_peak_shaving_mode_status = AsyncMock(return_value=True)
+
+        # Get peak shaving mode status
+        status = await inverter.get_peak_shaving_mode_status()
+
+        # Verify correct endpoint call
+        mock_client.api.control.get_peak_shaving_mode_status.assert_called_once_with("1234567890")
+        assert status is True

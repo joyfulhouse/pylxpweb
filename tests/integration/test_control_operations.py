@@ -388,3 +388,129 @@ class TestForcedChargeDischarge:
         finally:
             # ALWAYS restore original state
             await hybrid_inverter.set_forced_discharge(original_forced_discharge)
+
+
+@pytest.mark.asyncio
+class TestWorkingModeControls:
+    """Test working mode control convenience methods (Issue #16).
+
+    NOTE: These tests verify API calls succeed but do NOT verify values are
+    applied, as inverters may have undocumented validation rules or delays
+    that prevent immediate changes.
+    """
+
+    async def test_ac_charge_mode_toggle_safe(self, client: LuxpowerClient) -> None:
+        """Test AC charge mode enable/disable - verify API calls succeed."""
+        stations = await Station.load_all(client)
+        inverter = stations[0].all_inverters[0]
+
+        # Read current state
+        original_status = await inverter.get_ac_charge_mode_status()
+
+        try:
+            # Toggle AC charge mode - verify API call succeeds
+            new_state = not original_status
+
+            if new_state:
+                success = await inverter.enable_ac_charge_mode()
+            else:
+                success = await inverter.disable_ac_charge_mode()
+
+            assert success is True
+
+            # Note: We don't verify the value is applied because the inverter
+            # may have validation rules or delays that prevent immediate changes
+
+        finally:
+            # ALWAYS restore original state
+            if original_status:
+                await inverter.enable_ac_charge_mode()
+            else:
+                await inverter.disable_ac_charge_mode()
+
+    async def test_pv_charge_priority_toggle_safe(self, client: LuxpowerClient) -> None:
+        """Test PV charge priority enable/disable - verify API calls succeed."""
+        stations = await Station.load_all(client)
+        inverter = stations[0].all_inverters[0]
+
+        # Read current state
+        original_status = await inverter.get_pv_charge_priority_status()
+
+        try:
+            # Toggle PV charge priority - verify API call succeeds
+            new_state = not original_status
+
+            if new_state:
+                success = await inverter.enable_pv_charge_priority()
+            else:
+                success = await inverter.disable_pv_charge_priority()
+
+            assert success is True
+
+            # Note: We don't verify the value is applied because the inverter
+            # may have validation rules or delays that prevent immediate changes
+
+        finally:
+            # ALWAYS restore original state
+            if original_status:
+                await inverter.enable_pv_charge_priority()
+            else:
+                await inverter.disable_pv_charge_priority()
+
+    async def test_forced_discharge_mode_toggle_safe(self, client: LuxpowerClient) -> None:
+        """Test forced discharge mode enable/disable - verify API calls succeed."""
+        stations = await Station.load_all(client)
+        inverter = stations[0].all_inverters[0]
+
+        # Read current state
+        original_status = await inverter.get_forced_discharge_status()
+
+        try:
+            # Toggle forced discharge mode - verify API call succeeds
+            new_state = not original_status
+
+            if new_state:
+                success = await inverter.enable_forced_discharge()
+            else:
+                success = await inverter.disable_forced_discharge()
+
+            assert success is True
+
+            # Note: We don't verify the value is applied because the inverter
+            # may have validation rules or delays that prevent immediate changes
+
+        finally:
+            # ALWAYS restore original state
+            if original_status:
+                await inverter.enable_forced_discharge()
+            else:
+                await inverter.disable_forced_discharge()
+
+    async def test_peak_shaving_mode_toggle_safe(self, client: LuxpowerClient) -> None:
+        """Test peak shaving mode enable/disable - verify API calls succeed."""
+        stations = await Station.load_all(client)
+        inverter = stations[0].all_inverters[0]
+
+        # Read current state
+        original_status = await inverter.get_peak_shaving_mode_status()
+
+        try:
+            # Toggle peak shaving mode - verify API call succeeds
+            new_state = not original_status
+
+            if new_state:
+                success = await inverter.enable_peak_shaving_mode()
+            else:
+                success = await inverter.disable_peak_shaving_mode()
+
+            assert success is True
+
+            # Note: We don't verify the value is applied because the inverter
+            # may have validation rules or delays that prevent immediate changes
+
+        finally:
+            # ALWAYS restore original state
+            if original_status:
+                await inverter.enable_peak_shaving_mode()
+            else:
+                await inverter.disable_peak_shaving_mode()

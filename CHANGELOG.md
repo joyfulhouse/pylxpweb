@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2025-11-20
+
+### Added
+
+- **Working Mode Controls** (Issue #16) - New convenience methods on `BaseInverter` for working mode operations:
+  - `enable_ac_charge_mode()` / `disable_ac_charge_mode()` / `get_ac_charge_mode_status()` - Control AC charge from grid
+  - `enable_pv_charge_priority()` / `disable_pv_charge_priority()` / `get_pv_charge_priority_status()` - Control PV charge priority mode
+  - `enable_forced_discharge()` / `disable_forced_discharge()` / `get_forced_discharge_status()` - Control forced discharge mode
+  - `enable_peak_shaving_mode()` / `disable_peak_shaving_mode()` / `get_peak_shaving_mode_status()` - Control grid peak shaving
+  - Corresponding API endpoints added to `ControlEndpoints` for low-level access
+  - All methods use the existing `control_function()` infrastructure with function parameter names (FUNC_AC_CHARGE, FUNC_FORCED_CHG_EN, FUNC_FORCED_DISCHG_EN, FUNC_GRID_PEAK_SHAVING)
+  - Comprehensive unit tests (24 new tests: 12 for BaseInverter methods, 12 for endpoint methods)
+  - Integration tests (4 tests with read-then-restore pattern for safe live API testing)
+
 ## [0.2.3] - 2025-11-20
 
 ### Added
