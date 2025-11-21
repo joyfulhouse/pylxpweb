@@ -125,8 +125,10 @@ class TestSOCLimits:
 
         # Limits should be in valid ranges
         # Convert to int if strings (API may return strings)
-        on_grid = int(limits["on_grid_limit"]) if isinstance(limits["on_grid_limit"], str) else limits["on_grid_limit"]
-        off_grid = int(limits["off_grid_limit"]) if isinstance(limits["off_grid_limit"], str) else limits["off_grid_limit"]
+        on_grid_val = limits["on_grid_limit"]
+        on_grid = int(on_grid_val) if isinstance(on_grid_val, str) else on_grid_val
+        off_grid_val = limits["off_grid_limit"]
+        off_grid = int(off_grid_val) if isinstance(off_grid_val, str) else off_grid_val
         assert 0 <= on_grid <= 100
         assert 0 <= off_grid <= 100
 
@@ -143,7 +145,8 @@ class TestSOCLimits:
         # Read current limits
         original_limits = await inverter.get_battery_soc_limits()
         # Convert to int if string
-        original_on_grid = int(original_limits["on_grid_limit"]) if isinstance(original_limits["on_grid_limit"], str) else original_limits["on_grid_limit"]
+        on_grid_val = original_limits["on_grid_limit"]
+        original_on_grid = int(on_grid_val) if isinstance(on_grid_val, str) else on_grid_val
 
         try:
             # Make a small safe change (±1%)
