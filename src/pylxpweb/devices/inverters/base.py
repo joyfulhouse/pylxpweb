@@ -839,3 +839,187 @@ class BaseInverter(BaseDevice):
         """
         status = await self._client.api.control.get_quick_charge_status(self.serial_number)
         return status.hasUnclosedQuickDischargeTask
+
+    # ============================================================================
+    # Working Mode Controls (Issue #16)
+    # ============================================================================
+
+    async def enable_ac_charge_mode(self) -> bool:
+        """Enable AC charge mode to allow battery charging from grid.
+
+        Universal control: All inverters support AC charging.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_ac_charge_mode()
+            True
+        """
+        result = await self._client.api.control.enable_ac_charge_mode(self.serial_number)
+        return result.success
+
+    async def disable_ac_charge_mode(self) -> bool:
+        """Disable AC charge mode.
+
+        Universal control: All inverters support AC charging.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_ac_charge_mode()
+            True
+        """
+        result = await self._client.api.control.disable_ac_charge_mode(self.serial_number)
+        return result.success
+
+    async def get_ac_charge_mode_status(self) -> bool:
+        """Get current AC charge mode status.
+
+        Universal control: All inverters support AC charging.
+
+        Returns:
+            True if AC charge mode is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_ac_charge_mode_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_ac_charge_mode_status(self.serial_number)
+
+    async def enable_pv_charge_priority(self) -> bool:
+        """Enable PV charge priority mode during specified hours.
+
+        Universal control: All inverters support forced charge.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_pv_charge_priority()
+            True
+        """
+        result = await self._client.api.control.enable_pv_charge_priority(self.serial_number)
+        return result.success
+
+    async def disable_pv_charge_priority(self) -> bool:
+        """Disable PV charge priority mode.
+
+        Universal control: All inverters support forced charge.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_pv_charge_priority()
+            True
+        """
+        result = await self._client.api.control.disable_pv_charge_priority(self.serial_number)
+        return result.success
+
+    async def get_pv_charge_priority_status(self) -> bool:
+        """Get current PV charge priority status.
+
+        Universal control: All inverters support forced charge.
+
+        Returns:
+            True if PV charge priority is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_pv_charge_priority_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_pv_charge_priority_status(self.serial_number)
+
+    async def enable_forced_discharge(self) -> bool:
+        """Enable forced discharge mode for grid export.
+
+        Universal control: All inverters support forced discharge.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_forced_discharge()
+            True
+        """
+        result = await self._client.api.control.enable_forced_discharge(self.serial_number)
+        return result.success
+
+    async def disable_forced_discharge(self) -> bool:
+        """Disable forced discharge mode.
+
+        Universal control: All inverters support forced discharge.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_forced_discharge()
+            True
+        """
+        result = await self._client.api.control.disable_forced_discharge(self.serial_number)
+        return result.success
+
+    async def get_forced_discharge_status(self) -> bool:
+        """Get current forced discharge status.
+
+        Universal control: All inverters support forced discharge.
+
+        Returns:
+            True if forced discharge is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_forced_discharge_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_forced_discharge_status(self.serial_number)
+
+    async def enable_peak_shaving_mode(self) -> bool:
+        """Enable grid peak shaving mode.
+
+        Universal control: Most inverters support peak shaving.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_peak_shaving_mode()
+            True
+        """
+        result = await self._client.api.control.enable_peak_shaving_mode(self.serial_number)
+        return result.success
+
+    async def disable_peak_shaving_mode(self) -> bool:
+        """Disable grid peak shaving mode.
+
+        Universal control: Most inverters support peak shaving.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_peak_shaving_mode()
+            True
+        """
+        result = await self._client.api.control.disable_peak_shaving_mode(self.serial_number)
+        return result.success
+
+    async def get_peak_shaving_mode_status(self) -> bool:
+        """Get current peak shaving mode status.
+
+        Universal control: Most inverters support peak shaving.
+
+        Returns:
+            True if peak shaving mode is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_peak_shaving_mode_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_peak_shaving_mode_status(self.serial_number)

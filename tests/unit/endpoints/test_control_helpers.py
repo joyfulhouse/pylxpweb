@@ -215,6 +215,262 @@ class TestPeakShavingHelpers:
         assert result.success is True
 
 
+class TestWorkingModeHelpers:
+    """Test working mode convenience methods (Issue #16)."""
+
+    # AC Charge Mode tests
+    @pytest.mark.asyncio
+    async def test_enable_ac_charge_mode(self) -> None:
+        """Test enable_ac_charge_mode convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.enable_ac_charge_mode("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_AC_CHARGE", True, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_disable_ac_charge_mode(self) -> None:
+        """Test disable_ac_charge_mode convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.disable_ac_charge_mode("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_AC_CHARGE", False, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_get_ac_charge_mode_status(self) -> None:
+        """Test get_ac_charge_mode_status method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {"FUNC_AC_CHARGE": True}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status
+        status = await control.get_ac_charge_mode_status("1234567890")
+
+        # Verify read_parameters was called
+        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
+        assert status is True
+
+    # PV Charge Priority tests
+    @pytest.mark.asyncio
+    async def test_enable_pv_charge_priority(self) -> None:
+        """Test enable_pv_charge_priority convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.enable_pv_charge_priority("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_FORCED_CHG_EN", True, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_disable_pv_charge_priority(self) -> None:
+        """Test disable_pv_charge_priority convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.disable_pv_charge_priority("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_FORCED_CHG_EN", False, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_get_pv_charge_priority_status(self) -> None:
+        """Test get_pv_charge_priority_status method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {"FUNC_FORCED_CHG_EN": True}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status
+        status = await control.get_pv_charge_priority_status("1234567890")
+
+        # Verify read_parameters was called
+        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
+        assert status is True
+
+    # Forced Discharge tests
+    @pytest.mark.asyncio
+    async def test_enable_forced_discharge(self) -> None:
+        """Test enable_forced_discharge convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.enable_forced_discharge("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_FORCED_DISCHG_EN", True, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_disable_forced_discharge(self) -> None:
+        """Test disable_forced_discharge convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.disable_forced_discharge("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_FORCED_DISCHG_EN", False, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_get_forced_discharge_status(self) -> None:
+        """Test get_forced_discharge_status method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {"FUNC_FORCED_DISCHG_EN": True}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status
+        status = await control.get_forced_discharge_status("1234567890")
+
+        # Verify read_parameters was called
+        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
+        assert status is True
+
+    # Peak Shaving Mode tests (additional to existing tests above)
+    @pytest.mark.asyncio
+    async def test_enable_peak_shaving_mode(self) -> None:
+        """Test enable_peak_shaving_mode convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.enable_peak_shaving_mode("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_GRID_PEAK_SHAVING", True, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_disable_peak_shaving_mode(self) -> None:
+        """Test disable_peak_shaving_mode convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.disable_peak_shaving_mode("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_GRID_PEAK_SHAVING", False, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_get_peak_shaving_mode_status(self) -> None:
+        """Test get_peak_shaving_mode_status method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {"FUNC_GRID_PEAK_SHAVING": True}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status
+        status = await control.get_peak_shaving_mode_status("1234567890")
+
+        # Verify read_parameters was called
+        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
+        assert status is True
+
+
 class TestBulkParameterRead:
     """Test bulk parameter reading method."""
 

@@ -580,6 +580,274 @@ class ControlEndpoints(BaseEndpoint):
         value = response.parameters.get("FUNC_EPS_EN", False)
         return bool(value)
 
+    # ============================================================================
+    # Working Mode Controls (Issue #16)
+    # ============================================================================
+
+    async def enable_ac_charge_mode(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable AC charge mode to allow battery charging from grid.
+
+        Convenience wrapper for control_function(..., "FUNC_AC_CHARGE", True).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_ac_charge_mode("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_AC_CHARGE", True, client_type=client_type
+        )
+
+    async def disable_ac_charge_mode(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable AC charge mode.
+
+        Convenience wrapper for control_function(..., "FUNC_AC_CHARGE", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_ac_charge_mode("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_AC_CHARGE", False, client_type=client_type
+        )
+
+    async def get_ac_charge_mode_status(self, inverter_sn: str) -> bool:
+        """Get current AC charge mode status.
+
+        Reads register 21 (function enable) and extracts FUNC_AC_CHARGE bit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if AC charge mode is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_ac_charge_mode_status("1234567890")
+            >>> if enabled:
+            >>>     print("AC charge mode is active")
+        """
+        response = await self.read_parameters(inverter_sn, 21, 1)
+        value = response.parameters.get("FUNC_AC_CHARGE", False)
+        return bool(value)
+
+    async def enable_pv_charge_priority(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable PV charge priority mode during specified hours.
+
+        Convenience wrapper for control_function(..., "FUNC_FORCED_CHG_EN", True).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_pv_charge_priority("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_FORCED_CHG_EN", True, client_type=client_type
+        )
+
+    async def disable_pv_charge_priority(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable PV charge priority mode.
+
+        Convenience wrapper for control_function(..., "FUNC_FORCED_CHG_EN", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_pv_charge_priority("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_FORCED_CHG_EN", False, client_type=client_type
+        )
+
+    async def get_pv_charge_priority_status(self, inverter_sn: str) -> bool:
+        """Get current PV charge priority status.
+
+        Reads register 21 (function enable) and extracts FUNC_FORCED_CHG_EN bit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if PV charge priority is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_pv_charge_priority_status("1234567890")
+            >>> if enabled:
+            >>>     print("PV charge priority mode is active")
+        """
+        response = await self.read_parameters(inverter_sn, 21, 1)
+        value = response.parameters.get("FUNC_FORCED_CHG_EN", False)
+        return bool(value)
+
+    async def enable_forced_discharge(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable forced discharge mode for grid export.
+
+        Convenience wrapper for control_function(..., "FUNC_FORCED_DISCHG_EN", True).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_forced_discharge("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_FORCED_DISCHG_EN", True, client_type=client_type
+        )
+
+    async def disable_forced_discharge(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable forced discharge mode.
+
+        Convenience wrapper for control_function(..., "FUNC_FORCED_DISCHG_EN", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_forced_discharge("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_FORCED_DISCHG_EN", False, client_type=client_type
+        )
+
+    async def get_forced_discharge_status(self, inverter_sn: str) -> bool:
+        """Get current forced discharge status.
+
+        Reads register 21 (function enable) and extracts FUNC_FORCED_DISCHG_EN bit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if forced discharge is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_forced_discharge_status("1234567890")
+            >>> if enabled:
+            >>>     print("Forced discharge mode is active")
+        """
+        response = await self.read_parameters(inverter_sn, 21, 1)
+        value = response.parameters.get("FUNC_FORCED_DISCHG_EN", False)
+        return bool(value)
+
+    async def enable_peak_shaving_mode(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable grid peak shaving mode.
+
+        Convenience wrapper for control_function(..., "FUNC_GRID_PEAK_SHAVING", True).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_peak_shaving_mode("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_GRID_PEAK_SHAVING", True, client_type=client_type
+        )
+
+    async def disable_peak_shaving_mode(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable grid peak shaving mode.
+
+        Convenience wrapper for control_function(..., "FUNC_GRID_PEAK_SHAVING", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_peak_shaving_mode("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_GRID_PEAK_SHAVING", False, client_type=client_type
+        )
+
+    async def get_peak_shaving_mode_status(self, inverter_sn: str) -> bool:
+        """Get current peak shaving mode status.
+
+        Reads register 21 (function enable) and extracts FUNC_GRID_PEAK_SHAVING bit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if peak shaving mode is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_peak_shaving_mode_status("1234567890")
+            >>> if enabled:
+            >>>     print("Peak shaving mode is active")
+        """
+        response = await self.read_parameters(inverter_sn, 21, 1)
+        value = response.parameters.get("FUNC_GRID_PEAK_SHAVING", False)
+        return bool(value)
+
     async def read_device_parameters_ranges(self, inverter_sn: str) -> dict[str, int | bool]:
         """Read all device parameters across three common register ranges.
 
