@@ -6,13 +6,16 @@ installation with inverters, batteries, and optional MID devices.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import zoneinfo
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
-from pylxpweb.models import InverterOverviewItem, ParallelGroupDeviceItem
+from pylxpweb.constants import DEVICE_TYPE_GRIDBOSS, parse_hhmm_timezone
+from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
+from pylxpweb.models import ParallelGroupDeviceItem
 
 from .base import BaseDevice
 from .models import DeviceInfo, Entity
@@ -182,7 +185,7 @@ class Station(BaseDevice):
 
             return dst_active
 
-        except Exception as e:
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError, KeyError) as e:
             _LOGGER.debug("Station %s: Error detecting DST status: %s", self.id, e)
             return None
 
@@ -253,11 +256,18 @@ class Station(BaseDevice):
                 _LOGGER.error("Station %s: Failed to update DST setting", self.id)
             return success
 
-        except Exception as e:
+        except (
+            LuxpowerAPIError,
+            LuxpowerConnectionError,
+            zoneinfo.ZoneInfoNotFoundError,
+            ValueError,
+            KeyError,
+        ) as e:
             _LOGGER.error("Station %s: Error syncing DST setting: %s", self.id, e)
             return False
 
-    def get_current_date(self) -> str | None:
+    @property
+    def current_date(self) -> str | None:
         """Get current date in station's timezone as YYYY-MM-DD string.
 
         This method uses currentTimezoneWithMinute (most accurate) as the primary
@@ -281,9 +291,8 @@ class Station(BaseDevice):
             if self.current_timezone_with_minute is not None:
                 # Parse HHMM format: -800 = -8 hours, 00 minutes
                 value = self.current_timezone_with_minute
-                hours = abs(value) // 100
-                minutes = abs(value) % 100
-                total_minutes = -(hours * 60 + minutes) if value < 0 else (hours * 60 + minutes)
+                hours, minutes = parse_hhmm_timezone(value)
+                total_minutes = hours * 60 + minutes
 
                 tz = timezone(timedelta(minutes=total_minutes))
                 result = datetime.now(tz).strftime("%Y-%m-%d")
@@ -315,7 +324,7 @@ class Station(BaseDevice):
             _LOGGER.debug("Station %s: No timezone info available, using UTC", self.id)
             return datetime.now(UTC).strftime("%Y-%m-%d")
 
-        except Exception as e:
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError, KeyError) as e:
             _LOGGER.debug("Error getting current date for station %s: %s", self.id, e)
             return None
 
@@ -370,10 +379,8 @@ class Station(BaseDevice):
             Automatically clears API caches within 5 minutes of hour boundaries
             to ensure fresh data at midnight (daily energy reset).
         """
-        import asyncio
-
         # Check if cache invalidation is needed before refreshing
-        if self._client.should_invalidate_cache():
+        if self._client.should_invalidate_cache:
             _LOGGER.info(
                 "Station %s: Cache invalidation needed before hour boundary, clearing all caches",
                 self.id,
@@ -382,18 +389,13 @@ class Station(BaseDevice):
 
         tasks = []
 
-        # Refresh all inverters
+        # Refresh all inverters (all inverters have refresh method)
         for inverter in self.all_inverters:
-            if hasattr(inverter, "refresh"):
-                tasks.append(inverter.refresh())
+            tasks.append(inverter.refresh())
 
-        # Refresh MID devices
+        # Refresh MID devices (check for None, mid_device always has refresh method)
         for group in self.parallel_groups:
-            if (
-                hasattr(group, "mid_device")
-                and group.mid_device
-                and hasattr(group.mid_device, "refresh")
-            ):
+            if group.mid_device:
                 tasks.append(group.mid_device.refresh())
 
         # Execute concurrently, ignore exceptions (partial failure OK)
@@ -420,15 +422,12 @@ class Station(BaseDevice):
         - Increases initial load time by ~300ms (concurrent, not per-inverter)
         - May fetch data that's never accessed
         """
-        import asyncio
-
         tasks = []
 
-        # Refresh parameters for all inverters concurrently
+        # Refresh parameters for all inverters concurrently (all inverters have refresh method)
         for inverter in self.all_inverters:
-            if hasattr(inverter, "refresh"):
-                # include_parameters=True triggers parameter fetch
-                tasks.append(inverter.refresh(include_parameters=True))
+            # include_parameters=True triggers parameter fetch
+            tasks.append(inverter.refresh(include_parameters=True))
 
         # Execute concurrently, ignore exceptions (partial failure OK)
         if tasks:
@@ -444,16 +443,12 @@ class Station(BaseDevice):
         total_lifetime = 0.0
 
         for inverter in self.all_inverters:
-            # Refresh if needed
-            if (
-                hasattr(inverter, "needs_refresh")
-                and inverter.needs_refresh
-                and hasattr(inverter, "refresh")
-            ):
+            # Refresh if needed (all inverters have these attributes)
+            if inverter.needs_refresh:
                 await inverter.refresh()
 
-            # Sum energy data
-            if hasattr(inverter, "energy") and inverter.energy:
+            # Sum energy data (all inverters have energy attribute)
+            if inverter.energy:
                 total_today += getattr(inverter.energy, "eToday", 0.0)
                 total_lifetime += getattr(inverter.energy, "eTotal", 0.0)
 
@@ -586,8 +581,6 @@ class Station(BaseDevice):
         plants_response = await client.api.plants.get_plants()
 
         # Load each station concurrently
-        import asyncio
-
         tasks = [cls.load(client, plant.plantId) for plant in plants_response.rows]
         return await asyncio.gather(*tasks)
 
@@ -605,18 +598,14 @@ class Station(BaseDevice):
         from .parallel_group import ParallelGroup
 
         try:
-            import logging
-
-            _LOGGER = logging.getLogger(__name__)
-
             # Step 1: Get device list first
             devices_response = await self._client.api.devices.get_devices(self.id)
 
-            # Step 2: Find GridBOSS/MID device (deviceType == 9) to query parallel groups
+            # Step 2: Find GridBOSS/MID device to query parallel groups
             gridboss_serial = None
-            if hasattr(devices_response, "rows") and devices_response.rows:
+            if devices_response.rows:
                 for device in devices_response.rows:
-                    if device.deviceType == 9:  # GridBOSS/MID device
+                    if device.deviceType == DEVICE_TYPE_GRIDBOSS:
                         gridboss_serial = device.serialNum
                         _LOGGER.debug("Found GridBOSS device: %s", gridboss_serial)
                         break
@@ -628,27 +617,28 @@ class Station(BaseDevice):
                     group_data = await self._client.api.devices.get_parallel_group_details(
                         gridboss_serial
                     )
-                except Exception as e:
+                except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as e:
                     _LOGGER.debug("Could not load parallel group details: %s", str(e))
                     group_data = None
 
             # Step 4: Create parallel groups from devices with parallelGroup field
-            if group_data and hasattr(group_data, "devices") and group_data.devices:
+            if group_data and group_data.devices:
+                # Create device lookup dictionary for O(1) access
+                device_lookup = {d.serialNum: d for d in devices_response.rows}
+
                 # Group devices by their parallelGroup field
                 groups_by_name: dict[str, list[ParallelGroupDeviceItem]] = {}
                 for pg_device in group_data.devices:
-                    # Get parallel group name from device list (not from group_data)
-                    device_info: InverterOverviewItem | None = next(
-                        (d for d in devices_response.rows if d.serialNum == pg_device.serialNum),
-                        None,
-                    )
+                    # Get parallel group name from device list using O(1) lookup
+                    device_info = device_lookup.get(pg_device.serialNum)
                     if device_info and device_info.parallelGroup:
                         group_name = device_info.parallelGroup
                         if group_name not in groups_by_name:
                             groups_by_name[group_name] = []
                         groups_by_name[group_name].append(pg_device)
 
-                # Create ParallelGroup objects
+                # Create ParallelGroup objects with lookup dictionary
+                groups_lookup = {}
                 for group_name, devices in groups_by_name.items():
                     # Use first device serial as reference
                     first_serial = devices[0].serialNum if devices else ""
@@ -659,16 +649,17 @@ class Station(BaseDevice):
                         first_device_serial=first_serial,
                     )
                     self.parallel_groups.append(group)
+                    groups_lookup[group_name] = group
                     _LOGGER.debug(
                         "Created parallel group '%s' with %d devices", group_name, len(devices)
                     )
 
             # Step 5: Process devices and assign to groups or standalone
-            if (
-                not isinstance(devices_response, BaseException)
-                and hasattr(devices_response, "rows")
-                and devices_response.rows
-            ):
+            # Build parallel groups lookup if not already created
+            if not locals().get("groups_lookup"):
+                groups_lookup = {g.name: g for g in self.parallel_groups}
+
+            if not isinstance(devices_response, BaseException) and devices_response.rows:
                 for device_data in devices_response.rows:
                     serial_num = device_data.serialNum
                     device_type = device_data.deviceType
@@ -682,23 +673,22 @@ class Station(BaseDevice):
                     # Get parallel group name
                     parallel_group_name = device_data.parallelGroup
 
-                    # Handle GridBOSS/MID devices (deviceType 9)
-                    if device_type == 9:
+                    # Handle GridBOSS/MID devices
+                    if device_type == DEVICE_TYPE_GRIDBOSS:
                         mid_device = MIDDevice(
                             client=self._client, serial_number=serial_num, model=model_text
                         )
 
-                        # Assign MID device to parallel group
+                        # Assign MID device to parallel group using O(1) lookup
                         if parallel_group_name:
-                            for group in self.parallel_groups:
-                                if group.name == parallel_group_name:
-                                    group.mid_device = mid_device
-                                    _LOGGER.debug(
-                                        "Assigned MID device %s to parallel group '%s'",
-                                        serial_num,
-                                        parallel_group_name,
-                                    )
-                                    break
+                            found_group = groups_lookup.get(parallel_group_name)
+                            if found_group:
+                                found_group.mid_device = mid_device
+                                _LOGGER.debug(
+                                    "Assigned MID device %s to parallel group '%s'",
+                                    serial_num,
+                                    parallel_group_name,
+                                )
                         else:
                             _LOGGER.warning(
                                 "MID device %s has no parallel group assignment", serial_num
@@ -710,23 +700,18 @@ class Station(BaseDevice):
                         client=self._client, serial_number=serial_num, model=model_text
                     )
 
-                    # Assign inverter to parallel group or standalone
+                    # Assign inverter to parallel group or standalone using O(1) lookup
                     if parallel_group_name:
-                        # Find matching parallel group
-                        group_found = False
-                        for group in self.parallel_groups:
-                            if group.name == parallel_group_name:
-                                group.inverters.append(inverter)
-                                group_found = True
-                                _LOGGER.debug(
-                                    "Assigned inverter %s to parallel group '%s'",
-                                    serial_num,
-                                    parallel_group_name,
-                                )
-                                break
-
-                        # If parallel group not found, treat as standalone
-                        if not group_found:
+                        found_group = groups_lookup.get(parallel_group_name)
+                        if found_group:
+                            found_group.inverters.append(inverter)
+                            _LOGGER.debug(
+                                "Assigned inverter %s to parallel group '%s'",
+                                serial_num,
+                                parallel_group_name,
+                            )
+                        else:
+                            # If parallel group not found, treat as standalone
                             self.standalone_inverters.append(inverter)
                             _LOGGER.debug(
                                 "Parallel group '%s' not found for %s - treating as standalone",
@@ -738,14 +723,10 @@ class Station(BaseDevice):
                         self.standalone_inverters.append(inverter)
                         _LOGGER.debug("Assigned inverter %s as standalone", serial_num)
 
-        except Exception:
+        except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as e:
             # If device loading fails, log and continue
             # Station can still function with empty device lists
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "Failed to load devices for station %s", self.id, exc_info=True
-            )
+            _LOGGER.warning("Failed to load devices for station %s: %s", self.id, e, exc_info=True)
 
     # ============================================================================
     # Station-Level Control Operations (Issue #15)

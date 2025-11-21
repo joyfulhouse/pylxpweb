@@ -889,17 +889,20 @@ class FirmwareUpdateDetails(BaseModel):
         """Obfuscate serial number in serialized output."""
         return _obfuscate_serial(value)
 
+    @property
     def has_app_update(self) -> bool:
         """Check if application firmware update is available."""
         return self.lastV1 is not None and self.v1 < self.lastV1 and self.pcs1UpdateMatch
 
+    @property
     def has_parameter_update(self) -> bool:
         """Check if parameter firmware update is available."""
         return self.lastV2 is not None and self.v2 < self.lastV2 and self.pcs2UpdateMatch
 
+    @property
     def has_update(self) -> bool:
         """Check if any firmware update is available."""
-        return self.has_app_update() or self.has_parameter_update()
+        return self.has_app_update or self.has_parameter_update
 
 
 class FirmwareUpdateCheck(BaseModel):
@@ -930,18 +933,21 @@ class FirmwareDeviceInfo(BaseModel):
         """Obfuscate serial number in serialized output."""
         return _obfuscate_serial(value)
 
+    @property
     def is_in_progress(self) -> bool:
         """Check if update is currently in progress."""
         return (
             self.updateStatus == UpdateStatus.UPLOADING or self.updateStatus == UpdateStatus.READY
         )
 
+    @property
     def is_complete(self) -> bool:
         """Check if update completed successfully."""
         return (
             self.updateStatus == UpdateStatus.COMPLETE or self.updateStatus == UpdateStatus.SUCCESS
         )
 
+    @property
     def is_failed(self) -> bool:
         """Check if update failed."""
         return self.updateStatus == UpdateStatus.FAILED
@@ -955,9 +961,10 @@ class FirmwareUpdateStatus(BaseModel):
     fileReady: bool
     deviceInfos: list[FirmwareDeviceInfo]
 
+    @property
     def has_active_updates(self) -> bool:
         """Check if any device has an active update."""
-        return any(device.is_in_progress() for device in self.deviceInfos)
+        return any(device.is_in_progress for device in self.deviceInfos)
 
 
 class UpdateEligibilityStatus(BaseModel):
@@ -966,6 +973,7 @@ class UpdateEligibilityStatus(BaseModel):
     success: bool
     msg: UpdateEligibilityMessage
 
+    @property
     def is_allowed(self) -> bool:
         """Check if device is allowed to update."""
         return self.msg == UpdateEligibilityMessage.ALLOW_TO_UPDATE

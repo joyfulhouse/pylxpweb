@@ -11,6 +11,7 @@ import pytest
 from pylxpweb import LuxpowerClient
 from pylxpweb.devices.mid_device import MIDDevice
 from pylxpweb.devices.models import Entity
+from pylxpweb.exceptions import LuxpowerAPIError
 from pylxpweb.models import MidboxRuntime
 
 
@@ -79,7 +80,9 @@ class TestMIDDeviceRefresh:
         mid = MIDDevice(client=mock_client, serial_number="1234567890")
 
         # Mock API error
-        mock_client.api.devices.get_midbox_runtime = AsyncMock(side_effect=Exception("API Error"))
+        mock_client.api.devices.get_midbox_runtime = AsyncMock(
+            side_effect=LuxpowerAPIError("API Error")
+        )
 
         await mid.refresh()
 

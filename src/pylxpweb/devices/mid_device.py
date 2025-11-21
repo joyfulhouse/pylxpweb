@@ -6,11 +6,17 @@ grid interconnection, UPS functionality, smart loads, and AC coupling.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from pylxpweb.constants import scale_mid_frequency, scale_mid_voltage
+from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
+
 from .base import BaseDevice
 from .models import DeviceClass, DeviceInfo, Entity, StateClass
+
+_LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
@@ -64,9 +70,9 @@ class MIDDevice(BaseDevice):
             runtime_data = await self._client.api.devices.get_midbox_runtime(self.serial_number)
             self.runtime = runtime_data
             self._last_refresh = datetime.now()
-        except Exception:
-            # Graceful error handling - runtime stays None
-            pass
+        except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
+            # Graceful error handling - keep existing cached data
+            _LOGGER.debug("Failed to fetch MID device runtime for %s: %s", self.serial_number, err)
 
     @property
     def has_data(self) -> bool:
@@ -86,7 +92,7 @@ class MIDDevice(BaseDevice):
         """
         if self.runtime is None:
             return 0.0
-        return float(self.runtime.midboxData.gridRmsVolt) / 10.0
+        return scale_mid_voltage(self.runtime.midboxData.gridRmsVolt)
 
     @property
     def ups_voltage(self) -> float:
@@ -97,7 +103,7 @@ class MIDDevice(BaseDevice):
         """
         if self.runtime is None:
             return 0.0
-        return float(self.runtime.midboxData.upsRmsVolt) / 10.0
+        return scale_mid_voltage(self.runtime.midboxData.upsRmsVolt)
 
     @property
     def grid_power(self) -> int:
@@ -141,7 +147,7 @@ class MIDDevice(BaseDevice):
         """
         if self.runtime is None:
             return 0.0
-        return float(self.runtime.midboxData.gridFreq) / 100.0
+        return scale_mid_frequency(self.runtime.midboxData.gridFreq)
 
     @property
     def firmware_version(self) -> str | None:

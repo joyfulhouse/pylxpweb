@@ -14,6 +14,7 @@ import pytest
 from pylxpweb import LuxpowerClient
 from pylxpweb.devices.models import DeviceInfo
 from pylxpweb.devices.station import Location, Station
+from pylxpweb.exceptions import LuxpowerAPIError
 
 
 @pytest.fixture
@@ -516,10 +517,8 @@ class TestStationFactoryMethods:
             created_date=datetime(2024, 1, 1),
         )
 
-        # Mock API error
-        mock_client.api.devices.get_parallel_group_details = AsyncMock(
-            side_effect=Exception("API Error")
-        )
+        # Mock API error - error happens at the get_devices call
+        mock_client.api.devices.get_devices = AsyncMock(side_effect=LuxpowerAPIError("API Error"))
 
         # Should not raise, just log warning
         await station._load_devices()

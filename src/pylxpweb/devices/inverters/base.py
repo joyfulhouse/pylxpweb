@@ -12,6 +12,8 @@ from abc import abstractmethod
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from pylxpweb.constants import MAX_REGISTERS_PER_READ, SOC_MAX_PERCENT, SOC_MIN_PERCENT
+from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 from pylxpweb.models import OperatingMode
 
 from ..base import BaseDevice
@@ -167,9 +169,10 @@ class BaseInverter(BaseDevice):
                 )
                 self.runtime = runtime_data
                 self._runtime_cache_time = datetime.now()
-            except Exception:
-                # Keep existing cached data on error
-                pass
+            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
+                # Keep existing cached data on API/connection errors
+                _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
+                # Preserve existing cached data
 
     async def _fetch_energy(self) -> None:
         """Fetch energy data with caching."""
@@ -178,9 +181,9 @@ class BaseInverter(BaseDevice):
                 energy_data = await self._client.api.devices.get_inverter_energy(self.serial_number)
                 self.energy = energy_data
                 self._energy_cache_time = datetime.now()
-            except Exception:
-                # Keep existing cached data on error
-                pass
+            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
+                # Keep existing cached data on API/connection errors
+                _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
 
     async def _fetch_battery(self) -> None:
         """Fetch battery data with caching."""
@@ -196,9 +199,9 @@ class BaseInverter(BaseDevice):
                     await self._update_batteries(battery_data.batteryArray)
 
                 self._battery_cache_time = datetime.now()
-            except Exception:
-                # Keep existing cached data on error
-                pass
+            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
+                # Keep existing cached data on API/connection errors
+                _LOGGER.debug("Failed to fetch battery data for %s: %s", self.serial_number, err)
 
     async def _fetch_parameters(self) -> None:
         """Fetch all parameters with caching.
@@ -212,9 +215,15 @@ class BaseInverter(BaseDevice):
             try:
                 # Fetch all 3 register ranges concurrently
                 range_tasks = [
-                    self._client.api.control.read_parameters(self.serial_number, 0, 127),
-                    self._client.api.control.read_parameters(self.serial_number, 127, 127),
-                    self._client.api.control.read_parameters(self.serial_number, 240, 127),
+                    self._client.api.control.read_parameters(
+                        self.serial_number, 0, MAX_REGISTERS_PER_READ
+                    ),
+                    self._client.api.control.read_parameters(
+                        self.serial_number, MAX_REGISTERS_PER_READ, MAX_REGISTERS_PER_READ
+                    ),
+                    self._client.api.control.read_parameters(
+                        self.serial_number, 240, MAX_REGISTERS_PER_READ
+                    ),
                 ]
 
                 responses = await asyncio.gather(*range_tasks, return_exceptions=True)
@@ -229,9 +238,9 @@ class BaseInverter(BaseDevice):
                 if all_parameters:
                     self.parameters = all_parameters
                     self._parameters_cache_time = datetime.now()
-            except Exception:
-                # Keep existing cached data on error
-                pass
+            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
+                # Keep existing cached data on API/connection errors
+                _LOGGER.debug("Failed to fetch parameters for %s: %s", self.serial_number, err)
 
     def to_device_info(self) -> DeviceInfo:
         """Convert to device info model.
@@ -316,7 +325,7 @@ class BaseInverter(BaseDevice):
             # Can't determine station, allow graceful degradation
             return False
 
-        current_date = station.get_current_date()
+        current_date = station.current_date
         if current_date is None:
             # Can't determine date, don't force reset
             return False
@@ -705,8 +714,10 @@ class BaseInverter(BaseDevice):
             success = success and result.success
 
         if off_grid_limit is not None:
-            if not 0 <= off_grid_limit <= 100:
-                raise ValueError("off_grid_limit must be between 0 and 100%")
+            if not SOC_MIN_PERCENT <= off_grid_limit <= SOC_MAX_PERCENT:
+                raise ValueError(
+                    f"off_grid_limit must be between {SOC_MIN_PERCENT} and {SOC_MAX_PERCENT}%"
+                )
             result = await self._client.api.control.write_parameter(
                 self.serial_number,
                 "HOLD_SOC_LOW_LIMIT_EPS_DISCHG",

@@ -25,6 +25,13 @@ import aiohttp
 from aiohttp import ClientTimeout
 
 from .api_namespace import APINamespace
+from .constants import (
+    BACKOFF_BASE_DELAY_SECONDS,
+    BACKOFF_MAX_DELAY_SECONDS,
+    CACHE_INVALIDATION_WINDOW_MINUTES,
+    HTTP_UNAUTHORIZED,
+    MIN_CACHE_INVALIDATION_INTERVAL_MINUTES,
+)
 from .endpoints import (
     AnalyticsEndpoints,
     ControlEndpoints,
@@ -114,8 +121,8 @@ class LuxpowerClient:
 
         # Backoff configuration
         self._backoff_config: dict[str, float] = {
-            "base_delay": 1.0,
-            "max_delay": 60.0,
+            "base_delay": BACKOFF_BASE_DELAY_SECONDS,
+            "max_delay": BACKOFF_MAX_DELAY_SECONDS,
             "exponential_factor": 2.0,
             "jitter": 0.1,
         }
@@ -369,7 +376,8 @@ class LuxpowerClient:
             len(keys_to_remove),
         )
 
-    def get_cache_stats(self) -> dict[str, int | dict[str, int]]:
+    @property
+    def cache_stats(self) -> dict[str, int | dict[str, int]]:
         """Get cache statistics.
 
         Returns:
@@ -378,7 +386,7 @@ class LuxpowerClient:
                 - endpoints: Dict of endpoint types to entry counts
 
         Example:
-            >>> stats = client.get_cache_stats()
+            >>> stats = client.cache_stats
             >>> print(f"Cache size: {stats['total_entries']}")
             >>> for endpoint, count in stats['endpoints'].items():
             >>>     print(f"  {endpoint}: {count} entries")
@@ -461,7 +469,7 @@ class LuxpowerClient:
 
         except aiohttp.ClientResponseError as err:
             self._handle_request_error(err)
-            if err.status == 401:
+            if err.status == HTTP_UNAUTHORIZED:
                 # Session expired - try to re-authenticate once
                 _LOGGER.warning("Got 401 Unauthorized, attempting to re-authenticate")
                 try:
@@ -525,6 +533,7 @@ class LuxpowerClient:
 
     # Cache Invalidation for Date/Hour Boundaries
 
+    @property
     def should_invalidate_cache(self) -> bool:
         """Check if cache should be invalidated for hour/date boundaries.
 
@@ -546,8 +555,8 @@ class LuxpowerClient:
         now = datetime.now()
         minutes_to_hour = 60 - now.minute
 
-        # Outside the 5-minute window before hour boundary
-        if minutes_to_hour > 5:
+        # Outside the window before hour boundary
+        if minutes_to_hour > CACHE_INVALIDATION_WINDOW_MINUTES:
             return False
 
         # First run - invalidate if within window
@@ -569,9 +578,9 @@ class LuxpowerClient:
             )
             return True
 
-        # Within 5-minute window but haven't invalidated recently
+        # Within window but haven't invalidated recently
         time_since_last = now - self._last_cache_invalidation
-        min_interval = timedelta(minutes=10)
+        min_interval = timedelta(minutes=MIN_CACHE_INVALIDATION_INTERVAL_MINUTES)
         should_invalidate = time_since_last >= min_interval
 
         if should_invalidate:
@@ -594,7 +603,7 @@ class LuxpowerClient:
         Call this before hour boundaries to ensure fresh data at date rollover.
 
         See Also:
-            should_invalidate_cache() - Determines when to call this method
+            should_invalidate_cache - Property that determines when to call this method
         """
         # Clear main response cache
         self._response_cache.clear()

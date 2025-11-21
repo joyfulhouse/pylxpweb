@@ -76,13 +76,12 @@ class ParallelGroup:
 
         tasks = []
 
-        # Refresh all inverters
+        # Refresh all inverters (all inverters have refresh method)
         for inverter in self.inverters:
-            if hasattr(inverter, "refresh"):
-                tasks.append(inverter.refresh())
+            tasks.append(inverter.refresh())
 
-        # Refresh MID device
-        if self.mid_device and hasattr(self.mid_device, "refresh"):
+        # Refresh MID device (check for None, mid_device always has refresh method)
+        if self.mid_device:
             tasks.append(self.mid_device.refresh())
 
         # Execute concurrently
@@ -99,16 +98,12 @@ class ParallelGroup:
         total_lifetime = 0.0
 
         for inverter in self.inverters:
-            # Refresh if needed
-            if (
-                hasattr(inverter, "needs_refresh")
-                and inverter.needs_refresh
-                and hasattr(inverter, "refresh")
-            ):
+            # Refresh if needed (all inverters have these attributes)
+            if inverter.needs_refresh:
                 await inverter.refresh()
 
-            # Sum energy data
-            if hasattr(inverter, "energy") and inverter.energy:
+            # Sum energy data (all inverters have energy attribute)
+            if inverter.energy:
                 total_today += getattr(inverter.energy, "eToday", 0.0)
                 total_lifetime += getattr(inverter.energy, "eTotal", 0.0)
 

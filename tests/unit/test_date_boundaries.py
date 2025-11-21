@@ -21,7 +21,7 @@ from pylxpweb.models import EnergyInfo
 
 
 class TestStationDateDetection:
-    """Test Station.get_current_date() method for timezone-aware date detection."""
+    """Test Station.current_date property for timezone-aware date detection."""
 
     def test_timezone_gmt_minus_8(self):
         """Test timezone parsing for GMT -8 (PST)."""
@@ -42,7 +42,7 @@ class TestStationDateDetection:
             pst_time = utc_time.astimezone(timezone(timedelta(hours=-8)))  # 02:30 PST
             mock_dt.now.return_value = pst_time
 
-            result = station.get_current_date()
+            result = station.current_date
 
         assert result == "2025-11-21"
 
@@ -63,7 +63,7 @@ class TestStationDateDetection:
             jst_time = utc_time.astimezone(timezone(timedelta(hours=9)))  # 00:30 JST next day
             mock_dt.now.return_value = jst_time
 
-            result = station.get_current_date()
+            result = station.current_date
 
         assert result == "2025-11-22"  # Next day in JST
 
@@ -82,7 +82,7 @@ class TestStationDateDetection:
         with patch("pylxpweb.devices.station.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2025, 11, 21, 10, 30, tzinfo=UTC)
 
-            result = station.get_current_date()
+            result = station.current_date
 
         # Should fall back to UTC
         assert result == "2025-11-21"
@@ -102,7 +102,7 @@ class TestStationDateDetection:
         with patch("pylxpweb.devices.station.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2025, 11, 21, 10, 30, tzinfo=UTC)
 
-            result = station.get_current_date()
+            result = station.current_date
 
         # Should fall back to UTC
         assert result == "2025-11-21"
@@ -126,7 +126,7 @@ class TestStationDateDetection:
             pdt_time = utc_time.astimezone(timezone(timedelta(minutes=-420)))  # 03:30 PDT
             mock_dt.now.return_value = pdt_time
 
-            result = station.get_current_date()
+            result = station.current_date
 
         assert result == "2025-11-21"
 
@@ -536,7 +536,7 @@ class TestCacheInvalidation:
         with patch("pylxpweb.client.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2025, 11, 21, 23, 57)
 
-            result = client.should_invalidate_cache()
+            result = client.should_invalidate_cache
 
         assert result is True
 
@@ -548,7 +548,7 @@ class TestCacheInvalidation:
         with patch("pylxpweb.client.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2025, 11, 21, 23, 50)
 
-            result = client.should_invalidate_cache()
+            result = client.should_invalidate_cache
 
         assert result is False
 
@@ -562,7 +562,7 @@ class TestCacheInvalidation:
         with patch("pylxpweb.client.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2025, 11, 22, 0, 57)
 
-            result = client.should_invalidate_cache()
+            result = client.should_invalidate_cache
 
         assert result is True
 
@@ -575,7 +575,7 @@ class TestCacheInvalidation:
         with patch("pylxpweb.client.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2025, 11, 21, 23, 57)
 
-            result = client.should_invalidate_cache()
+            result = client.should_invalidate_cache
 
         # Should not invalidate (less than 10 minutes since last)
         assert result is False
@@ -589,7 +589,7 @@ class TestCacheInvalidation:
         with patch("pylxpweb.client.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2025, 11, 21, 23, 57)
 
-            result = client.should_invalidate_cache()
+            result = client.should_invalidate_cache
 
         # Should invalidate (more than 10 minutes since last)
         assert result is True
