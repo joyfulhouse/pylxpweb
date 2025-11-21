@@ -1508,46 +1508,6 @@ def apply_scale(value: int | float, scale_factor: ScaleFactor) -> float:
     return float(value) / float(scale_factor.value)
 
 
-def _get_scaling_for_field(
-    field_name: str,
-    data_type: Literal[
-        "runtime", "energy", "battery_bank", "battery_module", "gridboss", "overview", "parameter"
-    ],
-) -> ScaleFactor:
-    """Get the appropriate scaling factor for a field (internal use only).
-
-    This is an internal function for testing and validation purposes.
-    Production code should use the type-specific convenience functions instead
-    (e.g., scale_runtime_value, scale_battery_value).
-
-    Args:
-        field_name: Name of the field (e.g., "vpv1", "totalVoltage")
-        data_type: Type of data source
-
-    Returns:
-        ScaleFactor enum indicating how to scale the value
-
-    Raises:
-        KeyError: If field_name not found in the specified data type
-
-    Example:
-        >>> scale = _get_scaling_for_field("vpv1", "runtime")
-        >>> apply_scale(5100, scale)
-        510.0
-    """
-    scaling_map = {
-        "runtime": INVERTER_RUNTIME_SCALING,
-        "energy": ENERGY_INFO_SCALING,
-        "battery_bank": BATTERY_BANK_SCALING,
-        "battery_module": BATTERY_MODULE_SCALING,
-        "gridboss": GRIDBOSS_RUNTIME_SCALING,
-        "overview": INVERTER_OVERVIEW_SCALING,
-        "parameter": PARAMETER_SCALING,
-    }
-
-    return scaling_map[data_type][field_name]
-
-
 def scale_runtime_value(field_name: str, value: int | float) -> float:
     """Convenience function to scale inverter runtime values.
 
