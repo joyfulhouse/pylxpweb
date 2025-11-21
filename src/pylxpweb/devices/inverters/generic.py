@@ -47,7 +47,7 @@ class GenericInverter(BaseInverter):
         entities = []
 
         # Power sensors
-        if self.runtime:
+        if self._runtime:
             # AC Power Output
             entities.append(
                 Entity(
@@ -74,7 +74,7 @@ class GenericInverter(BaseInverter):
                 )
 
             # Battery Voltage
-            if hasattr(self.runtime, "vBat") and self.runtime.vBat:
+            if hasattr(self._runtime, "vBat") and self._runtime.vBat:
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_battery_voltage",
@@ -82,12 +82,12 @@ class GenericInverter(BaseInverter):
                         device_class=DeviceClass.VOLTAGE,
                         state_class=StateClass.MEASUREMENT,
                         unit_of_measurement="V",
-                        value=self.runtime.vBat / 100.0,  # Scaled value
+                        value=self._runtime.vBat / 100.0,  # Scaled value
                     )
                 )
 
             # PV Power
-            if hasattr(self.runtime, "ppv"):
+            if hasattr(self._runtime, "ppv"):
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_pv_power",
@@ -95,12 +95,12 @@ class GenericInverter(BaseInverter):
                         device_class=DeviceClass.POWER,
                         state_class=StateClass.MEASUREMENT,
                         unit_of_measurement="W",
-                        value=self.runtime.ppv,
+                        value=self._runtime.ppv,
                     )
                 )
 
             # Grid Power
-            if hasattr(self.runtime, "pToGrid"):
+            if hasattr(self._runtime, "pToGrid"):
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_grid_power",
@@ -108,12 +108,12 @@ class GenericInverter(BaseInverter):
                         device_class=DeviceClass.POWER,
                         state_class=StateClass.MEASUREMENT,
                         unit_of_measurement="W",
-                        value=self.runtime.pToGrid,
+                        value=self._runtime.pToGrid,
                     )
                 )
 
             # Load Power
-            if hasattr(self.runtime, "pToUser"):
+            if hasattr(self._runtime, "pToUser"):
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_load_power",
@@ -121,12 +121,12 @@ class GenericInverter(BaseInverter):
                         device_class=DeviceClass.POWER,
                         state_class=StateClass.MEASUREMENT,
                         unit_of_measurement="W",
-                        value=self.runtime.pToUser,
+                        value=self._runtime.pToUser,
                     )
                 )
 
             # Battery Charge/Discharge Power
-            if hasattr(self.runtime, "batPower"):
+            if hasattr(self._runtime, "batPower"):
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_battery_power",
@@ -134,12 +134,12 @@ class GenericInverter(BaseInverter):
                         device_class=DeviceClass.POWER,
                         state_class=StateClass.MEASUREMENT,
                         unit_of_measurement="W",
-                        value=self.runtime.batPower,
+                        value=self._runtime.batPower,
                     )
                 )
 
             # Temperature sensors
-            if hasattr(self.runtime, "tinner"):
+            if hasattr(self._runtime, "tinner"):
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_temp_internal",
@@ -147,11 +147,11 @@ class GenericInverter(BaseInverter):
                         device_class=DeviceClass.TEMPERATURE,
                         state_class=StateClass.MEASUREMENT,
                         unit_of_measurement="°C",
-                        value=self.runtime.tinner,
+                        value=self._runtime.tinner,
                     )
                 )
 
-            if hasattr(self.runtime, "tBat"):
+            if hasattr(self._runtime, "tBat"):
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_temp_battery",
@@ -159,12 +159,12 @@ class GenericInverter(BaseInverter):
                         device_class=DeviceClass.TEMPERATURE,
                         state_class=StateClass.MEASUREMENT,
                         unit_of_measurement="°C",
-                        value=self.runtime.tBat,
+                        value=self._runtime.tBat,
                     )
                 )
 
         # Energy sensors
-        if self.energy:
+        if self._energy:
             # Today's Production
             entities.append(
                 Entity(

@@ -69,24 +69,6 @@ class Battery(BaseDevice):
         return self._battery_index
 
     @property
-    def data(self) -> BatteryModule:
-        """Get raw battery data.
-
-        Note: Direct modification of this data is discouraged.
-        Use the provided setter methods or properties instead.
-        """
-        return self._data
-
-    @data.setter
-    def data(self, value: BatteryModule) -> None:
-        """Set raw battery data.
-
-        Args:
-            value: New BatteryModule data
-        """
-        self._data = value
-
-    @property
     def voltage(self) -> float:
         """Get battery voltage in volts.
 

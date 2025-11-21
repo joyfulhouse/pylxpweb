@@ -431,7 +431,7 @@ class TestMonotonicEnergyTracking:
 
         # API returns higher value
         # 46.5 kWh (465 in 0.1 kWh units)
-        inverter.energy = EnergyInfo.model_construct(todayYielding=465)
+        inverter._energy = EnergyInfo.model_construct(todayYielding=465)
 
         result = inverter.total_energy_today
 
@@ -449,7 +449,7 @@ class TestMonotonicEnergyTracking:
 
         # API returns lower value (stale cache)
         # 45.0 kWh (450 in 0.1 kWh units)
-        inverter.energy = EnergyInfo.model_construct(todayYielding=450)
+        inverter._energy = EnergyInfo.model_construct(todayYielding=450)
 
         result = inverter.total_energy_today
 
@@ -471,7 +471,7 @@ class TestMonotonicEnergyTracking:
         inverter._last_energy_today = 45.5
 
         # API returns 0 (likely stale cache showing post-midnight value)
-        inverter.energy = EnergyInfo.model_construct(todayYielding=0)
+        inverter._energy = EnergyInfo.model_construct(todayYielding=0)
 
         result = inverter.total_energy_today
 
@@ -488,7 +488,7 @@ class TestMonotonicEnergyTracking:
 
         # API returns lower value
         # 12300.0 kWh (123000 in 0.1 kWh units)
-        inverter.energy = EnergyInfo.model_construct(totalYielding=123000)
+        inverter._energy = EnergyInfo.model_construct(totalYielding=123000)
 
         result = inverter.total_energy_lifetime
 
@@ -505,7 +505,7 @@ class TestMonotonicEnergyTracking:
 
         # API returns higher value
         # 12350.0 kWh (123500 in 0.1 kWh units)
-        inverter.energy = EnergyInfo.model_construct(totalYielding=123500)
+        inverter._energy = EnergyInfo.model_construct(totalYielding=123500)
 
         result = inverter.total_energy_lifetime
 
@@ -520,7 +520,7 @@ class TestMonotonicEnergyTracking:
         inverter._last_energy_lifetime = 12345.6
 
         # API returns 0 (should be rejected)
-        inverter.energy = EnergyInfo.model_construct(totalYielding=0)
+        inverter._energy = EnergyInfo.model_construct(totalYielding=0)
 
         result = inverter.total_energy_lifetime
 

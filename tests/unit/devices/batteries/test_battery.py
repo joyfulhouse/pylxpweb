@@ -44,7 +44,7 @@ class TestBatteryInitialization:
         assert battery.battery_key == sample_battery_module.batteryKey
         assert battery.battery_sn == sample_battery_module.batterySn
         assert battery.battery_index == sample_battery_module.batIndex
-        assert battery.data is sample_battery_module
+        assert battery._data is sample_battery_module
 
 
 class TestBatteryProperties:

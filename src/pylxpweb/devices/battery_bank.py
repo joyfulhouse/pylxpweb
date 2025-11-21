@@ -64,7 +64,7 @@ class BatteryBank(BaseDevice):
         super().__init__(client, f"{inverter_serial}_battery_bank", "Battery Bank")
 
         self.inverter_serial = inverter_serial
-        self.data = battery_info
+        self._data = battery_info
 
         # Individual battery modules in this bank
         self.batteries: list[Battery] = []  # Will be Battery objects
@@ -76,7 +76,7 @@ class BatteryBank(BaseDevice):
         Returns:
             Status string (e.g., "Charging", "Discharging", "Idle").
         """
-        return self.data.batStatus
+        return self._data.batStatus
 
     @property
     def soc(self) -> int:
@@ -85,7 +85,7 @@ class BatteryBank(BaseDevice):
         Returns:
             State of charge percentage (0-100).
         """
-        return self.data.soc
+        return self._data.soc
 
     @property
     def voltage(self) -> float:
@@ -94,7 +94,7 @@ class BatteryBank(BaseDevice):
         Returns:
             Battery voltage (scaled from vBat ÷10).
         """
-        return apply_scale(self.data.vBat, ScaleFactor.SCALE_10)
+        return apply_scale(self._data.vBat, ScaleFactor.SCALE_10)
 
     @property
     def charge_power(self) -> int:
@@ -103,7 +103,7 @@ class BatteryBank(BaseDevice):
         Returns:
             Charging power in watts.
         """
-        return self.data.pCharge
+        return self._data.pCharge
 
     @property
     def discharge_power(self) -> int:
@@ -112,7 +112,7 @@ class BatteryBank(BaseDevice):
         Returns:
             Discharging power in watts.
         """
-        return self.data.pDisCharge
+        return self._data.pDisCharge
 
     @property
     def max_capacity(self) -> int:
@@ -121,7 +121,7 @@ class BatteryBank(BaseDevice):
         Returns:
             Maximum capacity in Ah.
         """
-        return self.data.maxBatteryCharge
+        return self._data.maxBatteryCharge
 
     @property
     def current_capacity(self) -> float:
@@ -130,7 +130,7 @@ class BatteryBank(BaseDevice):
         Returns:
             Current capacity in Ah.
         """
-        return self.data.currentBatteryCharge
+        return self._data.currentBatteryCharge
 
     @property
     def battery_count(self) -> int:
@@ -139,7 +139,7 @@ class BatteryBank(BaseDevice):
         Returns:
             Number of battery modules.
         """
-        return len(self.data.batteryArray)
+        return len(self._data.batteryArray)
 
     async def refresh(self) -> None:
         """Refresh battery bank data.

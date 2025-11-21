@@ -45,7 +45,7 @@ class TestBatteryBankInit:
         )
 
         assert battery_bank.inverter_serial == "1234567890"
-        assert battery_bank.data == sample_battery_info
+        assert battery_bank._data == sample_battery_info
         assert battery_bank.batteries == []
         assert battery_bank.serial_number == "1234567890_battery_bank"
         assert battery_bank.model == "Battery Bank"
@@ -246,7 +246,7 @@ class TestBatteryBankDataUpdate:
             batteryArray=[],
         )
 
-        battery_bank.data = new_battery_info
+        battery_bank._data = new_battery_info
 
         # Verify updated state
         assert battery_bank.soc == 75

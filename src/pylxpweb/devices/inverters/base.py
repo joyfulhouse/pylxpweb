@@ -54,13 +54,13 @@ class BaseInverter(BaseDevice):
         super().__init__(client, serial_number, model)
 
         # Runtime data (refreshed frequently)
-        self.runtime: InverterRuntime | None = None
+        self._runtime: InverterRuntime | None = None
 
         # Energy data (refreshed less frequently)
-        self.energy: EnergyInfo | None = None
+        self._energy: EnergyInfo | None = None
 
         # Battery bank (contains aggregate data and individual batteries)
-        self.battery_bank: Any | None = None  # Will be BatteryBank object
+        self._battery_bank: Any | None = None  # Will be BatteryBank object
 
         # Parameters (configuration registers, refreshed hourly)
         self.parameters: dict[str, Any] | None = None
@@ -68,8 +68,8 @@ class BaseInverter(BaseDevice):
         # ===== Cache Management =====
         # Parameters cache time tracking
         self._parameters_cache_time: datetime | None = None
-        self._parameters_cache_ttl = timedelta(hours=1)  # 1-hour TTL for parameters
-        self._parameters_cache_lock = asyncio.Lock()
+        self.parameters_cache_ttl = timedelta(hours=1)  # 1-hour TTL for parameters
+        self.parameters_cache_lock = asyncio.Lock()
 
         # Runtime data cache
         self._runtime_cache_time: datetime | None = None
@@ -137,8 +137,8 @@ class BaseInverter(BaseDevice):
             or (now - self._battery_cache_time) > self._battery_cache_ttl
         )
         should_fetch_battery = battery_expired and (
-            self.battery_bank is None  # Haven't checked yet
-            or (self.battery_bank and self.battery_bank.battery_count > 0)  # Has batteries
+            self._battery_bank is None  # Haven't checked yet
+            or (self._battery_bank and self._battery_bank.battery_count > 0)  # Has batteries
         )
         if should_fetch_battery:
             tasks.append(self._fetch_battery())
@@ -148,7 +148,7 @@ class BaseInverter(BaseDevice):
         parameters_expired = (
             force
             or self._parameters_cache_time is None
-            or (now - self._parameters_cache_time) > self._parameters_cache_ttl
+            or (now - self._parameters_cache_time) > self.parameters_cache_ttl
         )
         if include_parameters and parameters_expired:
             tasks.append(self._fetch_parameters())
@@ -167,7 +167,7 @@ class BaseInverter(BaseDevice):
                 runtime_data = await self._client.api.devices.get_inverter_runtime(
                     self.serial_number
                 )
-                self.runtime = runtime_data
+                self._runtime = runtime_data
                 self._runtime_cache_time = datetime.now()
             except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
                 # Keep existing cached data on API/connection errors
@@ -179,7 +179,7 @@ class BaseInverter(BaseDevice):
         async with self._energy_cache_lock:
             try:
                 energy_data = await self._client.api.devices.get_inverter_energy(self.serial_number)
-                self.energy = energy_data
+                self._energy = energy_data
                 self._energy_cache_time = datetime.now()
             except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
                 # Keep existing cached data on API/connection errors
@@ -211,7 +211,7 @@ class BaseInverter(BaseDevice):
         - Range 2: Registers 127-253 (extended parameters 1)
         - Range 3: Registers 240-366 (extended parameters 2)
         """
-        async with self._parameters_cache_lock:
+        async with self.parameters_cache_lock:
             try:
                 # Fetch all 3 register ranges concurrently
                 range_tasks = [
@@ -253,7 +253,7 @@ class BaseInverter(BaseDevice):
             name=f"{self.model} {self.serial_number}",
             manufacturer="EG4/Luxpower",
             model=self.model,
-            sw_version=getattr(self.runtime, "fwCode", None) if self.runtime else None,
+            sw_version=getattr(self._runtime, "fwCode", None) if self._runtime else None,
         )
 
     @abstractmethod
@@ -288,7 +288,7 @@ class BaseInverter(BaseDevice):
         Returns:
             True if runtime data is available, False otherwise.
         """
-        return self.runtime is not None
+        return self._runtime is not None
 
     @property
     def power_output(self) -> float:
@@ -297,9 +297,9 @@ class BaseInverter(BaseDevice):
         Returns:
             Current AC power output in watts, or 0.0 if no data.
         """
-        if self.runtime is None:
+        if self._runtime is None:
             return 0.0
-        return float(getattr(self.runtime, "pinv", 0))
+        return float(getattr(self._runtime, "pinv", 0))
 
     def _should_reset_daily_energy(self) -> bool:
         """Check if daily energy should reset based on date boundary crossing.
@@ -362,13 +362,13 @@ class BaseInverter(BaseDevice):
         See Also:
             docs/SCALING_GUIDE.md - Date boundary handling and monotonic values
         """
-        if self.energy is None:
+        if self._energy is None:
             return 0.0
 
         # Get raw value from API and scale to kWh using proper scaling helper
         from pylxpweb.constants import scale_energy_value
 
-        raw_value = getattr(self.energy, "todayYielding", 0)
+        raw_value = getattr(self._energy, "todayYielding", 0)
         current_value_kwh = scale_energy_value("todayYielding", raw_value, to_kwh=True)
 
         # Check for date boundary reset
@@ -420,13 +420,13 @@ class BaseInverter(BaseDevice):
         See Also:
             docs/SCALING_GUIDE.md - Lifetime sensor classification
         """
-        if self.energy is None:
+        if self._energy is None:
             return 0.0
 
         # Get raw value from API and scale to kWh using proper scaling helper
         from pylxpweb.constants import scale_energy_value
 
-        raw_value = getattr(self.energy, "totalYielding", 0)
+        raw_value = getattr(self._energy, "totalYielding", 0)
         current_value_kwh = scale_energy_value("totalYielding", raw_value, to_kwh=True)
 
         # Lifetime energy should NEVER decrease
@@ -455,9 +455,9 @@ class BaseInverter(BaseDevice):
         Returns:
             Battery SOC (0-100), or None if no data.
         """
-        if self.runtime is None:
+        if self._runtime is None:
             return None
-        return getattr(self.runtime, "soc", None)
+        return getattr(self._runtime, "soc", None)
 
     async def _update_battery_bank(self, battery_info: Any) -> None:
         """Update battery bank object from API data.
@@ -468,15 +468,15 @@ class BaseInverter(BaseDevice):
         from ..battery_bank import BatteryBank
 
         # Create or update battery bank with aggregate data
-        if self.battery_bank is None:
-            self.battery_bank = BatteryBank(
+        if self._battery_bank is None:
+            self._battery_bank = BatteryBank(
                 client=self._client,
                 inverter_serial=self.serial_number,
                 battery_info=battery_info,
             )
         else:
             # Update existing battery bank data
-            self.battery_bank.data = battery_info
+            self._battery_bank.data = battery_info
 
     async def _update_batteries(self, battery_modules: list[Any]) -> None:
         """Update battery objects from API data.
@@ -487,12 +487,12 @@ class BaseInverter(BaseDevice):
         from ..battery import Battery
 
         # Batteries are stored in battery_bank, not directly on inverter
-        if self.battery_bank is None:
+        if self._battery_bank is None:
             return
 
         # Create Battery objects for each module
         # Use batteryKey to match existing batteries or create new ones
-        battery_map = {b.battery_key: b for b in self.battery_bank.batteries}
+        battery_map = {b.battery_key: b for b in self._battery_bank.batteries}
         updated_batteries = []
 
         for module in battery_modules:
@@ -507,7 +507,7 @@ class BaseInverter(BaseDevice):
 
             updated_batteries.append(battery)
 
-        self.battery_bank.batteries = updated_batteries
+        self._battery_bank.batteries = updated_batteries
 
     # ============================================================================
     # Control Operations - Universal inverter controls

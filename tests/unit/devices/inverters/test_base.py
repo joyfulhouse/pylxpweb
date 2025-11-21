@@ -97,9 +97,9 @@ class TestBaseInverterInitialization:
         assert inverter.serial_number == "1234567890"
         assert inverter.model == "TestModel"
         assert inverter._client is mock_client
-        assert inverter.runtime is None
-        assert inverter.energy is None
-        assert inverter.battery_bank is None
+        assert inverter._runtime is None
+        assert inverter._energy is None
+        assert inverter._battery_bank is None
 
     def test_cannot_instantiate_base_inverter_directly(self, mock_client: LuxpowerClient) -> None:
         """Test that BaseInverter cannot be instantiated directly."""
@@ -139,10 +139,10 @@ class TestInverterRefresh:
         mock_client.api.devices.get_battery_info.assert_called_once_with("1234567890")
 
         # Verify data stored
-        assert inverter.runtime is sample_runtime
-        assert inverter.energy is sample_energy
-        assert inverter.battery_bank is not None
-        assert len(inverter.battery_bank.batteries) == 3  # Sample has 3 batteries
+        assert inverter._runtime is sample_runtime
+        assert inverter._energy is sample_energy
+        assert inverter._battery_bank is not None
+        assert len(inverter._battery_bank.batteries) == 3  # Sample has 3 batteries
         assert inverter._last_refresh is not None
 
     @pytest.mark.asyncio
@@ -162,10 +162,10 @@ class TestInverterRefresh:
         await inverter.refresh()
 
         # Runtime should be None (error), energy and batteries should be set
-        assert inverter.runtime is None
-        assert inverter.energy is sample_energy
-        assert inverter.battery_bank is not None
-        assert len(inverter.battery_bank.batteries) == 3
+        assert inverter._runtime is None
+        assert inverter._energy is sample_energy
+        assert inverter._battery_bank is not None
+        assert len(inverter._battery_bank.batteries) == 3
 
     @pytest.mark.asyncio
     async def test_refresh_handles_energy_error(
@@ -184,10 +184,10 @@ class TestInverterRefresh:
         await inverter.refresh()
 
         # Runtime and batteries should be set, energy should be None (error)
-        assert inverter.runtime is sample_runtime
-        assert inverter.energy is None
-        assert inverter.battery_bank is not None
-        assert len(inverter.battery_bank.batteries) == 3
+        assert inverter._runtime is sample_runtime
+        assert inverter._energy is None
+        assert inverter._battery_bank is not None
+        assert len(inverter._battery_bank.batteries) == 3
 
 
 class TestInverterDeviceInfo:
@@ -200,7 +200,7 @@ class TestInverterDeviceInfo:
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
-        inverter.runtime = sample_runtime
+        inverter._runtime = sample_runtime
 
         device_info = inverter.to_device_info()
 
@@ -254,7 +254,7 @@ class TestInverterProperties:
     ) -> None:
         """Test model property is not affected by runtime.modelText (which is hex code)."""
         inverter = ConcreteInverter(client=mock_client, serial_number="1234567890", model="18KPV")
-        inverter.runtime = sample_runtime
+        inverter._runtime = sample_runtime
 
         # Model should remain "18KPV" regardless of runtime.modelText (which is "0x1098600")
         assert inverter.model == "18KPV"
@@ -268,7 +268,7 @@ class TestInverterProperties:
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
-        inverter.runtime = sample_runtime
+        inverter._runtime = sample_runtime
 
         assert inverter.has_data is True
 
@@ -287,7 +287,7 @@ class TestInverterProperties:
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
-        inverter.runtime = sample_runtime
+        inverter._runtime = sample_runtime
 
         # Sample data has pinv=0
         assert inverter.power_output == 0.0
@@ -307,7 +307,7 @@ class TestInverterProperties:
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
-        inverter.energy = sample_energy
+        inverter._energy = sample_energy
 
         assert inverter.total_energy_today == 25.5
 
@@ -326,7 +326,7 @@ class TestInverterProperties:
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
-        inverter.energy = sample_energy
+        inverter._energy = sample_energy
 
         assert inverter.total_energy_lifetime == 5000.0
 
@@ -345,7 +345,7 @@ class TestInverterProperties:
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
-        inverter.runtime = sample_runtime
+        inverter._runtime = sample_runtime
 
         # Sample data has soc=73
         assert inverter.battery_soc == 73
@@ -368,7 +368,7 @@ class TestInverterBatteries:
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        assert inverter.battery_bank is None
+        assert inverter._battery_bank is None
 
     def test_battery_bank_can_be_populated(self, mock_client: LuxpowerClient) -> None:
         """Test battery_bank can be populated."""
@@ -379,10 +379,10 @@ class TestInverterBatteries:
         # Add mock battery bank
         battery_bank = Mock()
         battery_bank.batteries = [Mock(), Mock()]
-        inverter.battery_bank = battery_bank
+        inverter._battery_bank = battery_bank
 
-        assert inverter.battery_bank is battery_bank
-        assert len(inverter.battery_bank.batteries) == 2
+        assert inverter._battery_bank is battery_bank
+        assert len(inverter._battery_bank.batteries) == 2
 
 
 class TestInverterControlOperations:
