@@ -74,7 +74,7 @@ class TestStationLoading:
 
         # Each station should have required attributes
         for station in stations:
-            assert station.plant_id > 0
+            assert station.id > 0
             assert station.name
             assert station._client is client
 
@@ -86,9 +86,9 @@ class TestStationLoading:
 
         # Load first station by ID
         first_station = stations[0]
-        loaded_station = await Station.load(client, first_station.plant_id)
+        loaded_station = await Station.load(client, first_station.id)
 
-        assert loaded_station.plant_id == first_station.plant_id
+        assert loaded_station.id == first_station.id
         assert loaded_station.name == first_station.name
 
 
@@ -114,7 +114,7 @@ class TestStationDeviceHierarchy:
         # If station has parallel groups, check structure
         if len(station.parallel_groups) > 0:
             for group in station.parallel_groups:
-                assert group.group_id
+                assert group.name
                 assert group._client is client
                 assert len(group.inverters) > 0
 
@@ -318,17 +318,15 @@ class TestStationAggregation:
         await station.refresh_all_data()
 
         # Get total production
-        total = station.get_total_production()
+        total = await station.get_total_production()
 
         # Should have production data
-        assert "total_power_w" in total
-        assert "total_energy_today_kwh" in total
-        assert "total_energy_lifetime_kwh" in total
+        assert "today_kwh" in total
+        assert "lifetime_kwh" in total
 
         # Values should be non-negative
-        assert total["total_power_w"] >= 0
-        assert total["total_energy_today_kwh"] >= 0
-        assert total["total_energy_lifetime_kwh"] >= 0
+        assert total["today_kwh"] >= 0
+        assert total["lifetime_kwh"] >= 0
 
     async def test_concurrent_refresh(self, client: LuxpowerClient) -> None:
         """Test concurrent refresh of all devices."""

@@ -332,21 +332,27 @@ class BaseInverter(BaseDevice):
             >>> await inverter.set_battery_soc_limits(on_grid_limit=15, off_grid_limit=20)
             True
         """
-        from pylxpweb.constants import HOLD_DISCHG_CUT_OFF_SOC_EOD, HOLD_SOC_LOW_LIMIT_EPS_DISCHG
-
-        params_to_write = {}
+        # Write each parameter individually using parameter names
+        success = True
 
         if on_grid_limit is not None:
             if not 10 <= on_grid_limit <= 90:
                 raise ValueError("on_grid_limit must be between 10 and 90%")
-            params_to_write[HOLD_DISCHG_CUT_OFF_SOC_EOD] = on_grid_limit
+            result = await self._client.api.control.write_parameter(
+                self.serial_number,
+                "HOLD_DISCHG_CUT_OFF_SOC_EOD",
+                str(on_grid_limit),
+            )
+            success = success and result.success
 
         if off_grid_limit is not None:
             if not 0 <= off_grid_limit <= 100:
                 raise ValueError("off_grid_limit must be between 0 and 100%")
-            params_to_write[HOLD_SOC_LOW_LIMIT_EPS_DISCHG] = off_grid_limit
+            result = await self._client.api.control.write_parameter(
+                self.serial_number,
+                "HOLD_SOC_LOW_LIMIT_EPS_DISCHG",
+                str(off_grid_limit),
+            )
+            success = success and result.success
 
-        if not params_to_write:
-            return True
-
-        return await self.write_parameters(params_to_write)
+        return success

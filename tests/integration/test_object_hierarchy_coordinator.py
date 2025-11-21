@@ -101,11 +101,11 @@ class TestObjectHierarchyLoading:
             # Check parallel groups (may be empty)
             print(f"  Parallel Groups: {len(station.parallel_groups)}")
             for group in station.parallel_groups:
-                assert hasattr(group, "group_id")
+                assert hasattr(group, "name")
                 assert hasattr(group, "inverters")
                 assert hasattr(group, "_client")
                 assert group._client is client
-                print(f"    - Group {group.group_id}: {len(group.inverters)} inverters")
+                print(f"    - Group {group.name}: {len(group.inverters)} inverters")
 
                 # Check MID device if present
                 if group.mid_device:
@@ -306,8 +306,8 @@ class TestCoordinatorDataUpdate:
         print("\n=== Testing Data Staleness Tracking ===")
 
         # Initial state
-        initial_refresh = inverter.last_refresh
-        print(f"Initial last_refresh: {initial_refresh}")
+        initial_refresh = inverter._last_refresh
+        print(f"Initial _last_refresh: {initial_refresh}")
 
         # Wait a moment
         await asyncio.sleep(0.1)
@@ -316,8 +316,8 @@ class TestCoordinatorDataUpdate:
         await inverter.refresh()
 
         # Check timestamp updated
-        new_refresh = inverter.last_refresh
-        print(f"After refresh last_refresh: {new_refresh}")
+        new_refresh = inverter._last_refresh
+        print(f"After refresh _last_refresh: {new_refresh}")
 
         if initial_refresh is not None:
             assert new_refresh > initial_refresh, "Timestamp should be updated"

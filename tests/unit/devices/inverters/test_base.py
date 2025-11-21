@@ -492,15 +492,16 @@ class TestInverterControlOperations:
         mock_client.api.control = Mock()
         mock_response = Mock()
         mock_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_response)
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_response)
 
         # Set both limits
         result = await inverter.set_battery_soc_limits(on_grid_limit=20, off_grid_limit=15)
 
-        # Verify API call with both parameters
-        mock_client.api.control.write_parameters.assert_called_once_with(
-            "1234567890", {105: 20, 106: 15}
-        )
+        # Verify API calls (two separate calls for two parameters)
+        assert mock_client.api.control.write_parameter.call_count == 2
+        calls = mock_client.api.control.write_parameter.call_args_list
+        assert calls[0][0] == ("1234567890", "HOLD_DISCHG_CUT_OFF_SOC_EOD", "20")
+        assert calls[1][0] == ("1234567890", "HOLD_SOC_LOW_LIMIT_EPS_DISCHG", "15")
 
         assert result is True
 
@@ -515,13 +516,15 @@ class TestInverterControlOperations:
         mock_client.api.control = Mock()
         mock_response = Mock()
         mock_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_response)
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_response)
 
         # Set only on-grid limit
         result = await inverter.set_battery_soc_limits(on_grid_limit=25)
 
-        # Verify API call with only on-grid parameter
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {105: 25})
+        # Verify API call with parameter name and string value
+        mock_client.api.control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_DISCHG_CUT_OFF_SOC_EOD", "25"
+        )
 
         assert result is True
 
@@ -536,13 +539,15 @@ class TestInverterControlOperations:
         mock_client.api.control = Mock()
         mock_response = Mock()
         mock_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_response)
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_response)
 
         # Set only off-grid limit
         result = await inverter.set_battery_soc_limits(off_grid_limit=10)
 
-        # Verify API call with only off-grid parameter
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {106: 10})
+        # Verify API call with parameter name and string value
+        mock_client.api.control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_SOC_LOW_LIMIT_EPS_DISCHG", "10"
+        )
 
         assert result is True
 
