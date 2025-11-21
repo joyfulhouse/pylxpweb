@@ -56,18 +56,18 @@ def sample_energy() -> EnergyInfo:
         success=True,
         serialNum="1234567890",
         soc=85,
-        todayYielding=25500,  # 25.5 kWh in Wh
-        todayCharging=10000,
-        todayDischarging=8000,
-        todayImport=5000,
-        todayExport=3000,
-        todayUsage=15000,
-        totalYielding=5000000,  # 5000 kWh in Wh
-        totalCharging=2000000,
-        totalDischarging=1800000,
-        totalImport=1000000,
-        totalExport=800000,
-        totalUsage=3000000,
+        todayYielding=255,  # 25.5 kWh (raw API value in 0.1 kWh units)
+        todayCharging=100,
+        todayDischarging=80,
+        todayImport=50,
+        todayExport=30,
+        todayUsage=150,
+        totalYielding=50000,  # 5000 kWh (raw API value in 0.1 kWh units)
+        totalCharging=20000,
+        totalDischarging=18000,
+        totalImport=10000,
+        totalExport=8000,
+        totalUsage=30000,
     )
 
 

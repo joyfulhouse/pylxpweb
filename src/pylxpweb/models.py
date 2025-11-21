@@ -369,13 +369,13 @@ class InverterOverviewItem(BaseModel):
     soc: str  # State of charge (e.g., "58 %")
     vBat: int  # Battery voltage (scaled: divide by 10 for actual volts)
     vBatText: str
-    totalYielding: int  # Total energy generated (scaled: divide by 10 for kWh)
+    totalYielding: int  # Total energy generated (raw: divide by 10 for kWh)
     totalYieldingText: str
-    totalDischarging: int  # Total energy discharged (scaled: divide by 10 for kWh)
+    totalDischarging: int  # Total energy discharged (raw: divide by 10 for kWh)
     totalDischargingText: str
-    totalExport: int  # Total energy exported (scaled: divide by 10 for kWh)
+    totalExport: int  # Total energy exported (raw: divide by 10 for kWh)
     totalExportText: str
-    totalUsage: int  # Total energy consumed (scaled: divide by 10 for kWh)
+    totalUsage: int  # Total energy consumed (raw: divide by 10 for kWh)
     totalUsageText: str
     parallelGroup: str
     parallelIndex: str
@@ -526,7 +526,10 @@ class InverterRuntime(BaseModel):
 class EnergyInfo(BaseModel):
     """Energy statistics data.
 
-    All energy values are in Wh (divide by 10 for kWh display).
+    Raw energy values from API are in units of 0.1 kWh:
+    - Divide by 10 to get kWh directly
+    - Example: 184 → 18.4 kWh
+
     Note: serialNum and soc are not present in parallel group energy responses.
     """
 

@@ -189,32 +189,37 @@ class TestEnergyScaling:
     """Test energy data scaling."""
 
     def test_energy_to_wh(self) -> None:
-        """Test energy scaling to Wh (÷10)."""
-        assert scale_energy_value("todayYielding", 90, to_kwh=False) == 9.0
-        assert scale_energy_value("monthYielding", 1500, to_kwh=False) == 150.0
-        assert scale_energy_value("totalYielding", 5000, to_kwh=False) == 500.0
+        """Test energy scaling to Wh (÷10 to get kWh, ×1000 for Wh)."""
+        # 90÷10=9kWh, 9×1000=9000Wh
+        assert scale_energy_value("todayYielding", 90, to_kwh=False) == 9000.0
+        # 1500÷10=150kWh
+        assert scale_energy_value("monthYielding", 1500, to_kwh=False) == 150000.0
+        # 5000÷10=500kWh
+        assert scale_energy_value("totalYielding", 5000, to_kwh=False) == 500000.0
 
     def test_energy_to_kwh(self) -> None:
-        """Test energy scaling to kWh (÷10 then ÷1000)."""
-        assert scale_energy_value("todayYielding", 90, to_kwh=True) == 0.009
-        assert scale_energy_value("monthYielding", 1500, to_kwh=True) == 0.15
-        assert scale_energy_value("totalYielding", 5000, to_kwh=True) == 0.5
+        """Test energy scaling to kWh (÷10 directly - API uses 0.1 kWh units)."""
+        assert scale_energy_value("todayYielding", 90, to_kwh=True) == 9.0  # 90÷10=9kWh
+        assert scale_energy_value("monthYielding", 1500, to_kwh=True) == 150.0  # 1500÷10=150kWh
+        assert scale_energy_value("totalYielding", 5000, to_kwh=True) == 500.0  # 5000÷10=500kWh
 
     def test_all_energy_fields(self) -> None:
         """Test all energy field types."""
-        # Daily
-        assert scale_energy_value("todayCharging", 100, to_kwh=False) == 10.0
-        assert scale_energy_value("todayDischarging", 200, to_kwh=False) == 20.0
+        # Daily - 100÷10=10kWh, ×1000=10000Wh
+        assert scale_energy_value("todayCharging", 100, to_kwh=False) == 10000.0
+        # Daily - 200÷10=20kWh, ×1000=20000Wh
+        assert scale_energy_value("todayDischarging", 200, to_kwh=False) == 20000.0
 
-        # Monthly
-        assert scale_energy_value("monthGridImport", 3000, to_kwh=True) == 0.3
-        assert scale_energy_value("monthExport", 4000, to_kwh=True) == 0.4
+        # Monthly - 3000÷10=300kWh
+        assert scale_energy_value("monthGridImport", 3000, to_kwh=True) == 300.0
+        # Monthly - 4000÷10=400kWh
+        assert scale_energy_value("monthExport", 4000, to_kwh=True) == 400.0
 
-        # Yearly
-        assert scale_energy_value("yearUsage", 50000, to_kwh=True) == 5.0
+        # Yearly - 50000÷10=5000kWh
+        assert scale_energy_value("yearUsage", 50000, to_kwh=True) == 5000.0
 
-        # Total
-        assert scale_energy_value("totalExport", 100000, to_kwh=True) == 10.0
+        # Total - 100000÷10=10000kWh
+        assert scale_energy_value("totalExport", 100000, to_kwh=True) == 10000.0
 
 
 class TestGetScalingForField:
@@ -376,7 +381,8 @@ class TestEdgeCases:
 
     def test_large_values(self) -> None:
         """Test scaling with large values."""
-        assert scale_energy_value("totalYielding", 1000000, to_kwh=True) == 100.0
+        # 1000000÷10=100000kWh
+        assert scale_energy_value("totalYielding", 1000000, to_kwh=True) == 100000.0
         assert scale_runtime_value("pToUser", 15000) == 15000.0
 
 
