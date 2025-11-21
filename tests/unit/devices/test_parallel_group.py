@@ -6,7 +6,7 @@ inverters operating in parallel.
 
 from __future__ import annotations
 
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -223,7 +223,7 @@ class TestParallelGroupCombinedEnergy:
     async def test_get_combined_energy_multiple_inverters(
         self, mock_client: LuxpowerClient, mock_station: Mock
     ) -> None:
-        """Test combined energy sums all inverters."""
+        """Test combined energy uses parallel group API endpoint."""
         group = ParallelGroup(
             client=mock_client,
             station=mock_station,
@@ -231,31 +231,34 @@ class TestParallelGroupCombinedEnergy:
             first_device_serial="1234567890",
         )
 
-        # Mock inverters with energy data
+        # Mock inverters (just need serial number and count)
         inv1 = Mock()
-        inv1.needs_refresh = False
-        inv1.energy = Mock()
-        inv1.energy.eToday = 10.5
-        inv1.energy.eTotal = 1000.0
-
+        inv1.serial_number = "INV001"
         inv2 = Mock()
-        inv2.needs_refresh = False
-        inv2.energy = Mock()
-        inv2.energy.eToday = 15.3
-        inv2.energy.eTotal = 1500.0
+        inv2.serial_number = "INV002"
 
         group.inverters = [inv1, inv2]
 
+        # Mock the parallel energy API call
+        mock_energy = Mock()
+        mock_energy.todayYielding = 258  # 25.8 kWh * 10
+        mock_energy.totalYielding = 25000  # 2500.0 kWh * 10
+        mock_client.api.devices.get_parallel_energy = AsyncMock(return_value=mock_energy)
+
         result = await group.get_combined_energy()
 
+        # Verify API was called with first inverter serial
+        mock_client.api.devices.get_parallel_energy.assert_called_once_with("INV001")
+
+        # Verify results are correctly scaled (divided by 10)
         assert result["today_kwh"] == 25.8
         assert result["lifetime_kwh"] == 2500.0
 
     @pytest.mark.asyncio
-    async def test_get_combined_energy_with_missing_energy_data(
+    async def test_get_combined_energy_with_single_inverter(
         self, mock_client: LuxpowerClient, mock_station: Mock
     ) -> None:
-        """Test combined energy handles inverters without energy data."""
+        """Test combined energy with single inverter in group."""
         group = ParallelGroup(
             client=mock_client,
             station=mock_station,
@@ -263,20 +266,22 @@ class TestParallelGroupCombinedEnergy:
             first_device_serial="1234567890",
         )
 
-        # One inverter with energy, one without
+        # Single inverter in the group
         inv1 = Mock()
-        inv1.needs_refresh = False
-        inv1.energy = Mock()
-        inv1.energy.eToday = 10.5
-        inv1.energy.eTotal = 1000.0
+        inv1.serial_number = "INV001"
 
-        inv2 = Mock()
-        inv2.needs_refresh = False
-        inv2.energy = None
+        group.inverters = [inv1]
 
-        group.inverters = [inv1, inv2]
+        # Mock the parallel energy API call
+        mock_energy = Mock()
+        mock_energy.todayYielding = 105  # 10.5 kWh * 10
+        mock_energy.totalYielding = 10000  # 1000.0 kWh * 10
+        mock_client.api.devices.get_parallel_energy = AsyncMock(return_value=mock_energy)
 
         result = await group.get_combined_energy()
+
+        # Verify API was called with the inverter serial
+        mock_client.api.devices.get_parallel_energy.assert_called_once_with("INV001")
 
         assert result["today_kwh"] == 10.5
         assert result["lifetime_kwh"] == 1000.0

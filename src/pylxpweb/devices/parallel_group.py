@@ -91,25 +91,30 @@ class ParallelGroup:
     async def get_combined_energy(self) -> dict[str, float]:
         """Get combined energy statistics for all inverters in group.
 
+        Uses the parallel group energy endpoint which returns aggregate data
+        for the entire parallel group instead of summing individual inverters.
+
         Returns:
             Dictionary with 'today_kwh' and 'lifetime_kwh' totals.
+
+        Raises:
+            ValueError: If no inverters in the group to query
         """
-        total_today = 0.0
-        total_lifetime = 0.0
+        if not self.inverters:
+            return {
+                "today_kwh": 0.0,
+                "lifetime_kwh": 0.0,
+            }
 
-        for inverter in self.inverters:
-            # Refresh if needed (all inverters have these attributes)
-            if inverter.needs_refresh:
-                await inverter.refresh()
+        # Use first inverter serial to query parallel group energy
+        # The API returns aggregate data for the entire group
+        first_serial = self.inverters[0].serial_number
+        energy_info = await self._client.api.devices.get_parallel_energy(first_serial)
 
-            # Sum energy data (all inverters have energy attribute)
-            if inverter.energy:
-                total_today += getattr(inverter.energy, "eToday", 0.0)
-                total_lifetime += getattr(inverter.energy, "eTotal", 0.0)
-
+        # Energy values are in units of 0.1 kWh, divide by 10 for kWh
         return {
-            "today_kwh": total_today,
-            "lifetime_kwh": total_lifetime,
+            "today_kwh": energy_info.todayYielding / 10,
+            "lifetime_kwh": energy_info.totalYielding / 10,
         }
 
     @classmethod
