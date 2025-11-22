@@ -223,9 +223,7 @@ class Battery(BaseDevice):
 
         # Calculate from remain/full capacity, rounded to nearest integer
         if self._data.currentFullCapacity > 0:
-            return round(
-                (self._data.currentRemainCapacity / self._data.currentFullCapacity) * 100
-            )
+            return round((self._data.currentRemainCapacity / self._data.currentFullCapacity) * 100)
 
         # Fallback to 0 if full capacity is 0
         return 0

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pylxpweb.constants import scale_mid_frequency, scale_mid_voltage
+
 if TYPE_CHECKING:
     from pylxpweb.models import MidboxRuntime
 
@@ -39,7 +41,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_voltage
 
         return scale_mid_voltage(self._runtime.midboxData.gridRmsVolt)
 
@@ -52,7 +53,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_voltage
 
         return scale_mid_voltage(self._runtime.midboxData.upsRmsVolt)
 
@@ -65,7 +65,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_voltage
 
         return scale_mid_voltage(self._runtime.midboxData.genRmsVolt)
 
@@ -82,7 +81,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_voltage
 
         return scale_mid_voltage(self._runtime.midboxData.gridL1RmsVolt)
 
@@ -95,7 +93,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_voltage
 
         return scale_mid_voltage(self._runtime.midboxData.gridL2RmsVolt)
 
@@ -112,7 +109,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_voltage
 
         return scale_mid_voltage(self._runtime.midboxData.upsL1RmsVolt)
 
@@ -125,7 +121,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_voltage
 
         return scale_mid_voltage(self._runtime.midboxData.upsL2RmsVolt)
 
@@ -142,7 +137,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_voltage
 
         return scale_mid_voltage(self._runtime.midboxData.genL1RmsVolt)
 
@@ -155,7 +149,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_voltage
 
         return scale_mid_voltage(self._runtime.midboxData.genL2RmsVolt)
 
@@ -443,7 +436,6 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_mid_frequency
 
         return scale_mid_frequency(self._runtime.midboxData.gridFreq)
 

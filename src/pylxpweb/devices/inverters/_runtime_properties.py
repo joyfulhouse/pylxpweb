@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pylxpweb.constants import scale_runtime_value
+
 if TYPE_CHECKING:
     from pylxpweb.models import InverterRuntime
 
@@ -43,8 +45,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
-
         return scale_runtime_value("vpv1", self._runtime.vpv1)
 
     @property
@@ -56,7 +56,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vpv2", self._runtime.vpv2)
 
@@ -69,7 +68,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None or self._runtime.vpv3 is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vpv3", self._runtime.vpv3)
 
@@ -130,7 +128,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vacr", self._runtime.vacr)
 
@@ -143,7 +140,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vacs", self._runtime.vacs)
 
@@ -156,7 +152,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vact", self._runtime.vact)
 
@@ -169,7 +164,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("fac", self._runtime.fac)
 
@@ -197,7 +191,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vepsr", self._runtime.vepsr)
 
@@ -210,7 +203,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vepss", self._runtime.vepss)
 
@@ -223,7 +215,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vepst", self._runtime.vepst)
 
@@ -236,7 +227,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("feps", self._runtime.feps)
 
@@ -334,7 +324,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vBat", self._runtime.vBat)
 
@@ -391,7 +380,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("maxChgCurr", self._runtime.maxChgCurr)
 
@@ -404,7 +392,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("maxDischgCurr", self._runtime.maxDischgCurr)
 
@@ -458,7 +445,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vBus1", self._runtime.vBus1)
 
@@ -471,7 +457,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("vBus2", self._runtime.vBus2)
 
@@ -499,7 +484,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("genVolt", self._runtime.genVolt)
 
@@ -512,7 +496,6 @@ class InverterRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-        from pylxpweb.constants import scale_runtime_value
 
         return scale_runtime_value("genFreq", self._runtime.genFreq)
 

@@ -94,6 +94,28 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         self._last_energy_lifetime: float | None = None
         self._last_energy_date: str | None = None  # YYYY-MM-DD in station timezone
 
+    def _is_cache_expired(
+        self,
+        cache_time: datetime | None,
+        ttl: timedelta,
+        force: bool,
+    ) -> bool:
+        """Check if cache entry has expired.
+
+        Args:
+            cache_time: Timestamp of cached data
+            ttl: Time-to-live for this cache
+            force: If True, always return True (force refresh)
+
+        Returns:
+            True if cache is expired or missing
+        """
+        if force:
+            return True
+        if cache_time is None:
+            return True
+        return (datetime.now() - cache_time) > ttl
+
     async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
         """Refresh runtime, energy, battery, and optionally parameters from API.
 
@@ -106,54 +128,30 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         """
         # Prepare tasks to fetch only expired/missing data
         tasks = []
-        task_types = []
-
-        now = datetime.now()
 
         # Runtime data (30s TTL)
-        runtime_expired = (
-            force
-            or self._runtime_cache_time is None
-            or (now - self._runtime_cache_time) > self._runtime_cache_ttl
-        )
-        if runtime_expired:
+        if self._is_cache_expired(self._runtime_cache_time, self._runtime_cache_ttl, force):
             tasks.append(self._fetch_runtime())
-            task_types.append("runtime")
 
         # Energy data (5min TTL)
-        energy_expired = (
-            force
-            or self._energy_cache_time is None
-            or (now - self._energy_cache_time) > self._energy_cache_ttl
-        )
-        if energy_expired:
+        if self._is_cache_expired(self._energy_cache_time, self._energy_cache_ttl, force):
             tasks.append(self._fetch_energy())
-            task_types.append("energy")
 
         # Battery data (30s TTL) - Lazy loading optimization
         # Only fetch if we have batteries OR haven't checked yet (first fetch)
-        battery_expired = (
-            force
-            or self._battery_cache_time is None
-            or (now - self._battery_cache_time) > self._battery_cache_ttl
-        )
-        should_fetch_battery = battery_expired and (
-            self._battery_bank is None  # Haven't checked yet
-            or (self._battery_bank and self._battery_bank.battery_count > 0)  # Has batteries
-        )
-        if should_fetch_battery:
-            tasks.append(self._fetch_battery())
-            task_types.append("battery")
+        if self._is_cache_expired(self._battery_cache_time, self._battery_cache_ttl, force):
+            should_fetch_battery = (
+                self._battery_bank is None  # Haven't checked yet
+                or (self._battery_bank and self._battery_bank.battery_count > 0)  # Has batteries
+            )
+            if should_fetch_battery:
+                tasks.append(self._fetch_battery())
 
-        # Parameters (1hr TTL) - only fetch if explicitly requested or expired
-        parameters_expired = (
-            force
-            or self._parameters_cache_time is None
-            or (now - self._parameters_cache_time) > self._parameters_cache_ttl
-        )
-        if include_parameters and parameters_expired:
+        # Parameters (1hr TTL) - only fetch if explicitly requested
+        if include_parameters and self._is_cache_expired(
+            self._parameters_cache_time, self._parameters_cache_ttl, force
+        ):
             tasks.append(self._fetch_parameters())
-            task_types.append("parameters")
 
         # Execute all needed fetches concurrently
         if tasks:
