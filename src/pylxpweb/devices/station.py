@@ -353,8 +353,8 @@ class Station(BaseDevice):
 
         batteries: list[Battery] = []
         for inverter in self.all_inverters:
-            if inverter.battery_bank and inverter.battery_bank.batteries:
-                batteries.extend(inverter.battery_bank.batteries)
+            if inverter._battery_bank and inverter._battery_bank.batteries:
+                batteries.extend(inverter._battery_bank.batteries)
         return batteries
 
     async def refresh(self) -> None:
@@ -447,10 +447,10 @@ class Station(BaseDevice):
             if inverter.needs_refresh:
                 await inverter.refresh()
 
-            # Sum energy data (all inverters have energy attribute)
-            if inverter.energy:
-                total_today += getattr(inverter.energy, "eToday", 0.0)
-                total_lifetime += getattr(inverter.energy, "eTotal", 0.0)
+            # Sum energy data (all inverters have _energy attribute)
+            if inverter._energy:
+                total_today += getattr(inverter._energy, "eToday", 0.0)
+                total_lifetime += getattr(inverter._energy, "eTotal", 0.0)
 
         return {
             "today_kwh": total_today,

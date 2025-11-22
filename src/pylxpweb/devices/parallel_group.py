@@ -38,7 +38,7 @@ class ParallelGroup:
 
             for inverter in group.inverters:
                 await inverter.refresh()
-                print(f"  Inverter {inverter.serial_number}: {inverter.runtime.pac}W")
+                print(f"  Inverter {inverter.serial_number}: {inverter.ac_output_power}W")
         ```
     """
 

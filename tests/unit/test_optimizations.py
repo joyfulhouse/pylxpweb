@@ -145,15 +145,15 @@ class TestLazyBatteryLoading:
         mock_client.api.devices.get_battery_info = AsyncMock(return_value=battery_info)
 
         # Verify battery_bank is None initially
-        assert inverter.battery_bank is None
+        assert inverter._battery_bank is None
 
         # First refresh should always fetch battery data
         await inverter.refresh(force=True)
 
         # Should have called get_battery_info
         assert mock_client.api.devices.get_battery_info.call_count == 1
-        assert inverter.battery_bank is not None
-        assert inverter.battery_bank.battery_count == 0
+        assert inverter._battery_bank is not None
+        assert inverter._battery_bank.battery_count == 0
 
     @pytest.mark.asyncio
     async def test_refresh_skips_battery_when_no_batteries_present(
@@ -241,7 +241,7 @@ class TestLazyBatteryLoading:
         # First refresh
         await inverter.refresh(force=True)
         assert mock_client.api.devices.get_battery_info.call_count == 1
-        assert inverter.battery_bank.battery_count == 1
+        assert inverter._battery_bank.battery_count == 1
 
         # Reset mock
         mock_client.api.devices.get_battery_info.reset_mock()

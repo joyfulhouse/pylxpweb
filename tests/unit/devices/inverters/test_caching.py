@@ -232,8 +232,8 @@ class TestDataCaching:
 
         # First refresh - success
         await inverter.refresh()
-        assert inverter.runtime == sample_runtime
+        assert inverter._runtime == sample_runtime
 
         # Force refresh with error - should keep old data
         await inverter.refresh(force=True)
-        assert inverter.runtime == sample_runtime  # Old data preserved
+        assert inverter._runtime == sample_runtime  # Old data preserved

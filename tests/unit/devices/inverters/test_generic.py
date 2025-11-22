@@ -65,8 +65,8 @@ class TestGenericInverterInitialization:
 
         assert inverter.serial_number == "1234567890"
         assert inverter.model == "FlexBOSS21"
-        assert inverter.runtime is None
-        assert inverter.energy is None
+        assert inverter._runtime is None
+        assert inverter._energy is None
 
 
 class TestGenericInverterEntities:
@@ -90,7 +90,7 @@ class TestGenericInverterEntities:
         inverter = GenericInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-        inverter.runtime = sample_runtime
+        inverter._runtime = sample_runtime
 
         entities = inverter.to_entities()
 
@@ -111,7 +111,7 @@ class TestGenericInverterEntities:
         inverter = GenericInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-        inverter.energy = sample_energy
+        inverter._energy = sample_energy
 
         entities = inverter.to_entities()
 
@@ -133,8 +133,8 @@ class TestGenericInverterEntities:
         inverter = GenericInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-        inverter.runtime = sample_runtime
-        inverter.energy = sample_energy
+        inverter._runtime = sample_runtime
+        inverter._energy = sample_energy
 
         entities = inverter.to_entities()
 
