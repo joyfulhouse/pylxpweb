@@ -170,9 +170,9 @@ class TestBatteryModuleScaling:
         assert scale_battery_value("batMaxCellTemp", 250) == 25.0
 
     def test_charge_reference_scaling(self) -> None:
-        """Test charge reference value scaling."""
-        # batChargeMaxCur: ÷100 (2000 → 20.0A)
-        assert scale_battery_value("batChargeMaxCur", 2000) == 20.0
+        """Test charge reference value scaling (÷10, consistent with battery current)."""
+        # batChargeMaxCur: ÷10 (2000 → 200.0A)
+        assert scale_battery_value("batChargeMaxCur", 2000) == 200.0
         # batChargeVoltRef: ÷10 (560 → 56.0V)
         assert scale_battery_value("batChargeVoltRef", 560) == 56.0
 
