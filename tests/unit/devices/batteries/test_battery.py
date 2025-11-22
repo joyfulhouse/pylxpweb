@@ -274,7 +274,8 @@ class TestBatteryEnhancedProperties:
 
         # Sample data has batteryType="BATT_default"
         assert battery.battery_type == "BATT_default"
-        assert battery.battery_type_text == ""
+        # batteryTypeText is empty in API, but falls back to "Lithium"
+        assert battery.battery_type_text == "Lithium"
 
     def test_bms_model_property(
         self, mock_client: LuxpowerClient, sample_battery_module: BatteryModule
@@ -333,9 +334,11 @@ class TestBatteryEnhancedProperties:
         """Test charge parameter properties."""
         battery = Battery(client=mock_client, battery_data=sample_battery_module)
 
-        # Sample data has charge parameters
-        assert battery.charge_max_current == 2000
-        assert battery.charge_voltage_ref == 560
+        # Sample data has charge parameters (now properly scaled)
+        # batChargeMaxCur: 2000 → 20.00A (÷100)
+        # batChargeVoltRef: 560 → 56.0V (÷10)
+        assert battery.charge_max_current == 20.0
+        assert battery.charge_voltage_ref == 56.0
 
     def test_additional_metrics_properties(
         self, mock_client: LuxpowerClient, sample_battery_module: BatteryModule
