@@ -76,9 +76,7 @@ class TestDataframeTimeoutResilience:
     and succeeds on retry.
     """
 
-    async def test_dataframe_timeout_is_retried_automatically(
-        self, client: LuxpowerClient
-    ) -> None:
+    async def test_dataframe_timeout_is_retried_automatically(self, client: LuxpowerClient) -> None:
         """Test that DATAFRAME_TIMEOUT errors are automatically retried.
 
         This test performs normal operations that may encounter DATAFRAME_TIMEOUT.
@@ -138,9 +136,7 @@ class TestDataframeTimeoutResilience:
 
         except LuxpowerAPIError as err:
             if "DATAFRAME_TIMEOUT" in str(err):
-                pytest.skip(
-                    "DATAFRAME_TIMEOUT after max retries - genuine hardware issue"
-                )
+                pytest.skip("DATAFRAME_TIMEOUT after max retries - genuine hardware issue")
             raise
 
     async def test_write_operations_with_dataframe_timeout_resilience(
@@ -177,9 +173,7 @@ class TestDataframeTimeoutResilience:
 
         except LuxpowerAPIError as err:
             if "DATAFRAME_TIMEOUT" in str(err):
-                pytest.skip(
-                    "DATAFRAME_TIMEOUT after max retries - genuine hardware issue"
-                )
+                pytest.skip("DATAFRAME_TIMEOUT after max retries - genuine hardware issue")
             raise
 
 
@@ -187,9 +181,7 @@ class TestDataframeTimeoutResilience:
 class TestTransientErrorRetryBehavior:
     """Test general transient error retry behavior."""
 
-    async def test_successful_operations_dont_trigger_retries(
-        self, client: LuxpowerClient
-    ) -> None:
+    async def test_successful_operations_dont_trigger_retries(self, client: LuxpowerClient) -> None:
         """Test that successful operations complete without retries.
 
         This verifies that the retry logic only activates on errors,
