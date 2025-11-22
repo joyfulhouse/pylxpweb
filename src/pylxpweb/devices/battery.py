@@ -209,13 +209,26 @@ class Battery(BaseDevice):
         return self._data.currentFullCapacity
 
     @property
-    def capacity_percent(self) -> int | None:
+    def capacity_percent(self) -> int:
         """Get current capacity as percentage of full capacity.
 
         Returns:
-            Capacity percentage (0-100), or None if not available.
+            Capacity percentage (0-100). If not provided by API, calculates
+            from currentRemainCapacity / currentFullCapacity and rounds to
+            nearest integer.
         """
-        return self._data.currentCapacityPercent
+        # Use API value if available
+        if self._data.currentCapacityPercent is not None:
+            return self._data.currentCapacityPercent
+
+        # Calculate from remain/full capacity, rounded to nearest integer
+        if self._data.currentFullCapacity > 0:
+            return round(
+                (self._data.currentRemainCapacity / self._data.currentFullCapacity) * 100
+            )
+
+        # Fallback to 0 if full capacity is 0
+        return 0
 
     @property
     def max_battery_charge(self) -> int | None:

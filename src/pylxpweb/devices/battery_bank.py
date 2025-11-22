@@ -219,9 +219,9 @@ class BatteryBank(BaseDevice):
         """Get current battery bank capacity in amp-hours.
 
         Returns:
-            Current capacity in Ah.
+            Current capacity in Ah, rounded to 1 decimal place.
         """
-        return self.data.currentBatteryCharge
+        return round(self.data.currentBatteryCharge, 1)
 
     @property
     def remain_capacity(self) -> int | None:
