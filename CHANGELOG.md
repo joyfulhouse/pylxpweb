@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2025-11-22
+
+### Added
+
+- **Transient Error Retry** - Automatic retry for hardware communication timeouts:
+  - Added `MAX_TRANSIENT_ERROR_RETRIES = 3` configuration constant
+  - Added `TRANSIENT_ERROR_MESSAGES` set with 5 known transient errors (`DATAFRAME_TIMEOUT`, `TIMEOUT`, `BUSY`, `DEVICE_BUSY`, `COMMUNICATION_ERROR`)
+  - Implemented automatic retry logic in `LuxpowerClient._request()` with exponential backoff (1s → 2s → 4s)
+  - Non-transient errors (e.g., `apiBlocked`) fail immediately without retry
+  - Retry count preserved across re-authentication
+  - 14 unit tests in `test_transient_error_retry.py` (100% passing)
+  - 5 integration tests in `test_transient_error_resilience.py` (100% passing)
+
+### Fixed
+
+- **Parameter Initialization** - Fixed incorrect initial values for Home Assistant sensors:
+  - Changed `_get_parameter()` return type from `-> int | float | bool` to `-> int | float | bool | None`
+  - Returns `None` when `self.parameters is None` (parameters not yet loaded)
+  - Updated 7 parameter properties to return `| None`: `battery_soc_limits`, `ac_charge_power_limit`, `pv_charge_power_limit`, `grid_peak_shaving_power_limit`, `ac_charge_soc_limit`, `battery_charge_current_limit`, `battery_discharge_current_limit`
+  - Home Assistant sensors now show "Unknown" state instead of incorrect defaults (False/0) on startup
+  - 8 unit tests in `test_parameter_initialization.py` (100% passing)
+
+- **Exception Handling** - Fixed double-wrapping of `LuxpowerAPIError` exceptions:
+  - Added explicit exception re-raising before generic `except Exception` handler
+  - Transient error exceptions now propagate correctly without "Unexpected error" wrapping
+
+### Testing
+
+- Added 27 new tests (22 unit + 5 integration)
+- Total test count: 492 unit tests + 67 integration tests (100% passing)
+- Zero linting errors (ruff check)
+- Zero type errors (mypy --strict)
+
 ## [0.3.1] - 2025-11-21
 
 ### Changed

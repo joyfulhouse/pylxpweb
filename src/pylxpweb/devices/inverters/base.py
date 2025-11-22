@@ -460,6 +460,140 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
             return None
         return getattr(self._runtime, "soc", None)
 
+    # ============================================================================
+    # Additional Energy Statistics Properties
+    # ============================================================================
+
+    @property
+    def energy_today_charging(self) -> float:
+        """Get battery charging energy today in kWh.
+
+        Returns:
+            Energy charged to battery today in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("todayCharging", self._energy.todayCharging, to_kwh=True)
+
+    @property
+    def energy_today_discharging(self) -> float:
+        """Get battery discharging energy today in kWh.
+
+        Returns:
+            Energy discharged from battery today in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("todayDischarging", self._energy.todayDischarging, to_kwh=True)
+
+    @property
+    def energy_today_import(self) -> float:
+        """Get grid import energy today in kWh.
+
+        Returns:
+            Energy imported from grid today in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("todayImport", self._energy.todayImport, to_kwh=True)
+
+    @property
+    def energy_today_export(self) -> float:
+        """Get grid export energy today in kWh.
+
+        Returns:
+            Energy exported to grid today in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("todayExport", self._energy.todayExport, to_kwh=True)
+
+    @property
+    def energy_today_usage(self) -> float:
+        """Get energy consumption today in kWh.
+
+        Returns:
+            Energy consumed by loads today in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("todayUsage", self._energy.todayUsage, to_kwh=True)
+
+    @property
+    def energy_lifetime_charging(self) -> float:
+        """Get total battery charging energy lifetime in kWh.
+
+        Returns:
+            Total energy charged to battery lifetime in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("totalCharging", self._energy.totalCharging, to_kwh=True)
+
+    @property
+    def energy_lifetime_discharging(self) -> float:
+        """Get total battery discharging energy lifetime in kWh.
+
+        Returns:
+            Total energy discharged from battery lifetime in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("totalDischarging", self._energy.totalDischarging, to_kwh=True)
+
+    @property
+    def energy_lifetime_import(self) -> float:
+        """Get total grid import energy lifetime in kWh.
+
+        Returns:
+            Total energy imported from grid lifetime in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("totalImport", self._energy.totalImport, to_kwh=True)
+
+    @property
+    def energy_lifetime_export(self) -> float:
+        """Get total grid export energy lifetime in kWh.
+
+        Returns:
+            Total energy exported to grid lifetime in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("totalExport", self._energy.totalExport, to_kwh=True)
+
+    @property
+    def energy_lifetime_usage(self) -> float:
+        """Get total energy consumption lifetime in kWh.
+
+        Returns:
+            Total energy consumed by loads lifetime in kWh, or 0.0 if no data.
+        """
+        if self._energy is None:
+            return 0.0
+        from pylxpweb.constants import scale_energy_value
+
+        return scale_energy_value("totalUsage", self._energy.totalUsage, to_kwh=True)
+
     async def _update_battery_bank(self, battery_info: Any) -> None:
         """Update battery bank object from API data.
 
@@ -584,7 +718,7 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         key: str,
         default: int | float | bool = 0,
         cast: type[int] | type[float] | type[bool] = int,
-    ) -> int | float | bool:
+    ) -> int | float | bool | None:
         """Get parameter value from cache with default and type casting.
 
         This method reads from the cached `self.parameters` dictionary, which is
@@ -607,7 +741,8 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
             cast: Type to cast the value to (int, float, or bool)
 
         Returns:
-            Parameter value cast to specified type, or default if not found
+            Parameter value cast to specified type, default if not found,
+            or None if parameters haven't been loaded yet
 
         Note:
             Subclasses can override this method to map standard parameter names
@@ -621,7 +756,7 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
             True
         """
         if self.parameters is None:
-            return cast(default)
+            return None
 
         value = self.parameters.get(key, default)
 
@@ -669,22 +804,29 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         return result
 
     @property
-    def battery_soc_limits(self) -> dict[str, int]:
+    def battery_soc_limits(self) -> dict[str, int] | None:
         """Get battery SOC discharge limits from cached parameters.
 
         Universal control: All inverters have SOC limits.
 
         Returns:
-            Dictionary with on_grid_limit and off_grid_limit (0-100%)
+            Dictionary with on_grid_limit and off_grid_limit (0-100%),
+            or None if parameters haven't been loaded yet
 
         Example:
             >>> limits = inverter.battery_soc_limits
             >>> limits
             {'on_grid_limit': 10, 'off_grid_limit': 20}
         """
+        on_grid = self._get_parameter("HOLD_DISCHG_CUT_OFF_SOC_EOD", 10, int)
+        off_grid = self._get_parameter("HOLD_SOC_LOW_LIMIT_EPS_DISCHG", 10, int)
+
+        if on_grid is None or off_grid is None:
+            return None
+
         return {
-            "on_grid_limit": int(self._get_parameter("HOLD_DISCHG_CUT_OFF_SOC_EOD", 10, int)),
-            "off_grid_limit": int(self._get_parameter("HOLD_SOC_LOW_LIMIT_EPS_DISCHG", 10, int)),
+            "on_grid_limit": int(on_grid),
+            "off_grid_limit": int(off_grid),
         }
 
     async def set_battery_soc_limits(
@@ -822,20 +964,21 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         return result.success
 
     @property
-    def ac_charge_power_limit(self) -> float:
+    def ac_charge_power_limit(self) -> float | None:
         """Get current AC charge power limit from cached parameters.
 
         Universal control: All inverters support AC charging.
 
         Returns:
-            Current power limit in kilowatts
+            Current power limit in kilowatts, or None if parameters not loaded
 
         Example:
             >>> power = inverter.ac_charge_power_limit
             >>> power
             5.0
         """
-        return self._get_parameter("HOLD_AC_CHARGE_POWER_CMD", 0.0, float)
+        value = self._get_parameter("HOLD_AC_CHARGE_POWER_CMD", 0.0, float)
+        return float(value) if value is not None else None
 
     # ============================================================================
     # PV Charge Power Control (Issue #10)
@@ -874,20 +1017,21 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         return result.success
 
     @property
-    def pv_charge_power_limit(self) -> int:
+    def pv_charge_power_limit(self) -> int | None:
         """Get current PV (forced) charge power limit from cached parameters.
 
         Universal control: All inverters support PV charging.
 
         Returns:
-            Current power limit in kilowatts (integer)
+            Current power limit in kilowatts (integer), or None if parameters not loaded
 
         Example:
             >>> power = inverter.pv_charge_power_limit
             >>> power
             10
         """
-        return int(self._get_parameter("HOLD_FORCED_CHG_POWER_CMD", 0, int))
+        value = self._get_parameter("HOLD_FORCED_CHG_POWER_CMD", 0, int)
+        return int(value) if value is not None else None
 
     # ============================================================================
     # Grid Peak Shaving Control (Issue #11)
@@ -928,20 +1072,21 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         return result.success
 
     @property
-    def grid_peak_shaving_power_limit(self) -> float:
+    def grid_peak_shaving_power_limit(self) -> float | None:
         """Get current grid peak shaving power limit from cached parameters.
 
         Universal control: Most inverters support peak shaving.
 
         Returns:
-            Current power limit in kilowatts
+            Current power limit in kilowatts, or None if parameters not loaded
 
         Example:
             >>> power = inverter.grid_peak_shaving_power_limit
             >>> power
             7.0
         """
-        return self._get_parameter("_12K_HOLD_GRID_PEAK_SHAVING_POWER", 0.0, float)
+        value = self._get_parameter("_12K_HOLD_GRID_PEAK_SHAVING_POWER", 0.0, float)
+        return float(value) if value is not None else None
 
     # ============================================================================
     # AC Charge SOC Limit Control (Issue #12)
@@ -979,20 +1124,21 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         return result.success
 
     @property
-    def ac_charge_soc_limit(self) -> int:
+    def ac_charge_soc_limit(self) -> int | None:
         """Get current AC charge stop SOC limit from cached parameters.
 
         Universal control: All inverters support AC charge SOC limits.
 
         Returns:
-            Current SOC limit percentage
+            Current SOC limit percentage, or None if parameters not loaded
 
         Example:
             >>> limit = inverter.ac_charge_soc_limit
             >>> limit
             90
         """
-        return int(self._get_parameter("HOLD_AC_CHARGE_SOC_LIMIT", 100, int))
+        value = self._get_parameter("HOLD_AC_CHARGE_SOC_LIMIT", 100, int)
+        return int(value) if value is not None else None
 
     # ============================================================================
     # Battery Current Control (Issue #13)
@@ -1055,36 +1201,38 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         return result.success
 
     @property
-    def battery_charge_current_limit(self) -> int:
+    def battery_charge_current_limit(self) -> int | None:
         """Get current battery charge current limit from cached parameters.
 
         Universal control: All inverters support charge current limits.
 
         Returns:
-            Current limit in amperes
+            Current limit in amperes, or None if parameters not loaded
 
         Example:
             >>> current = inverter.battery_charge_current_limit
             >>> current
             100
         """
-        return int(self._get_parameter("HOLD_LEAD_ACID_CHARGE_RATE", 0, int))
+        value = self._get_parameter("HOLD_LEAD_ACID_CHARGE_RATE", 0, int)
+        return int(value) if value is not None else None
 
     @property
-    def battery_discharge_current_limit(self) -> int:
+    def battery_discharge_current_limit(self) -> int | None:
         """Get current battery discharge current limit from cached parameters.
 
         Universal control: All inverters support discharge current limits.
 
         Returns:
-            Current limit in amperes
+            Current limit in amperes, or None if parameters not loaded
 
         Example:
             >>> current = inverter.battery_discharge_current_limit
             >>> current
             120
         """
-        return int(self._get_parameter("HOLD_LEAD_ACID_DISCHARGE_RATE", 0, int))
+        value = self._get_parameter("HOLD_LEAD_ACID_DISCHARGE_RATE", 0, int)
+        return int(value) if value is not None else None
 
     # ============================================================================
     # Operating Mode Control (Issue #14)

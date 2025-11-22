@@ -1292,6 +1292,7 @@ ENERGY_INFO_SCALING: dict[str, ScaleFactor] = {
     "todayCharging": ScaleFactor.SCALE_10,
     "todayDischarging": ScaleFactor.SCALE_10,
     "todayGridImport": ScaleFactor.SCALE_10,
+    "todayImport": ScaleFactor.SCALE_10,  # Alternative field name for todayGridImport
     "todayUsage": ScaleFactor.SCALE_10,
     "todayExport": ScaleFactor.SCALE_10,
     # Monthly Energy (÷10 to get kWh)
@@ -1299,6 +1300,7 @@ ENERGY_INFO_SCALING: dict[str, ScaleFactor] = {
     "monthCharging": ScaleFactor.SCALE_10,
     "monthDischarging": ScaleFactor.SCALE_10,
     "monthGridImport": ScaleFactor.SCALE_10,
+    "monthImport": ScaleFactor.SCALE_10,  # Alternative field name for monthGridImport
     "monthUsage": ScaleFactor.SCALE_10,
     "monthExport": ScaleFactor.SCALE_10,
     # Yearly Energy (÷10 to get kWh)
@@ -1306,6 +1308,7 @@ ENERGY_INFO_SCALING: dict[str, ScaleFactor] = {
     "yearCharging": ScaleFactor.SCALE_10,
     "yearDischarging": ScaleFactor.SCALE_10,
     "yearGridImport": ScaleFactor.SCALE_10,
+    "yearImport": ScaleFactor.SCALE_10,  # Alternative field name for yearGridImport
     "yearUsage": ScaleFactor.SCALE_10,
     "yearExport": ScaleFactor.SCALE_10,
     # Lifetime Total Energy (÷10 to get kWh)
@@ -1313,6 +1316,7 @@ ENERGY_INFO_SCALING: dict[str, ScaleFactor] = {
     "totalCharging": ScaleFactor.SCALE_10,
     "totalDischarging": ScaleFactor.SCALE_10,
     "totalGridImport": ScaleFactor.SCALE_10,
+    "totalImport": ScaleFactor.SCALE_10,  # Alternative field name for totalGridImport
     "totalUsage": ScaleFactor.SCALE_10,
     "totalExport": ScaleFactor.SCALE_10,
 }
@@ -1679,6 +1683,19 @@ BACKOFF_BASE_DELAY_SECONDS = 1.0
 
 # Maximum delay (in seconds) for exponential backoff
 BACKOFF_MAX_DELAY_SECONDS = 60.0
+
+# Maximum number of retry attempts for transient errors
+MAX_TRANSIENT_ERROR_RETRIES = 3
+
+# Known transient error messages that should trigger automatic retry
+# These are hardware/network communication errors that may succeed on retry
+TRANSIENT_ERROR_MESSAGES = {
+    "DATAFRAME_TIMEOUT",  # Inverter dataframe communication timeout
+    "TIMEOUT",  # Generic timeout error
+    "BUSY",  # Device busy, try again
+    "COMMUNICATION_ERROR",  # Communication failure with device
+    "DEVICE_BUSY",  # Device is busy processing another request
+}
 
 # ==============================================================================
 # Timezone Parsing Constants

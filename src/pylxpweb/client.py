@@ -8,8 +8,15 @@ Key Features:
 - Session management with auto-reauthentication
 - Request caching with configurable TTL
 - Exponential backoff for rate limiting
+- Automatic retry for transient errors (DATAFRAME_TIMEOUT, BUSY, etc.)
 - Support for injected aiohttp.ClientSession (Platinum tier requirement)
 - Comprehensive error handling
+
+Retry Behavior:
+- Transient errors (hardware communication timeouts) are automatically retried
+  up to MAX_TRANSIENT_ERROR_RETRIES times with exponential backoff
+- Non-transient errors (permissions, invalid parameters) fail immediately
+- Session expiration triggers automatic re-authentication and retry
 """
 
 from __future__ import annotations
@@ -29,6 +36,8 @@ from .constants import (
     BACKOFF_BASE_DELAY_SECONDS,
     BACKOFF_MAX_DELAY_SECONDS,
     HTTP_UNAUTHORIZED,
+    MAX_TRANSIENT_ERROR_RETRIES,
+    TRANSIENT_ERROR_MESSAGES,
 )
 from .endpoints import (
     AnalyticsEndpoints,
@@ -427,6 +436,17 @@ class LuxpowerClient:
             "endpoints": endpoints,
         }
 
+    def _is_transient_error(self, error_msg: str) -> bool:
+        """Check if an error message indicates a transient error.
+
+        Args:
+            error_msg: The error message to check
+
+        Returns:
+            bool: True if the error is transient and should be retried
+        """
+        return any(transient in error_msg for transient in TRANSIENT_ERROR_MESSAGES)
+
     async def _request(
         self,
         method: str,
@@ -435,6 +455,7 @@ class LuxpowerClient:
         data: dict[str, Any] | None = None,
         cache_key: str | None = None,
         cache_endpoint: str | None = None,
+        _retry_count: int = 0,
     ) -> dict[str, Any]:
         """Make an HTTP request to the API.
 
@@ -442,12 +463,16 @@ class LuxpowerClient:
         to ensure fresh data at date rollovers (especially midnight for daily
         energy values).
 
+        Automatically retries transient errors (e.g., DATAFRAME_TIMEOUT, BUSY)
+        with exponential backoff up to MAX_TRANSIENT_ERROR_RETRIES attempts.
+
         Args:
             method: HTTP method (GET, POST, etc.)
             endpoint: API endpoint (will be joined with base_url)
             data: Request data (will be form-encoded for POST)
             cache_key: Optional cache key for response caching
             cache_endpoint: Optional endpoint key for cache TTL lookup
+            _retry_count: Internal retry counter (do not set manually)
 
         Returns:
             dict: JSON response from the API
@@ -455,7 +480,7 @@ class LuxpowerClient:
         Raises:
             LuxpowerAuthError: If authentication fails
             LuxpowerConnectionError: If connection fails
-            LuxpowerAPIError: If API returns an error
+            LuxpowerAPIError: If API returns an error (non-transient or max retries exceeded)
         """
         # Auto-invalidate cache on first request after hour change
         # This ensures fresh data after boundaries, especially midnight
@@ -499,6 +524,29 @@ class LuxpowerClient:
                     if not error_msg:
                         # No standard error message, show entire response
                         error_msg = f"No error message. Full response: {json_data}"
+
+                    # Check if this is a transient error that should be retried
+                    is_transient = self._is_transient_error(error_msg)
+                    can_retry = _retry_count < MAX_TRANSIENT_ERROR_RETRIES
+                    if is_transient and can_retry:
+                        self._handle_request_error()
+                        _LOGGER.warning(
+                            "Transient API error '%s' (attempt %d/%d), retrying with backoff...",
+                            error_msg,
+                            _retry_count + 1,
+                            MAX_TRANSIENT_ERROR_RETRIES,
+                        )
+                        # Retry with incremented counter
+                        return await self._request(
+                            method,
+                            endpoint,
+                            data=data,
+                            cache_key=cache_key,
+                            cache_endpoint=cache_endpoint,
+                            _retry_count=_retry_count + 1,
+                        )
+
+                    # Non-transient error or max retries exceeded
                     raise LuxpowerAPIError(f"API error (HTTP {response.status}): {error_msg}")
 
                 # Cache successful response
@@ -524,6 +572,7 @@ class LuxpowerClient:
                     data=data,
                     cache_key=cache_key,
                     cache_endpoint=cache_endpoint,
+                    _retry_count=_retry_count,  # Preserve retry count
                 )
             except Exception as login_err:
                 _LOGGER.error("Re-authentication failed: %s", login_err)
@@ -544,11 +593,16 @@ class LuxpowerClient:
                         data=data,
                         cache_key=cache_key,
                         cache_endpoint=cache_endpoint,
+                        _retry_count=_retry_count,  # Preserve retry count
                     )
                 except Exception as login_err:
                     _LOGGER.error("Re-authentication failed: %s", login_err)
                     raise LuxpowerAuthError("Authentication failed") from err
             raise LuxpowerAPIError(f"HTTP {err.status}: {err.message}") from err
+
+        except LuxpowerAPIError:
+            # Re-raise our own exceptions (from transient error handling, etc)
+            raise
 
         except aiohttp.ClientError as err:
             self._handle_request_error(err)

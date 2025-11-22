@@ -140,11 +140,15 @@ pytest tests/unit/ --cov=pylxpweb --cov-report=term-missing
 - Per cycle: 7 calls (4 data + 3 parameters)
 - Per hour: ~487 calls (4 + 120×4 + 3)
 
-### Session Management
-- Cookie-based (`JSESSIONID`)
-- Expiration: ~2 hours
-- Auto-reauthentication on 401/403
-- Support session injection (Platinum tier requirement)
+### Session Management & Error Handling
+- **Session**: Cookie-based (`JSESSIONID`), ~2 hour expiration
+- **Auto-reauthentication**: Automatic on 401/403 responses
+- **Transient Error Retry**: Automatic retry with exponential backoff
+  - Errors: `DATAFRAME_TIMEOUT`, `TIMEOUT`, `BUSY`, `DEVICE_BUSY`, `COMMUNICATION_ERROR`
+  - Max retries: 3 attempts (configurable via `MAX_TRANSIENT_ERROR_RETRIES`)
+  - Backoff: 1s → 2s → 4s → 8s (exponential with jitter, max 60s)
+  - Non-transient errors (e.g., `apiBlocked`) fail immediately
+- **Session injection**: Supported (Platinum tier requirement)
 
 ## Implementation Patterns
 

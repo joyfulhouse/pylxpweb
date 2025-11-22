@@ -358,6 +358,146 @@ class TestInverterProperties:
 
         assert inverter.battery_soc is None
 
+    def test_energy_today_charging(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_today_charging property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # todayCharging=100 → 10.0 kWh (÷10)
+        assert inverter.energy_today_charging == 10.0
+
+    def test_energy_today_discharging(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_today_discharging property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # todayDischarging=80 → 8.0 kWh (÷10)
+        assert inverter.energy_today_discharging == 8.0
+
+    def test_energy_today_import(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_today_import property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # todayImport=50 → 5.0 kWh (÷10)
+        assert inverter.energy_today_import == 5.0
+
+    def test_energy_today_export(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_today_export property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # todayExport=30 → 3.0 kWh (÷10)
+        assert inverter.energy_today_export == 3.0
+
+    def test_energy_today_usage(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_today_usage property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # todayUsage=150 → 15.0 kWh (÷10)
+        assert inverter.energy_today_usage == 15.0
+
+    def test_energy_lifetime_charging(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_lifetime_charging property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # totalCharging=20000 → 2000.0 kWh (÷10)
+        assert inverter.energy_lifetime_charging == 2000.0
+
+    def test_energy_lifetime_discharging(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_lifetime_discharging property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # totalDischarging=18000 → 1800.0 kWh (÷10)
+        assert inverter.energy_lifetime_discharging == 1800.0
+
+    def test_energy_lifetime_import(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_lifetime_import property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # totalImport=10000 → 1000.0 kWh (÷10)
+        assert inverter.energy_lifetime_import == 1000.0
+
+    def test_energy_lifetime_export(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_lifetime_export property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # totalExport=8000 → 800.0 kWh (÷10)
+        assert inverter.energy_lifetime_export == 800.0
+
+    def test_energy_lifetime_usage(
+        self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
+    ) -> None:
+        """Test energy_lifetime_usage property."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter._energy = sample_energy
+
+        # totalUsage=30000 → 3000.0 kWh (÷10)
+        assert inverter.energy_lifetime_usage == 3000.0
+
+    def test_all_energy_properties_without_data(self, mock_client: LuxpowerClient) -> None:
+        """Test all energy properties return 0.0 without data."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Today's energy
+        assert inverter.energy_today_charging == 0.0
+        assert inverter.energy_today_discharging == 0.0
+        assert inverter.energy_today_import == 0.0
+        assert inverter.energy_today_export == 0.0
+        assert inverter.energy_today_usage == 0.0
+
+        # Lifetime energy
+        assert inverter.energy_lifetime_charging == 0.0
+        assert inverter.energy_lifetime_discharging == 0.0
+        assert inverter.energy_lifetime_import == 0.0
+        assert inverter.energy_lifetime_export == 0.0
+        assert inverter.energy_lifetime_usage == 0.0
+
 
 class TestInverterBatteries:
     """Test inverter battery bank management."""
