@@ -21,8 +21,6 @@ To run these tests:
 from __future__ import annotations
 
 import os
-import sys
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
@@ -33,9 +31,6 @@ env_path = Path(__file__).parent.parent.parent / ".env"
 if env_path.exists():
     load_dotenv(env_path)
 
-# Import after loading .env
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from pylxpweb import LuxpowerClient  # noqa: E402
 from pylxpweb.constants import MAX_TRANSIENT_ERROR_RETRIES  # noqa: E402
 from pylxpweb.devices.station import Station  # noqa: E402
@@ -44,7 +39,6 @@ from pylxpweb.exceptions import LuxpowerAPIError  # noqa: E402
 # Load credentials from environment
 LUXPOWER_USERNAME = os.getenv("LUXPOWER_USERNAME")
 LUXPOWER_PASSWORD = os.getenv("LUXPOWER_PASSWORD")
-LUXPOWER_BASE_URL = os.getenv("LUXPOWER_BASE_URL", "https://monitor.eg4electronics.com")
 
 # Skip all tests if credentials are not provided
 pytestmark = [
@@ -54,17 +48,6 @@ pytestmark = [
         reason="Integration tests require LUXPOWER_USERNAME and LUXPOWER_PASSWORD env vars",
     ),
 ]
-
-
-@pytest.fixture
-async def client() -> AsyncGenerator[LuxpowerClient, None]:
-    """Create authenticated client for testing."""
-    async with LuxpowerClient(
-        username=LUXPOWER_USERNAME,
-        password=LUXPOWER_PASSWORD,
-        base_url=LUXPOWER_BASE_URL,
-    ) as client:
-        yield client
 
 
 @pytest.mark.integration
