@@ -106,6 +106,8 @@ class LuxpowerClient:
         self._session_id: str | None = None
         self._session_expires: datetime | None = None
         self._user_id: int | None = None
+        # Account level: "guest", "viewer", "operator", "owner", "installer"
+        self._account_level: str | None = None
 
         # Response cache with TTL configuration
         self._response_cache: dict[str, dict[str, Any]] = {}
@@ -264,6 +266,28 @@ class LuxpowerClient:
         if self._firmware_endpoints is None:
             self._firmware_endpoints = FirmwareEndpoints(self)
         return self._firmware_endpoints
+
+    @property
+    def account_level(self) -> str | None:
+        """Get detected account permission level.
+
+        Returns:
+            Account level: "guest", "viewer", "operator", "owner", "installer",
+            or None if not detected.
+
+        Note:
+            This is automatically detected after login by checking device endUser fields.
+            - "guest": Read-only access, parameter read/write blocked
+            - "viewer"/"operator": Limited access, control operations may be blocked
+            - "owner"/"installer": Full access to all operations
+
+        Example:
+            >>> async with LuxpowerClient(username, password) as client:
+            >>>     print(f"Account level: {client.account_level}")
+            >>>     if client.account_level in ("guest", "viewer", "operator"):
+            >>>         print("Control operations may be restricted")
+        """
+        return self._account_level
 
     async def _apply_backoff(self) -> None:
         """Apply exponential backoff delay before API requests."""
@@ -544,6 +568,9 @@ class LuxpowerClient:
         self._user_id = login_data.userId
         _LOGGER.info("Login successful, session expires at %s", self._session_expires)
 
+        # Detect account level from endUser field
+        await self._detect_account_level()
+
         return login_data
 
     async def _ensure_authenticated(self) -> None:
@@ -551,6 +578,56 @@ class LuxpowerClient:
         if not self._session_expires or datetime.now() >= self._session_expires:
             _LOGGER.info("Session expired or missing, re-authenticating")
             await self.login()
+
+    async def _detect_account_level(self) -> None:
+        """Detect account permission level from device list endUser field.
+
+        This checks the endUser field from the first available device to determine
+        the account type. The detection is done once after login and cached.
+
+        Account levels:
+        - "guest": Read-only access, parameter read/write blocked
+        - "viewer" or username: Limited access, control operations may be blocked
+        - "installer": Full access to all operations
+
+        Note:
+            If endUser is a username (not "guest"), we classify it as "viewer/operator"
+            level since it's neither guest nor installer. This may indicate limited
+            control permissions.
+        """
+        if self._account_level is not None:
+            return  # Already detected
+
+        try:
+            # Get plants to find a valid plant ID
+            plants_response = await self.api.plants.get_plants()
+            if not plants_response.rows:
+                _LOGGER.warning("No plants found, cannot detect account level")
+                return
+
+            # Get devices for first plant
+            devices_response = await self.api.devices.get_devices(plants_response.rows[0].plantId)
+            if not devices_response.rows:
+                _LOGGER.warning("No devices found, cannot detect account level")
+                return
+
+            # Check endUser field from first device
+            end_user = devices_response.rows[0].endUser
+            if end_user == "guest":
+                self._account_level = "guest"
+            elif end_user and ("installer" in end_user.lower()):
+                self._account_level = "installer"
+            elif end_user and end_user != "":
+                # Has endUser value but not guest or installer - likely viewer/operator
+                self._account_level = "viewer"
+            else:
+                # No endUser field or empty - assume owner (backward compatibility)
+                self._account_level = "owner"
+
+            _LOGGER.info("Detected account level: %s (endUser=%s)", self._account_level, end_user)
+
+        except Exception as err:
+            _LOGGER.warning("Failed to detect account level: %s", err)
 
     # Cache Invalidation for Date/Hour Boundaries
 

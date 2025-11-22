@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pylxpweb import LuxpowerClient  # noqa: E402
 from pylxpweb.devices import Station  # noqa: E402
 from pylxpweb.devices.inverters import HybridInverter  # noqa: E402
+from pylxpweb.exceptions import LuxpowerAPIError  # noqa: E402
 
 # Load credentials from environment
 LUXPOWER_USERNAME = os.getenv("LUXPOWER_USERNAME")
@@ -92,12 +93,21 @@ class TestParameterReadWrite:
         inverter = stations[0].all_inverters[0]
 
         # Read function enable register (register 21)
-        params = await inverter.read_parameters(21, 1)
+        try:
+            params = await inverter.read_parameters(21, 1)
 
-        # Should have parsed parameter names (not raw register keys)
-        assert len(params) > 0
-        # Register 21 contains function enable flags
-        assert any("FUNC" in str(k) for k in params)
+            # Should have parsed parameter names (not raw register keys)
+            assert len(params) > 0
+            # Register 21 contains function enable flags
+            assert any("FUNC" in str(k) for k in params)
+        except LuxpowerAPIError as err:
+            # If apiBlocked and account is viewer/operator, skip test
+            if "apiBlocked" in str(err) and client.account_level in ("guest", "viewer", "operator"):
+                pytest.skip(
+                    f"Parameter read blocked for {client.account_level} account - "
+                    "requires owner/installer permissions"
+                )
+            raise  # Re-raise if different error or unexpected account level
 
     # NOTE: write_parameters test removed because:
     # 1. Register 21 controls critical function enables (standby, EPS, etc.)
@@ -145,28 +155,38 @@ class TestSOCLimits:
         stations = await Station.load_all(client)
         inverter = stations[0].all_inverters[0]
 
-        # Refresh parameters and read current limits
-        await inverter.refresh(include_parameters=True)
-        original_limits = inverter.battery_soc_limits
-        # Convert to int if string
-        on_grid_val = original_limits["on_grid_limit"]
-        original_on_grid = int(on_grid_val) if isinstance(on_grid_val, str) else on_grid_val
-
         try:
-            # Make a small safe change (±1%)
-            new_limit = original_on_grid + 1 if original_on_grid < 90 else original_on_grid - 1
+            # Refresh parameters and read current limits
+            await inverter.refresh(include_parameters=True)
+            original_limits = inverter.battery_soc_limits
+            # Convert to int if string
+            on_grid_val = original_limits["on_grid_limit"]
+            original_on_grid = int(on_grid_val) if isinstance(on_grid_val, str) else on_grid_val
 
-            # Set new limit - verify API call succeeds
-            success = await inverter.set_battery_soc_limits(on_grid_limit=new_limit)
-            assert success is True
+            try:
+                # Make a small safe change (±1%)
+                new_limit = original_on_grid + 1 if original_on_grid < 90 else original_on_grid - 1
 
-            # Note: We don't verify the value is applied because the inverter
-            # may have validation rules (e.g., must be multiple of 5, min distance
-            # from current SOC, etc.) that cause it to reject or adjust the value
+                # Set new limit - verify API call succeeds
+                success = await inverter.set_battery_soc_limits(on_grid_limit=new_limit)
+                assert success is True
 
-        finally:
-            # ALWAYS restore original value
-            await inverter.set_battery_soc_limits(on_grid_limit=original_on_grid)
+                # Note: We don't verify the value is applied because the inverter
+                # may have validation rules (e.g., must be multiple of 5, min distance
+                # from current SOC, etc.) that cause it to reject or adjust the value
+
+            finally:
+                # ALWAYS restore original value
+                await inverter.set_battery_soc_limits(on_grid_limit=original_on_grid)
+
+        except LuxpowerAPIError as err:
+            # If apiBlocked and account is viewer/operator, skip test
+            if "apiBlocked" in str(err) and client.account_level in ("guest", "viewer", "operator"):
+                pytest.skip(
+                    f"SOC limit control blocked for {client.account_level} account - "
+                    "requires owner/installer permissions"
+                )
+            raise  # Re-raise if different error or unexpected account level
 
 
 @pytest.mark.asyncio
@@ -408,29 +428,39 @@ class TestWorkingModeControls:
         stations = await Station.load_all(client)
         inverter = stations[0].all_inverters[0]
 
-        # Read current state
-        original_status = await inverter.get_ac_charge_mode_status()
-
         try:
-            # Toggle AC charge mode - verify API call succeeds
-            new_state = not original_status
+            # Read current state
+            original_status = await inverter.get_ac_charge_mode_status()
 
-            if new_state:
-                success = await inverter.enable_ac_charge_mode()
-            else:
-                success = await inverter.disable_ac_charge_mode()
+            try:
+                # Toggle AC charge mode - verify API call succeeds
+                new_state = not original_status
 
-            assert success is True
+                if new_state:
+                    success = await inverter.enable_ac_charge_mode()
+                else:
+                    success = await inverter.disable_ac_charge_mode()
 
-            # Note: We don't verify the value is applied because the inverter
-            # may have validation rules or delays that prevent immediate changes
+                assert success is True
 
-        finally:
-            # ALWAYS restore original state
-            if original_status:
-                await inverter.enable_ac_charge_mode()
-            else:
-                await inverter.disable_ac_charge_mode()
+                # Note: We don't verify the value is applied because the inverter
+                # may have validation rules or delays that prevent immediate changes
+
+            finally:
+                # ALWAYS restore original state
+                if original_status:
+                    await inverter.enable_ac_charge_mode()
+                else:
+                    await inverter.disable_ac_charge_mode()
+
+        except LuxpowerAPIError as err:
+            # If apiBlocked and account is viewer/operator, skip test
+            if "apiBlocked" in str(err) and client.account_level in ("guest", "viewer", "operator"):
+                pytest.skip(
+                    f"AC charge control blocked for {client.account_level} account - "
+                    "requires owner/installer permissions"
+                )
+            raise  # Re-raise if different error or unexpected account level
 
     async def test_pv_charge_priority_toggle_safe(self, client: LuxpowerClient) -> None:
         """Test PV charge priority enable/disable - verify API calls succeed."""
@@ -466,55 +496,75 @@ class TestWorkingModeControls:
         stations = await Station.load_all(client)
         inverter = stations[0].all_inverters[0]
 
-        # Read current state
-        original_status = await inverter.get_forced_discharge_status()
-
         try:
-            # Toggle forced discharge mode - verify API call succeeds
-            new_state = not original_status
+            # Read current state
+            original_status = await inverter.get_forced_discharge_status()
 
-            if new_state:
-                success = await inverter.enable_forced_discharge()
-            else:
-                success = await inverter.disable_forced_discharge()
+            try:
+                # Toggle forced discharge mode - verify API call succeeds
+                new_state = not original_status
 
-            assert success is True
+                if new_state:
+                    success = await inverter.enable_forced_discharge()
+                else:
+                    success = await inverter.disable_forced_discharge()
 
-            # Note: We don't verify the value is applied because the inverter
-            # may have validation rules or delays that prevent immediate changes
+                assert success is True
 
-        finally:
-            # ALWAYS restore original state
-            if original_status:
-                await inverter.enable_forced_discharge()
-            else:
-                await inverter.disable_forced_discharge()
+                # Note: We don't verify the value is applied because the inverter
+                # may have validation rules or delays that prevent immediate changes
+
+            finally:
+                # ALWAYS restore original state
+                if original_status:
+                    await inverter.enable_forced_discharge()
+                else:
+                    await inverter.disable_forced_discharge()
+
+        except LuxpowerAPIError as err:
+            # If apiBlocked and account is viewer/operator, skip test
+            if "apiBlocked" in str(err) and client.account_level in ("guest", "viewer", "operator"):
+                pytest.skip(
+                    f"Forced discharge control blocked for {client.account_level} account - "
+                    "requires owner/installer permissions"
+                )
+            raise  # Re-raise if different error or unexpected account level
 
     async def test_peak_shaving_mode_toggle_safe(self, client: LuxpowerClient) -> None:
         """Test peak shaving mode enable/disable - verify API calls succeed."""
         stations = await Station.load_all(client)
         inverter = stations[0].all_inverters[0]
 
-        # Read current state
-        original_status = await inverter.get_peak_shaving_mode_status()
-
         try:
-            # Toggle peak shaving mode - verify API call succeeds
-            new_state = not original_status
+            # Read current state
+            original_status = await inverter.get_peak_shaving_mode_status()
 
-            if new_state:
-                success = await inverter.enable_peak_shaving_mode()
-            else:
-                success = await inverter.disable_peak_shaving_mode()
+            try:
+                # Toggle peak shaving mode - verify API call succeeds
+                new_state = not original_status
 
-            assert success is True
+                if new_state:
+                    success = await inverter.enable_peak_shaving_mode()
+                else:
+                    success = await inverter.disable_peak_shaving_mode()
 
-            # Note: We don't verify the value is applied because the inverter
-            # may have validation rules or delays that prevent immediate changes
+                assert success is True
 
-        finally:
-            # ALWAYS restore original state
-            if original_status:
-                await inverter.enable_peak_shaving_mode()
-            else:
-                await inverter.disable_peak_shaving_mode()
+                # Note: We don't verify the value is applied because the inverter
+                # may have validation rules or delays that prevent immediate changes
+
+            finally:
+                # ALWAYS restore original state
+                if original_status:
+                    await inverter.enable_peak_shaving_mode()
+                else:
+                    await inverter.disable_peak_shaving_mode()
+
+        except LuxpowerAPIError as err:
+            # If apiBlocked and account is viewer/operator, skip test
+            if "apiBlocked" in str(err) and client.account_level in ("guest", "viewer", "operator"):
+                pytest.skip(
+                    f"Peak shaving control blocked for {client.account_level} account - "
+                    "requires owner/installer permissions"
+                )
+            raise  # Re-raise if different error or unexpected account level

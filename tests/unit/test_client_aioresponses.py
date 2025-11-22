@@ -25,13 +25,23 @@ class TestAuthentication:
 
     @pytest.mark.asyncio
     async def test_login_success(
-        self, mocked_api: aioresponses, login_response: dict[str, Any]
+        self, mocked_api: aioresponses, login_response: dict[str, Any], plants_response: dict[str, Any]
     ) -> None:
         """Test successful login."""
         # Mock the API endpoint
         mocked_api.post(
             f"{BASE_URL}/WManage/api/login",
             payload=login_response,
+        )
+
+        # Mock account level detection calls
+        mocked_api.post(
+            f"{BASE_URL}/WManage/web/config/plant/list/viewer",
+            payload=plants_response,
+        )
+        mocked_api.post(
+            f"{BASE_URL}/WManage/api/inverterOverview/list",
+            payload={"success": True, "total": 1, "rows": [{"serialNum": "1234567890", "endUser": "owner"}]},
         )
 
         # Test the client
@@ -64,12 +74,22 @@ class TestAuthentication:
 
     @pytest.mark.asyncio
     async def test_context_manager(
-        self, mocked_api: aioresponses, login_response: dict[str, Any]
+        self, mocked_api: aioresponses, login_response: dict[str, Any], plants_response: dict[str, Any]
     ) -> None:
         """Test client as async context manager."""
         mocked_api.post(
             f"{BASE_URL}/WManage/api/login",
             payload=login_response,
+        )
+
+        # Mock account level detection calls
+        mocked_api.post(
+            f"{BASE_URL}/WManage/web/config/plant/list/viewer",
+            payload=plants_response,
+        )
+        mocked_api.post(
+            f"{BASE_URL}/WManage/api/inverterOverview/list",
+            payload={"success": True, "total": 1, "rows": [{"serialNum": "1234567890", "endUser": "owner"}]},
         )
 
         async with LuxpowerClient("testuser", "testpass") as client:
@@ -93,7 +113,17 @@ class TestPlantDiscovery:
             payload=login_response,
         )
 
-        # Mock plants list
+        # Mock account level detection calls (called during login)
+        mocked_api.post(
+            f"{BASE_URL}/WManage/web/config/plant/list/viewer",
+            payload=plants_response,
+        )
+        mocked_api.post(
+            f"{BASE_URL}/WManage/api/inverterOverview/list",
+            payload={"success": True, "total": 1, "rows": [{"serialNum": "1234567890", "endUser": "owner"}]},
+        )
+
+        # Mock plants list (called by test explicitly)
         mocked_api.post(
             f"{BASE_URL}/WManage/web/config/plant/list/viewer",
             payload=plants_response,

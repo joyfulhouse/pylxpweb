@@ -381,6 +381,7 @@ class InverterOverviewItem(BaseModel):
     parallelIndex: str
     parallelInfo: str
     parallelModel: str
+    endUser: str | None = None  # Account type: "guest", owner username, or installer name
 
     @field_serializer("serialNum")
     def serialize_serial(self, value: str) -> str:
