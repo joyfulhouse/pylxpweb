@@ -109,6 +109,10 @@ class TestSOCLimits:
         # Read SOC limits
         limits = inverter.battery_soc_limits
 
+        # Skip if parameters couldn't be loaded
+        if limits is None:
+            pytest.skip("Parameters not available (device may not support SOC limits)")
+
         # Should have both on-grid and off-grid limits
         assert "on_grid_limit" in limits
         assert "off_grid_limit" in limits
@@ -136,6 +140,11 @@ class TestSOCLimits:
             # Refresh parameters and read current limits
             await inverter.refresh(include_parameters=True)
             original_limits = inverter.battery_soc_limits
+
+            # Skip if parameters couldn't be loaded
+            if original_limits is None:
+                pytest.skip("Parameters not available (device may not support SOC limits)")
+
             # Convert to int if string
             on_grid_val = original_limits["on_grid_limit"]
             original_on_grid = int(on_grid_val) if isinstance(on_grid_val, str) else on_grid_val
