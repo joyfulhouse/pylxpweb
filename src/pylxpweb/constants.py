@@ -1672,17 +1672,6 @@ DEVICE_TYPE_INVERTER = 6  # Standard inverter
 DEVICE_TYPE_GRIDBOSS = 9  # GridBOSS/MID device (parallel group controller)
 
 # ==============================================================================
-# Cache Configuration Constants
-# ==============================================================================
-# Time window (in minutes) before hour boundary to invalidate cache
-# This ensures fresh data is fetched near the hour mark when energy values reset
-CACHE_INVALIDATION_WINDOW_MINUTES = 5
-
-# Minimum interval (in minutes) between cache invalidations
-# Prevents excessive cache clearing during rapid refresh cycles
-MIN_CACHE_INVALIDATION_INTERVAL_MINUTES = 10
-
-# ==============================================================================
 # Backoff and Retry Constants
 # ==============================================================================
 # Base delay (in seconds) for exponential backoff on API errors

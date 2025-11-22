@@ -380,16 +380,10 @@ class Station(BaseDevice):
         4. Does NOT reload device hierarchy (use load() for that)
 
         Cache Invalidation:
-            Automatically clears API caches within 5 minutes of hour boundaries
-            to ensure fresh data at midnight (daily energy reset).
+            Cache is automatically invalidated on the first request after any
+            hour boundary (handled by LuxpowerClient._request method). This
+            ensures fresh data at midnight for daily energy resets.
         """
-        # Check if cache invalidation is needed before refreshing
-        if self._client.should_invalidate_cache:
-            _LOGGER.info(
-                "Station %s: Cache invalidation needed before hour boundary, clearing all caches",
-                self.id,
-            )
-            self._client.clear_all_caches()
 
         tasks = []
 

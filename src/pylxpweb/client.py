@@ -28,9 +28,7 @@ from .api_namespace import APINamespace
 from .constants import (
     BACKOFF_BASE_DELAY_SECONDS,
     BACKOFF_MAX_DELAY_SECONDS,
-    CACHE_INVALIDATION_WINDOW_MINUTES,
     HTTP_UNAUTHORIZED,
-    MIN_CACHE_INVALIDATION_INTERVAL_MINUTES,
 )
 from .endpoints import (
     AnalyticsEndpoints,
@@ -131,8 +129,10 @@ class LuxpowerClient:
         self._current_backoff_delay: float = 0.0
         self._consecutive_errors: int = 0
 
-        # Cache invalidation for boundary handling
-        self._last_cache_invalidation: datetime | None = None
+        # Hour tracking for automatic cache invalidation at boundaries
+        # Invalidates cache on first request after hour changes to ensure
+        # fresh data at date boundaries (especially midnight for daily energy values)
+        self._last_request_hour: int | None = None
 
         # API namespace (new v0.2.0 interface)
         self._api_namespace: APINamespace | None = None
@@ -438,6 +438,10 @@ class LuxpowerClient:
     ) -> dict[str, Any]:
         """Make an HTTP request to the API.
 
+        Automatically invalidates cache on first request after hour boundary
+        to ensure fresh data at date rollovers (especially midnight for daily
+        energy values).
+
         Args:
             method: HTTP method (GET, POST, etc.)
             endpoint: API endpoint (will be joined with base_url)
@@ -453,6 +457,19 @@ class LuxpowerClient:
             LuxpowerConnectionError: If connection fails
             LuxpowerAPIError: If API returns an error
         """
+        # Auto-invalidate cache on first request after hour change
+        # This ensures fresh data after boundaries, especially midnight
+        current_hour = datetime.now().hour
+        if self._last_request_hour is not None and current_hour != self._last_request_hour:
+            _LOGGER.info(
+                "Hour boundary crossed (hour %d → %d), invalidating all caches",
+                self._last_request_hour,
+                current_hour,
+            )
+            self.clear_cache()
+
+        self._last_request_hour = current_hour
+
         # Check cache if enabled
         if cache_key and cache_endpoint and self._is_cache_valid(cache_key, cache_endpoint):
             cached = self._get_cached_response(cache_key)
@@ -628,94 +645,3 @@ class LuxpowerClient:
 
         except Exception as err:
             _LOGGER.warning("Failed to detect account level: %s", err)
-
-    # Cache Invalidation for Date/Hour Boundaries
-
-    @property
-    def should_invalidate_cache(self) -> bool:
-        """Check if cache should be invalidated for hour/date boundaries.
-
-        This implements proactive cache clearing within 5 minutes of the top
-        of each hour to ensure fresh data at date boundaries (midnight).
-
-        Returns:
-            True if cache should be cleared now, False otherwise.
-
-        Algorithm:
-            1. Within 5 minutes of hour boundary (XX:55-XX:59): Consider invalidation
-            2. First run: Invalidate immediately if within window
-            3. Hour crossed: Always invalidate
-            4. Rate limit: Minimum 10 minutes between invalidations
-
-        See Also:
-            docs/SCALING_GUIDE.md - Cache invalidation strategy
-        """
-        now = datetime.now()
-        minutes_to_hour = 60 - now.minute
-
-        # Outside the window before hour boundary
-        if minutes_to_hour > CACHE_INVALIDATION_WINDOW_MINUTES:
-            return False
-
-        # First run - invalidate if within window
-        if self._last_cache_invalidation is None:
-            _LOGGER.debug(
-                "First run within %d minutes of hour boundary, will invalidate cache",
-                minutes_to_hour,
-            )
-            return True
-
-        # Check if we've crossed into a new hour
-        last_hour = self._last_cache_invalidation.hour
-        current_hour = now.hour
-        if current_hour != last_hour:
-            _LOGGER.debug(
-                "Hour boundary crossed from %d:xx to %d:xx, will invalidate cache",
-                last_hour,
-                current_hour,
-            )
-            return True
-
-        # Within window but haven't invalidated recently
-        time_since_last = now - self._last_cache_invalidation
-        min_interval = timedelta(minutes=MIN_CACHE_INVALIDATION_INTERVAL_MINUTES)
-        should_invalidate = time_since_last >= min_interval
-
-        if should_invalidate:
-            _LOGGER.debug(
-                "Within %d minutes of hour boundary and %s since last invalidation, "
-                "will invalidate cache",
-                minutes_to_hour,
-                time_since_last,
-            )
-
-        return should_invalidate
-
-    def clear_all_caches(self) -> None:
-        """Clear all API response caches.
-
-        This method clears:
-        - Response cache (runtime, energy, battery data)
-        - Endpoint-specific caches (if accessible)
-
-        Call this before hour boundaries to ensure fresh data at date rollover.
-
-        See Also:
-            should_invalidate_cache - Property that determines when to call this method
-        """
-        # Clear main response cache
-        self._response_cache.clear()
-
-        # Clear endpoint caches if available
-        if self._api_namespace:
-            if hasattr(self.api.devices, "_response_cache"):
-                self.api.devices._response_cache.clear()
-            if hasattr(self.api.plants, "_response_cache"):
-                self.api.plants._response_cache.clear()
-
-        self._last_cache_invalidation = datetime.now()
-
-        _LOGGER.info(
-            "Cleared all API caches at %s to prevent date rollover issues",
-            self._last_cache_invalidation.strftime("%Y-%m-%d %H:%M:%S"),
-        )

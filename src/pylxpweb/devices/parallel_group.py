@@ -144,10 +144,20 @@ class ParallelGroup:
     # ===========================================
     # Energy Properties - Today
     # ===========================================
+    # Daily energy values reset at midnight (API server time).
+    # The client automatically invalidates cache on hour boundaries
+    # to minimize stale data, but cannot control API reset timing.
 
     @property
     def today_yielding(self) -> float:
         """Get today's PV generation in kWh.
+
+        This value resets daily at midnight (API-controlled timing).
+        The client invalidates cache on hour boundaries, but values
+        shortly after midnight may reflect stale API data.
+
+        For Home Assistant: Use SensorStateClass.TOTAL_INCREASING
+        to let HA's statistics handle resets automatically.
 
         Returns:
             Today's yielding (÷10 for kWh), or 0.0 if no data.

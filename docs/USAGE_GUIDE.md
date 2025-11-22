@@ -523,16 +523,39 @@ await client.close()  # Easy to forget
 
 ### 6. Cache-Aware Design
 
+The client automatically manages caching with TTL and hour-boundary invalidation:
+
 ```python
 # Inverter refresh caches data with TTL:
-# - Runtime data: 30 seconds
-# - Energy data: 5 minutes
-# - Parameters: 1 hour
+# - Runtime data: 20 seconds
+# - Energy data: 20 seconds
+# - Battery data: 5 minutes
+# - Parameters: 2 minutes
 
 await inverter.refresh()  # Fetches data
 await inverter.refresh()  # Uses cache (if within TTL)
 await inverter.refresh(force=True)  # Bypasses cache
+
+# Cache automatically cleared on hour boundaries (e.g., midnight)
+# to ensure fresh data for daily energy resets
 ```
+
+**Important: Daily Energy Values**
+
+Properties like `today_yielding`, `today_charging`, etc. reset at midnight (API server time):
+
+```python
+# These values accumulate throughout the day and reset at midnight:
+print(f"Today's PV: {inverter.today_yielding} kWh")  # Resets daily
+print(f"Today's Charging: {inverter.today_charging} kWh")  # Resets daily
+
+# Lifetime values never reset:
+print(f"Lifetime PV: {inverter.lifetime_yielding} kWh")  # Monotonically increasing
+```
+
+**Note**: The API controls reset timing, which may not align exactly with midnight in your timezone. The client invalidates cache on hour boundaries to minimize stale data, but values shortly after midnight may temporarily reflect the previous day's total until the API backend resets.
+
+**For Home Assistant integrations**: Use `SensorStateClass.TOTAL_INCREASING` for daily energy sensors. Home Assistant's statistics system automatically detects value decreases and handles them as resets, providing accurate long-term statistics.
 
 ### 7. Use Type Hints
 
