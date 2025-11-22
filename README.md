@@ -41,9 +41,12 @@ uv sync --all-extras --dev
 
 ## Quick Start
 
+### Basic Usage with Device Objects
+
 ```python
 import asyncio
 from pylxpweb import LuxpowerClient
+from pylxpweb.devices.station import Station
 
 async def main():
     # Create client with credentials
@@ -53,41 +56,91 @@ async def main():
         password="your_password",
         base_url="https://monitor.eg4electronics.com"  # or us.luxpowertek.com, eu.luxpowertek.com
     ) as client:
-        # Get all stations/plants using the API namespace
-        plants = await client.api.plants.get_plants()
-        print(f"Found {len(plants.rows)} stations")
+        # Load all stations with device hierarchy
+        stations = await Station.load_all(client)
+        print(f"Found {len(stations)} stations")
 
-        # Select first station
-        plant = plants.rows[0]
-        plant_id = plant.plantId
+        # Work with first station
+        station = stations[0]
+        print(f"\nStation: {station.name}")
 
-        # Get devices for this station
-        devices = await client.api.devices.get_devices(str(plant_id))
+        # Access inverters - all have properly-scaled properties
+        for inverter in station.all_inverters:
+            await inverter.refresh()  # Fetch latest data
 
-        # Get runtime data for each inverter
-        for device in devices.rows:
-            if device.deviceType == 6:  # Inverter type
-                serial = device.serialNum
+            print(f"\n{inverter.model} {inverter.serial_number}:")
 
-                # Get real-time data using API namespace
-                runtime = await client.api.devices.get_inverter_runtime(serial)
-                energy = await client.api.devices.get_inverter_energy_info(serial)
+            # All properties return properly-scaled values
+            print(f"  PV Power: {inverter.pv_total_power}W")
+            print(f"  Battery: {inverter.battery_soc}% @ {inverter.battery_voltage}V")
+            print(f"  Grid: {inverter.grid_voltage_r}V @ {inverter.grid_frequency}Hz")
+            print(f"  Inverter Power: {inverter.inverter_power}W")
+            print(f"  To Grid: {inverter.power_to_grid}W")
+            print(f"  To User: {inverter.power_to_user}W")
+            print(f"  Temperature: {inverter.inverter_temperature}°C")
+            print(f"  Today: {inverter.total_energy_today}kWh")
+            print(f"  Lifetime: {inverter.total_energy_lifetime}kWh")
 
-                print(f"\nInverter {serial}:")
-                print(f"  AC Power: {runtime.pac}W")
-                print(f"  Battery SOC: {runtime.soc}%")
-                print(f"  Daily Energy: {energy.eToday}kWh")
-                print(f"  Grid Power: {runtime.pToGrid}W")
+            # Access battery bank if available
+            if inverter.battery_bank:
+                bank = inverter.battery_bank
+                print(f"\n  Battery Bank:")
+                print(f"    Voltage: {bank.voltage}V")
+                print(f"    SOC: {bank.soc}%")
+                print(f"    Charge Power: {bank.charge_power}W")
+                print(f"    Discharge Power: {bank.discharge_power}W")
+                print(f"    Capacity: {bank.current_capacity}/{bank.max_capacity} Ah")
 
-                # Get battery information
-                batteries = await client.api.devices.get_battery_info(serial)
-                for battery_module in batteries.batteryArray:
-                    key = battery_module.batteryKey
-                    soc = battery_module.soc
-                    voltage = battery_module.totalVoltage / 100  # Scale voltage
-                    print(f"  Battery {key}: {soc}% @ {voltage}V")
+                # Individual battery modules
+                for battery in bank.batteries:
+                    print(f"    Battery {battery.battery_index + 1}:")
+                    print(f"      Voltage: {battery.voltage}V")
+                    print(f"      Current: {battery.current}A")
+                    print(f"      SOC: {battery.soc}%")
+                    print(f"      Temp: {battery.max_cell_temp}°C")
+
+        # Access GridBOSS (MID) devices if present
+        for group in station.parallel_groups:
+            if group.mid_device:
+                mid = group.mid_device
+                await mid.refresh()
+
+                print(f"\nGridBOSS {mid.serial_number}:")
+                print(f"  Grid: {mid.grid_voltage}V @ {mid.grid_frequency}Hz")
+                print(f"  Grid Power: {mid.grid_power}W")
+                print(f"  UPS Power: {mid.ups_power}W")
+                print(f"  Load L1: {mid.load_l1_power}W @ {mid.load_l1_current}A")
+                print(f"  Load L2: {mid.load_l2_power}W @ {mid.load_l2_current}A")
 
 asyncio.run(main())
+```
+
+### Low-Level API Access
+
+For direct API access without device objects:
+
+```python
+async with LuxpowerClient(username, password) as client:
+    # Get stations
+    plants = await client.api.plants.get_plants()
+    plant_id = plants.rows[0].plantId
+
+    # Get devices
+    devices = await client.api.devices.get_devices(str(plant_id))
+
+    # Get runtime data for first inverter
+    inverter = devices.rows[0]
+    serial = inverter.serialNum
+
+    # Fetch data (returns Pydantic models)
+    runtime = await client.api.devices.get_inverter_runtime(serial)
+    energy = await client.api.devices.get_inverter_energy(serial)
+
+    # NOTE: Raw API returns scaled integers - you must scale manually
+    print(f"AC Power: {runtime.pac}W")  # No scaling needed for power
+    print(f"Grid Voltage: {runtime.vacr / 10}V")  # Must divide by 10
+    print(f"Grid Frequency: {runtime.fac / 100}Hz")  # Must divide by 100
+    print(f"Battery Voltage: {runtime.vBat / 10}V")  # Must divide by 10
 ```
 
 ## Advanced Usage
@@ -256,18 +309,40 @@ pylxpweb/
 
 ## Data Scaling
 
-The API returns scaled integer values that must be converted:
+### Automatic Scaling with Device Properties (Recommended)
 
-| Data Type | Scaling | Example |
-|-----------|---------|---------|
-| Voltage | ÷ 100 | 5100 → 51.00V |
-| Current | ÷ 100 | 1500 → 15.00A |
-| Frequency | ÷ 100 | 5998 → 59.98Hz |
-| Cell Voltage | ÷ 1000 | 3350 → 3.350V |
-| Power | none | 1030 → 1030W |
-| Temperature | none | 39 → 39°C |
+**Device objects automatically handle all scaling** - just use the properties:
 
-See [API Reference](docs/api/LUXPOWER_API.md#data-scaling-reference) for complete details.
+```python
+# ✅ RECOMMENDED: Use device properties (automatically scaled)
+await inverter.refresh()
+voltage = inverter.grid_voltage_r  # Returns 241.8 (already scaled)
+frequency = inverter.grid_frequency  # Returns 59.98 (already scaled)
+power = inverter.pv_total_power  # Returns 1500 (already scaled)
+```
+
+All device classes (`BaseInverter`, `MIDDevice`, `Battery`, `BatteryBank`, `ParallelGroup`) provide properly-scaled properties. **You never need to manually scale values when using device objects.**
+
+### Manual Scaling for Raw API Data
+
+If you use the low-level API directly (not recommended for most users), you must scale values manually:
+
+| Data Type | Scaling | Raw API | Scaled | Property Name |
+|-----------|---------|---------|--------|---------------|
+| Inverter Voltage | ÷10 | 2410 | 241.0V | `grid_voltage_r` |
+| Battery Voltage (Bank) | ÷10 | 539 | 53.9V | `battery_voltage` |
+| Battery Voltage (Module) | ÷100 | 5394 | 53.94V | `voltage` |
+| Cell Voltage | ÷1000 | 3364 | 3.364V | `max_cell_voltage` |
+| Current | ÷100 | 1500 | 15.00A | `grid_l1_current` |
+| Frequency | ÷100 | 5998 | 59.98Hz | `grid_frequency` |
+| Bus Voltage | ÷100 | 3703 | 37.03V | `bus1_voltage` |
+| Power | Direct | 1030 | 1030W | `inverter_power` |
+| Temperature | Direct | 39 | 39°C | `inverter_temperature` |
+| Energy | ÷10 | 184 | 18.4 kWh | `today_yielding` |
+
+**Note**: Different voltage types use different scaling factors. Use device properties to avoid confusion.
+
+See [Scaling Guide](docs/SCALING_GUIDE.md) and [API Reference](docs/api/LUXPOWER_API.md#data-scaling-reference) for complete details.
 
 ## API Endpoints
 
