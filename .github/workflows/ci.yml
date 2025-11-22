@@ -1,8 +1,10 @@
 name: CI
 
+# This workflow runs on PRs only (not on pushes to main).
+# Branch protection requires "CI Success" to pass before merging.
+# This prevents redundant CI runs - tests run once on PR, not again on merge.
+
 on:
-  push:
-    branches: [master, main]
   pull_request:
   workflow_dispatch:
 
