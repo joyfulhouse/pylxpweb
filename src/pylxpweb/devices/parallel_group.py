@@ -106,8 +106,10 @@ class ParallelGroup:
         """
         from contextlib import suppress
 
+        from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError
+
         # Keep existing cached data on error
-        with suppress(Exception):
+        with suppress(LuxpowerAPIError, LuxpowerConnectionError):
             self._energy = await self._client.api.devices.get_parallel_energy(serial_number)
 
     async def get_combined_energy(self) -> dict[str, float]:

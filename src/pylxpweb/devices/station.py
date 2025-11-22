@@ -15,7 +15,11 @@ from typing import TYPE_CHECKING, Any
 
 from pylxpweb.constants import DEVICE_TYPE_GRIDBOSS, parse_hhmm_timezone
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
-from pylxpweb.models import ParallelGroupDeviceItem
+from pylxpweb.models import (
+    InverterOverviewResponse,
+    ParallelGroupDetailsResponse,
+    ParallelGroupDeviceItem,
+)
 
 from .base import BaseDevice
 from .models import DeviceInfo, Entity
@@ -587,146 +591,231 @@ class Station(BaseDevice):
     async def _load_devices(self) -> None:
         """Load device hierarchy from API.
 
-        This method:
-        1. Gets parallel group configuration
-        2. Creates ParallelGroup objects
-        3. Discovers inverters and assigns to groups or standalone list
-        4. Discovers MID devices and assigns to parallel groups
+        This method orchestrates device loading by:
+        1. Getting device list from API
+        2. Finding GridBOSS to query parallel group configuration
+        3. Creating ParallelGroup objects
+        4. Assigning inverters and MID devices to groups or standalone list
         """
-        from .inverters.generic import GenericInverter
-        from .mid_device import MIDDevice
-        from .parallel_group import ParallelGroup
-
         try:
-            # Step 1: Get device list first
-            devices_response = await self._client.api.devices.get_devices(self.id)
+            # Get device list and parallel group configuration
+            devices_response = await self._get_device_list()
+            gridboss_serial = self._find_gridboss(devices_response)
+            group_data = await self._get_parallel_groups(gridboss_serial)
 
-            # Step 2: Find GridBOSS/MID device to query parallel groups
-            gridboss_serial = None
-            if devices_response.rows:
-                for device in devices_response.rows:
-                    if device.deviceType == DEVICE_TYPE_GRIDBOSS:
-                        gridboss_serial = device.serialNum
-                        _LOGGER.debug("Found GridBOSS device: %s", gridboss_serial)
-                        break
+            # Create parallel groups and lookup dictionary
+            groups_lookup = self._create_parallel_groups(group_data, devices_response)
 
-            # Step 3: Query parallel group details if GridBOSS exists
-            group_data = None
-            if gridboss_serial:
-                try:
-                    group_data = await self._client.api.devices.get_parallel_group_details(
-                        gridboss_serial
-                    )
-                except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as e:
-                    _LOGGER.debug("Could not load parallel group details: %s", str(e))
-                    group_data = None
-
-            # Step 4: Create parallel groups from devices with parallelGroup field
-            if group_data and group_data.devices:
-                # Create device lookup dictionary for O(1) access
-                device_lookup = {d.serialNum: d for d in devices_response.rows}
-
-                # Group devices by their parallelGroup field
-                groups_by_name: dict[str, list[ParallelGroupDeviceItem]] = {}
-                for pg_device in group_data.devices:
-                    # Get parallel group name from device list using O(1) lookup
-                    device_info = device_lookup.get(pg_device.serialNum)
-                    if device_info and device_info.parallelGroup:
-                        group_name = device_info.parallelGroup
-                        if group_name not in groups_by_name:
-                            groups_by_name[group_name] = []
-                        groups_by_name[group_name].append(pg_device)
-
-                # Create ParallelGroup objects with lookup dictionary
-                groups_lookup = {}
-                for group_name, devices in groups_by_name.items():
-                    # Use first device serial as reference
-                    first_serial = devices[0].serialNum if devices else ""
-                    group = ParallelGroup(
-                        client=self._client,
-                        station=self,
-                        name=group_name,
-                        first_device_serial=first_serial,
-                    )
-                    self.parallel_groups.append(group)
-                    groups_lookup[group_name] = group
-                    _LOGGER.debug(
-                        "Created parallel group '%s' with %d devices", group_name, len(devices)
-                    )
-
-            # Step 5: Process devices and assign to groups or standalone
-            # Build parallel groups lookup if not already created
-            if not locals().get("groups_lookup"):
-                groups_lookup = {g.name: g for g in self.parallel_groups}
-
-            if not isinstance(devices_response, BaseException) and devices_response.rows:
-                for device_data in devices_response.rows:
-                    serial_num = device_data.serialNum
-                    device_type = device_data.deviceType
-                    # Use deviceTypeText as the model name (e.g., "18KPV", "FlexBOSS21")
-                    # This provides the human-readable model name
-                    model_text = device_data.deviceTypeText
-
-                    if not serial_num:
-                        continue
-
-                    # Get parallel group name
-                    parallel_group_name = device_data.parallelGroup
-
-                    # Handle GridBOSS/MID devices
-                    if device_type == DEVICE_TYPE_GRIDBOSS:
-                        mid_device = MIDDevice(
-                            client=self._client, serial_number=serial_num, model=model_text
-                        )
-
-                        # Assign MID device to parallel group using O(1) lookup
-                        if parallel_group_name:
-                            found_group = groups_lookup.get(parallel_group_name)
-                            if found_group:
-                                found_group.mid_device = mid_device
-                                _LOGGER.debug(
-                                    "Assigned MID device %s to parallel group '%s'",
-                                    serial_num,
-                                    parallel_group_name,
-                                )
-                        else:
-                            _LOGGER.warning(
-                                "MID device %s has no parallel group assignment", serial_num
-                            )
-                        continue
-
-                    # Create inverter object
-                    inverter = GenericInverter(
-                        client=self._client, serial_number=serial_num, model=model_text
-                    )
-
-                    # Assign inverter to parallel group or standalone using O(1) lookup
-                    if parallel_group_name:
-                        found_group = groups_lookup.get(parallel_group_name)
-                        if found_group:
-                            found_group.inverters.append(inverter)
-                            _LOGGER.debug(
-                                "Assigned inverter %s to parallel group '%s'",
-                                serial_num,
-                                parallel_group_name,
-                            )
-                        else:
-                            # If parallel group not found, treat as standalone
-                            self.standalone_inverters.append(inverter)
-                            _LOGGER.debug(
-                                "Parallel group '%s' not found for %s - treating as standalone",
-                                parallel_group_name,
-                                serial_num,
-                            )
-                    else:
-                        # Standalone inverter
-                        self.standalone_inverters.append(inverter)
-                        _LOGGER.debug("Assigned inverter %s as standalone", serial_num)
+            # Assign devices to groups or standalone
+            self._assign_devices(devices_response, groups_lookup)
 
         except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as e:
             # If device loading fails, log and continue
             # Station can still function with empty device lists
             _LOGGER.warning("Failed to load devices for station %s: %s", self.id, e, exc_info=True)
+
+    async def _get_device_list(self) -> InverterOverviewResponse:
+        """Get device list from API.
+
+        Returns:
+            Device list response from API.
+        """
+        return await self._client.api.devices.get_devices(self.id)
+
+    def _find_gridboss(self, devices_response: InverterOverviewResponse) -> str | None:
+        """Find GridBOSS device in device list.
+
+        Args:
+            devices_response: Device list response from API.
+
+        Returns:
+            GridBOSS serial number if found, None otherwise.
+        """
+        if not devices_response.rows:
+            return None
+
+        for device in devices_response.rows:
+            if device.deviceType == DEVICE_TYPE_GRIDBOSS:
+                _LOGGER.debug("Found GridBOSS device: %s", device.serialNum)
+                return device.serialNum
+
+        return None
+
+    async def _get_parallel_groups(
+        self, gridboss_serial: str | None
+    ) -> ParallelGroupDetailsResponse | None:
+        """Get parallel group details if GridBOSS exists.
+
+        Args:
+            gridboss_serial: GridBOSS serial number or None.
+
+        Returns:
+            Parallel group details or None if not available.
+        """
+        if not gridboss_serial:
+            return None
+
+        try:
+            return await self._client.api.devices.get_parallel_group_details(gridboss_serial)
+        except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as e:
+            _LOGGER.debug("Could not load parallel group details: %s", str(e))
+            return None
+
+    def _create_parallel_groups(
+        self,
+        group_data: ParallelGroupDetailsResponse | None,
+        devices_response: InverterOverviewResponse,
+    ) -> dict[str, ParallelGroup]:
+        """Create ParallelGroup objects from API data.
+
+        Args:
+            group_data: Parallel group details from API.
+            devices_response: Device list for looking up group names.
+
+        Returns:
+            Dictionary mapping group names to ParallelGroup objects.
+        """
+        from .parallel_group import ParallelGroup
+
+        if not group_data or not group_data.devices:
+            return {}
+
+        # Create device lookup for O(1) access
+        device_lookup = {d.serialNum: d for d in devices_response.rows}
+
+        # Group devices by parallelGroup field
+        groups_by_name: dict[str, list[ParallelGroupDeviceItem]] = {}
+        for pg_device in group_data.devices:
+            device_info = device_lookup.get(pg_device.serialNum)
+            if device_info and device_info.parallelGroup:
+                group_name = device_info.parallelGroup
+                if group_name not in groups_by_name:
+                    groups_by_name[group_name] = []
+                groups_by_name[group_name].append(pg_device)
+
+        # Create ParallelGroup objects
+        groups_lookup = {}
+        for group_name, devices in groups_by_name.items():
+            first_serial = devices[0].serialNum if devices else ""
+            group = ParallelGroup(
+                client=self._client,
+                station=self,
+                name=group_name,
+                first_device_serial=first_serial,
+            )
+            self.parallel_groups.append(group)
+            groups_lookup[group_name] = group
+            _LOGGER.debug("Created parallel group '%s' with %d devices", group_name, len(devices))
+
+        return groups_lookup
+
+    def _assign_devices(
+        self, devices_response: InverterOverviewResponse, groups_lookup: dict[str, ParallelGroup]
+    ) -> None:
+        """Assign devices to parallel groups or standalone list.
+
+        Args:
+            devices_response: Device list from API.
+            groups_lookup: Dictionary mapping group names to ParallelGroup objects.
+        """
+
+        if not devices_response.rows:
+            return
+
+        for device_data in devices_response.rows:
+            if not device_data.serialNum:
+                continue
+
+            serial_num = device_data.serialNum
+            device_type = device_data.deviceType
+            model_text = device_data.deviceTypeText
+            parallel_group_name = device_data.parallelGroup
+
+            # Handle GridBOSS/MID devices
+            if device_type == DEVICE_TYPE_GRIDBOSS:
+                self._assign_mid_device(serial_num, model_text, parallel_group_name, groups_lookup)
+                continue
+
+            # Handle inverters
+            self._assign_inverter(serial_num, model_text, parallel_group_name, groups_lookup)
+
+    def _assign_mid_device(
+        self,
+        serial_num: str,
+        model_text: str,
+        parallel_group_name: str | None,
+        groups_lookup: dict[str, ParallelGroup],
+    ) -> None:
+        """Assign MID device to parallel group.
+
+        Args:
+            serial_num: MID device serial number.
+            model_text: MID device model name.
+            parallel_group_name: Parallel group name or None.
+            groups_lookup: Dictionary mapping group names to ParallelGroup objects.
+        """
+        from .mid_device import MIDDevice
+
+        mid_device = MIDDevice(client=self._client, serial_number=serial_num, model=model_text)
+
+        if parallel_group_name:
+            found_group = groups_lookup.get(parallel_group_name)
+            if found_group:
+                found_group.mid_device = mid_device
+                _LOGGER.debug(
+                    "Assigned MID device %s to parallel group '%s'",
+                    serial_num,
+                    parallel_group_name,
+                )
+            else:
+                _LOGGER.warning(
+                    "Parallel group '%s' not found for MID device %s",
+                    parallel_group_name,
+                    serial_num,
+                )
+        else:
+            _LOGGER.warning("MID device %s has no parallel group assignment", serial_num)
+
+    def _assign_inverter(
+        self,
+        serial_num: str,
+        model_text: str,
+        parallel_group_name: str | None,
+        groups_lookup: dict[str, ParallelGroup],
+    ) -> None:
+        """Assign inverter to parallel group or standalone list.
+
+        Args:
+            serial_num: Inverter serial number.
+            model_text: Inverter model name.
+            parallel_group_name: Parallel group name or None.
+            groups_lookup: Dictionary mapping group names to ParallelGroup objects.
+        """
+        from .inverters.generic import GenericInverter
+
+        inverter = GenericInverter(client=self._client, serial_number=serial_num, model=model_text)
+
+        if parallel_group_name:
+            found_group = groups_lookup.get(parallel_group_name)
+            if found_group:
+                found_group.inverters.append(inverter)
+                _LOGGER.debug(
+                    "Assigned inverter %s to parallel group '%s'",
+                    serial_num,
+                    parallel_group_name,
+                )
+            else:
+                # If parallel group not found, treat as standalone
+                self.standalone_inverters.append(inverter)
+                _LOGGER.debug(
+                    "Parallel group '%s' not found for %s - treating as standalone",
+                    parallel_group_name,
+                    serial_num,
+                )
+        else:
+            # Standalone inverter
+            self.standalone_inverters.append(inverter)
+            _LOGGER.debug("Assigned inverter %s as standalone", serial_num)
 
     # ============================================================================
     # Station-Level Control Operations (Issue #15)

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2025-11-21
+
+### Changed
+
+- **Code Quality Review** - Comprehensive code review against CLAUDE.md standards and Python best practices:
+  - Fixed broad exception suppression in `parallel_group.py` (changed from `suppress(Exception)` to specific `LuxpowerAPIError` and `LuxpowerConnectionError`)
+  - Refactored `Station._load_devices()` to reduce complexity from 21 to 6 by extracting 6 helper methods:
+    - `_get_device_list()` - Fetch devices from API
+    - `_find_gridboss()` - Find GridBOSS device
+    - `_get_parallel_groups()` - Query parallel group configuration
+    - `_create_parallel_groups()` - Create ParallelGroup objects
+    - `_assign_devices()` - Assign devices to groups
+    - `_assign_mid_device()` / `_assign_inverter()` - Device-specific assignment logic
+  - Improved code maintainability with single-responsibility helper methods
+  - Enhanced readability with clear data flow and reduced nesting
+  - All linting checks passing (ruff check, ruff format)
+  - All type checks passing (mypy --strict, 0 errors)
+  - Test coverage improved to 74.93%
+
+### Testing
+
+- ✅ **Unit tests**: 479 passed, 0 failed
+- ✅ **Coverage**: 74.93% (exceeds 70% requirement, improved from 74.86%)
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+- ✅ **All quality checks passing**: ruff, mypy strict mode, pytest
+
+### Documentation
+
+- Added comprehensive code review document (`docs/claude/CODE_REVIEW_2025-11-21_v2.md`):
+  - Detailed analysis of 7 review areas (type hints, async patterns, error handling, etc.)
+  - Before/after examples of improvements
+  - Test results and quality metrics
+  - Recommendations for future improvements
+
 ## [0.2.7] - 2025-11-21
 
 ### Added
