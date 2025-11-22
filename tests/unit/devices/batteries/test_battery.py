@@ -335,9 +335,9 @@ class TestBatteryEnhancedProperties:
         battery = Battery(client=mock_client, battery_data=sample_battery_module)
 
         # Sample data has charge parameters (now properly scaled)
-        # batChargeMaxCur: 2000 → 20.00A (÷100)
+        # batChargeMaxCur: 2000 → 200.0A (÷10, consistent with battery current)
         # batChargeVoltRef: 560 → 56.0V (÷10)
-        assert battery.charge_max_current == 20.0
+        assert battery.charge_max_current == 200.0
         assert battery.charge_voltage_ref == 56.0
 
     def test_additional_metrics_properties(

@@ -1358,8 +1358,8 @@ BATTERY_MODULE_SCALING: dict[str, ScaleFactor] = {
     "batMinCellTemp": ScaleFactor.SCALE_10,
     "ambientTemp": ScaleFactor.SCALE_10,
     "mosTemp": ScaleFactor.SCALE_10,
-    # Charge/Discharge Reference Values
-    "batChargeMaxCur": ScaleFactor.SCALE_100,  # 2000 → 20.00A
+    # Charge/Discharge Reference Values (÷10, consistent with battery current scaling)
+    "batChargeMaxCur": ScaleFactor.SCALE_10,  # 2000 → 200.0A
     "batChargeVoltRef": ScaleFactor.SCALE_10,  # 560 → 56.0V
     # Percentages - NO SCALING
     "soc": ScaleFactor.SCALE_NONE,
