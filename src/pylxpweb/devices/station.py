@@ -431,6 +431,35 @@ class Station(BaseDevice):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def _warm_parallel_group_energy_cache(self) -> None:
+        """Pre-fetch energy data for all parallel groups to eliminate first-access latency.
+
+        This optimization fetches energy data concurrently for all parallel groups during
+        initial station load, ensuring energy sensors show data immediately in Home Assistant.
+
+        Called automatically by Station.load() and Station.load_all().
+
+        Benefits:
+        - Parallel group energy properties return immediately with actual values
+        - Eliminates 0.00 kWh display on integration startup in Home Assistant
+        - All energy properties show real data from first access
+
+        Trade-offs:
+        - Adds 1 API call per parallel group on startup
+        - Minimal increase in initial load time (~100ms, concurrent)
+        """
+        tasks = []
+
+        # Fetch energy data for all parallel groups concurrently
+        for group in self.parallel_groups:
+            if group.inverters:
+                first_serial = group.inverters[0].serial_number
+                tasks.append(group._fetch_energy_data(first_serial))
+
+        # Execute concurrently, ignore exceptions (partial failure OK)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def get_total_production(self) -> dict[str, float]:
         """Calculate total energy production across all inverters.
 
@@ -552,9 +581,10 @@ class Station(BaseDevice):
         # Load device hierarchy
         await station._load_devices()
 
-        # Warm parameter cache for better initial performance (optimization)
-        # This pre-fetches parameters for all inverters to eliminate first-access latency
+        # Warm caches for better initial performance (optimization)
+        # This pre-fetches data to eliminate first-access latency
         await station._warm_parameter_cache()
+        await station._warm_parallel_group_energy_cache()
 
         return station
 
