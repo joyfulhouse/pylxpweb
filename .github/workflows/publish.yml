@@ -1,5 +1,15 @@
 name: Publish to PyPI
 
+# This workflow is triggered automatically when a GitHub Release is published
+# (which happens via the release.yml workflow when you push a version tag).
+#
+# Workflow: git tag v0.3.4 → release.yml creates GitHub Release → THIS workflow publishes to PyPI
+#
+# Note: This workflow skips running tests because:
+# 1. All code has already been tested in the PR before merging to main
+# 2. Branch protection ensures only tested code reaches main
+# 3. Re-running tests here would be redundant and wasteful
+
 on:
   release:
     types: [published]
@@ -23,116 +33,10 @@ permissions:
   id-token: write  # Required for OIDC PyPI publishing
 
 jobs:
-  lint:
-    name: Lint & Type Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Set up Python
-        run: uv python install 3.13
-
-      - name: Install dependencies
-        run: uv sync --all-extras
-
-      - name: Run ruff linting
-        run: uv run ruff check src/ tests/
-
-      - name: Run ruff formatting check
-        run: uv run ruff format --check src/ tests/
-
-      - name: Run mypy type checking
-        run: uv run mypy src/pylxpweb/
-
-  test:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Set up Python
-        run: uv python install 3.13
-
-      - name: Install dependencies
-        run: uv sync --all-extras
-
-      - name: Run unit tests
-        run: |
-          uv run pytest tests/unit/ \
-            --cov=pylxpweb \
-            --cov-report=term-missing \
-            --cov-report=xml \
-            --junitxml=pytest.xml
-
-  integration-tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: [lint, test]
-    continue-on-error: true  # Don't block publish if integration tests fail
-    environment: integration-tests
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      - name: Set up Python
-        run: uv python install 3.13
-
-      - name: Install dependencies
-        run: uv sync --all-extras
-
-      - name: Run integration tests
-        env:
-          LUXPOWER_USERNAME: ${{ secrets.LUXPOWER_USERNAME }}
-          LUXPOWER_PASSWORD: ${{ secrets.LUXPOWER_PASSWORD }}
-          LUXPOWER_BASE_URL: ${{ secrets.LUXPOWER_BASE_URL }}
-        run: |
-          uv run pytest tests/integration/ \
-            -v \
-            -m integration \
-            --reruns 2 \
-            --reruns-delay 300 \
-            --only-rerun "LuxpowerDeviceOfflineError" \
-            --only-rerun "LuxpowerConnectionError" \
-            --only-rerun "TimeoutError" \
-            --only-rerun "timeout" \
-            --tb=short \
-            --log-cli-level=WARNING
-
-      - name: Upload integration test results
-        uses: actions/upload-artifact@v5
-        if: failure()
-        with:
-          name: integration-test-results-publish
-          path: |
-            .pytest_cache/
-            test-results/
-          retention-days: 7
-
   build:
     name: Build Package
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [lint, test, integration-tests]
     steps:
       - uses: actions/checkout@v5
 
@@ -160,6 +64,15 @@ jobs:
           name: python-package-distributions
           path: dist/
           retention-days: 7
+
+      - name: Create build summary
+        run: |
+          echo "## 📦 Package Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Built packages:" >> $GITHUB_STEP_SUMMARY
+          ls -lh dist/ >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Next: Publishing to TestPyPI and PyPI..." >> $GITHUB_STEP_SUMMARY
 
   publish-testpypi:
     name: Publish to TestPyPI
