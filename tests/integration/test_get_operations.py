@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
@@ -46,20 +45,7 @@ pytestmark = [
 ]
 
 
-@pytest.fixture
-async def client() -> AsyncGenerator[LuxpowerClient, None]:
-    """Create authenticated client for testing."""
-    async with LuxpowerClient(
-        LUXPOWER_USERNAME, LUXPOWER_PASSWORD, base_url=LUXPOWER_BASE_URL
-    ) as client:
-        yield client
-
-
-@pytest.fixture
-async def station(client: LuxpowerClient) -> Station | None:
-    """Load first station for testing."""
-    stations = await Station.load_all(client)
-    return stations[0] if stations else None
+# Note: client and station fixtures now provided by conftest.py (session-scoped with throttling)
 
 
 @pytest.fixture

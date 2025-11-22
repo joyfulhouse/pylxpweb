@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
@@ -57,26 +56,15 @@ pytestmark = [
 ]
 
 
-@pytest.fixture
-async def client() -> AsyncGenerator[LuxpowerClient, None]:
-    """Create authenticated client for testing."""
-    async with LuxpowerClient(
-        username=LUXPOWER_USERNAME,
-        password=LUXPOWER_PASSWORD,
-        base_url=LUXPOWER_BASE_URL,
-    ) as client:
-        yield client
+# Note: client fixture now provided by conftest.py (session-scoped with throttling)
 
 
 @pytest.fixture
-async def hybrid_inverter(client: LuxpowerClient) -> HybridInverter | None:
+async def hybrid_inverter(station: Station) -> HybridInverter | None:
     """Find a hybrid inverter for testing (if available)."""
-    stations = await Station.load_all(client)
-
-    for station in stations:
-        for inverter in station.all_inverters:
-            if isinstance(inverter, HybridInverter):
-                return inverter
+    for inverter in station.all_inverters:
+        if isinstance(inverter, HybridInverter):
+            return inverter
 
     return None
 
