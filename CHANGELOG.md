@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7] - 2025-11-23
+
 ### Added
 
 - **Firmware Update Detection** - Home Assistant-compatible firmware update detection for inverters and MID devices:
@@ -21,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 27 comprehensive unit tests (11 for model, 16 for mixin)
   - All tests passing (580 total), zero linting/type errors
   - Full OpenAPI documentation with version format examples and detection algorithm
+
+### Testing
+
+- ✅ **Total tests**: 580 (all passing)
+- ✅ **Coverage**: >85%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
 
 ## [0.3.6] - 2025-11-22
 
@@ -522,6 +531,8 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 
 ## Version History Summary
 
+- **v0.3.7** (2025-11-23): Firmware update detection for HA Update entities
+- **v0.3.6** (2025-11-22): DST state synchronization fix
 - **v0.3.5** (2025-11-22): Integration test optimizations, battery property fixes, constants refactoring, property mixin tests
 - **v0.3.4** (2025-11-22): CI/CD workflow optimizations, branch protection, automated releases
 - **v0.3.3** (2025-11-22): Transient error retry, parameter initialization fixes
@@ -539,6 +550,8 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.3.7]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.6...v0.3.7
+[0.3.6]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.1...v0.3.3
