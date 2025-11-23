@@ -850,6 +850,10 @@ class Station(BaseDevice):
 
         This is a station-level setting that affects all devices in the station.
 
+        After a successful write, the cached DST state is updated to reflect the new value.
+        This ensures that subsequent reads return the correct state without requiring
+        an additional API call.
+
         Args:
             enabled: True to enable DST, False to disable
 
@@ -859,9 +863,17 @@ class Station(BaseDevice):
         Example:
             >>> await station.set_daylight_saving_time(True)
             True
+            >>> station.daylight_saving_time  # Immediately reflects new value
+            True
         """
         result = await self._client.api.plants.set_daylight_saving_time(self.id, enabled)
-        return bool(result.get("success", False))
+        success = bool(result.get("success", False))
+
+        # Update cached state on successful write to ensure consistency
+        if success:
+            self.daylight_saving_time = enabled
+
+        return success
 
     async def get_daylight_saving_time_enabled(self) -> bool:
         """Get current daylight saving time setting.

@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2025-11-22
+
+### Fixed
+
+- **DST State Synchronization** - Fixed Home Assistant DST switch reverting after toggle:
+  - `Station.set_daylight_saving_time()` now updates cached `daylight_saving_time` attribute after successful API write
+  - Prevents HA switch from reverting to old state when reading cached value
+  - Added 3 comprehensive unit tests verifying state synchronization behavior
+  - Ensures UI state matches backend state immediately after control operations
+
+## [0.3.5] - 2025-11-22
+
+### Added
+
+- **Parallel Group Energy Pre-Fetching** - Pre-fetch energy data for parallel groups during station load:
+  - Added `_warm_parallel_group_energy_cache()` method to `Station` class
+  - Parallel group energy sensors now show actual values immediately instead of 0.00 kWh
+  - Eliminates initial 0.00 kWh display on integration startup
+  - Concurrent execution with graceful error handling (~100ms latency impact)
+
+- **Modular Constants Package** - Split large `constants.py` (1789 lines) into organized package:
+  - `constants/api.py` (43 lines) - HTTP codes, device types, retry configuration
+  - `constants/devices.py` (98 lines) - Device constants, timezone parsing, MID scaling
+  - `constants/locations.py` (227 lines) - Timezone, country, continent, region mappings
+  - `constants/registers.py` (965 lines) - Hold/input register definitions, bit manipulation
+  - `constants/scaling.py` (486 lines) - ScaleFactor enum, scaling dictionaries, scaling functions
+  - `constants/__init__.py` (470 lines) - Re-exports all symbols for 100% backward compatibility
+  - Better organization, improved maintainability, easier navigation
+  - All existing imports continue to work unchanged
+
+- **Property Mixin Test Coverage** - Added 58 comprehensive tests for property mixins:
+  - `InverterRuntimePropertiesMixin`: 28 tests (87% coverage, up from 38%)
+  - `MIDRuntimePropertiesMixin`: 30 tests (91% coverage, up from 48%)
+  - Voltage/frequency scaling verification, power/temperature no-scaling verification
+  - Graceful None handling, type safety verification, edge case coverage
+  - Total coverage improved: 73.79% → 80.67% (+6.88%)
+
+### Fixed
+
+- **Battery Property Scaling Corrections**:
+  - `charge_max_current`: Corrected to ÷10 scaling (raw 2000 → 200.0A, was incorrectly 20.0A)
+  - `charge_voltage_ref`: Corrected to ÷10 scaling (raw 560 → 56.0V, was incorrectly 5.6V)
+  - `type_text`: Now shows "Lithium" fallback when API returns empty string
+
+- **Battery Capacity Percentage Rounding** - Round calculated capacity percentage to nearest integer:
+  - Fixed excessive precision (82.8571428571429% → 83%)
+  - When API doesn't provide `currentCapacityPercent`, calculate from `currentRemainCapacity / currentFullCapacity * 100`
+  - Uses API value when available (already an integer), rounds calculated values
+  - Also rounded `battery_bank.current_capacity` to 1 decimal place (e.g., 596.4 Ah)
+
+- **Integration Test Rate Limiting** - Implemented API throttling to prevent rate limiting errors:
+  - Centralized fixtures in `conftest.py` (removed duplicate client fixtures from 4 test files)
+  - Added global 500ms API throttling between all API calls
+  - Prevents repeated login errors (DATAFRAME_TIMEOUT) and mounting errors
+  - Maintains function scope for proper test isolation
+  - Simpler than module/session-scoped async fixtures (avoids pytest-asyncio limitations)
+
+### Changed
+
+- **Code Quality Improvements**:
+  - Module-level imports in property mixins (eliminates per-call import overhead)
+  - Extracted `_is_cache_expired()` helper method in `BaseInverter`
+  - Improved code readability and DRY principle
+  - Cleaner `refresh()` method with reduced duplication
+
+### Testing
+
+- ✅ **Total tests**: 550 (492 unit + 58 integration)
+- ✅ **Coverage**: 80.67% (improved from 73.79%)
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
+## [0.3.4] - 2025-11-22
+
+### Added
+
+- **Optimized CI/CD Workflows** - Industry-standard CI/CD pipeline with automated release process:
+  - **CI workflow**: Only runs on PRs (not on merge to main) to eliminate redundant runs
+  - **Release workflow**: Auto-creates GitHub releases from version tags
+  - **Publish workflow**: Removes redundant testing (trusts PR checks), publishes to TestPyPI and PyPI
+  - New file: `.github/workflows/release.yml` - Auto-create releases from tags
+  - New file: `.github/WORKFLOWS.md` - Complete workflow documentation
+  - Eliminates redundant CI runs (was 3x per release, now 1x)
+  - Faster releases: 17 min → 7 min (10 min savings)
+
+- **Branch Protection** - Configured via script to enforce quality standards:
+  - Require PR before merging (no direct commits to main)
+  - Require 'CI Success' status check
+  - Require branches up-to-date before merge
+  - Dismiss stale reviews on new commits
+  - Enforce for admins
+  - Block force pushes and deletions
+  - New file: `.github/setup-branch-protection.sh` - One-time setup script
+
+### Changed
+
+- **Release Process** - Now fully automated:
+  1. Create PR with version bump
+  2. Merge after CI passes
+  3. Tag: `git tag v0.3.4 && git push origin v0.3.4`
+  4. Automatic: Release created → Package published to PyPI
+
+### Benefits
+
+- Prevents untested code from reaching main
+- Automated release process: git tag → auto-release → auto-publish
+- Consistent quality enforcement across all contributors
+- Faster, more reliable releases
+
 ## [0.3.3] - 2025-11-22
 
 ### Added
@@ -398,6 +507,16 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 
 ## Version History Summary
 
+- **v0.3.5** (2025-11-22): Integration test optimizations, battery property fixes, constants refactoring, property mixin tests
+- **v0.3.4** (2025-11-22): CI/CD workflow optimizations, branch protection, automated releases
+- **v0.3.3** (2025-11-22): Transient error retry, parameter initialization fixes
+- **v0.3.1** (2025-11-21): Code quality review and refactoring
+- **v0.3.0** (2025-11-21): Python best practices refactoring
+- **v0.2.8** (2025-11-21): DST auto-detection with manual sync
+- **v0.2.7** (2025-11-21): Caching and parameter architecture refactor
+- **v0.2.6** (2025-11-21): Device model information fix
+- **v0.2.5** (2025-11-21): Home Assistant compatibility fix
+- **v0.2.4** (2025-11-21): Working mode controls
 - **v0.2.3** (2025-11-20): Operating mode control, quick charge/discharge support, diagnostic tool
 - **v0.2.2** (2025-11-20): Integration test fixes, SOC limit API correction
 - **v0.2.1** (2025-11-20): Battery current control convenience methods, comprehensive documentation
@@ -405,6 +524,16 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.3.5]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.1...v0.3.3
+[0.3.1]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/joyfulhouse/pylxpweb/compare/v0.2.8...v0.3.0
+[0.2.8]: https://github.com/joyfulhouse/pylxpweb/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/joyfulhouse/pylxpweb/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/joyfulhouse/pylxpweb/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/joyfulhouse/pylxpweb/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/joyfulhouse/pylxpweb/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/joyfulhouse/pylxpweb/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/joyfulhouse/pylxpweb/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/joyfulhouse/pylxpweb/compare/v0.2.0...v0.2.1

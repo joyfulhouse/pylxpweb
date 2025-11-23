@@ -17,6 +17,35 @@ Welcome to the **pylxpweb** documentation. This directory contains comprehensive
   - Data scaling reference
   - Error handling and retry strategies
 
+### User Guides
+- **[Usage Guide](USAGE_GUIDE.md)** - Comprehensive usage guide with examples
+  - Object hierarchy overview
+  - Station and device management
+  - Working with inverters, batteries, and GridBOSS devices
+  - Control operations
+  - Caching and performance optimization
+  - Error handling best practices
+
+- **[Property Reference](PROPERTY_REFERENCE.md)** - Complete property reference for all device types
+  - Inverter properties (~40 properties)
+  - MID device properties (~50 properties)
+  - Battery properties (~20 properties)
+  - BatteryBank properties (~10 properties)
+  - ParallelGroup properties (~12 properties)
+  - All properties with scaling, types, and descriptions
+
+- **[Scaling Guide](SCALING_GUIDE.md)** - Data scaling reference
+  - Voltage, current, frequency, power, energy scaling
+  - Different scaling factors for different data types
+  - Examples and conversion tables
+  - Best practices for using device properties vs raw API
+
+- **[Parameter Reference](PARAMETER_REFERENCE.md)** - Complete parameter catalog
+  - Hold register definitions
+  - Input register definitions
+  - Control function parameters
+  - Register ranges and mappings
+
 ### Architecture Documentation
 *Coming soon*
 - System design and patterns
@@ -34,9 +63,10 @@ Welcome to the **pylxpweb** documentation. This directory contains comprehensive
 ## Quick Start
 
 For getting started with the pylxpweb library, see:
-1. [Luxpower API Reference](api/LUXPOWER_API.md) - Understand the underlying API
-2. Project README.md (root) - Installation and basic usage
-3. Examples directory - Code samples and patterns
+1. Project README.md (root) - Installation and quick start examples
+2. [Usage Guide](USAGE_GUIDE.md) - Comprehensive usage documentation
+3. [Property Reference](PROPERTY_REFERENCE.md) - All available device properties
+4. [Luxpower API Reference](api/LUXPOWER_API.md) - Low-level API details
 
 ## Research Materials
 
@@ -59,15 +89,17 @@ When adding new documentation:
 ## Documentation Status
 
 - ✅ **API Reference** - Complete comprehensive documentation
+- ✅ **User Guides** - Complete (Usage Guide, Property Reference, Scaling Guide, Parameter Reference)
 - ⏳ **Architecture** - To be created
 - ⏳ **Examples** - To be created
 
 ## Additional Resources
 
 - [CLAUDE.md](../CLAUDE.md) - Project guidelines for Claude Code
+- [CHANGELOG.md](../CHANGELOG.md) - Version history and release notes
 - Research Materials: `research/eg4_web_monitor/` - Reference implementation
 - Sample API Responses: `research/eg4_web_monitor/.../samples/` - Real API data
 
 ---
 
-Last Updated: 2025-11-18
+Last Updated: 2025-11-22 (v0.3.5)
