@@ -5,7 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.9] - 2025-11-23
+
+### Added
+
+- **Real-Time Firmware Update Progress Tracking** - Monitor firmware update progress with adaptive caching:
+  - New method: `get_firmware_update_progress()` - Get real-time update status with progress percentage
+  - Added `in_progress` property to `FirmwareUpdateInfo` - Check if update is currently active
+  - Added `update_percentage` property (0-100) - Track update progress during installation
+  - Adaptive cache TTLs based on update status:
+    - During active updates: 10-second cache for near real-time progress
+    - No active update: 5-minute cache to reduce API load
+  - Optimistic updates: `start_firmware_update()` immediately sets `in_progress=True` for instant UI feedback
+  - Thread-safe cache access with asyncio locks
+  - Full Home Assistant Update entity compliance
+
+### Changed
+
+- **Firmware Update Caching Strategy** - Smart cache invalidation based on update state:
+  - Cache automatically adjusts TTL when update starts/stops
+  - Optimistic cache update eliminates detection delay when starting updates
+  - Real-time progress: ~6 API calls per minute during updates
+  - Idle operation: ~12 API calls per hour (vs. 3600 without caching)
+
+### Testing
+
+- ✅ **Total tests**: 598 (all passing, +11 from v0.3.8)
+- ✅ **Coverage**: >85%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
+### Usage Example
+
+```python
+# Start firmware update
+success = await inverter.start_firmware_update()
+
+# Monitor progress with automatic adaptive caching
+while True:
+    progress = await inverter.get_firmware_update_progress()
+    if not progress.in_progress:
+        break
+    print(f"Progress: {progress.update_percentage}%")
+    await asyncio.sleep(30)  # Poll every 30 seconds
+```
 
 ## [0.3.8] - 2025-11-23
 
@@ -559,6 +602,8 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 
 ## Version History Summary
 
+- **v0.3.9** (2025-11-23): Real-time firmware update progress tracking with adaptive caching
+- **v0.3.8** (2025-11-23): Firmware update convenience properties and summary formatting
 - **v0.3.7** (2025-11-23): Firmware update detection for HA Update entities
 - **v0.3.6** (2025-11-22): DST state synchronization fix
 - **v0.3.5** (2025-11-22): Integration test optimizations, battery property fixes, constants refactoring, property mixin tests
@@ -578,6 +623,8 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.3.9]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.8...v0.3.9
+[0.3.8]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.4...v0.3.5
