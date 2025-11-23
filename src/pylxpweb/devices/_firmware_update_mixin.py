@@ -202,13 +202,16 @@ class FirmwareUpdateMixin:
 
         return update_info
 
-    async def get_firmware_update_progress(self) -> FirmwareUpdateInfo:
+    async def get_firmware_update_progress(self, force: bool = False) -> FirmwareUpdateInfo:
         """Get real-time firmware update progress for this device.
 
         This method queries the API for current firmware update status and returns
-        updated FirmwareUpdateInfo with real-time progress data. Unlike
-        check_firmware_updates(), this method ALWAYS bypasses cache to provide
-        current progress information during active updates.
+        updated FirmwareUpdateInfo with real-time progress data.
+
+        Caching behavior:
+        - During active updates (in_progress=True): Always bypasses cache for real-time data
+        - No active update (in_progress=False): Uses 5-minute cache to reduce API calls
+        - force=True: Always bypasses cache regardless of update status
 
         Use this method when:
         - Monitoring active firmware update progress
@@ -219,6 +222,9 @@ class FirmwareUpdateMixin:
         - in_progress: True if update is currently active (UPLOADING/READY)
         - update_percentage: Current progress (0-100) parsed from API
         - All other fields from cached firmware check
+
+        Args:
+            force: If True, bypass cache and force fresh check from API
 
         Returns:
             FirmwareUpdateInfo with real-time progress data
@@ -246,6 +252,19 @@ class FirmwareUpdateMixin:
 
         client: LuxpowerClient = self._client  # type: ignore[attr-defined]
         serial: str = self.serial_number  # type: ignore[attr-defined]
+
+        # Check cache (only if not forced and no active update)
+        if not force:
+            async with self._firmware_update_cache_lock:
+                if (
+                    self._firmware_update_info is not None
+                    and self._firmware_update_cache_time is not None
+                    and not self._firmware_update_info.in_progress
+                ):
+                    # Use 5-minute cache for non-active updates
+                    cache_age = datetime.now() - self._firmware_update_cache_time
+                    if cache_age < timedelta(minutes=5):
+                        return self._firmware_update_info
 
         # Get current update status from API
         status = await client.api.firmware.get_firmware_update_status()
@@ -296,6 +315,8 @@ class FirmwareUpdateMixin:
         # Update cache with progress data
         async with self._firmware_update_cache_lock:
             self._firmware_update_info = update_info
+            # Update timestamp: allows caching when no active update
+            self._firmware_update_cache_time = datetime.now()
 
         return update_info
 

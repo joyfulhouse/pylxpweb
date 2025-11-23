@@ -622,19 +622,78 @@ class TestGetFirmwareUpdateProgress:
         mock_client.api.firmware.check_firmware_updates.assert_called_once_with("1234567890")
 
     @pytest.mark.asyncio
-    async def test_get_firmware_update_progress_updates_cache(
+    async def test_get_firmware_update_progress_updates_cache_timestamp(
         self, test_device: FirmwareTestDevice, mock_client: Mock
     ) -> None:
-        """Test that get_firmware_update_progress updates cached values."""
-        from pylxpweb.models import FirmwareDeviceInfo, FirmwareUpdateStatus, UpdateStatus
+        """Test that get_firmware_update_progress updates cache timestamp."""
+        from datetime import datetime, timedelta
+
+        from pylxpweb.models import FirmwareUpdateStatus
 
         # Mock check_firmware_updates to populate cache
         api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
         mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
 
-        # First call to populate cache
-        await test_device.check_firmware_updates()
-        assert test_device._firmware_update_info.in_progress is False
+        # Mock get_firmware_update_status with no active update
+        mock_status = FirmwareUpdateStatus.model_construct(
+            receiving=False,
+            progressing=False,
+            fileReady=False,
+            deviceInfos=[],
+        )
+        mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
+
+        # Get progress - should set cache timestamp
+        await test_device.get_firmware_update_progress()
+
+        # Verify cache timestamp was set
+        assert test_device._firmware_update_cache_time is not None
+        assert isinstance(test_device._firmware_update_cache_time, datetime)
+
+        # Verify it's recent (within last second)
+        assert datetime.now() - test_device._firmware_update_cache_time < timedelta(seconds=1)
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_uses_cache_when_no_active_update(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test that progress method uses 5-minute cache when no update active."""
+        from pylxpweb.models import FirmwareUpdateStatus
+
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # Mock get_firmware_update_status with no active update
+        mock_status = FirmwareUpdateStatus.model_construct(
+            receiving=False,
+            progressing=False,
+            fileReady=False,
+            deviceInfos=[],
+        )
+        mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
+
+        # First call - should hit API
+        progress1 = await test_device.get_firmware_update_progress()
+        assert progress1.in_progress is False
+        assert mock_client.api.firmware.get_firmware_update_status.call_count == 1
+
+        # Second call within 5 minutes - should use cache
+        progress2 = await test_device.get_firmware_update_progress()
+        assert progress2.in_progress is False
+        # Should still be 1 (no additional API call)
+        assert mock_client.api.firmware.get_firmware_update_status.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_bypasses_cache_during_active_update(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test that progress method always bypasses cache during active update."""
+        from pylxpweb.models import FirmwareDeviceInfo, FirmwareUpdateStatus, UpdateStatus
+
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
 
         # Mock get_firmware_update_status with active update
         device_info = FirmwareDeviceInfo.model_construct(
@@ -658,12 +717,45 @@ class TestGetFirmwareUpdateProgress:
         )
         mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
 
-        # Get progress - should update cache
-        await test_device.get_firmware_update_progress()
+        # First call - should hit API
+        progress1 = await test_device.get_firmware_update_progress()
+        assert progress1.in_progress is True
+        assert progress1.update_percentage == 50
+        assert mock_client.api.firmware.get_firmware_update_status.call_count == 1
 
-        # Cache should now reflect progress
-        assert test_device._firmware_update_info.in_progress is True
-        assert test_device._firmware_update_info.update_percentage == 50
+        # Second call - should ALSO hit API (no caching during active update)
+        progress2 = await test_device.get_firmware_update_progress()
+        assert progress2.in_progress is True
+        # Should be 2 (additional API call made)
+        assert mock_client.api.firmware.get_firmware_update_status.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_force_bypasses_cache(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test that force=True always bypasses cache."""
+        from pylxpweb.models import FirmwareUpdateStatus
+
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # Mock get_firmware_update_status with no active update
+        mock_status = FirmwareUpdateStatus.model_construct(
+            receiving=False,
+            progressing=False,
+            fileReady=False,
+            deviceInfos=[],
+        )
+        mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
+
+        # First call - should hit API
+        await test_device.get_firmware_update_progress()
+        assert mock_client.api.firmware.get_firmware_update_status.call_count == 1
+
+        # Second call with force=True - should hit API again
+        await test_device.get_firmware_update_progress(force=True)
+        assert mock_client.api.firmware.get_firmware_update_status.call_count == 2
 
 
 class TestFirmwareUpdateWorkflow:
