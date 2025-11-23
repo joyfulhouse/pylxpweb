@@ -118,7 +118,7 @@ async def find_min_block_size(
     """
     for block_size in range(1, max_size + 1):
         try:
-            response = await client.read_parameters(
+            response = await client.api.control.read_parameters(
                 serial_num,
                 start_register=start_register,
                 point_number=block_size,
@@ -174,7 +174,7 @@ async def validate_block_boundaries(
         test_size = block_size - offset
 
         try:
-            test_response = await client.read_parameters(
+            test_response = await client.api.control.read_parameters(
                 serial_num,
                 start_register=test_start,
                 point_number=test_size,
@@ -305,12 +305,13 @@ async def get_device_type_map(client: LuxpowerClient) -> dict[str, str]:
     device_map = {}
 
     try:
-        # Login returns plant/inverter data
-        login_data = await client.login()
+        # Get device information from plants endpoint
+        plants = await client.api.plants.get_plants()
 
-        for plant in login_data.plants:
-            for inverter in plant.inverters:
-                device_map[inverter.serialNum] = inverter.deviceTypeText4APP
+        for plant in plants.rows:
+            devices = await client.api.devices.get_devices(plant.plantId)
+            for device in devices.rows:
+                device_map[device.serialNum] = device.deviceTypeText
 
     except Exception as e:
         print(f"Warning: Could not build device type map: {e}")
@@ -497,7 +498,7 @@ async def main():
         # Build output structure
         output = {
             "metadata": {
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": datetime.now().astimezone().isoformat(),
                 "base_url": base_url,
                 "serial_num": args.serial_num,
                 "device_type": device_type,
