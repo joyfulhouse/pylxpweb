@@ -35,7 +35,6 @@ env/
 *.swp
 *.swo
 *~
-.DS_Store
 
 # Testing
 .tox/
@@ -86,8 +85,6 @@ docs/.doctrees/
 # Temporary files
 *.tmp
 *.bak
-*.swp
-.DS_Store
 test_api_debug.py
 test_full_data_check.py
 full_data_check_output.txt
