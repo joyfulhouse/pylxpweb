@@ -179,9 +179,7 @@ class TestCheckFirmwareUpdates:
     ) -> None:
         """Test check_firmware_updates caches the result."""
         # Mock API response
-        api_check = _create_firmware_check(
-            v1=13, v2=0, last_v1=14, last_v2=0, info_url=None
-        )
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
         mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
 
         # First call
@@ -198,9 +196,7 @@ class TestCheckFirmwareUpdates:
     ) -> None:
         """Test check_firmware_updates uses cache when TTL not expired."""
         # Mock API response
-        api_check = _create_firmware_check(
-            v1=13, v2=0, last_v1=14, last_v2=0, info_url=None
-        )
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
         mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
 
         # First call - should hit API
@@ -221,9 +217,7 @@ class TestCheckFirmwareUpdates:
     ) -> None:
         """Test check_firmware_updates with force=True bypasses cache."""
         # Mock API response
-        api_check = _create_firmware_check(
-            v1=13, v2=0, last_v1=14, last_v2=0, info_url=None
-        )
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
         mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
 
         # First call
@@ -241,9 +235,7 @@ class TestCheckFirmwareUpdates:
     ) -> None:
         """Test check_firmware_updates fetches again when cache expired."""
         # Mock API response
-        api_check = _create_firmware_check(
-            v1=13, v2=0, last_v1=14, last_v2=0, info_url=None
-        )
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
         mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
 
         # First call
@@ -311,12 +303,9 @@ class TestCheckUpdateEligibility:
     ) -> None:
         """Test check_update_eligibility calls firmware API."""
         mock_eligibility = UpdateEligibilityStatus(
-            success=True,
-            msg=UpdateEligibilityMessage.ALLOW_TO_UPDATE
+            success=True, msg=UpdateEligibilityMessage.ALLOW_TO_UPDATE
         )
-        mock_client.api.firmware.check_update_eligibility = AsyncMock(
-            return_value=mock_eligibility
-        )
+        mock_client.api.firmware.check_update_eligibility = AsyncMock(return_value=mock_eligibility)
 
         result = await test_device.check_update_eligibility()
 
@@ -329,12 +318,9 @@ class TestCheckUpdateEligibility:
     ) -> None:
         """Test check_update_eligibility returns False when not allowed."""
         mock_eligibility = UpdateEligibilityStatus(
-            success=True,
-            msg=UpdateEligibilityMessage.DEVICE_UPDATING
+            success=True, msg=UpdateEligibilityMessage.DEVICE_UPDATING
         )
-        mock_client.api.firmware.check_update_eligibility = AsyncMock(
-            return_value=mock_eligibility
-        )
+        mock_client.api.firmware.check_update_eligibility = AsyncMock(return_value=mock_eligibility)
 
         result = await test_device.check_update_eligibility()
 
@@ -350,14 +336,11 @@ class TestFirmwareUpdateWorkflow:
     ) -> None:
         """Test complete firmware update workflow."""
         # Setup mocks
-        api_check = _create_firmware_check(
-            v1=13, v2=0, last_v1=14, last_v2=0, info_url=None
-        )
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
         mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
         mock_client.api.firmware.check_update_eligibility = AsyncMock(
             return_value=UpdateEligibilityStatus(
-                success=True,
-                msg=UpdateEligibilityMessage.ALLOW_TO_UPDATE
+                success=True, msg=UpdateEligibilityMessage.ALLOW_TO_UPDATE
             )
         )
         mock_client.api.firmware.start_firmware_update = AsyncMock(return_value=True)
@@ -383,9 +366,7 @@ class TestFirmwareUpdateWorkflow:
     ) -> None:
         """Test workflow when no update is available."""
         # Setup mocks
-        api_check = _create_firmware_check(
-            v1=14, v2=0, last_v1=14, last_v2=0, info_url=None
-        )
+        api_check = _create_firmware_check(v1=14, v2=0, last_v1=14, last_v2=0, info_url=None)
         mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
 
         # Check for updates
