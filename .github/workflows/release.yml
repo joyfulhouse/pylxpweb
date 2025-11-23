@@ -1,13 +1,31 @@
-name: Release
+name: Release and Publish
+
+# This workflow creates a GitHub Release and publishes to PyPI when a version tag is pushed
+# Workflow: git tag v0.3.10 && git push origin v0.3.10 → Creates release → Publishes to TestPyPI → Publishes to PyPI
 
 on:
   push:
     tags:
-      - 'v*.*.*'  # Trigger on version tags (e.g., v0.3.3)
+      - 'v*.*.*'  # Trigger on version tags (e.g., v0.3.10)
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to publish to (skip-publish, testpypi, or pypi)'
+        required: true
+        type: choice
+        options:
+          - skip-publish
+          - testpypi
+          - pypi
+
+# Only one release at a time
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
 
 permissions:
   contents: write  # Required to create releases
+  id-token: write  # Required for OIDC PyPI publishing
 
 jobs:
   create-release:
@@ -15,7 +33,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
@@ -70,4 +87,109 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Release URL: ${{ steps.create_release.outputs.html_url }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "This will automatically trigger the publish workflow." >> $GITHUB_STEP_SUMMARY
+          echo "Next: Building and publishing to PyPI..." >> $GITHUB_STEP_SUMMARY
+
+  build:
+    name: Build Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Build package
+        run: uv build
+
+      - name: Check package
+        run: uv run twine check dist/*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: python-package-distributions
+          path: dist/
+          retention-days: 7
+
+      - name: Create build summary
+        run: |
+          echo "## 📦 Package Built" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Built packages:" >> $GITHUB_STEP_SUMMARY
+          ls -lh dist/ >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Next: Publishing to TestPyPI and PyPI..." >> $GITHUB_STEP_SUMMARY
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'skip-publish')
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          print-hash: true
+
+      - name: Create TestPyPI summary
+        run: |
+          echo "## 🧪 Published to TestPyPI" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Package: pylxpweb" >> $GITHUB_STEP_SUMMARY
+          echo "Version: $(ls dist/*.whl | sed 's/.*pylxpweb-//' | sed 's/-.*//')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Test install: \`pip install --index-url https://test.pypi.org/simple/ pylxpweb\`" >> $GITHUB_STEP_SUMMARY
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build, publish-testpypi]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'pypi')
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          print-hash: true
+
+      - name: Create PyPI summary
+        run: |
+          echo "## 🎉 Published to PyPI" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Package: pylxpweb" >> $GITHUB_STEP_SUMMARY
+          echo "Version: $(ls dist/*.whl | sed 's/.*pylxpweb-//' | sed 's/-.*//')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Install: \`pip install pylxpweb\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📦 View on PyPI: https://pypi.org/project/pylxpweb/" >> $GITHUB_STEP_SUMMARY
