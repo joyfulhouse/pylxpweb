@@ -260,3 +260,35 @@ class TestFirmwareUpdateInfoFromAPIResponse:
         assert info.installed_version == "IAAB-0000"  # v1=0(0x00), v2=0(0x00)
         assert info.latest_version == "IAAB-0000"
         assert info.update_available is False
+
+    def test_release_summary_uses_hex_format(self) -> None:
+        """Test release_summary displays version numbers in hex to match firmware version format."""
+        # Test app firmware update: v1=13 (0x0D) → v1=20 (0x14)
+        api_check_app = _create_firmware_check(v1=13, v2=0, last_v1=20, last_v2=None)
+        info_app = FirmwareUpdateInfo.from_api_response(
+            check=api_check_app,
+            title="Test Firmware",
+        )
+
+        # Should show hex values (0D → 14), not decimal (13 → 20)
+        assert info_app.release_summary == "App firmware: v0D → v14"
+
+        # Test param firmware update: v2=5 (0x05) → v2=10 (0x0A)
+        api_check_param = _create_firmware_check(v1=13, v2=5, last_v1=None, last_v2=10)
+        info_param = FirmwareUpdateInfo.from_api_response(
+            check=api_check_param,
+            title="Test Firmware",
+        )
+
+        # Should show hex values (05 → 0A), not decimal (5 → 10)
+        assert info_param.release_summary == "Parameter firmware: v05 → v0A"
+
+        # Test both updates: v1=19 (0x13) → v1=22 (0x16), v2=0 (0x00) → v2=1 (0x01)
+        api_check_both = _create_firmware_check(v1=19, v2=0, last_v1=22, last_v2=1)
+        info_both = FirmwareUpdateInfo.from_api_response(
+            check=api_check_both,
+            title="Test Firmware",
+        )
+
+        # Should show hex values, not decimal
+        assert info_both.release_summary == "App firmware: v13 → v16; Parameter firmware: v00 → v01"

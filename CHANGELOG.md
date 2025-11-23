@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8] - 2025-11-23
+
+### Added
+
+- **Firmware Update Convenience Properties** - Added public properties to `FirmwareUpdateMixin` for easy access to cached firmware update information:
+  - Added `latest_firmware_version` property - returns latest version string or None
+  - Added `firmware_update_title` property - returns update title or None
+  - Added `firmware_update_summary` property - returns release summary or None
+  - Added `firmware_update_url` property - returns release notes URL or None
+  - All properties provide synchronous access to cached data without API calls
+  - 6 additional unit tests verifying property behavior (22 total for mixin)
+
+### Fixed
+
+- **Firmware Update Summary Formatting** - Fixed release summary to display version numbers in hexadecimal format:
+  - Changed from decimal format (e.g., "v13 → v20") to hex format (e.g., "v0D → v14")
+  - Ensures version numbers in summary match firmware version format (e.g., "IAAB-0D00")
+  - Affects `release_summary` field in `FirmwareUpdateInfo.from_api_response()`
+  - Example: API reports v1=19→22, summary now shows "v13 → v16" (hex) instead of "v19 → v22" (decimal)
+  - Added comprehensive test to verify hex formatting for app and parameter updates
+
+### Testing
+
+- ✅ **Total tests**: 587 (all passing, +7 from v0.3.7)
+- ✅ **Coverage**: >85%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.3.7] - 2025-11-23
 
 ### Added

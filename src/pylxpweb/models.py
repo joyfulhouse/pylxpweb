@@ -1172,11 +1172,12 @@ class FirmwareUpdateInfo(BaseModel):
             latest_version = details.fwCodeBeforeUpload
 
         # Generate release summary (max 255 chars for HA)
+        # Format as hex to match firmware version format (e.g., IAAB-1300 means v1=0x13)
         summary_parts = []
         if details.has_app_update:
-            summary_parts.append(f"App firmware: v{details.v1} → v{details.lastV1}")
+            summary_parts.append(f"App firmware: v{details.v1:02X} → v{details.lastV1:02X}")
         if details.has_parameter_update:
-            summary_parts.append(f"Parameter firmware: v{details.v2} → v{details.lastV2}")
+            summary_parts.append(f"Parameter firmware: v{details.v2:02X} → v{details.lastV2:02X}")
         release_summary = "; ".join(summary_parts) if summary_parts else None
 
         # Determine supported features based on API capabilities

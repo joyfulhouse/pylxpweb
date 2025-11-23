@@ -75,6 +75,68 @@ class FirmwareUpdateMixin:
             return None
         return self._firmware_update_info.update_available
 
+    @property
+    def latest_firmware_version(self) -> str | None:
+        """Get latest firmware version from cache.
+
+        Returns:
+            Latest firmware version string, or None if not checked yet.
+
+        Example:
+            >>> await device.check_firmware_updates()
+            >>> print(f"Latest version: {device.latest_firmware_version}")
+        """
+        if self._firmware_update_info is None:
+            return None
+        return self._firmware_update_info.latest_version
+
+    @property
+    def firmware_update_title(self) -> str | None:
+        """Get firmware update title from cache.
+
+        Returns:
+            Firmware update title, or None if not checked yet.
+
+        Example:
+            >>> await device.check_firmware_updates()
+            >>> print(f"Title: {device.firmware_update_title}")
+        """
+        if self._firmware_update_info is None:
+            return None
+        return self._firmware_update_info.title
+
+    @property
+    def firmware_update_summary(self) -> str | None:
+        """Get firmware update summary from cache.
+
+        Returns:
+            Firmware update release summary, or None if not checked yet.
+
+        Example:
+            >>> await device.check_firmware_updates()
+            >>> if device.firmware_update_summary:
+            ...     print(f"Summary: {device.firmware_update_summary}")
+        """
+        if self._firmware_update_info is None:
+            return None
+        return self._firmware_update_info.release_summary
+
+    @property
+    def firmware_update_url(self) -> str | None:
+        """Get firmware update URL from cache.
+
+        Returns:
+            Firmware update release URL, or None if not checked yet.
+
+        Example:
+            >>> await device.check_firmware_updates()
+            >>> if device.firmware_update_url:
+            ...     print(f"Release notes: {device.firmware_update_url}")
+        """
+        if self._firmware_update_info is None:
+            return None
+        return self._firmware_update_info.release_url
+
     async def check_firmware_updates(self, force: bool = False) -> FirmwareUpdateInfo:
         """Check for available firmware updates (cached with 24-hour TTL).
 
