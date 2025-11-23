@@ -346,6 +346,30 @@ class TestStartFirmwareUpdate:
         assert result is True
 
     @pytest.mark.asyncio
+    async def test_start_firmware_update_sets_in_progress_optimistically(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test start_firmware_update optimistically sets in_progress=True."""
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # Populate cache
+        await test_device.check_firmware_updates()
+        assert test_device._firmware_update_info.in_progress is False
+
+        # Mock start_firmware_update to succeed
+        mock_client.api.firmware.start_firmware_update = AsyncMock(return_value=True)
+
+        # Start update
+        result = await test_device.start_firmware_update()
+        assert result is True
+
+        # Cache should now show in_progress=True (optimistic)
+        assert test_device._firmware_update_info.in_progress is True
+        assert test_device._firmware_update_info.update_percentage == 0
+
+    @pytest.mark.asyncio
     async def test_start_firmware_update_with_fast_mode(
         self, test_device: FirmwareTestDevice, mock_client: Mock
     ) -> None:
@@ -562,7 +586,8 @@ class TestGetFirmwareUpdateProgress:
                 return_value=mock_status
             )
 
-            progress = await test_device.get_firmware_update_progress()
+            # Use force=True to bypass cache for each test case
+            progress = await test_device.get_firmware_update_progress(force=True)
             assert progress.update_percentage == expected_percentage
 
     @pytest.mark.asyncio
@@ -685,10 +710,10 @@ class TestGetFirmwareUpdateProgress:
         assert mock_client.api.firmware.get_firmware_update_status.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_get_firmware_update_progress_bypasses_cache_during_active_update(
+    async def test_get_firmware_update_progress_uses_short_cache_during_active_update(
         self, test_device: FirmwareTestDevice, mock_client: Mock
     ) -> None:
-        """Test that progress method always bypasses cache during active update."""
+        """Test that progress method uses 10-second cache during active update."""
         from pylxpweb.models import FirmwareDeviceInfo, FirmwareUpdateStatus, UpdateStatus
 
         # Mock check_firmware_updates to populate cache
@@ -723,11 +748,11 @@ class TestGetFirmwareUpdateProgress:
         assert progress1.update_percentage == 50
         assert mock_client.api.firmware.get_firmware_update_status.call_count == 1
 
-        # Second call - should ALSO hit API (no caching during active update)
+        # Second call immediately after - should use 10-second cache
         progress2 = await test_device.get_firmware_update_progress()
         assert progress2.in_progress is True
-        # Should be 2 (additional API call made)
-        assert mock_client.api.firmware.get_firmware_update_status.call_count == 2
+        # Should still be 1 (cache used within 10 seconds)
+        assert mock_client.api.firmware.get_firmware_update_status.call_count == 1
 
     @pytest.mark.asyncio
     async def test_get_firmware_update_progress_force_bypasses_cache(
