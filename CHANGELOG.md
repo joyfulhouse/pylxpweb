@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2025-11-22
+
+### Fixed
+
+- **DST State Synchronization** - Fixed Home Assistant DST switch reverting after toggle:
+  - `Station.set_daylight_saving_time()` now updates cached `daylight_saving_time` attribute after successful API write
+  - Prevents HA switch from reverting to old state when reading cached value
+  - Added 3 comprehensive unit tests verifying state synchronization behavior
+  - Ensures UI state matches backend state immediately after control operations
+
 ## [0.3.5] - 2025-11-22
 
 ### Added

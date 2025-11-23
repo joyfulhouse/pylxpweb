@@ -526,3 +526,97 @@ class TestStationFactoryMethods:
         # Station should still be usable with empty device lists
         assert station.parallel_groups == []
         assert station.standalone_inverters == []
+
+
+class TestStationDaylightSavingTime:
+    """Test Station daylight saving time control."""
+
+    @pytest.mark.asyncio
+    async def test_set_daylight_saving_time_updates_cached_state(
+        self, mock_client: LuxpowerClient, sample_location: Location
+    ) -> None:
+        """Test that set_daylight_saving_time() updates cached daylight_saving_time."""
+        # Create station with DST initially disabled
+        station = Station(
+            client=mock_client,
+            plant_id=12345,
+            name="Test Station",
+            location=sample_location,
+            timezone="America/New_York",
+            created_date=datetime(2024, 1, 1),
+            daylight_saving_time=False,
+        )
+
+        # Mock successful API call
+        mock_client.api.plants.set_daylight_saving_time = AsyncMock(return_value={"success": True})
+
+        # Verify initial state
+        assert station.daylight_saving_time is False
+
+        # Enable DST
+        result = await station.set_daylight_saving_time(True)
+
+        # Verify success and state update
+        assert result is True
+        assert station.daylight_saving_time is True
+        mock_client.api.plants.set_daylight_saving_time.assert_called_once_with(12345, True)
+
+    @pytest.mark.asyncio
+    async def test_set_daylight_saving_time_does_not_update_on_failure(
+        self, mock_client: LuxpowerClient, sample_location: Location
+    ) -> None:
+        """Test that cached state is NOT updated when API call fails."""
+        station = Station(
+            client=mock_client,
+            plant_id=12345,
+            name="Test Station",
+            location=sample_location,
+            timezone="America/New_York",
+            created_date=datetime(2024, 1, 1),
+            daylight_saving_time=False,
+        )
+
+        # Mock failed API call
+        mock_client.api.plants.set_daylight_saving_time = AsyncMock(
+            return_value={"success": False, "msg": "API Error"}
+        )
+
+        # Verify initial state
+        assert station.daylight_saving_time is False
+
+        # Attempt to enable DST (will fail)
+        result = await station.set_daylight_saving_time(True)
+
+        # Verify failure and state NOT updated
+        assert result is False
+        assert station.daylight_saving_time is False  # Should remain False
+
+    @pytest.mark.asyncio
+    async def test_set_daylight_saving_time_disable(
+        self, mock_client: LuxpowerClient, sample_location: Location
+    ) -> None:
+        """Test disabling DST also updates cached state."""
+        # Create station with DST initially enabled
+        station = Station(
+            client=mock_client,
+            plant_id=12345,
+            name="Test Station",
+            location=sample_location,
+            timezone="America/New_York",
+            created_date=datetime(2024, 1, 1),
+            daylight_saving_time=True,
+        )
+
+        # Mock successful API call
+        mock_client.api.plants.set_daylight_saving_time = AsyncMock(return_value={"success": True})
+
+        # Verify initial state
+        assert station.daylight_saving_time is True
+
+        # Disable DST
+        result = await station.set_daylight_saving_time(False)
+
+        # Verify success and state update
+        assert result is True
+        assert station.daylight_saving_time is False
+        mock_client.api.plants.set_daylight_saving_time.assert_called_once_with(12345, False)
