@@ -348,11 +348,17 @@ pylxpweb/
 │   │   ├── mid_device.py      # MIDDevice (GridBOSS)
 │   │   └── inverters/         # BaseInverter, GenericInverter, HybridInverter
 │   ├── models.py           # Pydantic data models
-│   ├── constants.py        # Constants and register definitions
+│   ├── constants/          # Modular constants package
+│   │   ├── __init__.py        # Re-exports (backward compatible)
+│   │   ├── api.py             # HTTP codes, device types, retry config
+│   │   ├── devices.py         # Device constants, timezone parsing
+│   │   ├── locations.py       # Timezone, country, region mappings
+│   │   ├── registers.py       # Hold/input register definitions
+│   │   └── scaling.py         # ScaleFactor enum, scaling functions
 │   └── exceptions.py       # Custom exceptions
-├── tests/                  # Test suite (288+ tests)
-│   ├── unit/               # Unit tests (mock API)
-│   └── integration/        # Integration tests (live API)
+├── tests/                  # Test suite (550+ tests)
+│   ├── unit/               # Unit tests (492 tests, mock API)
+│   └── integration/        # Integration tests (58 tests, live API)
 ├── research/               # REFERENCE ONLY (not in package)
 └── pyproject.toml          # Package config (uv-based)
 ```
@@ -362,14 +368,19 @@ pylxpweb/
 ### GitHub Actions Workflows
 
 **CI Workflow** (`.github/workflows/ci.yml`):
-- Triggers: Push to main/master, PRs, manual dispatch
+- Triggers: PRs only (not on merge to main - eliminates redundant runs)
 - Jobs: Lint & Type Check (parallel), Unit Tests (parallel) → Integration Tests → CI Success
 - Python: 3.13 via `uv python install 3.13`
 - Integration tests skip for Dependabot PRs (no secret access)
 
+**Release Workflow** (`.github/workflows/release.yml`):
+- Triggers: Version tags (e.g., `v0.3.5`)
+- Auto-creates GitHub releases with changelog from CHANGELOG.md
+- Triggers publish workflow automatically
+
 **Publish Workflow** (`.github/workflows/publish.yml`):
 - Triggers: GitHub releases (`published`), manual dispatch
-- Flow: Lint → Test → Integration → Build → TestPyPI → PyPI
+- Flow: Build → TestPyPI → PyPI (no redundant testing, trusts PR checks)
 - OIDC authentication (no API tokens required)
 - Trusted publishers configured on PyPI/TestPyPI
 
@@ -378,41 +389,62 @@ pylxpweb/
 - Python (uv): Weekly updates (Mondays), max 10 PRs
 - Groups: `development-dependencies` and `production-dependencies`
 
+**Branch Protection**:
+- Require PR before merging (no direct commits to main)
+- Require 'CI Success' status check
+- Require branches up-to-date before merge
+- Dismiss stale reviews on new commits
+- Enforce for admins
+- Block force pushes and deletions
+
 ### GitHub Secrets Required
 - `LUXPOWER_USERNAME` - API username for integration tests
 - `LUXPOWER_PASSWORD` - API password
 - `LUXPOWER_BASE_URL` - API base URL
 
-## Current Implementation Status (v0.2.2)
+## Current Implementation Status (v0.3.5)
 
 ### Completed Features ✅
 - **API Coverage**: Complete endpoint coverage (auth, discovery, runtime, control)
 - **Device Hierarchy**: Station, ParallelGroup, Inverter, BatteryBank, Battery, MIDDevice
 - **Property-Based API**: ALL raw data private, ~150+ properly-scaled properties across all device types
-- **Parallel Groups**: Proper detection using GridBOSS serial number + aggregate energy data
+- **Parallel Groups**: Proper detection using GridBOSS serial number + pre-fetched energy data
 - **BatteryBank**: Aggregate battery data with individual battery array
 - **Control Operations**: Read/write parameters, control functions
 - **Concurrent Operations**: Station, Inverter, ParallelGroup refresh
 - **Type Safety**: mypy strict mode, Pydantic v2 models
-- **Test Coverage**: 479 tests, >85% coverage
+- **Test Coverage**: 550 tests (492 unit + 58 integration), 80.67% coverage
 - **Documentation**: Comprehensive usage guide, property reference, examples
+- **CI/CD**: Automated release pipeline (tag → release → publish to PyPI)
+- **Modular Constants**: Organized package structure for better maintainability
 
-### Recent Changes (2025-11-21)
-**Major API Refactoring**:
-- Made ALL raw Pydantic models private (`_runtime`, `_energy`, etc.)
-- Added ~40 properties to `BaseInverter` via `InverterRuntimePropertiesMixin`
-- Added ~50 properties to `MIDDevice` via `MIDRuntimePropertiesMixin`
-- Added ~12 energy properties to `ParallelGroup` (today/lifetime energy data)
-- Updated all 479 tests to use private attributes
-- Created comprehensive documentation (USAGE_GUIDE.md, PROPERTY_REFERENCE.md)
-- Updated README with property-based examples
-- Zero linting/type errors, all tests passing
+### Recent Changes (2025-11-22)
+
+**v0.3.5 - Integration Test Optimizations & Battery Fixes**:
+- Pre-fetch parallel group energy data on station load (fixes 0.00 kWh initial display)
+- Corrected battery property scaling (`charge_max_current`, `charge_voltage_ref`)
+- Rounded battery capacity percentage to nearest integer (82.857...% → 83%)
+- Split constants.py (1789 lines) into modular package (5 files, better organized)
+- Added 58 property mixin tests (coverage: 73.79% → 80.67%)
+- Centralized integration test fixtures with 500ms API throttling
+- Module-level imports in property mixins (eliminates per-call overhead)
+- Extracted `_is_cache_expired()` helper method
+
+**v0.3.4 - CI/CD Workflow Optimizations**:
+- CI workflow only runs on PRs (eliminates redundant runs on merge to main)
+- Release workflow auto-creates GitHub releases from version tags
+- Publish workflow trusts PR checks (no redundant testing)
+- Branch protection configured (require PR, CI Success, up-to-date branches)
+- Faster releases: 17 min → 7 min (10 min savings)
 
 **Benefits**:
-- Clear API: Only ONE way to access data (via properties)
-- No manual scaling required
-- Type-safe with graceful None handling
-- Eliminated confusion about which properties to use
+- Parallel group energy sensors show immediate values (not 0.00 kWh)
+- Better battery property accuracy with correct scaling
+- Cleaner percentage display (no excessive decimals)
+- More maintainable constants structure
+- Comprehensive property mixin test coverage
+- Reliable integration tests (no rate limiting)
+- Automated release process
 
 ### Known Limitations
 - **Low-Level API**: Direct API access still returns raw scaled integers (use device objects instead)
@@ -422,8 +454,8 @@ pylxpweb/
 ## Inter-Session Context
 
 ### Current Branch
-- `feature/0.2-object-hierarchy`
-- Status: ✅ Ready for merge (all tests passing, zero errors)
+- `main`
+- Status: ✅ All features complete, v0.3.5 released to PyPI
 
 ### Design Decisions & Rationale
 1. **Property-Based API**: ALL raw Pydantic models private, users access via properties only. Eliminates scaling confusion, provides type safety, graceful None handling.
