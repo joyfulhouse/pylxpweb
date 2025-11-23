@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Firmware Update Detection** - Home Assistant-compatible firmware update detection for inverters and MID devices:
+  - Added `FirmwareUpdateInfo` model with all HA Update entity requirements (`installed_version`, `latest_version`, `title`, `release_summary`, `release_url`)
+  - Created `FirmwareUpdateMixin` to provide firmware update detection across all device types
+  - Applied mixin to `BaseInverter` and `MIDDevice` classes
+  - Added `firmware_update_available` property for synchronous cache access (returns `bool | None`)
+  - Added `check_firmware_updates()` method with 24-hour TTL caching
+  - Added `start_firmware_update()` and `check_update_eligibility()` methods
+  - Hexadecimal version format handling: API returns decimal (v1=33) but versions use hex ("fAAB-2122" where 33=0x21)
+  - Update detection logic using `pcs1UpdateMatch`/`pcs2UpdateMatch` compatibility flags
+  - 27 comprehensive unit tests (11 for model, 16 for mixin)
+  - All tests passing (580 total), zero linting/type errors
+  - Full OpenAPI documentation with version format examples and detection algorithm
+
 ## [0.3.6] - 2025-11-22
 
 ### Fixed

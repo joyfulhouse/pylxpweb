@@ -1045,3 +1045,165 @@ class UpdateEligibilityStatus(BaseModel):
     def is_allowed(self) -> bool:
         """Check if device is allowed to update."""
         return self.msg == UpdateEligibilityMessage.ALLOW_TO_UPDATE
+
+
+class FirmwareUpdateInfo(BaseModel):
+    """Home Assistant-friendly firmware update information.
+
+    This model provides all fields needed to create an Update entity in Home Assistant,
+    including required properties (installed_version, latest_version, title) and
+    optional properties (release_summary, release_url, in_progress, etc.).
+
+    Example:
+        ```python
+        update_info = await inverter.get_firmware_update_info()
+        if update_info.update_available:
+            print(f"Update: {update_info.installed_version} → {update_info.latest_version}")
+            print(f"Release notes: {update_info.release_url}")
+            print(f"Summary: {update_info.release_summary}")
+        ```
+    """
+
+    # Required HA Update Entity properties
+    installed_version: str  # Current firmware version (e.g., "IAAB-1300")
+    latest_version: str  # Latest available version
+    title: str  # Software title (e.g., "Inverter Firmware", "GridBOSS Firmware")
+
+    # Optional HA Update Entity properties
+    release_summary: str | None = None  # Brief changelog (max 255 chars)
+    release_url: str | None = None  # URL to full release notes
+    in_progress: bool = False  # Whether update is currently installing
+    update_percentage: int | None = None  # Installation progress (0-100)
+
+    # Additional metadata for HA entity configuration
+    device_class: str = "firmware"  # UpdateDeviceClass.FIRMWARE
+    supported_features: list[str] = []  # e.g., ["install", "progress", "release_notes"]
+
+    # Raw API data for advanced use
+    app_version_current: int | None = None  # v1 from API
+    app_version_latest: int | None = None  # lastV1 from API
+    param_version_current: int | None = None  # v2 from API
+    param_version_latest: int | None = None  # lastV2 from API
+    app_filename: str | None = None  # lastV1FileName from API
+    param_filename: str | None = None  # lastV2FileName from API
+
+    @property
+    def update_available(self) -> bool:
+        """Check if firmware update is available.
+
+        Returns:
+            True if latest_version is newer than installed_version.
+        """
+        return self.installed_version != self.latest_version
+
+    @property
+    def has_app_update(self) -> bool:
+        """Check if application firmware update is available.
+
+        Returns:
+            True if app firmware update is available.
+        """
+        return (
+            self.app_version_current is not None
+            and self.app_version_latest is not None
+            and self.app_version_current < self.app_version_latest
+        )
+
+    @property
+    def has_parameter_update(self) -> bool:
+        """Check if parameter firmware update is available.
+
+        Returns:
+            True if parameter firmware update is available.
+        """
+        return (
+            self.param_version_current is not None
+            and self.param_version_latest is not None
+            and self.param_version_current < self.param_version_latest
+        )
+
+    @classmethod
+    def from_api_response(
+        cls,
+        check: FirmwareUpdateCheck,
+        title: str,
+        in_progress: bool = False,
+        update_percentage: int | None = None,
+    ) -> FirmwareUpdateInfo:
+        """Create FirmwareUpdateInfo from API response.
+
+        Args:
+            check: FirmwareUpdateCheck from API
+            title: Device title (e.g., "FlexBOSS21 Firmware", "GridBOSS Firmware")
+            in_progress: Whether update is currently installing
+            update_percentage: Installation progress (0-100)
+
+        Returns:
+            FirmwareUpdateInfo instance with HA-compatible fields.
+
+        Example:
+            ```python
+            api_check = await client.firmware.check_firmware_updates(serial)
+            update_info = FirmwareUpdateInfo.from_api_response(
+                api_check,
+                title="FlexBOSS21 Firmware"
+            )
+            ```
+        """
+        details = check.details
+
+        # Construct latest version from lastV1/lastV2 (or use current if no updates)
+        # Format: {fwCode}-{v1_hex}{v2_hex} (e.g., "IAAB-1600" for v1=22, v2=0)
+        # Note: API returns decimal values, but firmware versions use hexadecimal
+        if details.has_app_update or details.has_parameter_update:
+            # Use lastV1/lastV2 if there's an actual update, otherwise use current
+            latest_v1 = details.lastV1 if details.has_app_update else details.v1
+            latest_v2 = details.lastV2 if details.has_parameter_update else details.v2
+            # Extract firmware code (e.g., "IAAB" from "IAAB-1300")
+            fw_code = (
+                details.fwCodeBeforeUpload.split("-")[0]
+                if "-" in details.fwCodeBeforeUpload
+                else details.fwCodeBeforeUpload[:4]
+            )
+            # Convert to 2-digit hex (uppercase to match API format)
+            latest_version = f"{fw_code}-{latest_v1:02X}{latest_v2:02X}"
+        else:
+            # No updates available
+            latest_version = details.fwCodeBeforeUpload
+
+        # Generate release summary (max 255 chars for HA)
+        summary_parts = []
+        if details.has_app_update:
+            summary_parts.append(f"App firmware: v{details.v1} → v{details.lastV1}")
+        if details.has_parameter_update:
+            summary_parts.append(f"Parameter firmware: v{details.v2} → v{details.lastV2}")
+        release_summary = "; ".join(summary_parts) if summary_parts else None
+
+        # Determine supported features based on API capabilities
+        supported_features = ["install"]  # All devices support install
+        if update_percentage is not None:
+            supported_features.append("progress")
+        if check.infoForwardUrl:
+            supported_features.append("release_notes")
+
+        return cls(
+            # Required HA properties
+            installed_version=details.fwCodeBeforeUpload,
+            latest_version=latest_version,
+            title=title,
+            # Optional HA properties
+            release_summary=release_summary,
+            release_url=check.infoForwardUrl,
+            in_progress=in_progress,
+            update_percentage=update_percentage,
+            # Metadata
+            device_class="firmware",
+            supported_features=supported_features,
+            # Raw API data
+            app_version_current=details.v1,
+            app_version_latest=details.lastV1,
+            param_version_current=details.v2,
+            param_version_latest=details.lastV2,
+            app_filename=details.lastV1FileName,
+            param_filename=details.lastV2FileName,
+        )

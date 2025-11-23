@@ -16,6 +16,7 @@ from pylxpweb.constants import MAX_REGISTERS_PER_READ, SOC_MAX_PERCENT, SOC_MIN_
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 from pylxpweb.models import OperatingMode
 
+from .._firmware_update_mixin import FirmwareUpdateMixin
 from ..base import BaseDevice
 from ..models import DeviceInfo, Entity
 from ._runtime_properties import InverterRuntimePropertiesMixin
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from pylxpweb.models import EnergyInfo, InverterRuntime
 
 
-class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
+class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevice):
     """Abstract base class for all inverter types.
 
     All model-specific inverter classes (FlexBOSS, 18KPV, etc.) must inherit
@@ -86,6 +87,10 @@ class BaseInverter(InverterRuntimePropertiesMixin, BaseDevice):
         self._battery_cache_time: datetime | None = None
         self._battery_cache_ttl = timedelta(seconds=30)  # 30-second TTL for battery
         self._battery_cache_lock = asyncio.Lock()
+
+        # ===== Firmware Update Cache =====
+        # Initialize firmware update detection (from FirmwareUpdateMixin)
+        self._init_firmware_update_cache()
 
         # ===== Monotonic Value Tracking =====
         # Track last valid energy values to enforce monotonic behavior

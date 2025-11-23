@@ -57,7 +57,7 @@ from .exceptions import (
     LuxpowerDeviceOfflineError,
     LuxpowerError,
 )
-from .models import OperatingMode
+from .models import FirmwareUpdateInfo, OperatingMode
 
 __version__ = "0.3.6"
 __all__ = [
@@ -76,6 +76,8 @@ __all__ = [
     "ForecastingEndpoints",
     "ExportEndpoints",
     "FirmwareEndpoints",
+    # Models
+    "FirmwareUpdateInfo",
     # Enums
     "OperatingMode",
 ]

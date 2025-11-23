@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 
+from ._firmware_update_mixin import FirmwareUpdateMixin
 from ._mid_runtime_properties import MIDRuntimePropertiesMixin
 from .base import BaseDevice
 from .models import DeviceClass, DeviceInfo, Entity, StateClass
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from pylxpweb.models import MidboxRuntime
 
 
-class MIDDevice(MIDRuntimePropertiesMixin, BaseDevice):
+class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
     """Represents a GridBOSS/MID device for grid management.
 
     GridBOSS devices handle:
@@ -63,6 +64,9 @@ class MIDDevice(MIDRuntimePropertiesMixin, BaseDevice):
 
         # Runtime data (private - use properties for access)
         self._runtime: MidboxRuntime | None = None
+
+        # Initialize firmware update detection (from FirmwareUpdateMixin)
+        self._init_firmware_update_cache()
 
     async def refresh(self) -> None:
         """Refresh MID device runtime data from API."""

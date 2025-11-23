@@ -2729,15 +2729,33 @@ components:
               example: PCS
             fwCodeBeforeUpload:
               type: string
-              description: Current firmware version (format {standard}-{v1}{v2})
+              description: |
+                Current firmware version in hexadecimal format: {standard}-{v1_hex}{v2_hex}
+
+                **CRITICAL**: The version string uses 2-digit uppercase hexadecimal format,
+                while v1/v2 fields contain decimal values.
+
+                Example: v1=33 (decimal), v2=34 (decimal) → "fAAB-2122" (33=0x21, 34=0x22)
+
+                To construct version string from v1/v2:
+                ```python
+                version = f"{standard}-{v1:02X}{v2:02X}"  # Python
+                version = standard + '-' + toHex2(v1) + toHex2(v2)  // JavaScript
+                ```
+
+                This format matches the web UI implementation (remoteUpdateModalNormal.js).
               example: fAAB-2122
             v1:
               type: integer
-              description: Current application firmware version
+              description: |
+                Current application firmware version (decimal).
+                Convert to 2-digit hex for version string (e.g., 33 → "21").
               example: 33
             v2:
               type: integer
-              description: Current parameter firmware version
+              description: |
+                Current parameter firmware version (decimal).
+                Convert to 2-digit hex for version string (e.g., 34 → "22").
               example: 34
             v3Value:
               type: integer
@@ -2745,7 +2763,10 @@ components:
               example: 0
             lastV1:
               type: integer
-              description: Latest available application firmware version
+              description: |
+                Latest available application firmware version (decimal).
+                Only present if an app firmware update is available.
+                Convert to 2-digit hex for latest version string (e.g., 37 → "25").
               example: 37
             lastV1FileName:
               type: string
@@ -2753,7 +2774,10 @@ components:
               example: FAAB-25xx_20250925_App.hex
             lastV2:
               type: integer
-              description: Latest available parameter firmware version
+              description: |
+                Latest available parameter firmware version (decimal).
+                Only present if a parameter firmware update is available.
+                Convert to 2-digit hex for latest version string (e.g., 37 → "25").
               example: 37
             lastV2FileName:
               type: string
@@ -2765,15 +2789,31 @@ components:
               example: 33
             pcs1UpdateMatch:
               type: boolean
-              description: Whether PCS1 (app) update is compatible
+              description: |
+                Whether PCS1 (application firmware) update is compatible and recommended.
+
+                **Update Detection Logic**:
+                - App update available when: `lastV1 != null AND v1 < lastV1 AND pcs1UpdateMatch == true`
+                - If true and lastV1 present, construct latest version with lastV1 in hex format
+
+                This flag is part of the firmware compatibility check performed by the API.
               example: true
             pcs2UpdateMatch:
               type: boolean
-              description: Whether PCS2 (parameter) update is compatible
+              description: |
+                Whether PCS2 (parameter firmware) update is compatible and recommended.
+
+                **Update Detection Logic**:
+                - Parameter update available when: `lastV2 != null AND v2 < lastV2 AND pcs2UpdateMatch == true`
+                - If true and lastV2 present, construct latest version with lastV2 in hex format
+
+                This flag is part of the firmware compatibility check performed by the API.
               example: true
             pcs3UpdateMatch:
               type: boolean
-              description: Whether PCS3 update is compatible
+              description: |
+                Whether PCS3 update is compatible and recommended.
+                Typically false for most device types.
               example: false
             needRunStep2:
               type: boolean
@@ -2810,6 +2850,63 @@ components:
             Only present when `success: true` (update available).
             Contains comprehensive release notes, changelog, and update instructions.
           example: http://os.solarcloudsystem.com/#/apiLogin?...
+      description: |
+        Firmware update check response with version information and compatibility flags.
+
+        **Version Format - CRITICAL IMPLEMENTATION NOTE**:
+
+        The API uses a mixed format that requires conversion:
+        - Version strings (fwCodeBeforeUpload): Use 2-digit uppercase HEXADECIMAL format
+        - Version components (v1, v2, lastV1, lastV2): Use DECIMAL integers
+
+        **Example Conversion**:
+        ```
+        API Response:
+        {
+          "v1": 33,           // Current app version (decimal)
+          "v2": 34,           // Current param version (decimal)
+          "fwCodeBeforeUpload": "fAAB-2122",  // 33=0x21, 34=0x22 (hex)
+          "lastV1": 37,       // Latest app version (decimal)
+          "lastV2": 37,       // Latest param version (decimal)
+          "pcs1UpdateMatch": true,
+          "pcs2UpdateMatch": true
+        }
+
+        Construct Latest Version:
+        installed_version = "fAAB-2122"  // From fwCodeBeforeUpload
+        latest_version = "fAAB-2525"     // From f"{standard}-{lastV1:02X}{lastV2:02X}"
+                                         // 37=0x25, 37=0x25
+        ```
+
+        **Update Detection Algorithm**:
+        ```python
+        has_app_update = (
+            lastV1 is not None
+            and v1 < lastV1
+            and pcs1UpdateMatch == True
+        )
+
+        has_param_update = (
+            lastV2 is not None
+            and v2 < lastV2
+            and pcs2UpdateMatch == True
+        )
+
+        update_available = has_app_update or has_param_update
+
+        if update_available:
+            # Extract firmware code (e.g., "fAAB" from "fAAB-2122")
+            fw_code = fwCodeBeforeUpload.split('-')[0]
+
+            # Use latest versions if available, otherwise keep current
+            latest_v1 = lastV1 if has_app_update else v1
+            latest_v2 = lastV2 if has_param_update else v2
+
+            # Construct latest version with hex formatting
+            latest_version = f"{fw_code}-{latest_v1:02X}{latest_v2:02X}"
+        ```
+
+        This implementation matches the web UI logic in remoteUpdateModalNormal.js.
 
     FirmwareUpdateStatus:
       type: object
