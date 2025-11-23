@@ -21,9 +21,19 @@ class FirmwareUpdateMixin:
 
     This mixin adds:
     - Firmware update checking with 24-hour caching
+    - Real-time progress tracking with adaptive caching
     - Synchronous property access to cached update status
     - Methods to start updates and check eligibility
     - Full Home Assistant Update entity compatibility
+
+    Available properties (synchronous, cached):
+    - firmware_update_available: bool | None - Update availability
+    - firmware_update_in_progress: bool - Update currently in progress
+    - firmware_update_percentage: int | None - Progress percentage (0-100)
+    - latest_firmware_version: str | None - Latest version available
+    - firmware_update_title: str | None - Update title
+    - firmware_update_summary: str | None - Release summary
+    - firmware_update_url: str | None - Release notes URL
 
     The mixin expects the following attributes on the implementing class:
     - _client: LuxpowerClient instance
@@ -136,6 +146,52 @@ class FirmwareUpdateMixin:
         if self._firmware_update_info is None:
             return None
         return self._firmware_update_info.release_url
+
+    @property
+    def firmware_update_in_progress(self) -> bool:
+        """Check if firmware update is currently in progress (from cache).
+
+        This property provides synchronous access to cached firmware update progress status.
+        Returns False if no progress data available or if no update is in progress.
+
+        To get real-time progress, call `get_firmware_update_progress()` first.
+
+        Returns:
+            True if update is in progress, False otherwise.
+
+        Example:
+            >>> # Check progress
+            >>> await device.get_firmware_update_progress()
+            >>> # Access cached status
+            >>> if device.firmware_update_in_progress:
+            ...     print(f"Update at {device.firmware_update_percentage}%")
+        """
+        if self._firmware_update_info is None:
+            return False
+        return self._firmware_update_info.in_progress
+
+    @property
+    def firmware_update_percentage(self) -> int | None:
+        """Get firmware update progress percentage (from cache).
+
+        This property provides synchronous access to cached firmware update progress percentage.
+        Returns None if no progress data available.
+
+        To get real-time progress, call `get_firmware_update_progress()` first.
+
+        Returns:
+            Progress percentage (0-100), or None if not available.
+
+        Example:
+            >>> # Check progress
+            >>> await device.get_firmware_update_progress()
+            >>> # Access cached percentage
+            >>> if device.firmware_update_percentage is not None:
+            ...     print(f"Progress: {device.firmware_update_percentage}%")
+        """
+        if self._firmware_update_info is None:
+            return None
+        return self._firmware_update_info.update_percentage
 
     async def check_firmware_updates(self, force: bool = False) -> FirmwareUpdateInfo:
         """Check for available firmware updates (cached with 24-hour TTL).

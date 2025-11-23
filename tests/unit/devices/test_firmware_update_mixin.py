@@ -158,6 +158,18 @@ class TestFirmwareUpdateCacheProperties:
         assert test_device.firmware_update_summary is None
         assert test_device.firmware_update_url is None
 
+    def test_firmware_update_in_progress_returns_false_when_never_checked(
+        self, test_device: FirmwareTestDevice
+    ) -> None:
+        """Test firmware_update_in_progress returns False when never checked."""
+        assert test_device.firmware_update_in_progress is False
+
+    def test_firmware_update_percentage_returns_none_when_never_checked(
+        self, test_device: FirmwareTestDevice
+    ) -> None:
+        """Test firmware_update_percentage returns None when never checked."""
+        assert test_device.firmware_update_percentage is None
+
     def test_latest_firmware_version_returns_cached_value(
         self, test_device: FirmwareTestDevice
     ) -> None:
@@ -221,6 +233,60 @@ class TestFirmwareUpdateCacheProperties:
         # These are optional and should be None
         assert test_device.firmware_update_summary is None
         assert test_device.firmware_update_url is None
+
+    def test_firmware_update_in_progress_returns_true_when_update_active(
+        self, test_device: FirmwareTestDevice
+    ) -> None:
+        """Test firmware_update_in_progress returns True when update is active."""
+        test_device._firmware_update_info = FirmwareUpdateInfo(
+            installed_version="IAAB-1300",
+            latest_version="IAAB-1400",
+            title="Test Firmware",
+            in_progress=True,
+            update_percentage=50,
+        )
+
+        assert test_device.firmware_update_in_progress is True
+
+    def test_firmware_update_in_progress_returns_false_when_update_not_active(
+        self, test_device: FirmwareTestDevice
+    ) -> None:
+        """Test firmware_update_in_progress returns False when update is not active."""
+        test_device._firmware_update_info = FirmwareUpdateInfo(
+            installed_version="IAAB-1300",
+            latest_version="IAAB-1400",
+            title="Test Firmware",
+            in_progress=False,
+        )
+
+        assert test_device.firmware_update_in_progress is False
+
+    def test_firmware_update_percentage_returns_cached_value(
+        self, test_device: FirmwareTestDevice
+    ) -> None:
+        """Test firmware_update_percentage returns cached percentage."""
+        test_device._firmware_update_info = FirmwareUpdateInfo(
+            installed_version="IAAB-1300",
+            latest_version="IAAB-1400",
+            title="Test Firmware",
+            in_progress=True,
+            update_percentage=75,
+        )
+
+        assert test_device.firmware_update_percentage == 75
+
+    def test_firmware_update_percentage_returns_none_when_not_available(
+        self, test_device: FirmwareTestDevice
+    ) -> None:
+        """Test firmware_update_percentage returns None when not available."""
+        test_device._firmware_update_info = FirmwareUpdateInfo(
+            installed_version="IAAB-1300",
+            latest_version="IAAB-1400",
+            title="Test Firmware",
+            in_progress=False,
+        )
+
+        assert test_device.firmware_update_percentage is None
 
 
 class TestCheckFirmwareUpdates:

@@ -1003,21 +1003,53 @@ class FirmwareDeviceInfo(BaseModel):
 
     @property
     def is_in_progress(self) -> bool:
-        """Check if update is currently in progress."""
+        """Check if update is currently in progress.
+
+        Uses multiple indicators for reliable detection:
+        - updateStatus must be UPLOADING or READY
+        - isSendEndUpdate must be False (not completed yet)
+        - isSendStartUpdate should be True (update has started)
+
+        This ensures we accurately detect active updates and avoid
+        false positives from completed or failed updates.
+
+        Returns:
+            True if update is actively in progress, False otherwise
+        """
         return (
-            self.updateStatus == UpdateStatus.UPLOADING or self.updateStatus == UpdateStatus.READY
+            (self.updateStatus == UpdateStatus.UPLOADING or self.updateStatus == UpdateStatus.READY)
+            and not self.isSendEndUpdate
+            and self.isSendStartUpdate
         )
 
     @property
     def is_complete(self) -> bool:
-        """Check if update completed successfully."""
+        """Check if update completed successfully.
+
+        Uses multiple indicators for reliable detection:
+        - updateStatus is SUCCESS or COMPLETE
+        - isSendEndUpdate is True (end notification sent)
+        - stopTime is populated (not empty string)
+
+        Returns:
+            True if update completed successfully, False otherwise
+        """
         return (
-            self.updateStatus == UpdateStatus.COMPLETE or self.updateStatus == UpdateStatus.SUCCESS
+            (
+                self.updateStatus == UpdateStatus.SUCCESS
+                or self.updateStatus == UpdateStatus.COMPLETE
+            )
+            and self.isSendEndUpdate
+            and bool(self.stopTime.strip())
         )
 
     @property
     def is_failed(self) -> bool:
-        """Check if update failed."""
+        """Check if update failed.
+
+        Returns:
+            True if update failed, False otherwise
+        """
         return self.updateStatus == UpdateStatus.FAILED
 
 

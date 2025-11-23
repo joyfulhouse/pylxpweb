@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.10] - 2025-11-23
+
+### Added
+
+- **Synchronous Firmware Progress Properties** - New convenience properties for Home Assistant integration:
+  - `firmware_update_in_progress` (bool) - Synchronous property indicating if update is active
+  - `firmware_update_percentage` (int | None) - Synchronous property for progress percentage (0-100)
+  - Both properties provide immediate access to cached progress data without async calls
+  - Available on all devices with `FirmwareUpdateMixin` (BaseInverter, MIDDevice)
+
+### Changed
+
+- **Enhanced Firmware Update Detection Logic** - More reliable update state detection using multiple indicators:
+  - `is_in_progress` now checks: `updateStatus` (UPLOADING/READY) + `isSendStartUpdate=True` + `isSendEndUpdate=False`
+  - `is_complete` now checks: `updateStatus` (SUCCESS/COMPLETE) + `isSendEndUpdate=True` + `stopTime` populated
+  - Eliminates false positives from completed or failed updates
+  - Uses `isSendEndUpdate` field as primary completion indicator (most reliable)
+  - More robust handling of edge cases (whitespace in stopTime, etc.)
+
+### Testing
+
+- ✅ **Total tests**: 621 (all passing, +23 from v0.3.9)
+- ✅ **Coverage**: 82.66%
+- ✅ **New test file**: `test_firmware_device_info.py` with 17 comprehensive detection tests
+- ✅ **Property tests**: 6 new tests for synchronous progress properties
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
+### Usage Example
+
+```python
+# Start firmware update
+await device.start_firmware_update()
+
+# Monitor progress with synchronous properties
+async def monitor_update():
+    while True:
+        # Refresh progress data (async)
+        await device.get_firmware_update_progress()
+
+        # Access via synchronous properties (no await needed)
+        if device.firmware_update_in_progress:
+            print(f"Progress: {device.firmware_update_percentage}%")
+        else:
+            print("Update complete!")
+            break
+
+        await asyncio.sleep(30)
+
+# Home Assistant Update Entity example
+@property
+def in_progress(self) -> bool:
+    return self.device.firmware_update_in_progress  # Synchronous!
+
+@property
+def update_percentage(self) -> int | None:
+    return self.device.firmware_update_percentage  # Synchronous!
+```
+
 ## [0.3.9] - 2025-11-23
 
 ### Added
