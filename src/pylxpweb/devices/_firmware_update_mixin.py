@@ -202,6 +202,103 @@ class FirmwareUpdateMixin:
 
         return update_info
 
+    async def get_firmware_update_progress(self) -> FirmwareUpdateInfo:
+        """Get real-time firmware update progress for this device.
+
+        This method queries the API for current firmware update status and returns
+        updated FirmwareUpdateInfo with real-time progress data. Unlike
+        check_firmware_updates(), this method ALWAYS bypasses cache to provide
+        current progress information during active updates.
+
+        Use this method when:
+        - Monitoring active firmware update progress
+        - Checking if update is in progress
+        - Getting current update percentage during installation
+
+        The returned FirmwareUpdateInfo will have:
+        - in_progress: True if update is currently active (UPLOADING/READY)
+        - update_percentage: Current progress (0-100) parsed from API
+        - All other fields from cached firmware check
+
+        Returns:
+            FirmwareUpdateInfo with real-time progress data
+
+        Raises:
+            LuxpowerAPIError: If API check fails
+            LuxpowerConnectionError: If network connection fails
+
+        Example:
+            >>> # Start monitoring after initiating update
+            >>> await device.start_firmware_update()
+            >>>
+            >>> # Poll for progress
+            >>> while True:
+            ...     progress = await device.get_firmware_update_progress()
+            ...     if not progress.in_progress:
+            ...         break
+            ...     print(f"Progress: {progress.update_percentage}%")
+            ...     await asyncio.sleep(30)  # Poll every 30 seconds
+        """
+        # Import here to avoid circular imports
+        import re
+
+        from pylxpweb.models import FirmwareUpdateInfo
+
+        client: LuxpowerClient = self._client  # type: ignore[attr-defined]
+        serial: str = self.serial_number  # type: ignore[attr-defined]
+
+        # Get current update status from API
+        status = await client.api.firmware.get_firmware_update_status()
+
+        # Find this device's progress info
+        device_info = next(
+            (info for info in status.deviceInfos if info.inverterSn == serial),
+            None,
+        )
+
+        # Determine progress state
+        in_progress = False
+        update_percentage: int | None = None
+
+        if device_info is not None:
+            # Check if update is in progress
+            in_progress = device_info.is_in_progress
+
+            # Parse percentage from updateRate string (e.g., "50% - 280 / 561")
+            if device_info.updateRate:
+                match = re.match(r"^(\d+)%", device_info.updateRate)
+                if match:
+                    update_percentage = int(match.group(1))
+
+        # Get cached firmware check data (required for version info)
+        # If not cached, fetch it now
+        if self._firmware_update_info is None:
+            await self.check_firmware_updates()
+            assert self._firmware_update_info is not None
+
+        # Create updated FirmwareUpdateInfo with progress data
+        update_info = FirmwareUpdateInfo(
+            installed_version=self._firmware_update_info.installed_version,
+            latest_version=self._firmware_update_info.latest_version,
+            title=self._firmware_update_info.title,
+            release_summary=self._firmware_update_info.release_summary,
+            release_url=self._firmware_update_info.release_url,
+            in_progress=in_progress,
+            update_percentage=update_percentage,
+            device_class=self._firmware_update_info.device_class,
+            supported_features=self._firmware_update_info.supported_features,
+            app_version_current=self._firmware_update_info.app_version_current,
+            app_version_latest=self._firmware_update_info.app_version_latest,
+            param_version_current=self._firmware_update_info.param_version_current,
+            param_version_latest=self._firmware_update_info.param_version_latest,
+        )
+
+        # Update cache with progress data
+        async with self._firmware_update_cache_lock:
+            self._firmware_update_info = update_info
+
+        return update_info
+
     async def start_firmware_update(self, try_fast_mode: bool = False) -> bool:
         """Start firmware update for this device.
 

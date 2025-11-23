@@ -404,6 +404,268 @@ class TestCheckUpdateEligibility:
         assert result is False
 
 
+class TestGetFirmwareUpdateProgress:
+    """Tests for get_firmware_update_progress() method."""
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_when_not_in_progress(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test get_firmware_update_progress when no update is active."""
+        from pylxpweb.models import FirmwareUpdateStatus
+
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # Mock get_firmware_update_status with no active update
+        mock_status = FirmwareUpdateStatus.model_construct(
+            receiving=False,
+            progressing=False,
+            fileReady=False,
+            deviceInfos=[],
+        )
+        mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
+
+        # Get progress
+        progress = await test_device.get_firmware_update_progress()
+
+        # Should show no progress
+        assert progress.in_progress is False
+        assert progress.update_percentage is None
+        assert progress.installed_version == "IAAB-0D00"
+        assert progress.latest_version == "IAAB-0E00"
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_when_uploading(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test get_firmware_update_progress during active update."""
+        from pylxpweb.models import FirmwareDeviceInfo, FirmwareUpdateStatus, UpdateStatus
+
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # Mock get_firmware_update_status with active update
+        device_info = FirmwareDeviceInfo.model_construct(
+            inverterSn="1234567890",
+            startTime="2025-11-23 10:00:00",
+            stopTime="",
+            standardUpdate=True,
+            firmware="IAAB-0E00",
+            firmwareType="PCS",
+            updateStatus=UpdateStatus.UPLOADING,
+            isSendStartUpdate=True,
+            isSendEndUpdate=False,
+            packageIndex=280,
+            updateRate="50% - 280 / 561",
+        )
+        mock_status = FirmwareUpdateStatus.model_construct(
+            receiving=False,
+            progressing=True,
+            fileReady=True,
+            deviceInfos=[device_info],
+        )
+        mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
+
+        # Get progress
+        progress = await test_device.get_firmware_update_progress()
+
+        # Should show active update with 50% progress
+        assert progress.in_progress is True
+        assert progress.update_percentage == 50
+        assert progress.installed_version == "IAAB-0D00"
+        assert progress.latest_version == "IAAB-0E00"
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_when_complete(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test get_firmware_update_progress after update completes."""
+        from pylxpweb.models import FirmwareDeviceInfo, FirmwareUpdateStatus, UpdateStatus
+
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # Mock get_firmware_update_status with completed update
+        device_info = FirmwareDeviceInfo.model_construct(
+            inverterSn="1234567890",
+            startTime="2025-11-23 10:00:00",
+            stopTime="2025-11-23 10:25:00",
+            standardUpdate=True,
+            firmware="IAAB-0E00",
+            firmwareType="PCS",
+            updateStatus=UpdateStatus.SUCCESS,
+            isSendStartUpdate=True,
+            isSendEndUpdate=True,
+            packageIndex=560,
+            updateRate="100% - 561 / 561",
+        )
+        mock_status = FirmwareUpdateStatus.model_construct(
+            receiving=False,
+            progressing=False,
+            fileReady=False,
+            deviceInfos=[device_info],
+        )
+        mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
+
+        # Get progress
+        progress = await test_device.get_firmware_update_progress()
+
+        # Should show completed update
+        assert progress.in_progress is False
+        assert progress.update_percentage == 100
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_parses_percentage_correctly(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test that percentage is correctly parsed from various updateRate formats."""
+        from pylxpweb.models import FirmwareDeviceInfo, FirmwareUpdateStatus, UpdateStatus
+
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # Test various percentage values
+        test_cases = [
+            ("0% - 0 / 561", 0),
+            ("25% - 140 / 561", 25),
+            ("75% - 420 / 561", 75),
+            ("99% - 555 / 561", 99),
+            ("100% - 561 / 561", 100),
+        ]
+
+        for update_rate, expected_percentage in test_cases:
+            device_info = FirmwareDeviceInfo.model_construct(
+                inverterSn="1234567890",
+                startTime="2025-11-23 10:00:00",
+                stopTime="",
+                standardUpdate=True,
+                firmware="IAAB-0E00",
+                firmwareType="PCS",
+                updateStatus=UpdateStatus.UPLOADING,
+                isSendStartUpdate=True,
+                isSendEndUpdate=False,
+                packageIndex=0,
+                updateRate=update_rate,
+            )
+            mock_status = FirmwareUpdateStatus.model_construct(
+                receiving=False,
+                progressing=True,
+                fileReady=True,
+                deviceInfos=[device_info],
+            )
+            mock_client.api.firmware.get_firmware_update_status = AsyncMock(
+                return_value=mock_status
+            )
+
+            progress = await test_device.get_firmware_update_progress()
+            assert progress.update_percentage == expected_percentage
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_handles_missing_device_info(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test get_firmware_update_progress when device not in status response."""
+        from pylxpweb.models import FirmwareUpdateStatus
+
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # Mock get_firmware_update_status with different device
+        mock_status = FirmwareUpdateStatus.model_construct(
+            receiving=False,
+            progressing=False,
+            fileReady=False,
+            deviceInfos=[],  # Empty list
+        )
+        mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
+
+        # Get progress
+        progress = await test_device.get_firmware_update_progress()
+
+        # Should return False/None when device not found
+        assert progress.in_progress is False
+        assert progress.update_percentage is None
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_fetches_cache_if_empty(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test that get_firmware_update_progress fetches firmware check if cache empty."""
+        from pylxpweb.models import FirmwareUpdateStatus
+
+        # Mock check_firmware_updates
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # Mock get_firmware_update_status
+        mock_status = FirmwareUpdateStatus.model_construct(
+            receiving=False,
+            progressing=False,
+            fileReady=False,
+            deviceInfos=[],
+        )
+        mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
+
+        # Cache should be empty
+        assert test_device._firmware_update_info is None
+
+        # Get progress
+        await test_device.get_firmware_update_progress()
+
+        # Should have called check_firmware_updates to populate cache
+        mock_client.api.firmware.check_firmware_updates.assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    async def test_get_firmware_update_progress_updates_cache(
+        self, test_device: FirmwareTestDevice, mock_client: Mock
+    ) -> None:
+        """Test that get_firmware_update_progress updates cached values."""
+        from pylxpweb.models import FirmwareDeviceInfo, FirmwareUpdateStatus, UpdateStatus
+
+        # Mock check_firmware_updates to populate cache
+        api_check = _create_firmware_check(v1=13, v2=0, last_v1=14, last_v2=0, info_url=None)
+        mock_client.api.firmware.check_firmware_updates = AsyncMock(return_value=api_check)
+
+        # First call to populate cache
+        await test_device.check_firmware_updates()
+        assert test_device._firmware_update_info.in_progress is False
+
+        # Mock get_firmware_update_status with active update
+        device_info = FirmwareDeviceInfo.model_construct(
+            inverterSn="1234567890",
+            startTime="2025-11-23 10:00:00",
+            stopTime="",
+            standardUpdate=True,
+            firmware="IAAB-0E00",
+            firmwareType="PCS",
+            updateStatus=UpdateStatus.UPLOADING,
+            isSendStartUpdate=True,
+            isSendEndUpdate=False,
+            packageIndex=280,
+            updateRate="50% - 280 / 561",
+        )
+        mock_status = FirmwareUpdateStatus.model_construct(
+            receiving=False,
+            progressing=True,
+            fileReady=True,
+            deviceInfos=[device_info],
+        )
+        mock_client.api.firmware.get_firmware_update_status = AsyncMock(return_value=mock_status)
+
+        # Get progress - should update cache
+        await test_device.get_firmware_update_progress()
+
+        # Cache should now reflect progress
+        assert test_device._firmware_update_info.in_progress is True
+        assert test_device._firmware_update_info.update_percentage == 50
+
+
 class TestFirmwareUpdateWorkflow:
     """Integration tests for complete firmware update workflow."""
 
