@@ -10,6 +10,7 @@ This module provides plant/station functionality including:
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from pylxpweb.endpoints.base import BaseEndpoint
@@ -17,6 +18,8 @@ from pylxpweb.models import PlantListResponse
 
 if TYPE_CHECKING:
     from pylxpweb.client import LuxpowerClient
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class PlantEndpoints(BaseEndpoint):
@@ -146,9 +149,7 @@ class PlantEndpoints(BaseEndpoint):
             LuxpowerAPIError: If country cannot be found in locale API
         """
         import json
-        from logging import getLogger
 
-        _LOGGER = getLogger(__name__)
         _LOGGER.info(
             "Country '%s' not in static mapping, fetching from locale API",
             country_human,
@@ -225,15 +226,11 @@ class PlantEndpoints(BaseEndpoint):
             ValueError: If unable to map required fields
             LuxpowerAPIError: If dynamic fetch fails
         """
-        from logging import getLogger
-
         from pylxpweb.constants import (
             COUNTRY_MAP,
             TIMEZONE_MAP,
             get_continent_region_from_country,
         )
-
-        _LOGGER = getLogger(__name__)
 
         # Required fields for POST
         data: dict[str, Any] = {
