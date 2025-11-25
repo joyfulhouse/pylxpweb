@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.14] - 2025-11-25
+
+### Changed
+
+- **Logging Level Optimization** - Reduced log verbosity for production use:
+  - Changed cache invalidation logs from INFO to DEBUG (hour boundary, cache clearing)
+  - Changed authentication routine logs from INFO to DEBUG (login, session expiry, re-auth)
+  - Changed date boundary/energy reset logs from INFO to DEBUG (internal state management)
+  - Changed plant configuration logs from INFO to DEBUG (fetch details, update config, DST)
+  - Kept meaningful configuration changes at INFO level (DST update success)
+  - All WARNING and ERROR logs remain unchanged (appropriate for degraded/failed operations)
+
+### Testing
+
+- ✅ **Total tests**: 637 (all passing)
+- ✅ **Coverage**: >82%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.3.13] - 2025-11-24
 
 ### Fixed

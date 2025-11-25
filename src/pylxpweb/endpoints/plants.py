@@ -150,7 +150,7 @@ class PlantEndpoints(BaseEndpoint):
         """
         import json
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Country '%s' not in static mapping, fetching from locale API",
             country_human,
         )
@@ -190,7 +190,7 @@ class PlantEndpoints(BaseEndpoint):
                 # Check if our country is in this region
                 for country in countries:
                     if country["text"] == country_human:
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "Found country '%s' in locale API: continent=%s, region=%s",
                             country_human,
                             continent_enum,
@@ -264,7 +264,7 @@ class PlantEndpoints(BaseEndpoint):
             )
         except ValueError:
             # Slow path: dynamic fetch from locale API
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Country '%s' not in static mapping, fetching from locale API",
                 country_human,
             )
@@ -280,7 +280,7 @@ class PlantEndpoints(BaseEndpoint):
         # Apply any overrides
         data.update(overrides)
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Prepared plant update data for plant %s: timezone=%s, country=%s, "
             "continent=%s, region=%s, dst=%s",
             plant_details["plantId"],
@@ -332,13 +332,13 @@ class PlantEndpoints(BaseEndpoint):
         await self.client._ensure_authenticated()
 
         # Get current configuration from API (human-readable values)
-        _LOGGER.info("Fetching plant details for plant %s", plant_id)
+        _LOGGER.debug("Fetching plant details for plant %s", plant_id)
         plant_details = await self.get_plant_details(plant_id)
 
         # Prepare POST data using hybrid approach (static + dynamic mapping)
         data = await self._prepare_plant_update_data(plant_details, **kwargs)
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Updating plant %s configuration: %s",
             plant_id,
             dict(kwargs),
@@ -346,7 +346,7 @@ class PlantEndpoints(BaseEndpoint):
 
         response = await self.client._request("POST", "/WManage/web/config/plant/edit", data=data)
 
-        _LOGGER.info("Plant %s configuration updated successfully", plant_id)
+        _LOGGER.debug("Plant %s configuration updated successfully", plant_id)
         return response
 
     async def set_daylight_saving_time(self, plant_id: int | str, enabled: bool) -> dict[str, Any]:
@@ -374,7 +374,7 @@ class PlantEndpoints(BaseEndpoint):
         from logging import getLogger
 
         _LOGGER = getLogger(__name__)
-        _LOGGER.info(
+        _LOGGER.debug(
             "Setting Daylight Saving Time to %s for plant %s",
             "enabled" if enabled else "disabled",
             plant_id,

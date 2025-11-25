@@ -341,7 +341,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         if current_date != self._last_energy_date:
             # Date changed! Reset needed
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Inverter %s: Date boundary crossed from %s to %s",
                 self.serial_number,
                 self._last_energy_date,
@@ -377,7 +377,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         # Check for date boundary reset
         if self._should_reset_daily_energy():
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Inverter %s: Date boundary detected, resetting daily energy from %.2f to 0.0 "
                 "(API reported %.2f)",
                 self.serial_number,
@@ -402,7 +402,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
             # Allow reset to 0 (manual reset or API reset)
             if current_value_kwh == 0.0 and self._last_energy_today > 0.0:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "Inverter %s: Allowing manual reset to 0 for daily energy",
                     self.serial_number,
                 )
