@@ -486,7 +486,7 @@ class LuxpowerClient:
         # This ensures fresh data after boundaries, especially midnight
         current_hour = datetime.now().hour
         if self._last_request_hour is not None and current_hour != self._last_request_hour:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Hour boundary crossed (hour %d → %d), invalidating all caches",
                 self._last_request_hour,
                 current_hour,
@@ -564,7 +564,7 @@ class LuxpowerClient:
             )
             try:
                 await self.login()
-                _LOGGER.info("Re-authentication successful, retrying request")
+                _LOGGER.debug("Re-authentication successful, retrying request")
                 # Retry the request with the new session
                 return await self._request(
                     method,
@@ -585,7 +585,7 @@ class LuxpowerClient:
                 _LOGGER.warning("Got 401 Unauthorized, attempting to re-authenticate")
                 try:
                     await self.login()
-                    _LOGGER.info("Re-authentication successful, retrying request")
+                    _LOGGER.debug("Re-authentication successful, retrying request")
                     # Retry the request with the new session
                     return await self._request(
                         method,
@@ -623,7 +623,7 @@ class LuxpowerClient:
         Raises:
             LuxpowerAuthError: If authentication fails
         """
-        _LOGGER.info("Logging in as %s", self.username)
+        _LOGGER.debug("Logging in as %s", self.username)
 
         data = {
             "account": self.username,
@@ -637,7 +637,7 @@ class LuxpowerClient:
         # Store session info (session cookie is automatically handled by aiohttp)
         self._session_expires = datetime.now() + timedelta(hours=2)
         self._user_id = login_data.userId
-        _LOGGER.info("Login successful, session expires at %s", self._session_expires)
+        _LOGGER.debug("Login successful, session expires at %s", self._session_expires)
 
         # Detect account level from endUser field
         await self._detect_account_level()
@@ -647,7 +647,7 @@ class LuxpowerClient:
     async def _ensure_authenticated(self) -> None:
         """Ensure we have a valid session, re-authenticating if needed."""
         if not self._session_expires or datetime.now() >= self._session_expires:
-            _LOGGER.info("Session expired or missing, re-authenticating")
+            _LOGGER.debug("Session expired or missing, re-authenticating")
             await self.login()
 
     async def _detect_account_level(self) -> None:
@@ -695,7 +695,7 @@ class LuxpowerClient:
                 # No endUser field or empty - assume owner (backward compatibility)
                 self._account_level = "owner"
 
-            _LOGGER.info("Detected account level: %s (endUser=%s)", self._account_level, end_user)
+            _LOGGER.debug("Detected account level: %s (endUser=%s)", self._account_level, end_user)
 
         except Exception as err:
             _LOGGER.warning("Failed to detect account level: %s", err)

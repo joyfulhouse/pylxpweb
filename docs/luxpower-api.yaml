@@ -1218,10 +1218,16 @@ paths:
         Check if firmware updates are available for a specific device.
         Returns current firmware versions, available updates, and compatibility information.
 
-        **Update Availability**:
-        - `success: false` - No firmware update available
-        - `success: true` - Firmware update available
-        - When `success: true`, `infoForwardUrl` contains release notes and update details
+        **Response Behavior**:
+        - `success: true` with `details.lastV1 > details.v1` - Firmware update available
+        - `success: true` with `details.lastV1 == details.v1` - No update (firmware up to date)
+        - `success: false` with message "The current machine firmware is already the latest version." -
+          Firmware is already up to date (HTTP 200 with this message is NOT an error)
+
+        **Important**: When the device firmware is already the latest version, the API returns
+        HTTP 200 with `success: false` and a message indicating the firmware is current. Client
+        implementations should treat this as a successful check indicating no update available,
+        NOT as an error condition.
 
         **Firmware Version Format**: `{standard}-{v1}{v2}{v3}`
         - Example: "fAAB-2122" means fAAB standard, v21 app, v22 parameters
@@ -1276,10 +1282,11 @@ paths:
                       pcs1UpdateMatch: true
                       pcs2UpdateMatch: true
                     infoForwardUrl: "http://os.solarcloudsystem.com/#/apiLogin?..."
-                noUpdate:
-                  summary: No update available
+                alreadyLatest:
+                  summary: Firmware already up to date (HTTP 200, not an error)
                   value:
                     success: false
+                    message: "The current machine firmware is already the latest version."
 
   /web/maintain/remoteUpdate/info:
     post:

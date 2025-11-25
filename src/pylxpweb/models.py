@@ -980,6 +980,48 @@ class FirmwareUpdateCheck(BaseModel):
     details: FirmwareUpdateDetails
     infoForwardUrl: str | None = None
 
+    @classmethod
+    def create_up_to_date(cls, serial_num: str) -> FirmwareUpdateCheck:
+        """Create a FirmwareUpdateCheck indicating firmware is already up to date.
+
+        This is used when the API returns a "firmware is already the latest version"
+        message, which should be treated as a successful check with no update available.
+
+        Args:
+            serial_num: Device serial number
+
+        Returns:
+            FirmwareUpdateCheck with details indicating no update is available
+        """
+        # Create minimal details with no update available
+        # All version fields set to 0, no latest versions, compatibility flags False
+        details = FirmwareUpdateDetails(
+            serialNum=serial_num,
+            deviceType=0,
+            standard="",
+            firmwareType="",
+            fwCodeBeforeUpload="",
+            v1=0,  # Current version unknown
+            v2=0,
+            v3Value=0,
+            lastV1=None,  # No update available
+            lastV1FileName=None,
+            lastV2=None,
+            lastV2FileName=None,
+            m3Version=0,
+            pcs1UpdateMatch=False,  # No update match
+            pcs2UpdateMatch=False,
+            pcs3UpdateMatch=False,
+            needRunStep2=False,
+            needRunStep3=False,
+            needRunStep4=False,
+            needRunStep5=False,
+            midbox=False,
+            lowVoltBattery=False,
+            type6=False,
+        )
+        return cls(success=True, details=details, infoForwardUrl=None)
+
 
 class FirmwareDeviceInfo(BaseModel):
     """Individual device firmware update information."""

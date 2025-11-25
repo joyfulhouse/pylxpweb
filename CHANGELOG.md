@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.14] - 2025-11-25
+
+### Changed
+
+- **Logging Level Optimization** - Reduced log verbosity for production use:
+  - Changed cache invalidation logs from INFO to DEBUG (hour boundary, cache clearing)
+  - Changed authentication routine logs from INFO to DEBUG (login, session expiry, re-auth)
+  - Changed date boundary/energy reset logs from INFO to DEBUG (internal state management)
+  - Changed plant configuration logs from INFO to DEBUG (fetch details, update config, DST)
+  - Kept meaningful configuration changes at INFO level (DST update success)
+  - All WARNING and ERROR logs remain unchanged (appropriate for degraded/failed operations)
+
+### Testing
+
+- ✅ **Total tests**: 637 (all passing)
+- ✅ **Coverage**: >82%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
+## [0.3.13] - 2025-11-24
+
+### Fixed
+
+- **Firmware "Already Latest" Handling** - Fixed incorrect exception when firmware is already up to date:
+  - The API returns HTTP 200 with `success=false` and message "The current machine firmware is already the latest version." when firmware is current
+  - Previously this raised `LuxpowerAPIError` - now correctly returns `FirmwareUpdateCheck` with `has_update=False`
+  - Added `FirmwareUpdateCheck.create_up_to_date()` class method for creating "no update available" responses
+  - Added `FIRMWARE_UP_TO_DATE_MESSAGES` constant for message detection (case-insensitive)
+
+### Changed
+
+- **API Documentation Updated** - Updated `docs/luxpower-api.yaml` to document the "already latest" response behavior
+
+### Testing
+
+- ✅ **Total tests**: 640+ (new firmware endpoint tests added)
+- ✅ **New test file**: `tests/unit/endpoints/test_firmware_endpoints.py`
+- ✅ **Coverage**: >82%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
+## [0.3.12] - 2025-11-24
+
+### Changed
+
+- **Code Review Improvements** - Comprehensive code review cleanup:
+  - Added status badges to README (CI, Codecov, PyPI, Python version, License)
+  - Increased coverage threshold from 70% to 80% (current: 82.88%)
+  - Removed TODO comment in control.py (clarified as design note)
+  - Deleted constants.py.bak backup file (cleanup from refactoring)
+
+### Testing
+
+- ✅ **Total tests**: 621 (all passing)
+- ✅ **Coverage**: 82.88%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
+## [0.3.11] - 2025-11-24
+
+### Changed
+
+- **Code Quality** - Refactored logging imports in control and plants endpoints:
+  - Moved logging imports to module level (previously inline imports)
+  - Improved code consistency and reduced import overhead
+  - No functional changes or API modifications
+
 ## [0.3.10] - 2025-11-23
 
 ### Added
@@ -661,6 +728,10 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 
 ## Version History Summary
 
+- **v0.3.13** (2025-11-24): Fixed firmware "already latest" exception - now returns proper FirmwareUpdateCheck
+- **v0.3.12** (2025-11-24): Code review improvements - badges, coverage threshold, cleanup
+- **v0.3.11** (2025-11-24): Code quality - logging imports refactored
+- **v0.3.10** (2025-11-23): Synchronous firmware progress properties
 - **v0.3.9** (2025-11-23): Real-time firmware update progress tracking with adaptive caching
 - **v0.3.8** (2025-11-23): Firmware update convenience properties and summary formatting
 - **v0.3.7** (2025-11-23): Firmware update detection for HA Update entities
@@ -682,6 +753,10 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.3.13]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.12...v0.3.13
+[0.3.12]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.11...v0.3.12
+[0.3.11]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.10...v0.3.11
+[0.3.10]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.9...v0.3.10
 [0.3.9]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.6...v0.3.7

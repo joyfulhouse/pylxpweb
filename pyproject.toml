@@ -1,6 +1,6 @@
 [project]
 name = "pylxpweb"
-version = "0.3.10"
+version = "0.3.14"
 description = "Python client library for Luxpower/EG4 inverter web monitoring API"
 readme = "README.md"
 authors = [
@@ -35,7 +35,7 @@ dev = [
 ]
 
 [project.scripts]
-pylxpweb-diagnostics = "utils.collect_diagnostics:main"
+pylxpweb-collect = "pylxpweb.cli.collect_device_data:main"
 
 [build-system]
 requires = ["uv_build>=0.9.10,<0.10.0"]
@@ -121,6 +121,7 @@ omit = [
     "utils/*",
     "src/pylxpweb/constants.py",
     "src/pylxpweb/registers.py",
+    "src/pylxpweb/cli/*",
 ]
 
 [tool.coverage.report]
@@ -136,7 +137,7 @@ exclude_lines = [
 ]
 precision = 2
 skip_empty = true
-fail_under = 70  # TODO: Increase to 90 after adding endpoint tests
+fail_under = 80  # Current coverage: ~82%, increased from 70%
 
 [dependency-groups]
 dev = [

@@ -1,5 +1,11 @@
 # pylxpweb
 
+[![CI](https://github.com/joyfulhouse/pylxpweb/actions/workflows/ci.yml/badge.svg)](https://github.com/joyfulhouse/pylxpweb/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/joyfulhouse/pylxpweb/branch/main/graph/badge.svg)](https://codecov.io/gh/joyfulhouse/pylxpweb)
+[![PyPI version](https://badge.fury.io/py/pylxpweb.svg)](https://badge.fury.io/py/pylxpweb)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A Python client library for Luxpower/EG4 solar inverters and energy storage systems, providing programmatic access to the Luxpower/EG4 web monitoring API.
 
 ## Supported API Endpoints
