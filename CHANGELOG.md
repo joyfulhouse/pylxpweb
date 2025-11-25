@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.12] - 2025-11-24
+
+### Changed
+
+- **Code Review Improvements** - Comprehensive code review cleanup:
+  - Added status badges to README (CI, Codecov, PyPI, Python version, License)
+  - Increased coverage threshold from 70% to 80% (current: 82.88%)
+  - Removed TODO comment in control.py (clarified as design note)
+  - Deleted constants.py.bak backup file (cleanup from refactoring)
+
+### Testing
+
+- ✅ **Total tests**: 621 (all passing)
+- ✅ **Coverage**: 82.88%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.3.11] - 2025-11-24
 
 ### Changed
@@ -670,6 +687,9 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 
 ## Version History Summary
 
+- **v0.3.12** (2025-11-24): Code review improvements - badges, coverage threshold, cleanup
+- **v0.3.11** (2025-11-24): Code quality - logging imports refactored
+- **v0.3.10** (2025-11-23): Synchronous firmware progress properties
 - **v0.3.9** (2025-11-23): Real-time firmware update progress tracking with adaptive caching
 - **v0.3.8** (2025-11-23): Firmware update convenience properties and summary formatting
 - **v0.3.7** (2025-11-23): Firmware update detection for HA Update entities
@@ -691,6 +711,9 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.3.12]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.11...v0.3.12
+[0.3.11]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.10...v0.3.11
+[0.3.10]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.9...v0.3.10
 [0.3.9]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.6...v0.3.7
