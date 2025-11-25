@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.13] - 2025-11-24
+
+### Fixed
+
+- **Firmware "Already Latest" Handling** - Fixed incorrect exception when firmware is already up to date:
+  - The API returns HTTP 200 with `success=false` and message "The current machine firmware is already the latest version." when firmware is current
+  - Previously this raised `LuxpowerAPIError` - now correctly returns `FirmwareUpdateCheck` with `has_update=False`
+  - Added `FirmwareUpdateCheck.create_up_to_date()` class method for creating "no update available" responses
+  - Added `FIRMWARE_UP_TO_DATE_MESSAGES` constant for message detection (case-insensitive)
+
+### Changed
+
+- **API Documentation Updated** - Updated `docs/luxpower-api.yaml` to document the "already latest" response behavior
+
+### Testing
+
+- ✅ **Total tests**: 640+ (new firmware endpoint tests added)
+- ✅ **New test file**: `tests/unit/endpoints/test_firmware_endpoints.py`
+- ✅ **Coverage**: >82%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.3.12] - 2025-11-24
 
 ### Changed
@@ -687,6 +709,7 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 
 ## Version History Summary
 
+- **v0.3.13** (2025-11-24): Fixed firmware "already latest" exception - now returns proper FirmwareUpdateCheck
 - **v0.3.12** (2025-11-24): Code review improvements - badges, coverage threshold, cleanup
 - **v0.3.11** (2025-11-24): Code quality - logging imports refactored
 - **v0.3.10** (2025-11-23): Synchronous firmware progress properties
@@ -711,6 +734,7 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.3.13]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.12...v0.3.13
 [0.3.12]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.11...v0.3.12
 [0.3.11]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.10...v0.3.11
 [0.3.10]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.9...v0.3.10

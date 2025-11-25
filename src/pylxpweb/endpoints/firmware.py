@@ -9,9 +9,11 @@ This module provides firmware update functionality including:
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from pylxpweb.endpoints.base import BaseEndpoint
+from pylxpweb.exceptions import LuxpowerAPIError
 from pylxpweb.models import (
     FirmwareUpdateCheck,
     FirmwareUpdateStatus,
@@ -20,6 +22,15 @@ from pylxpweb.models import (
 
 if TYPE_CHECKING:
     from pylxpweb.client import LuxpowerClient
+
+_LOGGER = logging.getLogger(__name__)
+
+# Messages that indicate firmware is already up to date (not an error)
+FIRMWARE_UP_TO_DATE_MESSAGES = (
+    "already the latest version",
+    "firmware is already the latest",
+    "already up to date",
+)
 
 
 class FirmwareEndpoints(BaseEndpoint):
@@ -39,22 +50,27 @@ class FirmwareEndpoints(BaseEndpoint):
         This is a READ-ONLY operation that checks if firmware updates are available
         and returns information about the current and available firmware versions.
 
+        When firmware is already up to date, the API returns success=false with a
+        message like "The current machine firmware is already the latest version".
+        This method handles that case gracefully by returning a FirmwareUpdateCheck
+        with success=True and details indicating no update is available.
+
         Args:
             serial_num: Device serial number (10-digit string)
 
         Returns:
             FirmwareUpdateCheck object containing:
-                - success: Boolean indicating success
+                - success: Boolean indicating the check completed successfully
                 - details: Detailed firmware information including:
                     - Current firmware versions (v1, v2, v3)
-                    - Latest available versions (lastV1, lastV2)
+                    - Latest available versions (lastV1, lastV2) - None if up to date
                     - Update compatibility flags
                     - Device type information
                 - infoForwardUrl: URL to firmware changelog/release notes (optional)
 
         Raises:
             LuxpowerAuthError: If authentication fails
-            LuxpowerAPIError: If API returns an error
+            LuxpowerAPIError: If API returns an actual error (not "up to date" message)
             LuxpowerConnectionError: If connection fails
 
         Example:
@@ -62,18 +78,35 @@ class FirmwareEndpoints(BaseEndpoint):
             if update_info.details.has_update():
                 print(f"Update available: {update_info.details.lastV1FileName}")
                 print(f"Changelog: {update_info.infoForwardUrl}")
+            else:
+                print("Firmware is already up to date")
         """
         await self.client._ensure_authenticated()
 
         data = {"serialNum": serial_num}
 
-        response = await self.client._request(
-            "POST",
-            "/WManage/web/maintain/standardUpdate/checkUpdates",
-            data=data,
-        )
+        try:
+            response = await self.client._request(
+                "POST",
+                "/WManage/web/maintain/standardUpdate/checkUpdates",
+                data=data,
+            )
+            return FirmwareUpdateCheck.model_validate(response)
 
-        return FirmwareUpdateCheck.model_validate(response)
+        except LuxpowerAPIError as err:
+            # Check if this is an "already up to date" message (not a real error)
+            error_msg = str(err).lower()
+            if any(msg in error_msg for msg in FIRMWARE_UP_TO_DATE_MESSAGES):
+                _LOGGER.debug(
+                    "Firmware is already up to date for device %s",
+                    serial_num,
+                )
+                # Return a FirmwareUpdateCheck indicating no update available
+                # We create minimal details since we don't have full version info
+                return FirmwareUpdateCheck.create_up_to_date(serial_num)
+
+            # Re-raise if it's a different error
+            raise
 
     async def get_firmware_update_status(self) -> FirmwareUpdateStatus:
         """Get firmware update status for all devices in user's account.
