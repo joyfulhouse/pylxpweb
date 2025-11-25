@@ -228,15 +228,6 @@ class Battery(BaseDevice):
         # Fallback to 0 if full capacity is 0
         return 0
 
-    @property
-    def max_battery_charge(self) -> int | None:
-        """Get maximum battery charge capacity in amp-hours.
-
-        Returns:
-            Maximum charge capacity in Ah, or None if not available.
-        """
-        return self._data.maxBatteryCharge
-
     # ========== Temperature Properties ==========
 
     @property

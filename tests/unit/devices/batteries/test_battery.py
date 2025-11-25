@@ -305,7 +305,6 @@ class TestBatteryEnhancedProperties:
         assert battery.current_remain_capacity == 204
         assert battery.current_full_capacity == 280
         assert battery.capacity_percent == 73
-        assert battery.max_battery_charge == 840
 
     def test_cell_number_properties(
         self, mock_client: LuxpowerClient, sample_battery_module: BatteryModule

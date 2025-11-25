@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] - 2025-11-25
+
+### Removed
+
+- **Battery.max_battery_charge property** - Removed misleading property from individual Battery class:
+  - The API returns the bank total (840 Ah) in each individual battery's `maxBatteryCharge` field
+  - This was confusing since individual batteries have 280 Ah capacity (not 840 Ah)
+  - Use `Battery.current_full_capacity` for individual battery capacity (280 Ah)
+  - Use `BatteryBank.max_capacity` for total bank capacity (840 Ah for 3 batteries)
+
+### Testing
+
+- ✅ **Total tests**: 637 (all passing)
+- ✅ **Coverage**: >82%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.3.14] - 2025-11-25
 
 ### Changed
