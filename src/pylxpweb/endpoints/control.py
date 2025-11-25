@@ -197,7 +197,7 @@ class ControlEndpoints(BaseEndpoint):
         """
         # Note: The API doesn't support batch writes, so we write sequentially
         # For now, just write the first parameter (most common use case is single register)
-        # TODO: Implement proper sequential writes if needed
+        # Multi-parameter support would require sequential writes with proper error handling
         if not parameters:
             return SuccessResponse(success=True)
 

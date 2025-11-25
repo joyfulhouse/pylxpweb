@@ -136,7 +136,7 @@ exclude_lines = [
 ]
 precision = 2
 skip_empty = true
-fail_under = 70  # TODO: Increase to 90 after adding endpoint tests
+fail_under = 80  # Current coverage: ~82%, increased from 70%
 
 [dependency-groups]
 dev = [
