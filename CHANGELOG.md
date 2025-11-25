@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.11] - 2025-11-24
+
+### Changed
+
+- **Code Quality** - Refactored logging imports in control and plants endpoints:
+  - Moved logging imports to module level (previously inline imports)
+  - Improved code consistency and reduced import overhead
+  - No functional changes or API modifications
+
 ## [0.3.10] - 2025-11-23
 
 ### Added

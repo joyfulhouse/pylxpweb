@@ -8,6 +8,7 @@ This module provides device control functionality including:
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from pylxpweb.endpoints.base import BaseEndpoint
@@ -19,6 +20,8 @@ from pylxpweb.models import (
 
 if TYPE_CHECKING:
     from pylxpweb.client import LuxpowerClient
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ControlEndpoints(BaseEndpoint):
@@ -947,13 +950,11 @@ class ControlEndpoints(BaseEndpoint):
             >>> await client.control.set_battery_charge_current("1234567890", 200)
             SuccessResponse(success=True)
         """
-        import logging
-
         if not (0 <= amperes <= 250):
             raise ValueError(f"Battery charge current must be between 0-250 A, got {amperes}")
 
         if validate_battery_limits and amperes > 200:
-            logging.warning(
+            _LOGGER.warning(
                 "Setting battery charge current to %d A. "
                 "Ensure this does not exceed your battery's maximum rating. "
                 "Typical limits: 200A for 10kWh, 150A for 7.5kWh, 100A for 5kWh.",
@@ -1003,13 +1004,11 @@ class ControlEndpoints(BaseEndpoint):
             >>> await client.control.set_battery_discharge_current("1234567890", 50)
             SuccessResponse(success=True)
         """
-        import logging
-
         if not (0 <= amperes <= 250):
             raise ValueError(f"Battery discharge current must be between 0-250 A, got {amperes}")
 
         if validate_battery_limits and amperes > 200:
-            logging.warning(
+            _LOGGER.warning(
                 "Setting battery discharge current to %d A. "
                 "Ensure this does not exceed your battery's maximum rating.",
                 amperes,
