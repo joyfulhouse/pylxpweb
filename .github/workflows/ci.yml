@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -90,25 +90,35 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, test]
     timeout-minutes: 30
-    # Skip for Dependabot PRs (no secret access)
-    if: github.actor != 'dependabot[bot]'
-    environment: integration-tests
+    # Use environment only for non-Dependabot PRs (Dependabot has no secret access)
+    environment: ${{ github.actor != 'dependabot[bot]' && 'integration-tests' || '' }}
     steps:
-      - uses: actions/checkout@v5
+      - name: Skip for Dependabot
+        if: github.actor == 'dependabot[bot]'
+        run: |
+          echo "Skipping integration tests for Dependabot PR (no secret access)"
+          echo "Integration tests will run after merge to main"
+
+      - uses: actions/checkout@v6
+        if: github.actor != 'dependabot[bot]'
 
       - name: Install uv
+        if: github.actor != 'dependabot[bot]'
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
+        if: github.actor != 'dependabot[bot]'
         run: uv python install 3.13
 
       - name: Install dependencies
+        if: github.actor != 'dependabot[bot]'
         run: uv sync --all-extras
 
       - name: Run integration tests
+        if: github.actor != 'dependabot[bot]'
         env:
           LUXPOWER_USERNAME: ${{ secrets.LUXPOWER_USERNAME }}
           LUXPOWER_PASSWORD: ${{ secrets.LUXPOWER_PASSWORD }}
@@ -131,7 +141,7 @@ jobs:
 
       - name: Upload integration test results
         uses: actions/upload-artifact@v5
-        if: failure()
+        if: failure() && github.actor != 'dependabot[bot]'
         with:
           name: integration-test-results
           path: |
