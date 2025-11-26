@@ -247,17 +247,12 @@ from .registers import (
 # ============================================================================
 from .scaling import (
     BATTERY_BANK_SCALING,
-    BATTERY_LIFETIME_SENSORS,
     BATTERY_MODULE_SCALING,
-    DAILY_ENERGY_SENSORS,
     ENERGY_INFO_SCALING,
     GRIDBOSS_RUNTIME_SCALING,
     INVERTER_OVERVIEW_SCALING,
     # Scaling dictionaries
     INVERTER_RUNTIME_SCALING,
-    # Energy sensor classification
-    LIFETIME_ENERGY_SENSORS,
-    MONTHLY_ENERGY_SENSORS,
     PARAMETER_SCALING,
     # Scaling factor enum
     ScaleFactor,
@@ -439,10 +434,6 @@ __all__ = [
     "GRIDBOSS_RUNTIME_SCALING",
     "INVERTER_OVERVIEW_SCALING",
     "PARAMETER_SCALING",
-    "LIFETIME_ENERGY_SENSORS",
-    "DAILY_ENERGY_SENSORS",
-    "MONTHLY_ENERGY_SENSORS",
-    "BATTERY_LIFETIME_SENSORS",
     "apply_scale",
     "get_precision",
     "get_battery_field_precision",

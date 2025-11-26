@@ -92,13 +92,6 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # Initialize firmware update detection (from FirmwareUpdateMixin)
         self._init_firmware_update_cache()
 
-        # ===== Monotonic Value Tracking =====
-        # Track last valid energy values to enforce monotonic behavior
-        # and detect date boundary crossings for daily resets
-        self._last_energy_today: float | None = None
-        self._last_energy_lifetime: float | None = None
-        self._last_energy_date: str | None = None  # YYYY-MM-DD in station timezone
-
     def _is_cache_expired(
         self,
         cache_time: datetime | None,
@@ -305,152 +298,38 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             return 0.0
         return float(getattr(self._runtime, "pinv", 0))
 
-    def _should_reset_daily_energy(self) -> bool:
-        """Check if daily energy should reset based on date boundary crossing.
-
-        This method detects when the date changes (midnight in station timezone)
-        and signals that daily energy values should be reset to 0.
-
-        Returns:
-            True if date boundary crossed and daily values should reset, False otherwise.
-        """
-        # Get station reference (walk up the device hierarchy)
-        station = None
-        if hasattr(self, "_client") and hasattr(self._client, "_stations"):
-            # Try to find station that contains this inverter
-            # Note: This is a bit of a hack, but Station doesn't have a back-reference
-            # In production, you'd pass station reference during initialization
-            for s in getattr(self._client, "_stations", []):
-                if self in s.all_inverters:
-                    station = s
-                    break
-
-        if station is None:
-            # Can't determine station, allow graceful degradation
-            return False
-
-        current_date = station.current_date
-        if current_date is None:
-            # Can't determine date, don't force reset
-            return False
-
-        if self._last_energy_date is None:
-            # First time, just set the date
-            self._last_energy_date = current_date
-            return False
-
-        if current_date != self._last_energy_date:
-            # Date changed! Reset needed
-            _LOGGER.debug(
-                "Inverter %s: Date boundary crossed from %s to %s",
-                self.serial_number,
-                self._last_energy_date,
-                current_date,
-            )
-            self._last_energy_date = current_date
-            return True
-
-        return False
-
     @property
     def total_energy_today(self) -> float:
-        """Get total energy produced today in kWh with monotonic enforcement.
+        """Get total energy produced today in kWh.
 
-        This property enforces monotonic behavior:
-        - Within same day: value never decreases (rejects API stale data)
-        - Date boundary: forces reset to 0 (prevents stale cache issues)
+        This is a daily value that resets at midnight (API server time).
+        Home Assistant's SensorStateClass.TOTAL_INCREASING handles resets.
 
         Returns:
-            Energy produced today in kWh, enforcing monotonic behavior.
-
-        See Also:
-            docs/SCALING_GUIDE.md - Date boundary handling and monotonic values
+            Energy produced today in kWh, or 0.0 if no data.
         """
         if self._energy is None:
             return 0.0
 
-        # Get raw value from API and scale to kWh using proper scaling helper
         from pylxpweb.constants import scale_energy_value
 
         raw_value = getattr(self._energy, "todayYielding", 0)
-        current_value_kwh = scale_energy_value("todayYielding", raw_value, to_kwh=True)
-
-        # Check for date boundary reset
-        if self._should_reset_daily_energy():
-            _LOGGER.debug(
-                "Inverter %s: Date boundary detected, resetting daily energy from %.2f to 0.0 "
-                "(API reported %.2f)",
-                self.serial_number,
-                self._last_energy_today if self._last_energy_today is not None else 0.0,
-                current_value_kwh,
-            )
-            self._last_energy_today = 0.0
-            return 0.0
-
-        # Enforce monotonic behavior within same day
-        if self._last_energy_today is not None:
-            if current_value_kwh < self._last_energy_today:
-                # API returned lower value - reject and maintain previous
-                _LOGGER.debug(
-                    "Inverter %s: Rejecting daily energy decrease (%.2f -> %.2f), maintaining %.2f",
-                    self.serial_number,
-                    self._last_energy_today,
-                    current_value_kwh,
-                    self._last_energy_today,
-                )
-                return self._last_energy_today
-
-            # Allow reset to 0 (manual reset or API reset)
-            if current_value_kwh == 0.0 and self._last_energy_today > 0.0:
-                _LOGGER.debug(
-                    "Inverter %s: Allowing manual reset to 0 for daily energy",
-                    self.serial_number,
-                )
-
-        # Update last valid state
-        self._last_energy_today = current_value_kwh
-        return current_value_kwh
+        return scale_energy_value("todayYielding", raw_value, to_kwh=True)
 
     @property
     def total_energy_lifetime(self) -> float:
-        """Get total energy produced lifetime in kWh with monotonic enforcement.
-
-        Lifetime energy should NEVER decrease - it's truly monotonic.
-        This property rejects any API values lower than the last known value.
+        """Get total energy produced lifetime in kWh.
 
         Returns:
-            Total lifetime energy in kWh, enforcing strictly monotonic behavior.
-
-        See Also:
-            docs/SCALING_GUIDE.md - Lifetime sensor classification
+            Total lifetime energy in kWh, or 0.0 if no data.
         """
         if self._energy is None:
             return 0.0
 
-        # Get raw value from API and scale to kWh using proper scaling helper
         from pylxpweb.constants import scale_energy_value
 
         raw_value = getattr(self._energy, "totalYielding", 0)
-        current_value_kwh = scale_energy_value("totalYielding", raw_value, to_kwh=True)
-
-        # Lifetime energy should NEVER decrease
-        if (
-            self._last_energy_lifetime is not None
-            and current_value_kwh < self._last_energy_lifetime
-        ):
-            # Reject decrease for lifetime sensor
-            _LOGGER.debug(
-                "Inverter %s: Rejecting lifetime energy decrease (%.2f -> %.2f), maintaining %.2f",
-                self.serial_number,
-                self._last_energy_lifetime,
-                current_value_kwh,
-                self._last_energy_lifetime,
-            )
-            return self._last_energy_lifetime
-
-        # Update last valid state
-        self._last_energy_lifetime = current_value_kwh
-        return current_value_kwh
+        return scale_energy_value("totalYielding", raw_value, to_kwh=True)
 
     @property
     def battery_soc(self) -> int | None:
