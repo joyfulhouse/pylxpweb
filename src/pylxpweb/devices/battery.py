@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pylxpweb.constants import scale_battery_value
+from pylxpweb.constants import get_battery_field_precision, scale_battery_value
 
 from .base import BaseDevice
 from .models import DeviceClass, DeviceInfo, Entity, StateClass
@@ -164,9 +164,11 @@ class Battery(BaseDevice):
         """Get battery power in watts (calculated from V * I).
 
         Returns:
-            Battery power in watts.
+            Battery power in watts, rounded to voltage precision.
         """
-        return self.voltage * self.current
+        # Use voltage precision (2 decimals) as it's higher than current (1 decimal)
+        precision = get_battery_field_precision("totalVoltage")
+        return round(self.voltage * self.current, precision)
 
     # ========== State of Charge/Health ==========
 
@@ -271,9 +273,11 @@ class Battery(BaseDevice):
         """Get cell temperature imbalance (max - min).
 
         Returns:
-            Temperature difference between hottest and coolest cell in Celsius.
+            Temperature difference between hottest and coolest cell in Celsius,
+            rounded to source data precision.
         """
-        return self.max_cell_temp - self.min_cell_temp
+        precision = get_battery_field_precision("batMaxCellTemp")
+        return round(self.max_cell_temp - self.min_cell_temp, precision)
 
     # ========== Cell Voltage Properties ==========
 
@@ -318,9 +322,11 @@ class Battery(BaseDevice):
         """Get cell voltage imbalance (max - min).
 
         Returns:
-            Voltage difference between highest and lowest cell in volts.
+            Voltage difference between highest and lowest cell in volts,
+            rounded to source data precision.
         """
-        return self.max_cell_voltage - self.min_cell_voltage
+        precision = get_battery_field_precision("batMaxCellVoltage")
+        return round(self.max_cell_voltage - self.min_cell_voltage, precision)
 
     # ========== Charge Parameters ==========
 

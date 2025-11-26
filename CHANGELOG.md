@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.16] - 2025-11-25
+
+### Changed
+
+- **Dynamic floating-point precision** - Calculated properties now derive precision from source data scaling:
+  - Added `get_precision(ScaleFactor)` and `get_battery_field_precision(field_name)` helper functions
+  - `Battery.power` rounds to voltage precision (2 decimals from SCALE_100)
+  - `Battery.cell_temp_delta` rounds to temperature precision (1 decimal from SCALE_10)
+  - `Battery.cell_voltage_delta` rounds to cell voltage precision (3 decimals from SCALE_1000)
+  - Eliminates floating-point artifacts (e.g., `0.0030000000000001137` → `0.003`)
+
+### Testing
+
+- ✅ **Total tests**: 637 (all passing)
+- ✅ **Coverage**: >82%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.3.15] - 2025-11-25
 
 ### Removed

@@ -337,6 +337,49 @@ def apply_scale(value: int | float, scale_factor: ScaleFactor) -> float:
     return float(value) / float(scale_factor.value)
 
 
+def get_precision(scale_factor: ScaleFactor) -> int:
+    """Get decimal precision from a scale factor.
+
+    Args:
+        scale_factor: ScaleFactor enum
+
+    Returns:
+        Number of decimal places (0 for SCALE_NONE, 1 for SCALE_10, etc.)
+
+    Example:
+        >>> get_precision(ScaleFactor.SCALE_10)
+        1
+        >>> get_precision(ScaleFactor.SCALE_1000)
+        3
+    """
+    if scale_factor == ScaleFactor.SCALE_NONE:
+        return 0
+    # log10 of scale factor gives decimal places
+    import math
+
+    return int(math.log10(scale_factor.value))
+
+
+def get_battery_field_precision(field_name: str) -> int:
+    """Get decimal precision for a battery module field.
+
+    Args:
+        field_name: Field name from BatteryModule model
+
+    Returns:
+        Number of decimal places for that field
+
+    Example:
+        >>> get_battery_field_precision("batMaxCellVoltage")
+        3
+        >>> get_battery_field_precision("current")
+        1
+    """
+    if field_name not in BATTERY_MODULE_SCALING:
+        return 0
+    return get_precision(BATTERY_MODULE_SCALING[field_name])
+
+
 def _get_scaling_for_field(
     field_name: str,
     data_type: Literal[

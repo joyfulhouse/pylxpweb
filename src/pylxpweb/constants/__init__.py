@@ -265,6 +265,8 @@ from .scaling import (
     _get_scaling_for_field,
     # Scaling functions
     apply_scale,
+    get_battery_field_precision,
+    get_precision,
     scale_battery_value,
     scale_energy_value,
     scale_runtime_value,
@@ -442,6 +444,8 @@ __all__ = [
     "MONTHLY_ENERGY_SENSORS",
     "BATTERY_LIFETIME_SENSORS",
     "apply_scale",
+    "get_precision",
+    "get_battery_field_precision",
     "scale_runtime_value",
     "scale_battery_value",
     "scale_energy_value",
