@@ -169,7 +169,7 @@ You'll see output like this:
 ```
 ======================================================================
   pylxpweb Device Data Collection Tool
-  Version: 0.3.17
+  Version: 0.3.18
 ======================================================================
 
 Base URL: https://monitor.eg4electronics.com

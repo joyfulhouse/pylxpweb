@@ -1,21 +1,13 @@
-# Data Scaling, Date Boundaries, and Monotonic Values Guide
+# Data Scaling Guide
 
-**Version**: 2.0.0
-**Last Updated**: 2025-11-21
-**Purpose**: Comprehensive guide to data scaling, date boundary handling, and monotonically increasing values in pylxpweb
+**Last Updated**: 2025-11-26
+**Purpose**: Comprehensive guide to data scaling in pylxpweb
 
 ## Overview
 
-The Luxpower/EG4 API exhibits three critical behaviors that require special handling:
+The Luxpower/EG4 API returns raw integer values that must be scaled with different divisors (÷10, ÷100, ÷1000). This guide explains the centralized scaling system in `src/pylxpweb/constants/scaling.py`.
 
-1. **Variable Scaling Factors**: Raw integer values must be scaled with different divisors (÷10, ÷100, ÷1000)
-2. **Date Boundary Resets**: Daily energy values reset to 0 at midnight (station timezone)
-3. **API Rounding Issues**: Cached data can cause apparent backwards movement near boundaries
-
-This guide explains:
-- The centralized scaling system in `src/pylxpweb/constants.py`
-- Date boundary detection and handling strategies (from EG4 Web Monitor integration)
-- Monotonic value enforcement to prevent backwards movement
+**Note on Energy Values**: pylxpweb does NOT implement monotonic enforcement for energy sensors. Home Assistant's `SensorStateClass.TOTAL_INCREASING` handles daily resets and monotonic behavior automatically. The library simply returns the scaled API values.
 
 ## Quick Start
 
@@ -575,424 +567,53 @@ If API scaling changes (rare):
 
 ---
 
-## Date Boundary Handling
+## Cache Invalidation
 
-### Problem Statement
-
-At midnight (station timezone), daily energy values reset to 0. However:
-
-1. **API Caching**: API may return stale data for several minutes after midnight
-2. **Timezone Awareness**: Must use station timezone, not UTC or system timezone
-3. **Monotonic Enforcement**: Home Assistant expects `total_increasing` sensors never to decrease
-
-### Implementation from WebMonitor Integration
-
-The EG4 Web Monitor integration successfully implements a **two-tier approach**:
-
-#### Tier 1: Timezone-Aware Date Detection
-
-From `research/eg4_web_monitor/custom_components/eg4_web_monitor/sensor.py:52-81`:
+The `LuxpowerClient` automatically invalidates its response cache when the hour changes. This helps ensure fresh data is fetched around midnight when daily values reset.
 
 ```python
-def _get_current_date(coordinator) -> Optional[str]:
-    """Get current date in station's timezone as YYYY-MM-DD string."""
-    try:
-        # Get timezone from station data
-        if coordinator.data and "station" in coordinator.data:
-            tz_str = coordinator.data["station"].get("timezone")  # e.g., "GMT -8"
-            if tz_str and "GMT" in tz_str:
-                offset_str = tz_str.replace("GMT", "").strip()
-                offset_hours = int(offset_str)
-                tz = timezone(timedelta(hours=offset_hours))
-                return datetime.now(tz).strftime("%Y-%m-%d")
-
-        # Fallback to UTC
-        return datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d")
-    except Exception:
-        return None  # Allow resets when we can't determine date
-```
-
-#### Tier 2: Lifetime vs Daily Sensor Classification
-
-```python
-# Sensors that should never decrease (lifetime values)
-LIFETIME_SENSORS = {
-    "total_energy",         # Lifetime production
-    "yield_lifetime",       # Lifetime yield
-    "discharging_lifetime", # Lifetime discharge
-    "charging_lifetime",    # Lifetime charge
-    "consumption_lifetime", # Lifetime consumption
-    "grid_export_lifetime", # Lifetime export
-    "grid_import_lifetime", # Lifetime import
-    "cycle_count",          # Battery cycle count
-}
-
-# All other total_increasing sensors reset at date boundaries
-```
-
-#### Tier 3: Monotonic State Tracking
-
-```python
-class EG4InverterSensor:
-    def __init__(self, ...):
-        # Instance-level state tracking
-        self._last_valid_state: Optional[float] = None
-        self._last_update_date: Optional[str] = None
-
-    @property
-    def native_value(self) -> Any:
-        current_value = float(raw_value)
-        current_date = _get_current_date(self.coordinator)
-
-        # Check if lifetime sensor
-        is_lifetime = self._sensor_key in LIFETIME_SENSORS
-
-        # Detect date boundary crossing
-        date_changed = False
-        if not is_lifetime and current_date and self._last_update_date:
-            date_changed = current_date != self._last_update_date
-
-        # Force reset to 0 on date boundary
-        if date_changed:
-            logger.info(
-                "Date boundary crossed from %s to %s, "
-                "forcing reset from %.2f to 0.0 (API reported %.2f)",
-                self._last_update_date, current_date,
-                self._last_valid_state, current_value
-            )
-            self._last_valid_state = 0.0
-            self._last_update_date = current_date
-            return 0.0
-
-        # Prevent decrease within same day
-        if self._last_valid_state is not None:
-            if current_value < self._last_valid_state:
-                # Allow reset to 0 for non-lifetime sensors
-                if not is_lifetime and current_value == 0:
-                    self._last_valid_state = current_value
-                    self._last_update_date = current_date
-                    return current_value
-
-                # Maintain previous value
-                return self._last_valid_state
-
-        # Update and return
-        self._last_valid_state = current_value
-        self._last_update_date = current_date
-        return current_value
-```
-
-### Key Behaviors
-
-| Sensor Type | Date Change | API Reports Lower | API Reports 0 | API Reports Higher |
-|-------------|-------------|-------------------|---------------|-------------------|
-| **Lifetime** | Maintain | Maintain previous | Maintain previous | Accept new value |
-| **Daily** | Force reset to 0 | Maintain previous | Accept reset | Accept new value |
-
-**Critical Insight**: The integration **forces a reset to 0** on date boundary detection, regardless of what the API reports. This prevents:
-- Stale cached data showing yesterday's final value
-- API rounding issues causing small backwards movements
-- Timezone-related edge cases
-
-### Example Failure Scenario
-
-```
-23:58:00 - API returns 895 (÷10 = 89.5 kWh) - Cache hit
-23:59:30 - API returns 895 (÷10 = 89.5 kWh) - Cache hit
-00:00:30 - API returns 2 (÷10 = 0.2 kWh)   - New day starts
-00:01:00 - API returns 895 (÷10 = 89.5 kWh) - Cache stale! Shows yesterday's data
-```
-
-With date boundary detection:
-```
-00:00:30 - Date boundary detected → Force 0.0 kWh (ignore API's 0.2)
-00:01:00 - API reports 89.5 kWh → Reject (< previous 0.0 is impossible)
-00:02:00 - API reports 0.5 kWh → Accept (new fresh data)
+# Cache is automatically cleared when hour boundary is crossed
+# This is handled internally by the client
 ```
 
 ---
 
-## Cache Invalidation Strategy
+## Energy Value Handling
 
-### Problem: Hour and Date Boundaries
+### Daily vs Lifetime Sensors
 
-The API uses **aggressive caching** with TTLs that don't align with natural boundaries:
-- **Runtime data**: ~20 seconds
-- **Energy data**: ~2-5 minutes
-- **Parameter data**: ~2 minutes
+| Type | Example Properties | Reset Behavior |
+|------|-------------------|----------------|
+| **Daily** | `total_energy_today`, `energy_today_charging` | Resets at midnight (API-controlled) |
+| **Lifetime** | `total_energy_lifetime`, `energy_lifetime_charging` | Never resets |
 
-### WebMonitor Solution: Proactive Cache Invalidation
+### Home Assistant Integration
 
-From `coordinator.py:1525-1573`:
+For Home Assistant integrations using pylxpweb:
 
-```python
-def _should_invalidate_cache(self) -> bool:
-    """Check if cache invalidation is needed before top of hour."""
-    now = dt_util.utcnow()
-
-    # First run - invalidate if within 5 minutes of top of hour
-    if self._last_cache_invalidation is None:
-        minutes_to_hour = 60 - now.minute
-        return bool(minutes_to_hour <= 5)
-
-    # Check if we've crossed into a new hour
-    last_hour = self._last_cache_invalidation.hour
-    current_hour = now.hour
-    if current_hour != last_hour:
-        return True
-
-    # If within 5 minutes of next hour and haven't invalidated recently
-    minutes_to_hour = 60 - now.minute
-    time_since_last = now - self._last_cache_invalidation
-    return bool(minutes_to_hour <= 5 and time_since_last >= timedelta(minutes=10))
-
-def _invalidate_all_caches(self) -> None:
-    """Invalidate all caches to ensure fresh data when date changes."""
-    if hasattr(self.api, "clear_cache"):
-        self.api.clear_cache()
-    if hasattr(self.api, "_device_cache"):
-        self.api._device_cache.clear()
-
-    self._last_cache_invalidation = dt_util.utcnow()
-    logger.info("Successfully invalidated all caches to prevent date rollover issues")
-```
-
-**When Cache Invalidation Runs**:
-
-| Scenario | Minutes to Hour | Last Invalidation | Action |
-|----------|----------------|-------------------|--------|
-| First run | 3 | None | **Invalidate** |
-| First run | 7 | None | Skip |
-| Hour change | Any | < 1 hour ago | **Invalidate** |
-| Within 5 min | 3 | 11 minutes ago | **Invalidate** |
-| Within 5 min | 4 | 3 minutes ago | Skip (too recent) |
-
-**Why 5 Minutes Before Hour?**:
-- Gives time for multiple refresh cycles
-- Ensures fresh data at 00:00 when daily reset happens
-- Accounts for coordinator update interval (30 seconds)
-
----
-
-## Implementation Recommendations for pylxpweb
-
-### 1. Add Date Boundary Detection
-
-Add to `Station` class:
+- Use `SensorStateClass.TOTAL_INCREASING` for all energy sensors
+- Home Assistant automatically handles daily resets and monotonic tracking
+- No additional logic needed in the integration
 
 ```python
-from datetime import datetime, timezone, timedelta
-from typing import Optional
-
-class Station:
-    def __init__(self, ...):
-        self.timezone: str = timezone  # "GMT -8"
-
-    def get_current_date(self) -> Optional[str]:
-        """Get current date in station's timezone (YYYY-MM-DD)."""
-        try:
-            if self.timezone and "GMT" in self.timezone:
-                offset_str = self.timezone.replace("GMT", "").strip()
-                offset_hours = int(offset_str)
-                tz = timezone(timedelta(hours=offset_hours))
-                return datetime.now(tz).strftime("%Y-%m-%d")
-            return datetime.utcnow().strftime("%Y-%m-%d")
-        except Exception:
-            return None
-```
-
-### 2. Add Lifetime Sensor Classification
-
-Add to `constants.py`:
-
-```python
-# Sensors that should never decrease (truly monotonic)
-LIFETIME_ENERGY_SENSORS = {
-    "totalYielding",        # Lifetime production
-    "eTotal",               # Total energy lifetime
-    "totalDischarging",     # Lifetime discharge
-    "totalCharging",        # Lifetime charge
-}
-
-# Sensors that reset at date boundaries
-DAILY_ENERGY_SENSORS = {
-    "todayYielding",        # Today's production
-    "eToday",               # Today's energy
-    "todayDischarging",     # Today's discharge
-    "todayCharging",        # Today's charge
-}
-```
-
-### 3. Apply Monotonic Logic to Energy Properties
-
-Modify `BaseInverter`:
-
-```python
-class BaseInverter:
-    def __init__(self, ...):
-        self._last_today_energy: Optional[float] = None
-        self._last_energy_date: Optional[str] = None
-
-    def _should_reset_daily_energy(self) -> bool:
-        """Check if daily energy should reset based on date boundary."""
-        if not hasattr(self, '_client') or not self._client.station:
-            return False
-
-        current_date = self._client.station.get_current_date()
-        if current_date is None:
-            return False
-
-        if self._last_energy_date is None:
-            self._last_energy_date = current_date
-            return False
-
-        if current_date != self._last_energy_date:
-            self._last_energy_date = current_date
-            return True
-
-        return False
-
-    @property
-    def total_energy_today(self) -> float:
-        """Get total energy produced today in kWh with monotonic enforcement."""
-        if self.energy is None:
-            return 0.0
-
-        raw_value = float(getattr(self.energy, "todayYielding", 0))
-        current_value_kwh = raw_value / 1000.0  # Wh to kWh
-
-        # Check for date boundary reset
-        if self._should_reset_daily_energy():
-            _LOGGER.info(
-                "Inverter %s: Date boundary detected, resetting daily energy",
-                self.serial_number
-            )
-            self._last_today_energy = 0.0
-            return 0.0
-
-        # Enforce monotonic behavior within same day
-        if hasattr(self, '_last_today_energy') and self._last_today_energy is not None:
-            if current_value_kwh < self._last_today_energy:
-                _LOGGER.debug(
-                    "Inverter %s: Rejecting energy decrease (%.2f -> %.2f), maintaining %.2f",
-                    self.serial_number,
-                    self._last_today_energy,
-                    current_value_kwh,
-                    self._last_today_energy
-                )
-                return self._last_today_energy
-
-        self._last_today_energy = current_value_kwh
-        return current_value_kwh
-```
-
-### 4. Add Cache Invalidation to LuxpowerClient
-
-```python
-class LuxpowerClient:
-    def __init__(self, ...):
-        self._last_cache_clear: Optional[datetime] = None
-
-    def should_clear_cache_for_boundary(self) -> bool:
-        """Check if cache should be cleared for hour/date boundary."""
-        now = datetime.utcnow()
-        minutes_to_hour = 60 - now.minute
-
-        if minutes_to_hour > 5:
-            return False
-
-        if self._last_cache_clear is None:
-            return True
-
-        time_since_clear = now - self._last_cache_clear
-        return time_since_clear >= timedelta(minutes=10)
-
-    def clear_all_caches(self) -> None:
-        """Clear all API response caches."""
-        # Clear endpoint caches
-        self.api.devices._response_cache.clear()
-        self.api.plants._response_cache.clear()
-
-        self._last_cache_clear = datetime.utcnow()
-        _LOGGER.info("Cleared all API caches at hour boundary")
+# Example Home Assistant sensor definition
+@property
+def state_class(self) -> SensorStateClass:
+    return SensorStateClass.TOTAL_INCREASING
 ```
 
 ---
 
-## Testing Recommendations
+## References
 
-### Unit Tests for Date Boundary Logic
-
-```python
-def test_date_boundary_reset():
-    """Test that daily energy resets at midnight."""
-    inverter = GenericInverter(client, "1234567890", "18KPV")
-    inverter._last_energy_date = "2025-11-20"
-    inverter._last_today_energy = 45.5
-
-    # Simulate date change
-    inverter._last_energy_date = "2025-11-21"
-    assert inverter.total_energy_today == 0.0
-
-def test_monotonic_within_day():
-    """Test that energy never decreases within same day."""
-    inverter = GenericInverter(client, "1234567890", "18KPV")
-    inverter._last_energy_date = "2025-11-20"
-    inverter._last_today_energy = 45.5
-
-    # API returns lower value (cache issue)
-    inverter.energy = EnergyInfo(todayYielding=450)  # 45.0 kWh
-    assert inverter.total_energy_today == 45.5  # Maintains previous
-
-def test_lifetime_never_decreases():
-    """Test that lifetime energy never decreases."""
-    inverter = GenericInverter(client, "1234567890", "18KPV")
-    inverter._last_lifetime_energy = 12345.6
-
-    # API returns lower value
-    inverter.energy = EnergyInfo(totalYielding=123000)  # 12300.0 kWh
-    assert inverter.total_energy_lifetime == 12345.6  # Maintains
-```
-
----
-
-## Summary of Key Takeaways
-
-### Critical Patterns from WebMonitor
-
-| Feature | Implementation | Benefit |
-|---------|---------------|---------|
-| **Date Detection** | Station timezone parsing | Accurate midnight detection |
-| **Forced Reset** | Override API on date boundary | Prevents stale data issues |
-| **Monotonic Tracking** | Per-sensor instance state | Prevents backwards movement |
-| **Cache Clearing** | 5-min pre-hour invalidation | Fresh data at boundaries |
-| **Lifetime Classification** | Explicit sensor categorization | Correct reset behavior |
-
-### For pylxpweb v0.3.0
-
-1. **Scaling**: Already implemented with centralized constants ✅
-2. **Date Boundaries**: Implement timezone-aware date detection 🔨
-3. **Monotonic Values**: Track last valid state, prevent decreases 🔨
-4. **Cache Invalidation**: Clear caches proactively at hour boundaries 🔨
-5. **Lifetime Classification**: Distinguish lifetime vs daily sensors 🔨
-
-### References
-
-- **WebMonitor Coordinator**: `research/eg4_web_monitor/custom_components/eg4_web_monitor/coordinator.py`
-- **WebMonitor Sensor**: `research/eg4_web_monitor/custom_components/eg4_web_monitor/sensor.py`
-- **WebMonitor Constants**: `research/eg4_web_monitor/custom_components/eg4_web_monitor/const.py`
+- **Source Code**: `src/pylxpweb/constants/scaling.py`
 - **API Documentation**: `docs/api/LUXPOWER_API.md`
 
 ---
 
-## Version History
+## Changelog
 
-- **2.0.0** (2025-11-21): Added date boundary and monotonic value handling
-  - Date boundary detection with timezone awareness
-  - Monotonic value enforcement patterns
-  - Cache invalidation strategies
-  - Implementation recommendations from WebMonitor integration
-- **1.0.0** (2025-11-21): Initial centralized scaling system
-  - Comprehensive scaling dictionaries for all data types
-  - Helper functions for common operations
-  - Full documentation and test examples
+- **2025-11-26**: Removed monotonic enforcement documentation
+  - pylxpweb no longer implements monotonic enforcement
+  - Home Assistant's TOTAL_INCREASING handles resets automatically
+- **2025-11-21**: Initial scaling guide

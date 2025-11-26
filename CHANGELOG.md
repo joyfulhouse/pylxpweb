@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.18] - 2025-11-26
+
+### Removed
+
+- **Monotonic enforcement for energy sensors** - Removed all monotonic value tracking:
+  - Daily and lifetime energy properties now return raw scaled API values
+  - Home Assistant's `SensorStateClass.TOTAL_INCREASING` handles resets automatically
+  - Removed broken date boundary detection that never worked (station lookup failed)
+  - Removed `_enforce_monotonic()` methods from `BaseInverter` and `ParallelGroup`
+  - Removed tracking variables (`_last_lifetime_*`, `_last_energy_*`)
+
+- **Dead code cleanup** - Removed unused sensor classification constants:
+  - `LIFETIME_ENERGY_SENSORS`
+  - `DAILY_ENERGY_SENSORS`
+  - `MONTHLY_ENERGY_SENSORS`
+  - `BATTERY_LIFETIME_SENSORS`
+
+### Changed
+
+- Updated `docs/SCALING_GUIDE.md` to reflect simplified approach
+- Energy properties are now simpler and more predictable
+
+### Testing
+
+- ✅ **Total tests**: 637 (all passing)
+- ✅ **Coverage**: >82%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.3.17] - 2025-11-25
 
 ### Added
