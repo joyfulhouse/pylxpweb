@@ -3,19 +3,52 @@
 This guide walks you through collecting data from your Luxpower/EG4 inverter so developers can add support for your inverter model.
 
 **The process is simple:**
-1. Install the tool
+1. Choose your method (download executable OR use browser)
 2. Run one command with your login credentials
-3. Upload the generated files to GitHub
+3. Upload the generated zip file to GitHub
 
 ## What You'll Need
 
 - **Your EG4/Luxpower web portal login** (the same username and password you use at monitor.eg4electronics.com)
-- **Python 3.12 or newer** installed on your computer
 - **5-10 minutes** (the tool automatically discovers and scans all your devices)
 
 ---
 
-## Step 1: Install Python
+## Choose Your Method
+
+### Option A: Download Executable (Easiest - No Installation Required)
+
+Download a ready-to-run program for your operating system:
+
+| Operating System | Download Link |
+|------------------|---------------|
+| **Windows** | [pylxpweb-collect-windows.exe](https://github.com/joyfulhouse/pylxpweb/releases/latest/download/pylxpweb-collect-windows.exe) |
+| **Mac** | [pylxpweb-collect-macos](https://github.com/joyfulhouse/pylxpweb/releases/latest/download/pylxpweb-collect-macos) |
+| **Linux** | [pylxpweb-collect-linux](https://github.com/joyfulhouse/pylxpweb/releases/latest/download/pylxpweb-collect-linux) |
+
+Then skip to [Step 3: Run the Data Collection](#step-3-run-the-data-collection).
+
+### Option B: Use GitHub Codespaces (No Download Required)
+
+Run everything in your browser using GitHub Codespaces:
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/joyfulhouse/pylxpweb?quickstart=1)
+
+1. Click the button above (requires free GitHub account)
+2. Wait ~1 minute for the environment to start
+3. In the terminal that appears, run:
+   ```
+   pylxpweb-collect -u YOUR_EMAIL -p YOUR_PASSWORD
+   ```
+4. Download the generated zip file from the file explorer on the left
+
+### Option C: Install with Python (For developers)
+
+If you prefer to install Python, continue with the steps below.
+
+---
+
+## Step 1: Install Python (Option C only)
 
 ### Windows
 
@@ -69,7 +102,20 @@ You should see some text scroll by ending with "Successfully installed pylxpweb"
 
 ## Step 3: Run the Data Collection
 
-Run this command, replacing the placeholders with your actual login information:
+### If you downloaded the executable (Option A):
+
+**Windows:** Open Command Prompt, navigate to your Downloads folder, and run:
+```
+pylxpweb-collect-windows.exe -u YOUR_EMAIL -p YOUR_PASSWORD
+```
+
+**Mac:** Open Terminal, navigate to your Downloads folder, and run:
+```
+chmod +x pylxpweb-collect-macos
+./pylxpweb-collect-macos -u YOUR_EMAIL -p YOUR_PASSWORD
+```
+
+### If you installed with pip (Option C):
 
 ```
 pylxpweb-collect -u YOUR_EMAIL -p YOUR_PASSWORD
@@ -114,7 +160,7 @@ The tool will automatically:
 1. Log in to your account
 2. Find all your inverters
 3. Read all the register values from each device
-4. Create report files
+4. Create report files and bundle them into a zip
 
 This typically takes **2-10 minutes** depending on how many devices you have.
 
@@ -123,7 +169,7 @@ You'll see output like this:
 ```
 ======================================================================
   pylxpweb Device Data Collection Tool
-  Version: 0.3.15
+  Version: 0.3.17
 ======================================================================
 
 Base URL: https://monitor.eg4electronics.com
@@ -152,22 +198,30 @@ Found 2 device(s):
 [2/2] Processing: Grid Boss
   ...
 
+Creating zip archive...
+  Created: pylxpweb_device_data_20251125_143022.zip
+
 ======================================================================
   Collection Complete!
 ======================================================================
 
 Files created in: /Users/you/
-  - EG418KPV_4512670118.json
-  - EG418KPV_4512670118.md
-  - GridBoss_4524850115.json
-  - GridBoss_4524850115.md
+
+  ZIP FILE (attach this):
+    >>> pylxpweb_device_data_20251125_143022.zip <<<
+
+  Individual files (included in zip):
+    - EG418KPV_4512670118.json
+    - EG418KPV_4512670118.md
+    - GridBoss_4524850115.json
+    - GridBoss_4524850115.md
 ```
 
 ---
 
-## Step 5: Upload the Files to GitHub
+## Step 5: Upload the Zip File to GitHub
 
-After the collection completes, you'll see instructions like this:
+After the collection completes, you'll have a single zip file to upload:
 
 ```
 ======================================================================
@@ -186,11 +240,14 @@ To request support for your inverter model(s), please:
    - Any specific features or functions you need supported
    - Whether this is a hybrid, grid-tie, or off-grid inverter
 
-4. ATTACH ALL of these files to the issue:
-   - EG418KPV_4512670118.json
-   - EG418KPV_4512670118.md
-   - GridBoss_4524850115.json
-   - GridBoss_4524850115.md
+4. ATTACH this zip file to the issue:
+   >>> pylxpweb_device_data_20251125_143022.zip <<<
+
+   The zip contains these files:
+     - EG418KPV_4512670118.json
+     - EG418KPV_4512670118.md
+     - GridBoss_4524850115.json
+     - GridBoss_4524850115.md
 ```
 
 ### How to Create a GitHub Issue
@@ -201,7 +258,7 @@ To request support for your inverter model(s), please:
 4. In the description box, tell us:
    - Your inverter model
    - What features you need (battery control, grid export limits, etc.)
-5. **Drag and drop ALL the files** (.json and .md) into the description box
+5. **Drag and drop the zip file** into the description box
 6. Click **"Submit new issue"**
 
 ---

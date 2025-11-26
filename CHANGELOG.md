@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.17] - 2025-11-25
+
+### Added
+
+- **Standalone executables** - Pre-built binaries for Windows, macOS, and Linux:
+  - No Python installation required
+  - Download from GitHub Releases and run directly
+  - Built automatically on each release via PyInstaller
+
+- **GitHub Codespaces support** - Run the data collection tool in your browser:
+  - One-click setup via "Open in Codespaces" button
+  - Pre-configured development environment
+  - No local installation needed
+
+- **Zip archive output** - All collected files bundled into a single zip:
+  - `pylxpweb_device_data_YYYYMMDD_HHMMSS.zip` created automatically
+  - Easy to attach to GitHub issues
+  - Individual JSON/MD files also available
+
+- **Pre-filled GitHub issue link** - Automated issue creation:
+  - Click the generated URL to open a pre-filled issue
+  - Device types, serial numbers, and status auto-populated
+  - Feature checklist and firmware version fields included
+  - Just attach the zip file and submit
+
+### Changed
+
+- Updated `docs/COLLECT_DEVICE_DATA.md` with three collection options:
+  - Option A: Download executable (easiest)
+  - Option B: GitHub Codespaces (no download)
+  - Option C: Install with Python (for developers)
+
+### Testing
+
+- ✅ **Total tests**: 637 (all passing)
+- ✅ **Coverage**: >82%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.3.16] - 2025-11-25
 
 ### Changed

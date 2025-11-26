@@ -28,9 +28,11 @@ import argparse
 import asyncio
 import json
 import sys
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlencode
 
 # Handle imports whether run as module or directly
 try:
@@ -528,38 +530,157 @@ async def collect_single_device(
     return json_path, md_path
 
 
+def create_zip_archive(
+    created_files: list[tuple[Path, Path]],
+    output_dir: Path,
+    sanitize: bool = False,
+) -> Path:
+    """Create a zip archive of all generated files.
+
+    Args:
+        created_files: List of (json_path, md_path) tuples
+        output_dir: Directory where zip should be created
+        sanitize: Whether files were sanitized (affects filename)
+
+    Returns:
+        Path to the created zip file
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    suffix = "_sanitized" if sanitize else ""
+    zip_name = f"pylxpweb_device_data_{timestamp}{suffix}.zip"
+    zip_path = output_dir / zip_name
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for json_path, md_path in created_files:
+            # Add files with just their filename (no directory structure)
+            zf.write(json_path, json_path.name)
+            zf.write(md_path, md_path.name)
+
+    return zip_path
+
+
+def generate_issue_url(
+    devices: list[dict[str, Any]],
+    zip_filename: str,
+    sanitized: bool = False,
+) -> str:
+    """Generate a pre-filled GitHub issue URL.
+
+    Args:
+        devices: List of device info dicts with device_type, serial_num, status
+        zip_filename: Name of the zip file to attach
+        sanitized: Whether data was sanitized
+
+    Returns:
+        URL string with pre-filled title and body
+    """
+    # Build title from device types
+    device_types = sorted({d["device_type"] for d in devices})
+    if len(device_types) == 1:
+        title = f"Add support for {device_types[0]}"
+    else:
+        title = f"Add support for {', '.join(device_types)}"
+
+    # Build body with device info
+    body_lines = [
+        "## Device Information",
+        "",
+        "| Device Type | Serial | Status |",
+        "|-------------|--------|--------|",
+    ]
+
+    for device in devices:
+        dtype = device["device_type"]
+        serial = device.get("display_serial", device["serial_num"])
+        status = device["status"]
+        body_lines.append(f"| {dtype} | {serial} | {status} |")
+
+    body_lines.extend(
+        [
+            "",
+            "## Features Needed",
+            "",
+            "<!-- Please describe what features you need supported -->",
+            "- [ ] Battery monitoring and control",
+            "- [ ] Grid export/import limits",
+            "- [ ] Time-of-use scheduling",
+            "- [ ] Other: ",
+            "",
+            "## Inverter Details",
+            "",
+            "- **Firmware Version**: <!-- Check your inverter's display or web portal -->",
+            "- **Inverter Type**: <!-- Hybrid / Grid-tie / Off-grid -->",
+            "- **Battery Type**: <!-- LiFePO4 / Lead-acid / None -->",
+            "",
+            "## Attached Data",
+            "",
+            f"Please attach the zip file: `{zip_filename}`",
+            "",
+            "---",
+            f"*Collected with pylxpweb v{__version__}*",
+        ]
+    )
+
+    if sanitized:
+        body_lines.insert(0, "> Note: Serial numbers have been sanitized for privacy.\n")
+
+    body = "\n".join(body_lines)
+
+    # Build URL with query parameters
+    params = {
+        "title": title,
+        "body": body,
+        "labels": "new-device",
+    }
+
+    return f"{GITHUB_ISSUES_URL}?{urlencode(params, quote_via=quote)}"
+
+
 def print_upload_instructions(
-    created_files: list[tuple[Path, Path]], sanitized: bool = False
+    devices: list[dict[str, Any]],
+    created_files: list[tuple[Path, Path]],
+    zip_path: Path | None = None,
+    sanitized: bool = False,
 ) -> None:
     """Print instructions for uploading the data."""
     print("\n" + "=" * 70)
-    print("  UPLOAD INSTRUCTIONS - Please read carefully!")
+    print("  UPLOAD INSTRUCTIONS")
     print("=" * 70)
     print()
-    print("To request support for your inverter model(s), please:")
+
+    # Generate pre-filled issue URL
+    if zip_path:
+        issue_url = generate_issue_url(devices, zip_path.name, sanitized)
+        print("CLICK THIS LINK to create a pre-filled GitHub issue:")
+        print()
+        print(f"  {issue_url}")
+        print()
+        print("-" * 70)
+        print()
+        print("After the page opens:")
+        print()
+        print("1. Review the pre-filled information (edit if needed)")
+        print()
+        print("2. ATTACH this zip file by dragging it into the description:")
+        print(f"   >>> {zip_path.name} <<<")
+        print()
+        print("3. Click 'Submit new issue'")
+    else:
+        print("Create a new GitHub issue at:")
+        print(f"   {GITHUB_ISSUES_URL}")
+        print()
+        print("Attach these files:")
+        for json_path, md_path in created_files:
+            print(f"   - {json_path.name}")
+            print(f"   - {md_path.name}")
+
     print()
-    print("1. Create a new GitHub issue at:")
-    print(f"   {GITHUB_ISSUES_URL}")
-    print()
-    print('2. Use a title like: "Add support for [Your Inverter Model]"')
-    print()
-    print("3. In the issue description, include:")
-    print("   - Your inverter model name and firmware version")
-    print("   - Any specific features or functions you need supported")
-    print("   - Whether this is a hybrid, grid-tie, or off-grid inverter")
-    print()
-    print("4. ATTACH ALL of these files to the issue:")
-    for json_path, md_path in created_files:
-        print(f"   - {json_path.name}")
-        print(f"   - {md_path.name}")
-    print()
+    print("-" * 70)
     if sanitized:
         print("NOTE: Sensitive data (serial numbers, locations) has been SANITIZED.")
         print("      The files are safe to share publicly.")
     else:
-        print("NOTE: Serial numbers in these files are NOT sanitized.")
-        print("      If privacy is a concern, re-run with the --sanitize flag:")
-        print("      pylxpweb-collect -u USER -p PASS --sanitize")
+        print("NOTE: Serial numbers are NOT sanitized. Re-run with --sanitize if needed.")
     print()
     print("Questions? Start a discussion at:")
     print(f"   {GITHUB_DISCUSSIONS_URL}")
@@ -607,13 +728,16 @@ async def main_async(args: argparse.Namespace) -> int:
                     original = device["serial_num"]
                     serial_map[original] = sanitize_serial(original)
 
+            # Add display_serial to each device for use in issue URL
+            for device in devices:
+                serial = device["serial_num"]
+                device["display_serial"] = serial_map.get(serial, serial) if sanitize else serial
+
             print(f"\nFound {len(devices)} device(s):")
             for i, device in enumerate(devices, 1):
                 dtype = device["device_type"]
-                serial = device["serial_num"]
+                display_serial = device["display_serial"]
                 status = device["status"]
-                # Show sanitized serial if sanitization is enabled
-                display_serial = serial_map.get(serial, serial) if sanitize else serial
                 print(f"  {i}. {dtype} ({display_serial}) - {status}")
             print()
 
@@ -646,6 +770,11 @@ async def main_async(args: argparse.Namespace) -> int:
                 print("\nNo data was collected. All devices may be offline.")
                 return 1
 
+            # Create zip archive
+            print("\nCreating zip archive...")
+            zip_path = create_zip_archive(created_files, output_dir, sanitize)
+            print(f"  Created: {zip_path.name}")
+
             # Print summary
             print()
             print("=" * 70)
@@ -654,12 +783,16 @@ async def main_async(args: argparse.Namespace) -> int:
             print()
             print(f"Files created in: {output_dir.absolute()}")
             print()
+            print("  ZIP FILE (attach this):")
+            print(f"    >>> {zip_path.name} <<<")
+            print()
+            print("  Individual files (included in zip):")
             for json_path, md_path in created_files:
-                print(f"  - {json_path.name}")
-                print(f"  - {md_path.name}")
+                print(f"    - {json_path.name}")
+                print(f"    - {md_path.name}")
 
-            # Print upload instructions
-            print_upload_instructions(created_files, sanitize)
+            # Print upload instructions with pre-filled issue link
+            print_upload_instructions(devices, created_files, zip_path, sanitize)
 
             return 0
 
