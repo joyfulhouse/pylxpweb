@@ -403,6 +403,72 @@ paths:
               schema:
                 $ref: '#/components/schemas/ParallelGroupDetails'
 
+  /api/inverter/autoParallel:
+    post:
+      tags:
+        - Device Discovery
+      summary: Initialize/sync parallel group data for a plant
+      description: |
+        **⚠️ WRITE OPERATION - MODIFIES PARALLEL GROUP CONFIGURATION**
+
+        Trigger automatic parallel group detection and synchronization for all inverters
+        in a plant. This is required on Luxpower regional APIs (EU, Asia, etc.) after
+        firmware updates or when parallel data becomes unavailable.
+
+        **When to Use**:
+        - After firmware updates that reset parallel group settings
+        - When the mobile app no longer shows "Parallel-A" option
+        - When `getParallelGroupDetails` returns empty/no data
+        - Initial setup of parallel inverter configurations
+
+        **Platform Differences**:
+        - **EG4 (monitor.eg4electronics.com)**: Parallel groups may be auto-configured
+        - **Luxpower (*.luxpowertek.com)**: Requires manual trigger via this endpoint
+          or the "Parallel Sync Data" button in the web UI
+
+        **Important Notes**:
+        - This endpoint is only visible/accessible via the web interface, not the mobile app
+        - May take several seconds to complete as it communicates with all inverters
+        - Should be called once per plant, not per inverter
+
+        **Recommendation**: Library implementations targeting Luxpower regional APIs
+        should consider calling this endpoint automatically during station discovery
+        if parallel group data is not available.
+      operationId: autoParallel
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - plantId
+              properties:
+                plantId:
+                  type: integer
+                  description: Plant/station ID to sync parallel data for
+                  example: 12345
+      responses:
+        '200':
+          description: Parallel sync initiated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid plant ID or sync failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  msg:
+                    type: string
+                    example: "Plant not found or no inverters available"
+
   /api/inverterOverview/list:
     post:
       tags:
