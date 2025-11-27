@@ -579,6 +579,12 @@ plant_name = "6245 N WILLARD"  # Real address
 4. Review test coverage
 5. Validate documentation updates
 
+### When Commenting on GitHub Issues
+1. **Never tag users without verification** - Don't assume who reported an issue based on related issues
+2. If the error came from the current user's terminal/conversation, don't tag external usernames
+3. Only tag users if they explicitly reported the issue in that specific GitHub issue
+4. When in doubt, don't tag anyone - let the issue notifications handle it
+
 ---
 
 **Remember**: This is a standalone library usable beyond Home Assistant. Keep HA-specific features (entity platforms, config flow, data coordinators) in the HA integration, not in pylxpweb.
