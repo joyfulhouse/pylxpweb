@@ -162,12 +162,16 @@ class PlantBasic(BaseModel):
 
 
 class TechInfo(BaseModel):
-    """Technical support information."""
+    """Technical support information.
+
+    Note: techInfoType2/techInfo2 are optional as some regional APIs
+    (e.g., EU Luxpower) may only return one tech info item.
+    """
 
     techInfoType1: str
     techInfo1: str
-    techInfoType2: str
-    techInfo2: str
+    techInfoType2: str | None = None
+    techInfo2: str | None = None
     techInfoCount: int
 
 
