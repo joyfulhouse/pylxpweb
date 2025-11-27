@@ -1050,12 +1050,23 @@ paths:
       description: |
         **⚠️ WRITE OPERATION - CHANGES DEVICE STATE**
 
-        Enable or disable device functions.
+        Enable or disable device functions via boolean toggle.
 
         **Common Functions**:
-        - `FUNC_EPS_EN`: Battery backup (EPS) mode
-        - `FUNC_SET_TO_STANDBY`: Standby mode
+        - `FUNC_EPS_EN`: Battery backup (EPS/off-grid) mode
+        - `FUNC_SET_TO_STANDBY`: Standby mode (0=Standby, 1=Power On)
         - `FUNC_GRID_PEAK_SHAVING`: Peak shaving mode
+        - `FUNC_AC_CHARGE_EN`: AC (grid) charging enabled
+        - `FUNC_FORCED_DISCHG_EN`: Forced discharge mode
+        - `FUNC_FORCED_CHG_EN`: Force charge mode
+        - `FUNC_PV_SELL_TO_GRID_EN`: PV feed-in to grid enabled
+        - `FUNC_PARALLEL_DATA_SYNC_EN`: Parallel group data synchronization
+        - `FUNC_MIDBOX_EN`: GridBOSS/MID device enabled
+
+        **Example Request**:
+        ```
+        inverterSn=1234567890&functionParam=FUNC_PARALLEL_DATA_SYNC_EN&enable=false&clientType=WEB&remoteSetType=NORMAL
+        ```
       operationId: controlFunction
       requestBody:
         required: true
