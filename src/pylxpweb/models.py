@@ -59,6 +59,7 @@ class BatteryType(str, Enum):
 
     LITHIUM = "LITHIUM"
     LEAD_ACID = "LEAD_ACID"
+    NO_BATTERY = "NO_BATTERY"
 
 
 class UserRole(str, Enum):
@@ -209,7 +210,7 @@ class LoginResponse(BaseModel):
     tempUnit: str
     tempUnitText: str
     dateFormat: str
-    userChartRecord: str
+    userChartRecord: str | None = None
     firewallNotificationEnable: str
     userCreateDate: str
     userCreatedDays: int
