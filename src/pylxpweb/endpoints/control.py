@@ -1051,3 +1051,73 @@ class ControlEndpoints(BaseEndpoint):
         """
         params = await self.read_device_parameters_ranges(inverter_sn)
         return int(params.get("HOLD_LEAD_ACID_DISCHARGE_RATE", 200))
+
+    # ============================================================================
+    # System SOC Limit Controls
+    # ============================================================================
+
+    async def set_system_charge_soc_limit(
+        self,
+        inverter_sn: str,
+        percent: int,
+    ) -> SuccessResponse:
+        """Set the system charge SOC limit.
+
+        Controls the maximum State of Charge (SOC) percentage the battery will
+        charge to during normal operation.
+
+        Args:
+            inverter_sn: Inverter serial number
+            percent: Target SOC limit (0-101%)
+                - 0-100: Stop charging when battery reaches this SOC
+                - 101: Special value to enable top balancing (allows full charge
+                       with cell balancing for lithium batteries)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If percent not in valid range (0-101)
+
+        Note:
+            Setting 101% enables top balancing mode, which allows the battery
+            management system to fully charge and balance individual cells.
+            This is recommended periodically for lithium battery health.
+
+        Example:
+            >>> # Limit charging to 90% for daily use (extends battery life)
+            >>> await client.control.set_system_charge_soc_limit("1234567890", 90)
+            SuccessResponse(success=True)
+
+            >>> # Enable top balancing (charge to 100% with cell balancing)
+            >>> await client.control.set_system_charge_soc_limit("1234567890", 101)
+            SuccessResponse(success=True)
+        """
+        if not (0 <= percent <= 101):
+            raise ValueError(
+                f"System charge SOC limit must be between 0-101%, got {percent}. "
+                "Use 101 for top balancing mode."
+            )
+
+        return await self.write_parameter(inverter_sn, "HOLD_SYSTEM_CHARGE_SOC_LIMIT", str(percent))
+
+    async def get_system_charge_soc_limit(self, inverter_sn: str) -> int:
+        """Get the current system charge SOC limit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            int: Current charge SOC limit (0-101%)
+                - 0-100: Normal SOC limit
+                - 101: Top balancing mode enabled
+
+        Example:
+            >>> limit = await client.control.get_system_charge_soc_limit("1234567890")
+            >>> if limit == 101:
+            >>>     print("Top balancing enabled")
+            >>> else:
+            >>>     print(f"Charge limit: {limit}%")
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        return int(params.get("HOLD_SYSTEM_CHARGE_SOC_LIMIT", 100))

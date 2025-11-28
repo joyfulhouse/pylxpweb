@@ -531,3 +531,153 @@ class TestBulkParameterRead:
         # Verify we got data from successful calls only
         assert "HOLD_AC_CHARGE_POWER_CMD" in combined
         assert len(combined) > 0
+
+
+class TestSystemChargeSocLimit:
+    """Test system charge SOC limit convenience methods."""
+
+    @pytest.mark.asyncio
+    async def test_set_system_charge_soc_limit_normal(self) -> None:
+        """Test setting system charge SOC limit to normal value."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock write_parameter
+        mock_response = SuccessResponse(success=True)
+        control.write_parameter = AsyncMock(return_value=mock_response)
+
+        # Set SOC limit to 90%
+        result = await control.set_system_charge_soc_limit("1234567890", 90)
+
+        # Verify write_parameter was called correctly
+        control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "90"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_set_system_charge_soc_limit_top_balance(self) -> None:
+        """Test setting system charge SOC limit to 101 for top balancing."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock write_parameter
+        mock_response = SuccessResponse(success=True)
+        control.write_parameter = AsyncMock(return_value=mock_response)
+
+        # Set SOC limit to 101% (top balancing)
+        result = await control.set_system_charge_soc_limit("1234567890", 101)
+
+        # Verify write_parameter was called correctly
+        control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "101"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_set_system_charge_soc_limit_zero(self) -> None:
+        """Test setting system charge SOC limit to 0%."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock write_parameter
+        mock_response = SuccessResponse(success=True)
+        control.write_parameter = AsyncMock(return_value=mock_response)
+
+        # Set SOC limit to 0%
+        result = await control.set_system_charge_soc_limit("1234567890", 0)
+
+        # Verify write_parameter was called correctly
+        control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "0"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_set_system_charge_soc_limit_invalid_high(self) -> None:
+        """Test that values above 101 raise ValueError."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Attempt to set invalid value
+        with pytest.raises(ValueError) as exc_info:
+            await control.set_system_charge_soc_limit("1234567890", 102)
+
+        assert "0-101%" in str(exc_info.value)
+        assert "102" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_set_system_charge_soc_limit_invalid_negative(self) -> None:
+        """Test that negative values raise ValueError."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Attempt to set invalid value
+        with pytest.raises(ValueError) as exc_info:
+            await control.set_system_charge_soc_limit("1234567890", -1)
+
+        assert "0-101%" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_get_system_charge_soc_limit(self) -> None:
+        """Test getting current system charge SOC limit."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_device_parameters_ranges
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 90}
+        )
+
+        # Get SOC limit
+        limit = await control.get_system_charge_soc_limit("1234567890")
+
+        # Verify
+        control.read_device_parameters_ranges.assert_called_once_with("1234567890")
+        assert limit == 90
+
+    @pytest.mark.asyncio
+    async def test_get_system_charge_soc_limit_top_balance(self) -> None:
+        """Test getting system charge SOC limit when set to 101 (top balancing)."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_device_parameters_ranges
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
+        )
+
+        # Get SOC limit
+        limit = await control.get_system_charge_soc_limit("1234567890")
+
+        assert limit == 101
+
+    @pytest.mark.asyncio
+    async def test_get_system_charge_soc_limit_default(self) -> None:
+        """Test getting system charge SOC limit defaults to 100 if not present."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_device_parameters_ranges without the parameter
+        control.read_device_parameters_ranges = AsyncMock(return_value={})
+
+        # Get SOC limit
+        limit = await control.get_system_charge_soc_limit("1234567890")
+
+        assert limit == 100
