@@ -342,6 +342,15 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             return None
         return getattr(self._runtime, "soc", None)
 
+    @property
+    def battery_bank(self) -> Any | None:
+        """Get battery bank with aggregate data and individual batteries.
+
+        Returns:
+            BatteryBank object with batteries list, or None if no battery data.
+        """
+        return self._battery_bank
+
     # ============================================================================
     # Additional Energy Statistics Properties
     # ============================================================================
