@@ -1031,6 +1031,27 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         value = self._get_parameter("HOLD_AC_CHARGE_SOC_LIMIT", 100, int)
         return int(value) if value is not None else None
 
+    @property
+    def system_charge_soc_limit(self) -> int | None:
+        """Get current system charge SOC limit from cached parameters.
+
+        This controls when the battery stops charging:
+        - 0-100%: Stop charging when battery reaches this SOC
+        - 101%: Enable top balancing (full charge with cell balancing)
+
+        Universal control: All inverters support system charge SOC limits.
+
+        Returns:
+            Current SOC limit percentage (0-101), or None if parameters not loaded
+
+        Example:
+            >>> limit = inverter.system_charge_soc_limit
+            >>> limit
+            80
+        """
+        value = self._get_parameter("HOLD_SYSTEM_CHARGE_SOC_LIMIT", 100, int)
+        return int(value) if value is not None else None
+
     # ============================================================================
     # Battery Current Control (Issue #13)
     # ============================================================================
@@ -1124,6 +1145,78 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         value = self._get_parameter("HOLD_LEAD_ACID_DISCHARGE_RATE", 0, int)
         return int(value) if value is not None else None
+
+    # ============================================================================
+    # Discharge Power Control
+    # ============================================================================
+
+    @property
+    def discharge_power_limit(self) -> int | None:
+        """Get current discharge power limit from cached parameters.
+
+        Universal control: All inverters support discharge power limits.
+
+        Returns:
+            Discharge power limit as percentage (0-100%), or None if not loaded
+
+        Example:
+            >>> power = inverter.discharge_power_limit
+            >>> power
+            100
+        """
+        value = self._get_parameter("HOLD_DISCHG_POWER_PERCENT_CMD", 100, int)
+        return int(value) if value is not None else None
+
+    # ============================================================================
+    # Battery Voltage Limits
+    # ============================================================================
+
+    @property
+    def battery_voltage_limits(self) -> dict[str, float] | None:
+        """Get battery voltage limits from cached parameters.
+
+        Universal control: All inverters have battery voltage protection.
+
+        Returns:
+            Dictionary with voltage limits in volts, or None if not loaded:
+            - max_charge_voltage: Maximum charge voltage (V)
+            - min_charge_voltage: Minimum charge voltage (V)
+            - max_discharge_voltage: Maximum discharge voltage (V)
+            - min_discharge_voltage: Minimum discharge voltage (V)
+
+        Example:
+            >>> limits = inverter.battery_voltage_limits
+            >>> limits
+            {'max_charge_voltage': 58.4, 'min_charge_voltage': 48.0,
+             'max_discharge_voltage': 57.6, 'min_discharge_voltage': 46.0}
+        """
+        # Return None if parameters not loaded yet
+        if self.parameters is None:
+            return None
+
+        # Check if all required params are present
+        required_keys = [
+            "HOLD_BAT_VOLT_MAX_CHG",
+            "HOLD_BAT_VOLT_MIN_CHG",
+            "HOLD_BAT_VOLT_MAX_DISCHG",
+            "HOLD_BAT_VOLT_MIN_DISCHG",
+        ]
+        if not all(key in self.parameters for key in required_keys):
+            return None
+
+        # Get values directly from parameters dict (already validated as present)
+        # Battery voltage values are stored as V * 100, so divide by 100
+        max_chg = self.parameters.get("HOLD_BAT_VOLT_MAX_CHG", 0)
+        min_chg = self.parameters.get("HOLD_BAT_VOLT_MIN_CHG", 0)
+        max_dischg = self.parameters.get("HOLD_BAT_VOLT_MAX_DISCHG", 0)
+        min_dischg = self.parameters.get("HOLD_BAT_VOLT_MIN_DISCHG", 0)
+
+        return {
+            "max_charge_voltage": float(max_chg) / 100.0,
+            "min_charge_voltage": float(min_chg) / 100.0,
+            "max_discharge_voltage": float(max_dischg) / 100.0,
+            "min_discharge_voltage": float(min_dischg) / 100.0,
+        }
 
     # ============================================================================
     # Operating Mode Control (Issue #14)
