@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.21] - 2025-12-02
+
+### Added
+
+- **system_charge_soc_limit property** - New inverter property for accessing the system charge SOC limit:
+  - `inverter.system_charge_soc_limit` - Get current system charge SOC limit from cached parameters
+  - Returns 0-100 for normal SOC limit, 101 for top balancing mode
+  - Returns `None` when parameters not loaded (Home Assistant shows "Unknown" state)
+  - Provides parity with `ac_charge_soc_limit` property pattern
+  - Used by Home Assistant integration to read current value without API call
+
+### Testing
+
+- ✅ **Total tests**: 646 (all passing)
+- ✅ **Coverage**: 83.63%
+- ✅ **Code style**: 100% (ruff: 0 errors)
+- ✅ **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.3.20] - 2025-11-28
 
 ### Added
@@ -850,6 +868,8 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 
 ## Version History Summary
 
+- **v0.3.21** (2025-12-02): Added `system_charge_soc_limit` property to BaseInverter
+- **v0.3.20** (2025-11-28): System charge SOC limit convenience functions (set/get)
 - **v0.3.13** (2025-11-24): Fixed firmware "already latest" exception - now returns proper FirmwareUpdateCheck
 - **v0.3.12** (2025-11-24): Code review improvements - badges, coverage threshold, cleanup
 - **v0.3.11** (2025-11-24): Code quality - logging imports refactored
@@ -875,6 +895,14 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.3.21]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.20...v0.3.21
+[0.3.20]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.19...v0.3.20
+[0.3.19]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.18...v0.3.19
+[0.3.18]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.17...v0.3.18
+[0.3.17]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.16...v0.3.17
+[0.3.16]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.15...v0.3.16
+[0.3.15]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.14...v0.3.15
+[0.3.14]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.12...v0.3.13
 [0.3.12]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.11...v0.3.12
 [0.3.11]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.10...v0.3.11
