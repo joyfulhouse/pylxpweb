@@ -104,6 +104,7 @@ class TestParameterInitialization:
         assert inverter.ac_charge_power_limit is None
         assert inverter.pv_charge_power_limit is None
         assert inverter.ac_charge_soc_limit is None
+        assert inverter.system_charge_soc_limit is None
         assert inverter.battery_charge_current_limit is None
         assert inverter.battery_discharge_current_limit is None
 
@@ -119,12 +120,14 @@ class TestParameterInitialization:
         inverter.parameters = {
             "HOLD_AC_CHARGE_POWER_CMD": 5.0,
             "HOLD_AC_CHARGE_SOC_LIMIT": 80,
+            "HOLD_SYSTEM_CHARGE_SOC_LIMIT": 100,
             "HOLD_FORCED_CHG_POWER_CMD": 10,
         }
 
         # Properties should now return actual values
         assert inverter.ac_charge_power_limit == 5.0
         assert inverter.ac_charge_soc_limit == 80
+        assert inverter.system_charge_soc_limit == 100
         assert inverter.pv_charge_power_limit == 10
 
     @pytest.mark.asyncio
@@ -207,3 +210,34 @@ class TestParameterInitialization:
         # Case 3: Parameters loaded, value is non-zero
         inverter.parameters = {"HOLD_AC_CHARGE_POWER_CMD": 5.0}
         assert inverter.ac_charge_power_limit == 5.0
+
+    def test_system_charge_soc_limit_property(self, mock_client: LuxpowerClient) -> None:
+        """Test system_charge_soc_limit property returns correct values.
+
+        The system charge SOC limit controls when the battery stops charging:
+        - 0-100%: Stop charging when battery reaches this SOC
+        - 101%: Enable top balancing (full charge with cell balancing)
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Case 1: Parameters not loaded - should return None
+        assert inverter.parameters is None
+        assert inverter.system_charge_soc_limit is None
+
+        # Case 2: Parameters loaded with normal SOC limit
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 80}
+        assert inverter.system_charge_soc_limit == 80
+
+        # Case 3: Parameters loaded with top balancing mode (101%)
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
+        assert inverter.system_charge_soc_limit == 101
+
+        # Case 4: Parameters loaded with 100% (maximum without top balancing)
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 100}
+        assert inverter.system_charge_soc_limit == 100
+
+        # Case 5: Parameters loaded but key missing - should return default (100)
+        inverter.parameters = {"OTHER_PARAM": 50}
+        assert inverter.system_charge_soc_limit == 100  # Default value

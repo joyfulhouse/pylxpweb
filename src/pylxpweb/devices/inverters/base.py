@@ -1022,6 +1022,27 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         value = self._get_parameter("HOLD_AC_CHARGE_SOC_LIMIT", 100, int)
         return int(value) if value is not None else None
 
+    @property
+    def system_charge_soc_limit(self) -> int | None:
+        """Get current system charge SOC limit from cached parameters.
+
+        This controls when the battery stops charging:
+        - 0-100%: Stop charging when battery reaches this SOC
+        - 101%: Enable top balancing (full charge with cell balancing)
+
+        Universal control: All inverters support system charge SOC limits.
+
+        Returns:
+            Current SOC limit percentage (0-101), or None if parameters not loaded
+
+        Example:
+            >>> limit = inverter.system_charge_soc_limit
+            >>> limit
+            80
+        """
+        value = self._get_parameter("HOLD_SYSTEM_CHARGE_SOC_LIMIT", 100, int)
+        return int(value) if value is not None else None
+
     # ============================================================================
     # Battery Current Control (Issue #13)
     # ============================================================================
