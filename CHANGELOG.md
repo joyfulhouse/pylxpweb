@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.23] - 2025-12-02
+
+### Added
+
+- **NO_BATTERY enum value** - Added `BatteryType.NO_BATTERY` for systems without batteries (PR #61 by @pirate)
+- **Optional userChartRecord** - Made `LoginResponse.userChartRecord` optional since some API responses don't include it (PR #61 by @pirate)
+- **Public battery_bank property** - Added `inverter.battery_bank` property to expose battery bank data (PR #61 by @pirate)
+
 ## [0.3.22] - 2025-12-02
 
 ### Fixed
@@ -897,6 +905,7 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 
 ## Version History Summary
 
+- **v0.3.23** (2025-12-02): NO_BATTERY enum, optional userChartRecord, battery_bank property (PR #61)
 - **v0.3.22** (2025-12-02): Cache invalidation fix, discharge_power_limit, battery_voltage_limits properties
 - **v0.3.21** (2025-12-02): Added `system_charge_soc_limit` property to BaseInverter
 - **v0.3.20** (2025-11-28): System charge SOC limit convenience functions (set/get)
@@ -925,6 +934,7 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.3.23]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.22...v0.3.23
 [0.3.22]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.21...v0.3.22
 [0.3.21]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.20...v0.3.21
 [0.3.20]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.19...v0.3.20
