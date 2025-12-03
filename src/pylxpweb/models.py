@@ -152,14 +152,17 @@ class ParallelGroupBasic(BaseModel):
 
 
 class PlantBasic(BaseModel):
-    """Plant information from login response."""
+    """Plant information from login response.
+
+    Note: parallelGroups may not be present for all device types (e.g., 12000XP).
+    """
 
     plantId: int
     name: str
     timezoneHourOffset: int
     timezoneMinuteOffset: int
     inverters: list[InverterBasic]
-    parallelGroups: list[ParallelGroupBasic]
+    parallelGroups: list[ParallelGroupBasic] = []
 
 
 class TechInfo(BaseModel):
