@@ -165,7 +165,13 @@ class ControlEndpoints(BaseEndpoint):
         response = await self.client._request(
             "POST", "/WManage/web/maintain/remoteSet/write", data=data
         )
-        return SuccessResponse.model_validate(response)
+        result = SuccessResponse.model_validate(response)
+
+        # Invalidate cache after successful write to ensure fresh data on next read
+        if result.success:
+            self.client.invalidate_cache_for_device(inverter_sn)
+
+        return result
 
     async def write_parameters(
         self,
@@ -218,7 +224,13 @@ class ControlEndpoints(BaseEndpoint):
         response = await self.client._request(
             "POST", "/WManage/web/maintain/remoteSet/write", data=data
         )
-        return SuccessResponse.model_validate(response)
+        result = SuccessResponse.model_validate(response)
+
+        # Invalidate cache after successful write to ensure fresh data on next read
+        if result.success:
+            self.client.invalidate_cache_for_device(inverter_sn)
+
+        return result
 
     async def control_function(
         self,
@@ -275,7 +287,13 @@ class ControlEndpoints(BaseEndpoint):
         response = await self.client._request(
             "POST", "/WManage/web/maintain/remoteSet/functionControl", data=data
         )
-        return SuccessResponse.model_validate(response)
+        result = SuccessResponse.model_validate(response)
+
+        # Invalidate cache after successful write to ensure fresh data on next read
+        if result.success:
+            self.client.invalidate_cache_for_device(inverter_sn)
+
+        return result
 
     async def start_quick_charge(
         self, inverter_sn: str, client_type: str = "WEB"

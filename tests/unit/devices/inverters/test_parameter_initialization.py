@@ -104,6 +104,7 @@ class TestParameterInitialization:
         assert inverter.ac_charge_power_limit is None
         assert inverter.pv_charge_power_limit is None
         assert inverter.ac_charge_soc_limit is None
+        assert inverter.system_charge_soc_limit is None
         assert inverter.battery_charge_current_limit is None
         assert inverter.battery_discharge_current_limit is None
 
@@ -119,12 +120,14 @@ class TestParameterInitialization:
         inverter.parameters = {
             "HOLD_AC_CHARGE_POWER_CMD": 5.0,
             "HOLD_AC_CHARGE_SOC_LIMIT": 80,
+            "HOLD_SYSTEM_CHARGE_SOC_LIMIT": 100,
             "HOLD_FORCED_CHG_POWER_CMD": 10,
         }
 
         # Properties should now return actual values
         assert inverter.ac_charge_power_limit == 5.0
         assert inverter.ac_charge_soc_limit == 80
+        assert inverter.system_charge_soc_limit == 100
         assert inverter.pv_charge_power_limit == 10
 
     @pytest.mark.asyncio
@@ -207,3 +210,98 @@ class TestParameterInitialization:
         # Case 3: Parameters loaded, value is non-zero
         inverter.parameters = {"HOLD_AC_CHARGE_POWER_CMD": 5.0}
         assert inverter.ac_charge_power_limit == 5.0
+
+    def test_system_charge_soc_limit_property(self, mock_client: LuxpowerClient) -> None:
+        """Test system_charge_soc_limit property returns correct values.
+
+        The system charge SOC limit controls when the battery stops charging:
+        - 0-100%: Stop charging when battery reaches this SOC
+        - 101%: Enable top balancing (full charge with cell balancing)
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Case 1: Parameters not loaded - should return None
+        assert inverter.parameters is None
+        assert inverter.system_charge_soc_limit is None
+
+        # Case 2: Parameters loaded with normal SOC limit
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 80}
+        assert inverter.system_charge_soc_limit == 80
+
+        # Case 3: Parameters loaded with top balancing mode (101%)
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
+        assert inverter.system_charge_soc_limit == 101
+
+        # Case 4: Parameters loaded with 100% (maximum without top balancing)
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 100}
+        assert inverter.system_charge_soc_limit == 100
+
+        # Case 5: Parameters loaded but key missing - should return default (100)
+        inverter.parameters = {"OTHER_PARAM": 50}
+        assert inverter.system_charge_soc_limit == 100  # Default value
+
+    def test_discharge_power_limit_property(self, mock_client: LuxpowerClient) -> None:
+        """Test discharge_power_limit property returns correct values.
+
+        The discharge power limit controls the maximum discharge power as a percentage.
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Case 1: Parameters not loaded - should return None
+        assert inverter.parameters is None
+        assert inverter.discharge_power_limit is None
+
+        # Case 2: Parameters loaded with discharge power limit
+        inverter.parameters = {"HOLD_DISCHG_POWER_PERCENT_CMD": 80}
+        assert inverter.discharge_power_limit == 80
+
+        # Case 3: Parameters loaded with 100% (maximum)
+        inverter.parameters = {"HOLD_DISCHG_POWER_PERCENT_CMD": 100}
+        assert inverter.discharge_power_limit == 100
+
+        # Case 4: Parameters loaded with 0% (minimum)
+        inverter.parameters = {"HOLD_DISCHG_POWER_PERCENT_CMD": 0}
+        assert inverter.discharge_power_limit == 0
+
+        # Case 5: Parameters loaded but key missing - should return default (100)
+        inverter.parameters = {"OTHER_PARAM": 50}
+        assert inverter.discharge_power_limit == 100  # Default value
+
+    def test_battery_voltage_limits_property(self, mock_client: LuxpowerClient) -> None:
+        """Test battery_voltage_limits property returns correct scaled values.
+
+        Battery voltage values are stored as V * 100 in the API.
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        # Case 1: Parameters not loaded - should return None
+        assert inverter.parameters is None
+        assert inverter.battery_voltage_limits is None
+
+        # Case 2: Parameters loaded with all voltage limits
+        inverter.parameters = {
+            "HOLD_BAT_VOLT_MAX_CHG": 5840,  # 58.4V
+            "HOLD_BAT_VOLT_MIN_CHG": 4800,  # 48.0V
+            "HOLD_BAT_VOLT_MAX_DISCHG": 5760,  # 57.6V
+            "HOLD_BAT_VOLT_MIN_DISCHG": 4600,  # 46.0V
+        }
+        limits = inverter.battery_voltage_limits
+        assert limits is not None
+        assert limits["max_charge_voltage"] == 58.4
+        assert limits["min_charge_voltage"] == 48.0
+        assert limits["max_discharge_voltage"] == 57.6
+        assert limits["min_discharge_voltage"] == 46.0
+
+        # Case 3: Parameters partially loaded - should return None
+        inverter.parameters = {
+            "HOLD_BAT_VOLT_MAX_CHG": 5840,
+            "HOLD_BAT_VOLT_MIN_CHG": 4800,
+            # Missing discharge voltage params
+        }
+        assert inverter.battery_voltage_limits is None

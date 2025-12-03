@@ -533,6 +533,86 @@ class TestBulkParameterRead:
         assert len(combined) > 0
 
 
+class TestCacheInvalidation:
+    """Test cache invalidation on write operations."""
+
+    @pytest.mark.asyncio
+    async def test_write_parameter_invalidates_cache(self) -> None:
+        """Test that write_parameter invalidates cache on successful write."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        mock_client._ensure_authenticated = AsyncMock()
+        mock_client._request = AsyncMock(return_value={"success": True})
+        mock_client.invalidate_cache_for_device = Mock()
+
+        control = ControlEndpoints(mock_client)
+
+        # Write parameter
+        result = await control.write_parameter("1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "90")
+
+        # Verify cache was invalidated
+        assert result.success is True
+        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    async def test_write_parameter_no_cache_invalidation_on_failure(self) -> None:
+        """Test that write_parameter does NOT invalidate cache on failure."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        mock_client._ensure_authenticated = AsyncMock()
+        mock_client._request = AsyncMock(return_value={"success": False})
+        mock_client.invalidate_cache_for_device = Mock()
+
+        control = ControlEndpoints(mock_client)
+
+        # Write parameter (fails)
+        result = await control.write_parameter("1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "90")
+
+        # Verify cache was NOT invalidated
+        assert result.success is False
+        mock_client.invalidate_cache_for_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_control_function_invalidates_cache(self) -> None:
+        """Test that control_function invalidates cache on successful operation."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        mock_client._ensure_authenticated = AsyncMock()
+        mock_client._request = AsyncMock(return_value={"success": True})
+        mock_client.invalidate_cache_for_device = Mock()
+
+        control = ControlEndpoints(mock_client)
+
+        # Call control_function
+        result = await control.control_function("1234567890", "FUNC_EPS_EN", True)
+
+        # Verify cache was invalidated
+        assert result.success is True
+        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_invalidates_cache(self) -> None:
+        """Test that write_parameters invalidates cache on successful write."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        mock_client._ensure_authenticated = AsyncMock()
+        mock_client._request = AsyncMock(return_value={"success": True})
+        mock_client.invalidate_cache_for_device = Mock()
+
+        control = ControlEndpoints(mock_client)
+
+        # Write parameters
+        result = await control.write_parameters("1234567890", {21: 512})
+
+        # Verify cache was invalidated
+        assert result.success is True
+        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+
+
 class TestSystemChargeSocLimit:
     """Test system charge SOC limit convenience methods."""
 
