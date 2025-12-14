@@ -818,6 +818,48 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         return await self._client.api.control.get_battery_backup_status(self.serial_number)
 
+    async def enable_battery_backup_ctrl(self) -> bool:
+        """Enable battery backup control mode (working mode).
+
+        This controls FUNC_BATTERY_BACKUP_CTRL, which is distinct from
+        enable_battery_backup() which controls FUNC_EPS_EN (EPS/off-grid mode).
+
+        Battery backup control is a working mode setting that affects how
+        the inverter manages battery reserves for backup power.
+
+        Universal control: All inverters support this working mode.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_battery_backup_ctrl()
+            True
+        """
+        result = await self._client.api.control.enable_battery_backup_ctrl(self.serial_number)
+        return result.success
+
+    async def disable_battery_backup_ctrl(self) -> bool:
+        """Disable battery backup control mode (working mode).
+
+        This controls FUNC_BATTERY_BACKUP_CTRL, which is distinct from
+        disable_battery_backup() which controls FUNC_EPS_EN (EPS/off-grid mode).
+
+        Battery backup control is a working mode setting that affects how
+        the inverter manages battery reserves for backup power.
+
+        Universal control: All inverters support this working mode.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_battery_backup_ctrl()
+            True
+        """
+        result = await self._client.api.control.disable_battery_backup_ctrl(self.serial_number)
+        return result.success
+
     # ============================================================================
     # AC Charge Power Control (Issue #9)
     # ============================================================================

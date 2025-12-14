@@ -485,6 +485,62 @@ class ControlEndpoints(BaseEndpoint):
             inverter_sn, "FUNC_EPS_EN", False, client_type=client_type
         )
 
+    async def enable_battery_backup_ctrl(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable battery backup control mode (working mode).
+
+        This controls FUNC_BATTERY_BACKUP_CTRL, which is distinct from
+        FUNC_EPS_EN (EPS/off-grid mode). Battery backup control is a
+        working mode setting that affects how the inverter manages
+        battery reserves for backup power.
+
+        Convenience wrapper for control_function(..., "FUNC_BATTERY_BACKUP_CTRL", True).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_battery_backup_ctrl("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_BATTERY_BACKUP_CTRL", True, client_type=client_type
+        )
+
+    async def disable_battery_backup_ctrl(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable battery backup control mode (working mode).
+
+        This controls FUNC_BATTERY_BACKUP_CTRL, which is distinct from
+        FUNC_EPS_EN (EPS/off-grid mode). Battery backup control is a
+        working mode setting that affects how the inverter manages
+        battery reserves for backup power.
+
+        Convenience wrapper for control_function(..., "FUNC_BATTERY_BACKUP_CTRL", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_battery_backup_ctrl("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_BATTERY_BACKUP_CTRL", False, client_type=client_type
+        )
+
     async def enable_normal_mode(
         self, inverter_sn: str, client_type: str = "WEB"
     ) -> SuccessResponse:
