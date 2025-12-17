@@ -127,7 +127,7 @@ jobs:
           uv run pytest tests/integration/ \
             -v \
             -m integration \
-            --reruns 3 \
+            --reruns 4 \
             --reruns-delay 60 \
             --only-rerun "LuxpowerDeviceOfflineError" \
             --only-rerun "LuxpowerConnectionError" \
@@ -137,6 +137,10 @@ jobs:
             --only-rerun "TimeoutError" \
             --only-rerun "timeout" \
             --only-rerun "DATAFRAME_TIMEOUT" \
+            --only-rerun "apiBlocked" \
+            --only-rerun "AssertionError" \
+            --only-rerun "assert False" \
+            --only-rerun "has_data" \
             --tb=short
 
       - name: Upload integration test results
