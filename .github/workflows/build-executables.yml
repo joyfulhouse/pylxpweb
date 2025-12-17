@@ -47,7 +47,7 @@ jobs:
           pyinstaller --onefile --name pylxpweb-collect src/pylxpweb/cli/collect_device_data.py
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset_name }}
           path: dist/${{ matrix.artifact_name }}
