@@ -91,6 +91,9 @@ from .locations import (
 # REGISTERS MODULE
 # ============================================================================
 from .registers import (
+    DEVICE_TYPE_CODE_LXP_EU,
+    DEVICE_TYPE_CODE_PV_SERIES,
+    DEVICE_TYPE_CODE_SNA,
     FUNC_EN_BIT_AC_CHARGE_EN,
     FUNC_EN_BIT_EPS_EN,
     FUNC_EN_BIT_FORCED_CHG_EN,
@@ -230,10 +233,14 @@ from .registers import (
     INPUT_V_PV1,
     INPUT_V_PV2,
     INPUT_V_PV3,
+    LXP_EU_PARAMETERS,
     PARAM_KEY_TO_REGISTER_18KPV,
+    PV_SERIES_PARAMETERS,
     REGISTER_STATS_18KPV,
     # Verified register mappings
     REGISTER_TO_PARAM_KEYS_18KPV,
+    # Model-specific parameters
+    SNA_PARAMETERS,
     # Web parameter mappings
     WEB_PARAM_TO_HOLD_REGISTER,
     get_func_en_bit,
@@ -422,6 +429,13 @@ __all__ = [
     "REGISTER_STATS_18KPV",
     "GRIDBOSS_PARAMETERS",
     "GRIDBOSS_STATS",
+    # Model-specific parameters
+    "SNA_PARAMETERS",
+    "PV_SERIES_PARAMETERS",
+    "LXP_EU_PARAMETERS",
+    "DEVICE_TYPE_CODE_SNA",
+    "DEVICE_TYPE_CODE_PV_SERIES",
+    "DEVICE_TYPE_CODE_LXP_EU",
     "get_func_en_bit_mask",
     "set_func_en_bit",
     "get_func_en_bit",
