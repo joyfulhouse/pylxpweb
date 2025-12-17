@@ -53,6 +53,37 @@ Station (Plant)
 
 **WARNING**: Note different voltage scaling for battery bank vs individual batteries!
 
+### Device Type Identification
+
+There are two different "device type" concepts:
+
+| Concept | Description | Values |
+|---------|-------------|--------|
+| **API `deviceType`** | Web API category for routing | 6=Inverter, 9=GridBOSS |
+| **`HOLD_DEVICE_TYPE_CODE`** | Firmware model identifier (register 19) | Varies per model |
+
+**Device Type Code Mapping:**
+| Code | Family | Example Models |
+|------|--------|----------------|
+| 54 | SNA Series | SNA12K-US (split-phase, US) |
+| 2092 | PV Series | 18KPV (high-voltage DC, US) |
+| 12 | LXP-EU Series | LXP-EU 12K (European) |
+
+**Feature Detection:**
+```python
+# Detect features based on inverter model
+await inverter.detect_features()
+
+# Check capabilities
+inverter.supports_split_phase      # SNA series only
+inverter.supports_volt_watt_curve  # PV/EU series
+inverter.supports_parallel         # PV/EU series
+inverter.model_family             # InverterFamily enum
+inverter.device_type_code         # Raw code (54, 2092, 12)
+```
+
+See [docs/DEVICE_TYPES.md](docs/DEVICE_TYPES.md) for comprehensive documentation.
+
 ## Development Standards
 
 ### Code Quality Requirements
@@ -408,13 +439,15 @@ pylxpweb/
 - **API Coverage**: Complete endpoint coverage (auth, discovery, runtime, control)
 - **Device Hierarchy**: Station, ParallelGroup, Inverter, BatteryBank, Battery, MIDDevice
 - **Property-Based API**: ALL raw data private, ~150+ properly-scaled properties across all device types
+- **Feature Detection**: Multi-layer model identification (device type code, HOLD_MODEL, runtime probing)
+- **Model Families**: SNA, PV Series, LXP-EU with automatic feature exposure
 - **Parallel Groups**: Proper detection using GridBOSS serial number + pre-fetched energy data
 - **BatteryBank**: Aggregate battery data with individual battery array
 - **Control Operations**: Read/write parameters, control functions
 - **Concurrent Operations**: Station, Inverter, ParallelGroup refresh
 - **Type Safety**: mypy strict mode, Pydantic v2 models
 - **Test Coverage**: 550 tests (492 unit + 58 integration), 80.67% coverage
-- **Documentation**: Comprehensive usage guide, property reference, examples
+- **Documentation**: Comprehensive usage guide, property reference, device types guide
 - **CI/CD**: Automated release pipeline (tag → release → publish to PyPI)
 - **Modular Constants**: Organized package structure for better maintainability
 
@@ -465,6 +498,8 @@ pylxpweb/
 5. **Parallel Group detection**: Requires GridBOSS serial (deviceType == 9), graceful fallback if not found
 6. **Voltage scaling differences**: API uses different precision for aggregate (÷10) vs individual (÷100) battery data - properties handle this automatically
 7. **Session injection**: Supported for HA Platinum tier compliance
+8. **Multi-layer Feature Detection**: Device type code (reg 19) → Model family → Runtime probing. Conservative defaults for unknown models, graceful degradation.
+9. **Device Type Code vs API deviceType**: These are different concepts - API deviceType (6/9) routes requests, HOLD_DEVICE_TYPE_CODE identifies specific model variant
 
 ### Important Commands
 ```bash

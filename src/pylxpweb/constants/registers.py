@@ -918,6 +918,58 @@ GRIDBOSS_STATS = {
 }
 
 # ============================================================================
+# MODEL-SPECIFIC PARAMETER KEYS
+# ============================================================================
+# These parameters are only available on specific inverter model families.
+# The feature detection system uses these to identify model capabilities.
+
+# SNA Series (Split-phase, North America) - Device Type Code: 54
+# These parameters are unique to SNA models like SNA12K-US
+SNA_PARAMETERS = [
+    # Discharge recovery hysteresis (prevents oscillation at SOC cutoff)
+    "HOLD_DISCHG_RECOVERY_LAG_SOC",  # SOC hysteresis percentage
+    "HOLD_DISCHG_RECOVERY_LAG_VOLT",  # Voltage hysteresis (÷10)
+    # Quick charge configuration
+    "SNA_HOLD_QUICK_CHARGE_MINUTE",  # Quick charge duration in minutes
+    # Off-grid specific
+    "OFF_GRID_HOLD_EPS_VOLT_SET",
+    "OFF_GRID_HOLD_EPS_FREQ_SET",
+]
+
+# PV Series (High-voltage DC, US) - Device Type Code: 2092
+# These parameters are available on 18KPV and similar models
+PV_SERIES_PARAMETERS = [
+    # Volt-Watt curve parameters
+    "HOLD_VW_V1",
+    "HOLD_VW_V2",
+    "HOLD_VW_V3",
+    "HOLD_VW_V4",
+    "HOLD_VW_P1",
+    "HOLD_VW_P2",
+    "HOLD_VW_P3",
+    "HOLD_VW_P4",
+    # Grid peak shaving
+    "_12K_HOLD_GRID_PEAK_SHAVING_POWER",
+    # Parallel operation
+    "HOLD_PARALLEL_REGISTER",
+]
+
+# LXP-EU Series (European) - Device Type Code: 12
+# These parameters are available on LXP-EU 12K and similar models
+LXP_EU_PARAMETERS = [
+    # EU grid compliance
+    "HOLD_EU_GRID_CODE",
+    "HOLD_EU_COUNTRY_CODE",
+]
+
+# Device Type Code Constants (HOLD_DEVICE_TYPE_CODE register 19)
+# These identify the specific inverter model/variant
+DEVICE_TYPE_CODE_SNA = 54  # SNA Series (e.g., SNA12K-US)
+DEVICE_TYPE_CODE_PV_SERIES = 2092  # PV Series (e.g., 18KPV)
+DEVICE_TYPE_CODE_LXP_EU = 12  # LXP-EU Series (e.g., LXP-EU 12K)
+
+
+# ============================================================================
 # HELPER FUNCTIONS FOR PARAMETER OPERATIONS
 # ============================================================================
 
