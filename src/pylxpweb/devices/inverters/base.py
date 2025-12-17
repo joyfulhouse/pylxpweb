@@ -19,6 +19,12 @@ from pylxpweb.models import OperatingMode
 from .._firmware_update_mixin import FirmwareUpdateMixin
 from ..base import BaseDevice
 from ..models import DeviceInfo, Entity
+from ._features import (
+    GridType,
+    InverterFamily,
+    InverterFeatures,
+    InverterModelInfo,
+)
 from ._runtime_properties import InverterRuntimePropertiesMixin
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,6 +97,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # ===== Firmware Update Cache =====
         # Initialize firmware update detection (from FirmwareUpdateMixin)
         self._init_firmware_update_cache()
+
+        # ===== Feature Detection =====
+        # Detected inverter features and capabilities
+        self._features: InverterFeatures = InverterFeatures()
+        self._features_detected: bool = False
 
     def _is_cache_expired(
         self,
@@ -1606,3 +1617,396 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             True
         """
         return await self._client.api.control.get_peak_shaving_mode_status(self.serial_number)
+
+    # ============================================================================
+    # Feature Detection (Model-Based Capabilities)
+    # ============================================================================
+
+    async def detect_features(self, force: bool = False) -> InverterFeatures:
+        """Detect inverter features and capabilities.
+
+        This method uses a multi-layer approach to determine what features
+        are available on this specific inverter:
+
+        1. **Device Type Code**: Read HOLD_DEVICE_TYPE_CODE (register 19) to
+           identify the model family (SNA, PV Series, LXP-EU, etc.)
+
+        2. **Model Info**: Decode HOLD_MODEL (registers 0-1) for hardware
+           configuration (power rating, battery type, US/EU version)
+
+        3. **Family Defaults**: Apply known feature sets for the model family
+
+        4. **Runtime Probing**: Check for optional registers that may or may
+           not exist on specific firmware versions
+
+        Feature detection results are cached. Use `force=True` to re-detect.
+
+        Args:
+            force: If True, re-detect features even if already cached
+
+        Returns:
+            InverterFeatures with all detected capabilities
+
+        Example:
+            >>> features = await inverter.detect_features()
+            >>> features.model_family
+            <InverterFamily.SNA: 'SNA'>
+            >>> features.split_phase
+            True
+            >>> features.supports_volt_watt_curve
+            False
+        """
+        if self._features_detected and not force:
+            return self._features
+
+        # Ensure parameters are loaded (needed for feature detection)
+        if self.parameters is None:
+            await self._fetch_parameters()
+
+        if self.parameters is None:
+            _LOGGER.warning(
+                "Cannot detect features for %s: parameters not available",
+                self.serial_number,
+            )
+            return self._features
+
+        # Layer 1: Get device type code
+        device_type_code = self.parameters.get("HOLD_DEVICE_TYPE_CODE", 0)
+        if isinstance(device_type_code, str):
+            device_type_code = int(device_type_code)
+
+        # Create features from device type code (applies family defaults)
+        self._features = InverterFeatures.from_device_type_code(device_type_code)
+
+        # Layer 2: Decode model info from HOLD_MODEL_* parameters
+        # The API returns individual decoded fields like HOLD_MODEL_lithiumType
+        self._features.model_info = InverterModelInfo.from_parameters(self.parameters)
+
+        # Layer 3: Runtime probing for optional features
+        await self._probe_optional_features()
+
+        self._features_detected = True
+        _LOGGER.debug(
+            "Detected features for %s: family=%s, grid_type=%s",
+            self.serial_number,
+            self._features.model_family.value,
+            self._features.grid_type.value,
+        )
+
+        return self._features
+
+    async def _probe_optional_features(self) -> None:
+        """Probe for optional features by checking for specific registers.
+
+        This method checks for registers that may or may not be present
+        depending on firmware version or hardware variant.
+        """
+        if self.parameters is None:
+            return
+
+        # Check for SNA-specific registers
+        # SNA models have discharge recovery hysteresis parameters
+        has_recovery_lag = "HOLD_DISCHG_RECOVERY_LAG_SOC" in self.parameters
+        has_quick_charge = "SNA_HOLD_QUICK_CHARGE_MINUTE" in self.parameters
+        if has_recovery_lag or has_quick_charge:
+            self._features.has_sna_registers = True
+            self._features.discharge_recovery_hysteresis = True
+
+        # Check for PV series registers (volt-watt curve parameters)
+        if "_12K_HOLD_GRID_PEAK_SHAVING_POWER" in self.parameters:
+            self._features.has_pv_series_registers = True
+            self._features.grid_peak_shaving = True
+
+        # Check for volt-watt curve support
+        if "HOLD_VW_V1" in self.parameters or "HOLD_VOLT_WATT_V1" in self.parameters:
+            self._features.volt_watt_curve = True
+
+        # Check for DRMS support
+        if "FUNC_DRMS_EN" in self.parameters:
+            drms_val = self.parameters.get("FUNC_DRMS_EN")
+            # DRMS is available if the parameter exists (regardless of value)
+            self._features.drms_support = drms_val is not None
+
+    # ============================================================================
+    # Feature Properties (Read-Only Capability Flags)
+    # ============================================================================
+
+    @property
+    def features(self) -> InverterFeatures:
+        """Get detected inverter features.
+
+        Note: Call `detect_features()` first to populate feature data.
+        If features haven't been detected yet, returns default features.
+
+        Returns:
+            InverterFeatures instance with capability flags
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.features.split_phase
+            True
+        """
+        return self._features
+
+    @property
+    def model_family(self) -> InverterFamily:
+        """Get the inverter model family.
+
+        Returns:
+            InverterFamily enum value (SNA, PV_SERIES, LXP_EU, etc.)
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.model_family
+            <InverterFamily.SNA: 'SNA'>
+        """
+        return self._features.model_family
+
+    @property
+    def device_type_code(self) -> int:
+        """Get the device type code from HOLD_DEVICE_TYPE_CODE register.
+
+        This is the firmware-level model identifier that varies per model:
+        - SNA12K-US: 54
+        - 18KPV: 2092
+        - LXP-EU 12K: 12
+
+        Returns:
+            Device type code integer
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.device_type_code
+            54
+        """
+        return self._features.device_type_code
+
+    @property
+    def grid_type(self) -> GridType:
+        """Get the grid configuration type.
+
+        Returns:
+            GridType enum value (SPLIT_PHASE, SINGLE_PHASE, THREE_PHASE)
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.grid_type
+            <GridType.SPLIT_PHASE: 'split_phase'>
+        """
+        return self._features.grid_type
+
+    @property
+    def power_rating_kw(self) -> int:
+        """Get the nominal power rating in kilowatts.
+
+        Decoded from HOLD_MODEL register.
+
+        Returns:
+            Power rating in kW, or 0 if unknown
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.power_rating_kw
+            12
+        """
+        return self._features.model_info.power_rating_kw
+
+    @property
+    def is_us_version(self) -> bool:
+        """Check if this is a US market version.
+
+        Decoded from HOLD_MODEL register.
+
+        Returns:
+            True if US version, False for EU/other
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.is_us_version
+            True
+        """
+        return self._features.model_info.us_version
+
+    @property
+    def supports_split_phase(self) -> bool:
+        """Check if inverter supports split-phase grid configuration.
+
+        Split-phase is the standard US residential configuration (120V/240V).
+
+        Returns:
+            True if split-phase is supported
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.supports_split_phase
+            True
+        """
+        return self._features.split_phase
+
+    @property
+    def supports_three_phase(self) -> bool:
+        """Check if inverter supports three-phase grid configuration.
+
+        Returns:
+            True if three-phase is supported
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.supports_three_phase
+            False
+        """
+        return self._features.three_phase_capable
+
+    @property
+    def supports_off_grid(self) -> bool:
+        """Check if inverter supports off-grid (EPS) mode.
+
+        Returns:
+            True if off-grid/EPS mode is supported
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.supports_off_grid
+            True
+        """
+        return self._features.off_grid_capable
+
+    @property
+    def supports_parallel(self) -> bool:
+        """Check if inverter supports parallel operation with other inverters.
+
+        Returns:
+            True if parallel operation is supported
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.supports_parallel
+            False
+        """
+        return self._features.parallel_support
+
+    @property
+    def supports_volt_watt_curve(self) -> bool:
+        """Check if inverter supports volt-watt curve settings.
+
+        Returns:
+            True if volt-watt curve is supported
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.supports_volt_watt_curve
+            False
+        """
+        return self._features.volt_watt_curve
+
+    @property
+    def supports_grid_peak_shaving(self) -> bool:
+        """Check if inverter supports grid peak shaving.
+
+        Returns:
+            True if grid peak shaving is supported
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.supports_grid_peak_shaving
+            True
+        """
+        return self._features.grid_peak_shaving
+
+    @property
+    def supports_drms(self) -> bool:
+        """Check if inverter supports DRMS (Demand Response Management).
+
+        Returns:
+            True if DRMS is supported
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.supports_drms
+            False
+        """
+        return self._features.drms_support
+
+    @property
+    def supports_discharge_recovery_hysteresis(self) -> bool:
+        """Check if inverter supports discharge recovery hysteresis settings.
+
+        This feature allows setting SOC/voltage lag values for discharge
+        recovery, preventing oscillation when SOC is near the cutoff threshold.
+
+        SNA series inverters have this feature.
+
+        Returns:
+            True if discharge recovery hysteresis is supported
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.supports_discharge_recovery_hysteresis
+            True
+        """
+        return self._features.discharge_recovery_hysteresis
+
+    # ============================================================================
+    # Model-Specific Parameter Access
+    # ============================================================================
+
+    @property
+    def discharge_recovery_lag_soc(self) -> int | None:
+        """Get discharge recovery SOC hysteresis value (SNA models only).
+
+        This setting prevents rapid on/off cycling when battery SOC is near
+        the discharge cutoff threshold. The inverter waits until SOC rises
+        by this amount before resuming discharge.
+
+        Returns:
+            SOC hysteresis percentage, or None if not supported/loaded
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> if inverter.supports_discharge_recovery_hysteresis:
+            ...     print(f"Lag SOC: {inverter.discharge_recovery_lag_soc}%")
+        """
+        if not self._features.discharge_recovery_hysteresis:
+            return None
+        value = self._get_parameter("HOLD_DISCHG_RECOVERY_LAG_SOC", 0, int)
+        return int(value) if value is not None else None
+
+    @property
+    def discharge_recovery_lag_volt(self) -> float | None:
+        """Get discharge recovery voltage hysteresis value (SNA models only).
+
+        This setting prevents rapid on/off cycling when battery voltage is
+        near the discharge cutoff threshold. The inverter waits until voltage
+        rises by this amount before resuming discharge.
+
+        Returns:
+            Voltage hysteresis in volts, or None if not supported/loaded
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> if inverter.supports_discharge_recovery_hysteresis:
+            ...     print(f"Lag Voltage: {inverter.discharge_recovery_lag_volt}V")
+        """
+        if not self._features.discharge_recovery_hysteresis:
+            return None
+        value = self._get_parameter("HOLD_DISCHG_RECOVERY_LAG_VOLT", 0, float)
+        return float(value) / 10.0 if value is not None else None  # Scaled by 10
+
+    @property
+    def quick_charge_minute(self) -> int | None:
+        """Get quick charge duration in minutes (SNA models only).
+
+        This setting controls how long quick charge runs when activated.
+
+        Returns:
+            Quick charge duration in minutes, or None if not supported/loaded
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> if inverter.features.quick_charge_minute:
+            ...     print(f"Quick charge: {inverter.quick_charge_minute} min")
+        """
+        if not self._features.quick_charge_minute:
+            return None
+        value = self._get_parameter("SNA_HOLD_QUICK_CHARGE_MINUTE", 0, int)
+        return int(value) if value is not None else None
