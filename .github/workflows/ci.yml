@@ -89,36 +89,26 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: [lint, test]
+    # Skip entirely for Dependabot PRs (no secret access, tests run after merge)
+    if: github.actor != 'dependabot[bot]'
     timeout-minutes: 30
-    # Use environment only for non-Dependabot PRs (Dependabot has no secret access)
-    environment: ${{ github.actor != 'dependabot[bot]' && 'integration-tests' || '' }}
+    environment: integration-tests
     steps:
-      - name: Skip for Dependabot
-        if: github.actor == 'dependabot[bot]'
-        run: |
-          echo "Skipping integration tests for Dependabot PR (no secret access)"
-          echo "Integration tests will run after merge to main"
-
       - uses: actions/checkout@v6
-        if: github.actor != 'dependabot[bot]'
 
       - name: Install uv
-        if: github.actor != 'dependabot[bot]'
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
-        if: github.actor != 'dependabot[bot]'
         run: uv python install 3.13
 
       - name: Install dependencies
-        if: github.actor != 'dependabot[bot]'
         run: uv sync --all-extras
 
       - name: Run integration tests
-        if: github.actor != 'dependabot[bot]'
         env:
           LUXPOWER_USERNAME: ${{ secrets.LUXPOWER_USERNAME }}
           LUXPOWER_PASSWORD: ${{ secrets.LUXPOWER_PASSWORD }}
@@ -145,7 +135,7 @@ jobs:
 
       - name: Upload integration test results
         uses: actions/upload-artifact@v6
-        if: failure() && github.actor != 'dependabot[bot]'
+        if: failure()
         with:
           name: integration-test-results
           path: |
