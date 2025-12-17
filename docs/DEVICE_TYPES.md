@@ -93,6 +93,26 @@ This is the firmware-level model identifier stored in register 19. It identifies
 **Sample Models:**
 - LXP-EU 12K: 12kW, device type code 12, HOLD_MODEL 0x19AC0
 
+### LXP-LV Series (Low-Voltage DC)
+
+**Device Type Code:** Varies (no single known code mapped yet)
+
+**Target Market:** Low-voltage DC battery systems (48V nominal)
+
+**Key Features:**
+- Low-voltage DC bus (48V nominal)
+- Single-phase grid
+- Parallel operation support
+- Off-grid capable
+
+**Unique Parameters:**
+- Similar to SNA series but with low-voltage DC configuration
+
+**Sample Models:**
+- LXP-LV 6048: 6kW, 48V DC
+
+> **Note**: The LXP-LV family exists in the implementation but no specific device type code has been mapped yet. Devices will show as `UNKNOWN` family until a code mapping is added.
+
 ## HOLD_MODEL Register Decoding
 
 The `HOLD_MODEL` register (registers 0-1) contains a 32-bit bitfield with hardware configuration:
@@ -247,18 +267,20 @@ async def configure_inverter(inverter):
 
 ## Feature Availability Matrix
 
-| Feature | SNA | PV Series | LXP-EU |
-|---------|-----|-----------|--------|
-| Split-Phase Grid | Yes | No | No |
-| Three-Phase Grid | No | Yes | Yes |
-| Off-Grid/EPS | Yes | Yes | Yes |
-| Parallel Operation | No | Yes | Yes |
-| Discharge Recovery Hysteresis | Yes | No | No |
-| Quick Charge Minute | Yes | No | No |
-| Volt-Watt Curve | No | Yes | Yes |
-| Grid Peak Shaving | Yes | Yes | Yes |
-| DRMS Support | No | Yes | Yes |
-| EU Grid Compliance | No | No | Yes |
+| Feature | SNA | PV Series | LXP-EU | LXP-LV |
+|---------|-----|-----------|--------|--------|
+| Split-Phase Grid | Yes | No | No | No |
+| Three-Phase Capable* | No | Yes | Yes | No |
+| Off-Grid/EPS | Yes | Yes | Yes | Yes |
+| Parallel Operation | No | Yes | Yes | Yes |
+| Discharge Recovery Hysteresis | Yes | No | No | No |
+| Quick Charge Minute | Yes | No | No | No |
+| Volt-Watt Curve | No | Yes | Yes | No |
+| Grid Peak Shaving | Yes | Yes | Yes | Yes |
+| DRMS Support | No | Yes | Yes | No |
+| EU Grid Compliance | No | No | Yes | No |
+
+> **Note**: *"Three-Phase Capable" indicates hardware capability. PV Series and LXP-EU default to single-phase but can support three-phase configurations depending on installation.
 
 ## Adding New Device Types
 
@@ -286,7 +308,7 @@ When a new inverter model is discovered:
 
 ### Classes
 
-- `InverterFamily` - Enum of model families (SNA, PV_SERIES, LXP_EU, UNKNOWN)
+- `InverterFamily` - Enum of model families (SNA, PV_SERIES, LXP_EU, LXP_LV, UNKNOWN)
 - `GridType` - Enum of grid types (SPLIT_PHASE, SINGLE_PHASE, THREE_PHASE)
 - `InverterModelInfo` - Decoded HOLD_MODEL register data
 - `InverterFeatures` - Detected feature capabilities

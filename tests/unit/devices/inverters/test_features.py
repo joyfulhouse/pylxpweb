@@ -30,6 +30,21 @@ class ConcreteInverter(BaseInverter):
 
 
 # =============================================================================
+# Module-Level Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def mock_client() -> LuxpowerClient:
+    """Create a mock client for testing."""
+    client = Mock(spec=LuxpowerClient)
+    client.api = Mock()
+    client.api.control = Mock()
+    client.api.control.read_parameters = AsyncMock()
+    return client
+
+
+# =============================================================================
 # InverterModelInfo Tests
 # =============================================================================
 
@@ -265,6 +280,17 @@ class TestHelperFunctions:
         assert features["parallel_support"] is False
         assert features["off_grid_capable"] is True
 
+    def test_get_family_features_lxp_lv(self) -> None:
+        """Test getting default features for LXP_LV family."""
+        features = get_family_features(InverterFamily.LXP_LV)
+
+        # LXP-LV is low-voltage DC, single-phase with parallel support
+        assert features["split_phase"] is False
+        assert features["three_phase_capable"] is False
+        assert features["parallel_support"] is True
+        assert features["off_grid_capable"] is True
+        assert features["volt_watt_curve"] is False
+
     def test_device_type_code_mapping_completeness(self) -> None:
         """Test that all known device type codes are mapped."""
         # Known device type codes
@@ -291,15 +317,6 @@ class TestHelperFunctions:
 
 class TestBaseInverterFeatureDetection:
     """Tests for feature detection in BaseInverter."""
-
-    @pytest.fixture
-    def mock_client(self) -> LuxpowerClient:
-        """Create a mock client for testing."""
-        client = Mock(spec=LuxpowerClient)
-        client.api = Mock()
-        client.api.control = Mock()
-        client.api.control.read_parameters = AsyncMock()
-        return client
 
     @pytest.fixture
     def sna_inverter(self, mock_client: LuxpowerClient) -> ConcreteInverter:
@@ -457,15 +474,6 @@ class TestBaseInverterFeatureDetection:
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
-    @pytest.fixture
-    def mock_client(self) -> LuxpowerClient:
-        """Create a mock client for testing."""
-        client = Mock(spec=LuxpowerClient)
-        client.api = Mock()
-        client.api.control = Mock()
-        client.api.control.read_parameters = AsyncMock()
-        return client
-
     @pytest.mark.asyncio
     async def test_detect_features_no_parameters(self, mock_client: LuxpowerClient) -> None:
         """Test feature detection when parameters are not available."""
@@ -474,14 +482,15 @@ class TestEdgeCases:
             serial_number="0000000000",
             model="Unknown",
         )
-
-        # Mock the parameter fetch to return None
-        mock_client.api.control.read_parameters.return_value = Mock(parameters={})
+        # Directly set empty parameters to test the edge case
+        inverter.parameters = {}
 
         features = await inverter.detect_features()
 
         # Should return default features
         assert features.model_family == InverterFamily.UNKNOWN
+        assert features.device_type_code == 0
+        assert features.grid_type == GridType.UNKNOWN
 
     def test_model_info_from_string_hex(self) -> None:
         """Test parsing HOLD_MODEL from hex string."""

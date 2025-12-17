@@ -14,10 +14,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
 
 
 class InverterFamily(str, Enum):
@@ -206,7 +202,10 @@ class InverterModelInfo:
         def get_int(key: str, default: int = 0) -> int:
             val = params.get(key, default)
             if isinstance(val, str):
-                return int(val) if val.isdigit() else default
+                try:
+                    return int(val)
+                except ValueError:
+                    return default
             return int(val) if val is not None else default
 
         def get_bool(key: str, default: bool = False) -> bool:

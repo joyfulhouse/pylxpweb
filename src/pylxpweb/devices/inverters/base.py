@@ -1990,7 +1990,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if not self._features.discharge_recovery_hysteresis:
             return None
         value = self._get_parameter("HOLD_DISCHG_RECOVERY_LAG_VOLT", 0, float)
-        return float(value) / 10.0 if value else None  # Scaled by 10
+        return float(value) / 10.0 if value is not None else None  # Scaled by 10
 
     @property
     def quick_charge_minute(self) -> int | None:
