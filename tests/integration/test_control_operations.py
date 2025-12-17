@@ -418,29 +418,39 @@ class TestWorkingModeControls:
         stations = await Station.load_all(client)
         inverter = stations[0].all_inverters[0]
 
-        # Read current state
-        original_status = await inverter.get_pv_charge_priority_status()
-
         try:
-            # Toggle PV charge priority - verify API call succeeds
-            new_state = not original_status
+            # Read current state
+            original_status = await inverter.get_pv_charge_priority_status()
 
-            if new_state:
-                success = await inverter.enable_pv_charge_priority()
-            else:
-                success = await inverter.disable_pv_charge_priority()
+            try:
+                # Toggle PV charge priority - verify API call succeeds
+                new_state = not original_status
 
-            assert success is True
+                if new_state:
+                    success = await inverter.enable_pv_charge_priority()
+                else:
+                    success = await inverter.disable_pv_charge_priority()
 
-            # Note: We don't verify the value is applied because the inverter
-            # may have validation rules or delays that prevent immediate changes
+                assert success is True
 
-        finally:
-            # ALWAYS restore original state
-            if original_status:
-                await inverter.enable_pv_charge_priority()
-            else:
-                await inverter.disable_pv_charge_priority()
+                # Note: We don't verify the value is applied because the inverter
+                # may have validation rules or delays that prevent immediate changes
+
+            finally:
+                # ALWAYS restore original state
+                if original_status:
+                    await inverter.enable_pv_charge_priority()
+                else:
+                    await inverter.disable_pv_charge_priority()
+
+        except LuxpowerAPIError as err:
+            # If apiBlocked and account is viewer/operator, skip test
+            if "apiBlocked" in str(err):
+                pytest.skip(
+                    "PV charge priority control blocked (apiBlocked) - "
+                    "account lacks permission for control operations"
+                )
+            raise  # Re-raise if different error or unexpected account level
 
     async def test_forced_discharge_mode_toggle_safe(self, client: LuxpowerClient) -> None:
         """Test forced discharge mode enable/disable - verify API calls succeed."""
