@@ -761,3 +761,105 @@ class TestSystemChargeSocLimit:
         limit = await control.get_system_charge_soc_limit("1234567890")
 
         assert limit == 100
+
+
+class TestGreenModeHelpers:
+    """Test green mode (off-grid mode) convenience methods."""
+
+    @pytest.mark.asyncio
+    async def test_enable_green_mode(self) -> None:
+        """Test enable_green_mode convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.enable_green_mode("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_GREEN_EN", True, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_disable_green_mode(self) -> None:
+        """Test disable_green_mode convenience method."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock control_function
+        mock_response = SuccessResponse(success=True)
+        control.control_function = AsyncMock(return_value=mock_response)
+
+        # Call convenience method
+        result = await control.disable_green_mode("1234567890")
+
+        # Verify control_function was called correctly
+        control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_GREEN_EN", False, client_type="WEB"
+        )
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_get_green_mode_status_enabled(self) -> None:
+        """Test get_green_mode_status when enabled."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {"FUNC_GREEN_EN": True}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status
+        status = await control.get_green_mode_status("1234567890")
+
+        # Verify read_parameters was called with register 110 (system functions)
+        control.read_parameters.assert_called_once_with("1234567890", 110, 1)
+        assert status is True
+
+    @pytest.mark.asyncio
+    async def test_get_green_mode_status_disabled(self) -> None:
+        """Test get_green_mode_status when disabled."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {"FUNC_GREEN_EN": False}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status
+        status = await control.get_green_mode_status("1234567890")
+
+        assert status is False
+
+    @pytest.mark.asyncio
+    async def test_get_green_mode_status_missing_field(self) -> None:
+        """Test get_green_mode_status when field is missing (defaults to False)."""
+        from pylxpweb.endpoints.control import ControlEndpoints
+
+        mock_client = Mock(spec=LuxpowerClient)
+        control = ControlEndpoints(mock_client)
+
+        # Mock read_parameters response without FUNC_GREEN_EN
+        mock_params = Mock(spec=ParameterReadResponse)
+        mock_params.parameters = {}
+        control.read_parameters = AsyncMock(return_value=mock_params)
+
+        # Get status (should default to False)
+        status = await control.get_green_mode_status("1234567890")
+
+        assert status is False

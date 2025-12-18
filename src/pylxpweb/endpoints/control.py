@@ -925,6 +925,93 @@ class ControlEndpoints(BaseEndpoint):
         value = response.parameters.get("FUNC_GRID_PEAK_SHAVING", False)
         return bool(value)
 
+    # ============================================================================
+    # Green Mode Controls (Off-Grid Mode in Web Monitor)
+    # ============================================================================
+
+    async def enable_green_mode(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable green mode (off-grid mode in the web monitoring display).
+
+        Green Mode controls the off-grid operating mode toggle visible in the
+        EG4 web monitoring interface. When enabled, the inverter operates in
+        an off-grid optimized configuration.
+
+        Note: This is FUNC_GREEN_EN in register 110, distinct from FUNC_EPS_EN
+        (battery backup/EPS mode) in register 21.
+
+        Convenience wrapper for control_function(..., "FUNC_GREEN_EN", True).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_green_mode("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_GREEN_EN", True, client_type=client_type
+        )
+
+    async def disable_green_mode(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable green mode (off-grid mode in the web monitoring display).
+
+        Green Mode controls the off-grid operating mode toggle visible in the
+        EG4 web monitoring interface. When disabled, the inverter operates in
+        standard grid-tied configuration.
+
+        Note: This is FUNC_GREEN_EN in register 110, distinct from FUNC_EPS_EN
+        (battery backup/EPS mode) in register 21.
+
+        Convenience wrapper for control_function(..., "FUNC_GREEN_EN", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_green_mode("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_GREEN_EN", False, client_type=client_type
+        )
+
+    async def get_green_mode_status(self, inverter_sn: str) -> bool:
+        """Get current green mode (off-grid mode) status.
+
+        Green Mode controls the off-grid operating mode toggle visible in the
+        EG4 web monitoring interface.
+
+        Reads register 110 (system functions) and extracts FUNC_GREEN_EN bit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if green mode is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_green_mode_status("1234567890")
+            >>> if enabled:
+            >>>     print("Green mode (off-grid) is active")
+        """
+        response = await self.read_parameters(inverter_sn, 110, 1)
+        value = response.parameters.get("FUNC_GREEN_EN", False)
+        return bool(value)
+
     async def read_device_parameters_ranges(self, inverter_sn: str) -> dict[str, int | bool]:
         """Read all device parameters across three common register ranges.
 

@@ -872,6 +872,91 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         return result.success
 
     # ============================================================================
+    # Green Mode Control (Off-Grid Mode in Web Monitor)
+    # ============================================================================
+
+    async def enable_green_mode(self) -> bool:
+        """Enable green mode (off-grid mode in the web monitoring display).
+
+        Green Mode controls the off-grid operating mode toggle visible in the
+        EG4 web monitoring interface. When enabled, the inverter operates in
+        an off-grid optimized configuration.
+
+        Note: This is FUNC_GREEN_EN in register 110, distinct from FUNC_EPS_EN
+        (battery backup/EPS mode) in register 21.
+
+        Universal control: All inverters support green mode.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_green_mode()
+            True
+        """
+        result = await self._client.api.control.enable_green_mode(self.serial_number)
+        return result.success
+
+    async def disable_green_mode(self) -> bool:
+        """Disable green mode (off-grid mode in the web monitoring display).
+
+        Green Mode controls the off-grid operating mode toggle visible in the
+        EG4 web monitoring interface. When disabled, the inverter operates in
+        standard grid-tied configuration.
+
+        Note: This is FUNC_GREEN_EN in register 110, distinct from FUNC_EPS_EN
+        (battery backup/EPS mode) in register 21.
+
+        Universal control: All inverters support green mode.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_green_mode()
+            True
+        """
+        result = await self._client.api.control.disable_green_mode(self.serial_number)
+        return result.success
+
+    async def get_green_mode_status(self) -> bool:
+        """Get current green mode (off-grid mode) status.
+
+        Green Mode controls the off-grid operating mode toggle visible in the
+        EG4 web monitoring interface.
+
+        Universal control: All inverters support green mode.
+
+        Returns:
+            True if green mode is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_green_mode_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_green_mode_status(self.serial_number)
+
+    @property
+    def green_mode_enabled(self) -> bool | None:
+        """Get green mode status from cached parameters.
+
+        Green Mode controls the off-grid operating mode toggle visible in the
+        EG4 web monitoring interface.
+
+        Returns:
+            True if green mode is enabled, False if disabled,
+            or None if parameters not loaded
+
+        Example:
+            >>> enabled = inverter.green_mode_enabled
+            >>> enabled
+            True
+        """
+        value = self._get_parameter("FUNC_GREEN_EN", False, bool)
+        return bool(value) if value is not None else None
+
+    # ============================================================================
     # AC Charge Power Control (Issue #9)
     # ============================================================================
 
