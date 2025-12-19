@@ -25,7 +25,9 @@ This is the firmware-level model identifier stored in register 19. It identifies
 |------|--------------|----------------|
 | **54** | SNA Series | SNA12K-US |
 | **2092** | PV Series | 18KPV |
+| **10284** | FlexBOSS Series | FlexBOSS21, FlexBOSS18 |
 | **12** | LXP-EU Series | LXP-EU 12K |
+| **50** | GridBOSS (MID) | GridBOSS |
 
 ## Model Families
 
@@ -112,6 +114,70 @@ This is the firmware-level model identifier stored in register 19. It identifies
 - LXP-LV 6048: 6kW, 48V DC
 
 > **Note**: The LXP-LV family exists in the implementation but no specific device type code has been mapped yet. Devices will show as `UNKNOWN` family until a code mapping is added.
+
+### FlexBOSS Series (High-Power Hybrid)
+
+**Device Type Code:** 10284
+
+**Target Market:** US residential/commercial high-power installations
+
+**Key Features:**
+- High-power hybrid inverter (18kW/21kW)
+- Split-phase grid support (L1/L2/N)
+- Parallel operation support
+- Volt-Watt curve control
+- Grid peak shaving
+- Green Mode (off-grid mode toggle)
+- DRMS support
+
+**Unique Parameters:**
+- `_12K_HOLD_*` registers for 12K/18K/21K series configuration
+- `HOLD_VOLT_WATT_V1/V2` - Volt-Watt curve voltage points
+- `HOLD_VOLT_WATT_DELAY_TIME` - Volt-Watt response delay
+- `FUNC_GREEN_EN` - Green Mode (off-grid mode) in register 110
+- `FUNC_MIDBOX_EN` - GridBOSS/MID controller integration
+- `FUNC_PARALLEL_DATA_SYNC_EN` - Parallel data synchronization
+- `FUNC_LSP_BAT_FIRST_*_EN` - Battery-first scheduling (48 time slots)
+- `FUNC_LSP_BYPASS_*_EN` - Bypass mode scheduling (48 time slots)
+
+**Firmware Prefix:** `FAAB-` (e.g., FAAB-2525)
+
+**Sample Models:**
+- FlexBOSS21: 21kW, device type code 10284, HOLD_MODEL 0x1098200
+- FlexBOSS18: 18kW, device type code 10284
+
+### GridBOSS (MID Controller)
+
+**Device Type Code:** 50
+
+**API Device Type:** 9 (separate from standard inverters which use deviceType=6)
+
+**Target Market:** Parallel group management and grid interconnection
+
+**Key Features:**
+- Main Interconnect Device (MID) controller
+- Parallel group coordination
+- Smart load port management (4 ports)
+- AC coupling support
+- Load shedding control
+- UPS functionality
+- Generator integration
+
+**Unique Parameters:**
+- `MIDBOX_HOLD_SMART_PORT_MODE` - Smart port configuration
+- `BIT_MIDBOX_SP_MODE_1/2/3/4` - Individual port mode settings
+- `FUNC_SMART_LOAD_EN_1/2/3/4` - Smart load enables per port
+- `FUNC_SHEDDING_MODE_EN_1/2/3/4` - Load shedding per port
+- `FUNC_AC_COUPLE_EN_1/2/3/4` - AC coupling per port
+- `MIDBOX_HOLD_UPS_*` registers - UPS configuration
+- `MIDBOX_HOLD_LOAD_*` registers - Load management
+
+**Firmware Prefix:** `IAAB-` (e.g., IAAB-1600)
+
+**Sample Models:**
+- GridBOSS: device type code 50, HOLD_MODEL 0x400902C0
+
+> **Note**: GridBOSS devices are handled separately from standard inverters in the API. They use `deviceType=9` for API routing and have their own runtime endpoint (`getMidboxRuntime`).
 
 ## HOLD_MODEL Register Decoding
 
@@ -267,20 +333,24 @@ async def configure_inverter(inverter):
 
 ## Feature Availability Matrix
 
-| Feature | SNA | PV Series | LXP-EU | LXP-LV |
-|---------|-----|-----------|--------|--------|
-| Split-Phase Grid | Yes | No | No | No |
-| Three-Phase Capable* | No | Yes | Yes | No |
-| Off-Grid/EPS | Yes | Yes | Yes | Yes |
-| Parallel Operation | No | Yes | Yes | Yes |
-| Discharge Recovery Hysteresis | Yes | No | No | No |
-| Quick Charge Minute | Yes | No | No | No |
-| Volt-Watt Curve | No | Yes | Yes | No |
-| Grid Peak Shaving | Yes | Yes | Yes | Yes |
-| DRMS Support | No | Yes | Yes | No |
-| EU Grid Compliance | No | No | Yes | No |
+| Feature | SNA | PV Series | FlexBOSS | LXP-EU | LXP-LV | GridBOSS |
+|---------|-----|-----------|----------|--------|--------|----------|
+| Split-Phase Grid | Yes | No | Yes | No | No | N/A |
+| Three-Phase Capable* | No | Yes | Yes | Yes | No | N/A |
+| Off-Grid/EPS | Yes | Yes | Yes | Yes | Yes | N/A |
+| Parallel Operation | No | Yes | Yes | Yes | Yes | Controller |
+| Discharge Recovery Hysteresis | Yes | No | No | No | No | N/A |
+| Quick Charge Minute | Yes | No | No | No | No | N/A |
+| Volt-Watt Curve | No | Yes | Yes | Yes | No | N/A |
+| Grid Peak Shaving | Yes | Yes | Yes | Yes | Yes | N/A |
+| DRMS Support | No | Yes | Yes | Yes | No | N/A |
+| EU Grid Compliance | No | No | No | Yes | No | N/A |
+| Green Mode | Yes | Yes | Yes | Yes | Yes | N/A |
+| Smart Load Ports | No | No | No | No | No | Yes (4) |
+| AC Coupling Ports | No | No | No | No | No | Yes (4) |
+| Load Shedding | No | No | No | No | No | Yes (4) |
 
-> **Note**: *"Three-Phase Capable" indicates hardware capability. PV Series and LXP-EU default to single-phase but can support three-phase configurations depending on installation.
+> **Note**: *"Three-Phase Capable" indicates hardware capability. PV Series, FlexBOSS, and LXP-EU default to single-phase but can support three-phase configurations depending on installation. GridBOSS is a MID controller that manages parallel groups rather than generating power directly.
 
 ## Adding New Device Types
 
