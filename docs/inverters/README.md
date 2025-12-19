@@ -4,24 +4,60 @@ This directory contains human-readable register map documentation for various Lu
 
 ## Available Register Maps
 
-### 18KPV (LXP 18K-Hybrid Gen4)
+### Example Register Maps (Sanitized)
+
+These are sanitized example register maps with generic serial numbers for reference:
+
+#### 18KPV (LXP 18K-Hybrid Gen4)
 - **File**: [`18KPV_example.md`](18KPV_example.md)
-- **Device Type**: 18KPV
+- **Device Type Code**: 2092
 - **Serial Number**: 1234567890 (Example)
 - **Register Ranges**: 0-274
 - **Total Parameters**: 488
-- **Total Register Blocks**: 209
 
-### GridBoss (Grid Boss 18K-Hybrid)
+#### GridBoss (Example)
 - **File**: [`GridBoss_example.md`](GridBoss_example.md)
-- **Device Type**: Grid Boss
+- **Device Type Code**: 50
 - **Serial Number**: 0987654321 (Example)
+- **Firmware**: IAAB-1300
 - **Register Ranges**: 0-380, 2032-2158
 - **Total Parameters**: 579
-- **Total Register Blocks**: 241
 
-> **Note**: These are sanitized example register maps with generic serial numbers and sample values.
-> They are provided for documentation and reference purposes only.
+### Community Contributed Register Maps
+
+Real device data contributed by users (serial numbers masked):
+
+#### FlexBOSS21
+- **Files**: [`FlexBOSS21_45******59.md`](FlexBOSS21_45******59.md), [`FlexBOSS21_45******59.json`](FlexBOSS21_45******59.json)
+- **Device Type Code**: 10284
+- **Firmware**: FAAB-2525
+- **Dongle Version**: V2.06
+- **Register Ranges**: 0-274
+- **Total Parameters**: 490
+- **Contributed via**: [Issue #79](https://github.com/joyfulhouse/pylxpweb/issues/79)
+
+#### GridBOSS
+- **Files**: [`GridBoss_43******85.md`](GridBoss_43******85.md), [`GridBoss_43******85.json`](GridBoss_43******85.json)
+- **Device Type Code**: 50
+- **Firmware**: IAAB-1600
+- **Dongle Version**: V2.06
+- **Register Ranges**: 0-380, 2032-2158
+- **Total Parameters**: 582
+- **Contributed via**: [Issue #79](https://github.com/joyfulhouse/pylxpweb/issues/79)
+
+#### SNA12KUS (12kPV)
+- **Files**: [`SNA12KUS_52******68.md`](SNA12KUS_52******68.md), [`SNA12KUS_52******68.json`](SNA12KUS_52******68.json)
+- **Device Type Code**: 54
+- **Register Ranges**: 0-274
+- **Total Parameters**: 488
+
+#### LXP-EU 12K
+- **Files**: [`LXPEU12K_43******13.md`](LXPEU12K_43******13.md), [`LXPEU12K_51******57.md`](LXPEU12K_51******57.md)
+- **Device Type Code**: 12
+- **Register Ranges**: 0-274
+
+> **Note**: Example register maps are sanitized with generic serial numbers.
+> Community contributions have serial numbers masked (e.g., `45******59`) for privacy.
 > To generate register maps for your own devices, use the utilities described in the "Generating Register Maps" section below.
 
 ## Table Format
