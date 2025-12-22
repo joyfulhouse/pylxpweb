@@ -1159,15 +1159,24 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters support AC charge SOC limits.
 
         Returns:
-            Current SOC limit percentage, or None if parameters not loaded
+            Current SOC limit percentage (0-100), or None if parameters not loaded
+            or parameter not found
 
         Example:
             >>> limit = inverter.ac_charge_soc_limit
             >>> limit
             90
         """
-        value = self._get_parameter("HOLD_AC_CHARGE_SOC_LIMIT", 100, int)
-        return int(value) if value is not None else None
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_AC_CHARGE_SOC_LIMIT")
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+            return int_value if 0 <= int_value <= 100 else None
+        except (ValueError, TypeError):
+            return None
 
     @property
     def system_charge_soc_limit(self) -> int | None:
@@ -1181,14 +1190,23 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         Returns:
             Current SOC limit percentage (0-101), or None if parameters not loaded
+            or parameter not found
 
         Example:
             >>> limit = inverter.system_charge_soc_limit
             >>> limit
             80
         """
-        value = self._get_parameter("HOLD_SYSTEM_CHARGE_SOC_LIMIT", 100, int)
-        return int(value) if value is not None else None
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_SYSTEM_CHARGE_SOC_LIMIT")
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+            return int_value if 0 <= int_value <= 101 else None
+        except (ValueError, TypeError):
+            return None
 
     # ============================================================================
     # Battery Current Control (Issue #13)
@@ -1296,14 +1314,23 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         Returns:
             Discharge power limit as percentage (0-100%), or None if not loaded
+            or parameter not found
 
         Example:
             >>> power = inverter.discharge_power_limit
             >>> power
             100
         """
-        value = self._get_parameter("HOLD_DISCHG_POWER_PERCENT_CMD", 100, int)
-        return int(value) if value is not None else None
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_DISCHG_POWER_PERCENT_CMD")
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+            return int_value if 0 <= int_value <= 100 else None
+        except (ValueError, TypeError):
+            return None
 
     # ============================================================================
     # Battery Voltage Limits
