@@ -238,9 +238,9 @@ class TestParameterInitialization:
         inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 100}
         assert inverter.system_charge_soc_limit == 100
 
-        # Case 5: Parameters loaded but key missing - should return default (100)
+        # Case 5: Parameters loaded but key missing - should return None (no default)
         inverter.parameters = {"OTHER_PARAM": 50}
-        assert inverter.system_charge_soc_limit == 100  # Default value
+        assert inverter.system_charge_soc_limit is None  # No default, returns None
 
     def test_discharge_power_limit_property(self, mock_client: LuxpowerClient) -> None:
         """Test discharge_power_limit property returns correct values.
@@ -267,9 +267,9 @@ class TestParameterInitialization:
         inverter.parameters = {"HOLD_DISCHG_POWER_PERCENT_CMD": 0}
         assert inverter.discharge_power_limit == 0
 
-        # Case 5: Parameters loaded but key missing - should return default (100)
+        # Case 5: Parameters loaded but key missing - should return None (no default)
         inverter.parameters = {"OTHER_PARAM": 50}
-        assert inverter.discharge_power_limit == 100  # Default value
+        assert inverter.discharge_power_limit is None  # No default, returns None
 
     def test_battery_voltage_limits_property(self, mock_client: LuxpowerClient) -> None:
         """Test battery_voltage_limits property returns correct scaled values.
