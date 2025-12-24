@@ -16,6 +16,7 @@ from pylxpweb.endpoints.base import BaseEndpoint
 from pylxpweb.models import (
     BatteryInfo,
     BatteryListResponse,
+    DongleStatus,
     EnergyInfo,
     InverterInfo,
     InverterOverviewResponse,
@@ -325,6 +326,49 @@ class DeviceEndpoints(BaseEndpoint):
             cache_endpoint="midbox_runtime",
         )
         return MidboxRuntime.model_validate(response)
+
+    async def get_dongle_status(self, datalog_serial: str) -> DongleStatus:
+        """Get dongle (datalog) connection status.
+
+        The dongle is the communication module that connects inverters to the
+        cloud monitoring service. This endpoint checks if the dongle is currently
+        online and communicating.
+
+        Use this to determine if device data is current or potentially stale.
+        When the dongle is offline, the inverter data shown in the API may be
+        outdated since no new data is being received from the device.
+
+        Note: The datalog serial number is different from the inverter serial number.
+        You can get the datalog serial from InverterInfo.datalogSn.
+
+        Args:
+            datalog_serial: Dongle/datalog serial number (e.g., "BC34000380")
+
+        Returns:
+            DongleStatus: Dongle connection status with is_online property
+
+        Example:
+            # Get dongle serial from inverter info
+            info = await client.devices.get_inverter_info("4512670118")
+            datalog_sn = info.datalogSn
+
+            # Check if dongle is online
+            status = await client.devices.get_dongle_status(datalog_sn)
+            if status.is_online:
+                print("Dongle is online - data is current")
+            else:
+                print("Dongle is offline - data may be stale")
+        """
+        await self.client._ensure_authenticated()
+
+        data = {"serialNum": datalog_serial}
+
+        response = await self.client._request(
+            "POST",
+            "/WManage/api/system/cluster/search/findOnlineDatalog",
+            data=data,
+        )
+        return DongleStatus.model_validate(response)
 
     # ============================================================================
     # Convenience Methods

@@ -11,6 +11,7 @@ import pytest
 from pylxpweb.models import (
     BatteryInfo,
     BatteryModule,
+    DongleStatus,
     EnergyInfo,
     InverterRuntime,
     LoginResponse,
@@ -283,3 +284,55 @@ class TestScalingFunctions:
         """Test energy conversion to kWh."""
         assert energy_to_kwh(1000) == 1.0
         assert energy_to_kwh(69269) == 69.269
+
+
+class TestDongleStatus:
+    """Test DongleStatus model."""
+
+    def test_parse_online_status(self) -> None:
+        """Test parsing dongle status when online."""
+        data = {"success": True, "msg": "current"}
+        model = DongleStatus.model_validate(data)
+
+        assert model.success is True
+        assert model.msg == "current"
+        assert model.is_online is True
+        assert model.status_text == "Online"
+
+    def test_parse_offline_status(self) -> None:
+        """Test parsing dongle status when offline."""
+        data = {"success": True, "msg": ""}
+        model = DongleStatus.model_validate(data)
+
+        assert model.success is True
+        assert model.msg == ""
+        assert model.is_online is False
+        assert model.status_text == "Offline"
+
+    def test_parse_missing_msg_defaults_to_empty(self) -> None:
+        """Test that missing msg field defaults to empty string (offline)."""
+        data = {"success": True}
+        model = DongleStatus.model_validate(data)
+
+        assert model.success is True
+        assert model.msg == ""
+        assert model.is_online is False
+        assert model.status_text == "Offline"
+
+    def test_parse_other_msg_values(self) -> None:
+        """Test that only 'current' msg value indicates online status."""
+        # Any value other than "current" should be considered offline
+        data = {"success": True, "msg": "other"}
+        model = DongleStatus.model_validate(data)
+
+        assert model.is_online is False
+        assert model.status_text == "Offline"
+
+    def test_success_false(self) -> None:
+        """Test handling of success=false response."""
+        data = {"success": False, "msg": "error"}
+        model = DongleStatus.model_validate(data)
+
+        assert model.success is False
+        # Even with success=false, the msg value should be preserved
+        assert model.msg == "error"

@@ -1290,3 +1290,49 @@ class FirmwareUpdateInfo(BaseModel):
             app_filename=details.lastV1FileName,
             param_filename=details.lastV2FileName,
         )
+
+
+# Dongle Connection Status Models
+
+
+class DongleStatus(BaseModel):
+    """Dongle connection status from findOnlineDatalog endpoint.
+
+    The dongle (datalog) is the communication module that connects
+    inverters to the cloud monitoring service. This model represents
+    its current online/offline status.
+
+    The API returns:
+    - msg: "current" when dongle is actively communicating
+    - msg: "" (empty) when dongle is offline/not communicating
+
+    Example:
+        ```python
+        status = await client.devices.get_dongle_status("BC34000380")
+        if status.is_online:
+            print("Dongle is online and communicating")
+        else:
+            print("Dongle is offline - inverter data may be stale")
+        ```
+    """
+
+    success: bool
+    msg: str = ""
+
+    @property
+    def is_online(self) -> bool:
+        """Check if the dongle is currently online.
+
+        Returns:
+            True if dongle is actively communicating, False otherwise.
+        """
+        return self.msg == "current"
+
+    @property
+    def status_text(self) -> str:
+        """Get human-readable status text.
+
+        Returns:
+            "Online" or "Offline" based on dongle status.
+        """
+        return "Online" if self.is_online else "Offline"

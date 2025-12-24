@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2025-12-24
+
+### Added
+
+- **Dongle connection status** - New endpoint to check if dongle (datalog) is online ([#59](https://github.com/joyfulhouse/pylxpweb/issues/59)):
+  - `DongleStatus` model with `is_online` and `status_text` properties
+  - `client.api.devices.get_dongle_status(datalog_serial)` - Check dongle connectivity
+  - API returns `msg: "current"` when online, empty when offline
+  - Enables detection of stale inverter data when dongle is disconnected
+
+### Example Usage
+
+```python
+# Get inverter info to find dongle serial
+info = await client.api.devices.get_inverter_info("4512670118")
+
+# Check dongle status
+status = await client.api.devices.get_dongle_status(info.datalogSn)
+if status.is_online:
+    print("Dongle is online - data is current")
+else:
+    print("Dongle is offline - inverter data may be stale")
+```
+
 ## [0.3.24] - 2025-12-03
 
 ### Fixed
