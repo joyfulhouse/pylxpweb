@@ -32,6 +32,11 @@ BACKOFF_MAX_DELAY_SECONDS = 60.0
 # Maximum number of retry attempts for transient errors
 MAX_TRANSIENT_ERROR_RETRIES = 3
 
+# Maximum number of retry attempts for login (re-authentication)
+# This allows recovery from transient network issues during re-auth
+# without requiring manual user intervention (fixes issue #70)
+MAX_LOGIN_RETRIES = 3
+
 # Known transient error messages that should trigger automatic retry
 # These are hardware/network communication errors that may succeed on retry
 TRANSIENT_ERROR_MESSAGES = {

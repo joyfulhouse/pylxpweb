@@ -36,6 +36,7 @@ from .constants import (
     BACKOFF_BASE_DELAY_SECONDS,
     BACKOFF_MAX_DELAY_SECONDS,
     HTTP_UNAUTHORIZED,
+    MAX_LOGIN_RETRIES,
     MAX_TRANSIENT_ERROR_RETRIES,
     TRANSIENT_ERROR_MESSAGES,
 )
@@ -574,9 +575,23 @@ class LuxpowerClient:
                     cache_endpoint=cache_endpoint,
                     _retry_count=_retry_count,  # Preserve retry count
                 )
+            except LuxpowerAuthError:
+                # True authentication failure (wrong credentials, account locked)
+                _LOGGER.error("Re-authentication failed: invalid credentials")
+                raise
+            except LuxpowerConnectionError as login_err:
+                # Transient connection issue during re-auth - don't treat as auth failure
+                # This allows Home Assistant to retry automatically instead of requiring
+                # manual re-authentication (fixes issue #70)
+                _LOGGER.warning("Re-authentication failed due to connection issue: %s", login_err)
+                raise
             except Exception as login_err:
-                _LOGGER.error("Re-authentication failed: %s", login_err)
-                raise LuxpowerAuthError("Authentication failed - session expired") from err
+                # Other unexpected errors during re-auth - treat as connection issue
+                # to allow automatic retry rather than requiring manual intervention
+                _LOGGER.error("Re-authentication failed unexpectedly: %s", login_err)
+                raise LuxpowerConnectionError(
+                    f"Re-authentication failed: {login_err}"
+                ) from login_err
 
         except aiohttp.ClientResponseError as err:
             self._handle_request_error(err)
@@ -595,9 +610,25 @@ class LuxpowerClient:
                         cache_endpoint=cache_endpoint,
                         _retry_count=_retry_count,  # Preserve retry count
                     )
+                except LuxpowerAuthError:
+                    # True authentication failure (wrong credentials, account locked)
+                    _LOGGER.error("Re-authentication failed: invalid credentials")
+                    raise
+                except LuxpowerConnectionError as login_err:
+                    # Transient connection issue during re-auth - don't treat as auth failure
+                    # This allows Home Assistant to retry automatically instead of requiring
+                    # manual re-authentication (fixes issue #70)
+                    _LOGGER.warning(
+                        "Re-authentication failed due to connection issue: %s", login_err
+                    )
+                    raise
                 except Exception as login_err:
-                    _LOGGER.error("Re-authentication failed: %s", login_err)
-                    raise LuxpowerAuthError("Authentication failed") from err
+                    # Other unexpected errors during re-auth - treat as connection issue
+                    # to allow automatic retry rather than requiring manual intervention
+                    _LOGGER.error("Re-authentication failed unexpectedly: %s", login_err)
+                    raise LuxpowerConnectionError(
+                        f"Re-authentication failed: {login_err}"
+                    ) from login_err
             raise LuxpowerAPIError(f"HTTP {err.status}: {err.message}") from err
 
         except LuxpowerAPIError:
@@ -614,16 +645,30 @@ class LuxpowerClient:
 
     # Authentication
 
-    async def login(self) -> LoginResponse:
+    async def login(self, _retry_count: int = 0) -> LoginResponse:
         """Authenticate with the API and establish a session.
+
+        This method includes automatic retry logic for transient failures
+        (network issues, temporary server errors) with exponential backoff.
+        This allows recovery from temporary issues without requiring manual
+        user intervention (fixes issue #70).
+
+        Args:
+            _retry_count: Internal retry counter (do not set manually)
 
         Returns:
             LoginResponse: Login response with user and plant information
 
         Raises:
-            LuxpowerAuthError: If authentication fails
+            LuxpowerAuthError: If authentication fails due to invalid credentials
+            LuxpowerConnectionError: If connection fails after all retries
         """
-        _LOGGER.debug("Logging in as %s", self.username)
+        _LOGGER.debug(
+            "Logging in as %s (attempt %d/%d)",
+            self.username,
+            _retry_count + 1,
+            MAX_LOGIN_RETRIES,
+        )
 
         data = {
             "account": self.username,
@@ -631,18 +676,50 @@ class LuxpowerClient:
             "language": "ENGLISH",
         }
 
-        response = await self._request("POST", "/WManage/api/login", data=data)
-        login_data = LoginResponse.model_validate(response)
+        try:
+            response = await self._request("POST", "/WManage/api/login", data=data)
+            login_data = LoginResponse.model_validate(response)
 
-        # Store session info (session cookie is automatically handled by aiohttp)
-        self._session_expires = datetime.now() + timedelta(hours=2)
-        self._user_id = login_data.userId
-        _LOGGER.debug("Login successful, session expires at %s", self._session_expires)
+            # Store session info (session cookie is automatically handled by aiohttp)
+            self._session_expires = datetime.now() + timedelta(hours=2)
+            self._user_id = login_data.userId
+            _LOGGER.debug("Login successful, session expires at %s", self._session_expires)
 
-        # Detect account level from endUser field
-        await self._detect_account_level()
+            # Detect account level from endUser field
+            await self._detect_account_level()
 
-        return login_data
+            return login_data
+
+        except LuxpowerAuthError:
+            # True authentication failure (wrong password, account locked)
+            # Don't retry - re-raise immediately
+            raise
+
+        except LuxpowerAPIError:
+            # API-level error (not transient) - don't retry
+            raise
+
+        except LuxpowerConnectionError as err:
+            # Transient connection issue - retry with backoff
+            if _retry_count < MAX_LOGIN_RETRIES - 1:
+                delay = self._backoff_config["base_delay"] * (2**_retry_count)
+                _LOGGER.warning(
+                    "Login failed due to connection error (attempt %d/%d): %s. "
+                    "Retrying in %.1f seconds...",
+                    _retry_count + 1,
+                    MAX_LOGIN_RETRIES,
+                    err,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                return await self.login(_retry_count=_retry_count + 1)
+            # Max retries exceeded
+            _LOGGER.error(
+                "Login failed after %d attempts due to connection errors: %s",
+                MAX_LOGIN_RETRIES,
+                err,
+            )
+            raise
 
     async def _ensure_authenticated(self) -> None:
         """Ensure we have a valid session, re-authenticating if needed."""

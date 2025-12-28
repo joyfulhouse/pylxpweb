@@ -12,7 +12,7 @@ import pytest
 from aioresponses import aioresponses
 
 from pylxpweb import LuxpowerClient
-from pylxpweb.exceptions import LuxpowerAuthError, LuxpowerConnectionError
+from pylxpweb.exceptions import LuxpowerConnectionError
 
 # Import fixtures
 
@@ -64,17 +64,24 @@ class TestAuthentication:
 
     @pytest.mark.asyncio
     async def test_login_failure(self, mocked_api: aioresponses) -> None:
-        """Test login with invalid credentials."""
-        # Mock failed login
+        """Test login with invalid credentials.
+
+        Note: The EG4 API returns HTTP 200 with success=false for auth failures,
+        not HTTP 401. A 401 response indicates session expiration, which triggers
+        re-authentication retry logic. Invalid credentials are reported as API errors.
+        """
+        from pylxpweb.exceptions import LuxpowerAPIError
+
+        # Mock failed login - API returns 200 with success=false for invalid credentials
         mocked_api.post(
             f"{BASE_URL}/WManage/api/login",
             payload={"success": False, "message": "Invalid credentials"},
-            status=401,
+            status=200,
         )
 
         client = LuxpowerClient("wronguser", "wrongpass")
 
-        with pytest.raises(LuxpowerAuthError):
+        with pytest.raises(LuxpowerAPIError, match="Invalid credentials"):
             await client.login()
 
         await client.close()
@@ -398,31 +405,32 @@ class TestErrorHandling:
         self,
         mocked_api: aioresponses,
     ) -> None:
-        """Test that backoff is applied on errors."""
-        # Mock failed login (mock it twice since client will retry)
+        """Test that backoff is applied on network/connection errors.
+
+        Note: Backoff is applied for network errors (connection refused, timeout),
+        not for API errors (success=false). This is intentional - backoff helps
+        with transient network issues, not with logical API errors.
+        """
+        import aiohttp
+
+        # Mock a network error (connection refused) on login
         mocked_api.post(
             f"{BASE_URL}/WManage/api/login",
-            payload={"success": False, "message": "Invalid credentials"},
-            status=401,
-        )
-        mocked_api.post(
-            f"{BASE_URL}/WManage/api/login",
-            payload={"success": False, "message": "Invalid credentials"},
-            status=401,
+            exception=aiohttp.ClientConnectionError("Connection refused"),
         )
 
-        client = LuxpowerClient("wrong", "wrong")
+        client = LuxpowerClient("testuser", "testpass")
 
         try:
             # Initial state
             assert client._consecutive_errors == 0
             assert client._current_backoff_delay == 0.0
 
-            # Try to login with wrong credentials (will fail)
-            with contextlib.suppress(LuxpowerAuthError):
+            # Try to login - will fail with connection error
+            with contextlib.suppress(LuxpowerConnectionError):
                 await client.login()
 
-            # Verify backoff was increased (client retries, so 2 errors)
+            # Verify backoff was increased due to connection errors
             assert client._consecutive_errors >= 1
             assert client._current_backoff_delay > 0
 
