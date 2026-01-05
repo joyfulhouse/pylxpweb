@@ -36,6 +36,14 @@ Real device data contributed by users (serial numbers masked):
 - **Total Parameters**: 490
 - **Contributed via**: [Issue #79](https://github.com/joyfulhouse/pylxpweb/issues/79)
 
+#### FlexBOSS21 (Sample 2)
+- **Files**: [`FlexBOSS21_50******96.md`](FlexBOSS21_50******96.md), [`FlexBOSS21_50******96.json`](FlexBOSS21_50******96.json)
+- **Device Type Code**: 10284
+- **Firmware**: FAAB-2525
+- **Register Ranges**: 0-125
+- **Total Parameters**: 190
+- **Contributed via**: [Issue #90](https://github.com/joyfulhouse/pylxpweb/issues/90) ([@talanov](https://github.com/talanov))
+
 #### GridBOSS
 - **Files**: [`GridBoss_43******85.md`](GridBoss_43******85.md), [`GridBoss_43******85.json`](GridBoss_43******85.json)
 - **Device Type Code**: 50
@@ -44,6 +52,14 @@ Real device data contributed by users (serial numbers masked):
 - **Register Ranges**: 0-380, 2032-2158
 - **Total Parameters**: 582
 - **Contributed via**: [Issue #79](https://github.com/joyfulhouse/pylxpweb/issues/79)
+
+#### GridBOSS (Sample 2)
+- **Files**: [`GridBoss_50******24.md`](GridBoss_50******24.md), [`GridBoss_50******24.json`](GridBoss_50******24.json)
+- **Device Type Code**: 50
+- **Firmware**: IAAB-1600
+- **Register Ranges**: 0-317, 2032-2104
+- **Total Parameters**: 583
+- **Contributed via**: [Issue #90](https://github.com/joyfulhouse/pylxpweb/issues/90) ([@talanov](https://github.com/talanov))
 
 #### SNA12KUS (12kPV)
 - **Files**: [`SNA12KUS_52******68.md`](SNA12KUS_52******68.md), [`SNA12KUS_52******68.json`](SNA12KUS_52******68.json)

@@ -1,0 +1,2295 @@
+{
+  "metadata": {
+    "timestamp": "2026-01-03T13:01:36.518442-06:00",
+    "pylxpweb_version": "0.4.4",
+    "base_url": "https://monitor.eg4electronics.com",
+    "serial_num": "50******96",
+    "device_type": "FlexBOSS21",
+    "merged_ranges": [
+      {
+        "start": 0,
+        "length": 367,
+        "end": 366
+      }
+    ]
+  },
+  "statistics": {
+    "total_blocks": 100,
+    "total_parameters": 190,
+    "blocks_with_leading_empty": 9
+  },
+  "register_blocks": [
+    {
+      "start_register": 0,
+      "block_size": 11,
+      "end_register": 10,
+      "parameter_count": 15,
+      "parameter_keys": [
+        "HOLD_FW_CODE",
+        "HOLD_MODEL",
+        "HOLD_MODEL_batteryType",
+        "HOLD_MODEL_leadAcidType",
+        "HOLD_MODEL_lithiumType",
+        "HOLD_MODEL_measurement",
+        "HOLD_MODEL_meterBrand",
+        "HOLD_MODEL_meterType",
+        "HOLD_MODEL_powerRating",
+        "HOLD_MODEL_rule",
+        "HOLD_MODEL_ruleMask",
+        "HOLD_MODEL_usVersion",
+        "HOLD_MODEL_wirelessMeter",
+        "HOLD_SERIAL_NUM",
+        "INPUT_BATTERY_VOLTAGE"
+      ],
+      "sample_values": {
+        "INPUT_BATTERY_VOLTAGE": "55.5",
+        "HOLD_MODEL": "0x1098200",
+        "HOLD_MODEL_wirelessMeter": 0,
+        "HOLD_MODEL_meterType": 0,
+        "HOLD_MODEL_usVersion": 1,
+        "HOLD_MODEL_meterBrand": 0,
+        "HOLD_MODEL_measurement": 1,
+        "HOLD_MODEL_ruleMask": 1,
+        "HOLD_MODEL_batteryType": 2,
+        "HOLD_MODEL_leadAcidType": 0,
+        "HOLD_MODEL_lithiumType": 0,
+        "HOLD_MODEL_powerRating": 8,
+        "HOLD_MODEL_rule": 0,
+        "HOLD_SERIAL_NUM": "50******96",
+        "HOLD_FW_CODE": "FAAB-2525"
+      },
+      "boundary_validation": {
+        "original_start": 0,
+        "original_size": 11,
+        "actual_start": 0,
+        "actual_size": 11,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 11,
+      "block_size": 4,
+      "end_register": 14,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_TIME"
+      ],
+      "sample_values": {
+        "HOLD_TIME": "2026-01-03 12:59:55"
+      },
+      "boundary_validation": {
+        "original_start": 11,
+        "original_size": 4,
+        "actual_start": 12,
+        "actual_size": 3,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 15,
+      "block_size": 1,
+      "end_register": 15,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_COM_ADDR"
+      ],
+      "sample_values": {
+        "HOLD_COM_ADDR": "1"
+      },
+      "boundary_validation": {
+        "original_start": 15,
+        "original_size": 1,
+        "actual_start": 15,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 16,
+      "block_size": 1,
+      "end_register": 16,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LANGUAGE"
+      ],
+      "sample_values": {
+        "HOLD_LANGUAGE": "1"
+      },
+      "boundary_validation": {
+        "original_start": 16,
+        "original_size": 1,
+        "actual_start": 16,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 17,
+      "block_size": 3,
+      "end_register": 19,
+      "parameter_count": 3,
+      "parameter_keys": [
+        "BIT_DEVICE_TYPE_ODM",
+        "BIT_MACHINE_TYPE",
+        "HOLD_DEVICE_TYPE_CODE"
+      ],
+      "sample_values": {
+        "HOLD_DEVICE_TYPE_CODE": "10284",
+        "BIT_DEVICE_TYPE_ODM": 4,
+        "BIT_MACHINE_TYPE": 1
+      },
+      "boundary_validation": {
+        "original_start": 17,
+        "original_size": 3,
+        "actual_start": 19,
+        "actual_size": 1,
+        "leading_empty_registers": 2
+      }
+    },
+    {
+      "start_register": 20,
+      "block_size": 1,
+      "end_register": 20,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_PV_INPUT_MODE"
+      ],
+      "sample_values": {
+        "HOLD_PV_INPUT_MODE": "7"
+      },
+      "boundary_validation": {
+        "original_start": 20,
+        "original_size": 1,
+        "actual_start": 20,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 21,
+      "block_size": 1,
+      "end_register": 21,
+      "parameter_count": 27,
+      "parameter_keys": [
+        "FUNC_AC_CHARGE",
+        "FUNC_ANTI_ISLAND_EN",
+        "FUNC_DCI_EN",
+        "FUNC_DRMS_EN",
+        "FUNC_EPS_EN",
+        "FUNC_FEED_IN_GRID_EN",
+        "FUNC_FORCED_CHG_EN",
+        "FUNC_FORCED_DISCHG_EN",
+        "FUNC_GFCI_EN",
+        "FUNC_GRID_ON_POWER_SS_EN",
+        "FUNC_ISO_EN",
+        "FUNC_LSP_AC_CHARGE",
+        "FUNC_LSP_BAT_ACTIVATION_EN",
+        "FUNC_LSP_BYPASS_EN",
+        "FUNC_LSP_BYPASS_MODE_EN",
+        "FUNC_LSP_CHARGE_PRIORITY_EN",
+        "FUNC_LSP_FAN_CHECK_EN",
+        "FUNC_LSP_ISO_EN",
+        "FUNC_LSP_LCD_REMOTE_DIS_CHG_EN",
+        "FUNC_LSP_SELF_CONSUMPTION_EN",
+        "FUNC_LSP_SET_TO_STANDBY",
+        "FUNC_LSP_WHOLE_DAY_SCHEDULE_EN",
+        "FUNC_LVRT_EN",
+        "FUNC_NEUTRAL_DETECT_EN",
+        "FUNC_OVF_LOAD_DERATE_EN",
+        "FUNC_SET_TO_STANDBY",
+        "FUNC_SW_SEAMLESSLY_EN"
+      ],
+      "sample_values": {
+        "FUNC_EPS_EN": true,
+        "FUNC_OVF_LOAD_DERATE_EN": false,
+        "FUNC_DRMS_EN": true,
+        "FUNC_LVRT_EN": false,
+        "FUNC_ANTI_ISLAND_EN": true,
+        "FUNC_NEUTRAL_DETECT_EN": false,
+        "FUNC_GRID_ON_POWER_SS_EN": true,
+        "FUNC_AC_CHARGE": false,
+        "FUNC_SW_SEAMLESSLY_EN": false,
+        "FUNC_SET_TO_STANDBY": true,
+        "FUNC_FORCED_DISCHG_EN": false,
+        "FUNC_FORCED_CHG_EN": false,
+        "FUNC_ISO_EN": true,
+        "FUNC_GFCI_EN": true,
+        "FUNC_DCI_EN": true,
+        "FUNC_FEED_IN_GRID_EN": false,
+        "FUNC_LSP_SET_TO_STANDBY": true,
+        "FUNC_LSP_ISO_EN": false,
+        "FUNC_LSP_FAN_CHECK_EN": true,
+        "FUNC_LSP_WHOLE_DAY_SCHEDULE_EN": false,
+        "FUNC_LSP_LCD_REMOTE_DIS_CHG_EN": true,
+        "FUNC_LSP_SELF_CONSUMPTION_EN": false,
+        "FUNC_LSP_AC_CHARGE": false,
+        "FUNC_LSP_BAT_ACTIVATION_EN": true,
+        "FUNC_LSP_BYPASS_MODE_EN": false,
+        "FUNC_LSP_BYPASS_EN": true,
+        "FUNC_LSP_CHARGE_PRIORITY_EN": false
+      },
+      "boundary_validation": {
+        "original_start": 21,
+        "original_size": 1,
+        "actual_start": 21,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 22,
+      "block_size": 1,
+      "end_register": 22,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_START_PV_VOLT"
+      ],
+      "sample_values": {
+        "HOLD_START_PV_VOLT": "200"
+      },
+      "boundary_validation": {
+        "original_start": 22,
+        "original_size": 1,
+        "actual_start": 22,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 23,
+      "block_size": 1,
+      "end_register": 23,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_CONNECT_TIME"
+      ],
+      "sample_values": {
+        "HOLD_CONNECT_TIME": "300"
+      },
+      "boundary_validation": {
+        "original_start": 23,
+        "original_size": 1,
+        "actual_start": 23,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 24,
+      "block_size": 1,
+      "end_register": 24,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_RECONNECT_TIME"
+      ],
+      "sample_values": {
+        "HOLD_RECONNECT_TIME": "300"
+      },
+      "boundary_validation": {
+        "original_start": 24,
+        "original_size": 1,
+        "actual_start": 24,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 25,
+      "block_size": 1,
+      "end_register": 25,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_CONN_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_CONN_LOW": "220"
+      },
+      "boundary_validation": {
+        "original_start": 25,
+        "original_size": 1,
+        "actual_start": 25,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 26,
+      "block_size": 1,
+      "end_register": 26,
+      "parameter_count": 11,
+      "parameter_keys": [
+        "FUNC_LSP_BATT_VOLT_OR_SOC",
+        "FUNC_LSP_WHOLE_BAT_FIRST_1_EN",
+        "FUNC_LSP_WHOLE_BAT_FIRST_2_EN",
+        "FUNC_LSP_WHOLE_BAT_FIRST_3_EN",
+        "FUNC_LSP_WHOLE_BYPASS_1_EN",
+        "FUNC_LSP_WHOLE_BYPASS_2_EN",
+        "FUNC_LSP_WHOLE_BYPASS_3_EN",
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_1_EN",
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_2_EN",
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_3_EN",
+        "HOLD_GRID_VOLT_CONN_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_CONN_HIGH": "252",
+        "FUNC_LSP_WHOLE_BYPASS_1_EN": false,
+        "FUNC_LSP_WHOLE_BYPASS_2_EN": false,
+        "FUNC_LSP_WHOLE_BYPASS_3_EN": false,
+        "FUNC_LSP_WHOLE_BAT_FIRST_1_EN": true,
+        "FUNC_LSP_WHOLE_BAT_FIRST_2_EN": true,
+        "FUNC_LSP_WHOLE_BAT_FIRST_3_EN": false,
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_1_EN": true,
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_2_EN": true,
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_3_EN": true,
+        "FUNC_LSP_BATT_VOLT_OR_SOC": false
+      },
+      "boundary_validation": {
+        "original_start": 26,
+        "original_size": 1,
+        "actual_start": 26,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 27,
+      "block_size": 1,
+      "end_register": 27,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_CONN_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_CONN_LOW": "59"
+      },
+      "boundary_validation": {
+        "original_start": 27,
+        "original_size": 1,
+        "actual_start": 27,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 28,
+      "block_size": 1,
+      "end_register": 28,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_CONN_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_CONN_HIGH": "61"
+      },
+      "boundary_validation": {
+        "original_start": 28,
+        "original_size": 1,
+        "actual_start": 28,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 29,
+      "block_size": 1,
+      "end_register": 29,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT1_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT1_LOW": "211.2"
+      },
+      "boundary_validation": {
+        "original_start": 29,
+        "original_size": 1,
+        "actual_start": 29,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 30,
+      "block_size": 1,
+      "end_register": 30,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT1_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT1_HIGH": "264"
+      },
+      "boundary_validation": {
+        "original_start": 30,
+        "original_size": 1,
+        "actual_start": 30,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 31,
+      "block_size": 1,
+      "end_register": 31,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT1_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT1_LOW_TIME": "2100"
+      },
+      "boundary_validation": {
+        "original_start": 31,
+        "original_size": 1,
+        "actual_start": 31,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 32,
+      "block_size": 1,
+      "end_register": 32,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT1_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT1_HIGH_TIME": "1300"
+      },
+      "boundary_validation": {
+        "original_start": 32,
+        "original_size": 1,
+        "actual_start": 32,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 33,
+      "block_size": 1,
+      "end_register": 33,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT2_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT2_LOW": "120"
+      },
+      "boundary_validation": {
+        "original_start": 33,
+        "original_size": 1,
+        "actual_start": 33,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 34,
+      "block_size": 1,
+      "end_register": 34,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT2_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT2_HIGH": "288"
+      },
+      "boundary_validation": {
+        "original_start": 34,
+        "original_size": 1,
+        "actual_start": 34,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 35,
+      "block_size": 1,
+      "end_register": 35,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT2_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT2_LOW_TIME": "200"
+      },
+      "boundary_validation": {
+        "original_start": 35,
+        "original_size": 1,
+        "actual_start": 35,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 36,
+      "block_size": 1,
+      "end_register": 36,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT2_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT2_HIGH_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 36,
+        "original_size": 1,
+        "actual_start": 36,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 37,
+      "block_size": 1,
+      "end_register": 37,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT3_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT3_LOW": "120"
+      },
+      "boundary_validation": {
+        "original_start": 37,
+        "original_size": 1,
+        "actual_start": 37,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 38,
+      "block_size": 1,
+      "end_register": 38,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT3_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT3_HIGH": "288"
+      },
+      "boundary_validation": {
+        "original_start": 38,
+        "original_size": 1,
+        "actual_start": 38,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 39,
+      "block_size": 1,
+      "end_register": 39,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT3_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT3_LOW_TIME": "200"
+      },
+      "boundary_validation": {
+        "original_start": 39,
+        "original_size": 1,
+        "actual_start": 39,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 40,
+      "block_size": 1,
+      "end_register": 40,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT3_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT3_HIGH_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 40,
+        "original_size": 1,
+        "actual_start": 40,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 41,
+      "block_size": 1,
+      "end_register": 41,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_MOV_AVG_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_MOV_AVG_HIGH": "264"
+      },
+      "boundary_validation": {
+        "original_start": 41,
+        "original_size": 1,
+        "actual_start": 41,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 42,
+      "block_size": 1,
+      "end_register": 42,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT1_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT1_LOW": "58.5"
+      },
+      "boundary_validation": {
+        "original_start": 42,
+        "original_size": 1,
+        "actual_start": 42,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 43,
+      "block_size": 1,
+      "end_register": 43,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT1_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT1_HIGH": "61.2"
+      },
+      "boundary_validation": {
+        "original_start": 43,
+        "original_size": 1,
+        "actual_start": 43,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 44,
+      "block_size": 1,
+      "end_register": 44,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT1_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT1_LOW_TIME": "30000"
+      },
+      "boundary_validation": {
+        "original_start": 44,
+        "original_size": 1,
+        "actual_start": 44,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 45,
+      "block_size": 1,
+      "end_register": 45,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT1_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT1_HIGH_TIME": "30000"
+      },
+      "boundary_validation": {
+        "original_start": 45,
+        "original_size": 1,
+        "actual_start": 45,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 46,
+      "block_size": 1,
+      "end_register": 46,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT2_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT2_LOW": "56.5"
+      },
+      "boundary_validation": {
+        "original_start": 46,
+        "original_size": 1,
+        "actual_start": 46,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 47,
+      "block_size": 1,
+      "end_register": 47,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT2_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT2_HIGH": "62"
+      },
+      "boundary_validation": {
+        "original_start": 47,
+        "original_size": 1,
+        "actual_start": 47,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 48,
+      "block_size": 1,
+      "end_register": 48,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT2_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT2_LOW_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 48,
+        "original_size": 1,
+        "actual_start": 48,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 49,
+      "block_size": 1,
+      "end_register": 49,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT2_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT2_HIGH_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 49,
+        "original_size": 1,
+        "actual_start": 49,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 50,
+      "block_size": 1,
+      "end_register": 50,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT3_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT3_LOW": "56.5"
+      },
+      "boundary_validation": {
+        "original_start": 50,
+        "original_size": 1,
+        "actual_start": 50,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 51,
+      "block_size": 1,
+      "end_register": 51,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT3_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT3_HIGH": "62"
+      },
+      "boundary_validation": {
+        "original_start": 51,
+        "original_size": 1,
+        "actual_start": 51,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 52,
+      "block_size": 1,
+      "end_register": 52,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT3_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT3_LOW_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 52,
+        "original_size": 1,
+        "actual_start": 52,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 53,
+      "block_size": 1,
+      "end_register": 53,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT3_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT3_HIGH_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 53,
+        "original_size": 1,
+        "actual_start": 53,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 54,
+      "block_size": 1,
+      "end_register": 54,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_MAX_Q_PERCENT_FOR_QV"
+      ],
+      "sample_values": {
+        "HOLD_MAX_Q_PERCENT_FOR_QV": "44"
+      },
+      "boundary_validation": {
+        "original_start": 54,
+        "original_size": 1,
+        "actual_start": 54,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 55,
+      "block_size": 1,
+      "end_register": 55,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_V1L"
+      ],
+      "sample_values": {
+        "HOLD_V1L": "235.2"
+      },
+      "boundary_validation": {
+        "original_start": 55,
+        "original_size": 1,
+        "actual_start": 55,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 56,
+      "block_size": 1,
+      "end_register": 56,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_V2L"
+      ],
+      "sample_values": {
+        "HOLD_V2L": "220.8"
+      },
+      "boundary_validation": {
+        "original_start": 56,
+        "original_size": 1,
+        "actual_start": 56,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 57,
+      "block_size": 1,
+      "end_register": 57,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_V1H"
+      ],
+      "sample_values": {
+        "HOLD_V1H": "244.8"
+      },
+      "boundary_validation": {
+        "original_start": 57,
+        "original_size": 1,
+        "actual_start": 57,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 58,
+      "block_size": 1,
+      "end_register": 58,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_V2H"
+      ],
+      "sample_values": {
+        "HOLD_V2H": "259.2"
+      },
+      "boundary_validation": {
+        "original_start": 58,
+        "original_size": 1,
+        "actual_start": 58,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 59,
+      "block_size": 1,
+      "end_register": 59,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_REACTIVE_POWER_CMD_TYPE"
+      ],
+      "sample_values": {
+        "HOLD_REACTIVE_POWER_CMD_TYPE": "0"
+      },
+      "boundary_validation": {
+        "original_start": 59,
+        "original_size": 1,
+        "actual_start": 59,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 60,
+      "block_size": 1,
+      "end_register": 60,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_ACTIVE_POWER_PERCENT_CMD"
+      ],
+      "sample_values": {
+        "HOLD_ACTIVE_POWER_PERCENT_CMD": "100"
+      },
+      "boundary_validation": {
+        "original_start": 60,
+        "original_size": 1,
+        "actual_start": 60,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 61,
+      "block_size": 1,
+      "end_register": 61,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_REACTIVE_POWER_PERCENT_CMD"
+      ],
+      "sample_values": {
+        "HOLD_REACTIVE_POWER_PERCENT_CMD": "100"
+      },
+      "boundary_validation": {
+        "original_start": 61,
+        "original_size": 1,
+        "actual_start": 61,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 62,
+      "block_size": 1,
+      "end_register": 62,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_PF_CMD",
+        "HOLD_PF_CMD_TEXT"
+      ],
+      "sample_values": {
+        "HOLD_PF_CMD": "1000",
+        "HOLD_PF_CMD_TEXT": "1"
+      },
+      "boundary_validation": {
+        "original_start": 62,
+        "original_size": 1,
+        "actual_start": 62,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 63,
+      "block_size": 1,
+      "end_register": 63,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_POWER_SOFT_START_SLOPE"
+      ],
+      "sample_values": {
+        "HOLD_POWER_SOFT_START_SLOPE": "100"
+      },
+      "boundary_validation": {
+        "original_start": 63,
+        "original_size": 1,
+        "actual_start": 63,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 64,
+      "block_size": 1,
+      "end_register": 64,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_CHARGE_POWER_PERCENT_CMD"
+      ],
+      "sample_values": {
+        "HOLD_CHARGE_POWER_PERCENT_CMD": "100"
+      },
+      "boundary_validation": {
+        "original_start": 64,
+        "original_size": 1,
+        "actual_start": 64,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 65,
+      "block_size": 1,
+      "end_register": 65,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_DISCHG_POWER_PERCENT_CMD"
+      ],
+      "sample_values": {
+        "HOLD_DISCHG_POWER_PERCENT_CMD": "100"
+      },
+      "boundary_validation": {
+        "original_start": 65,
+        "original_size": 1,
+        "actual_start": 65,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 66,
+      "block_size": 1,
+      "end_register": 66,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_POWER_CMD"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_POWER_CMD": "12"
+      },
+      "boundary_validation": {
+        "original_start": 66,
+        "original_size": 1,
+        "actual_start": 66,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 67,
+      "block_size": 1,
+      "end_register": 67,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_SOC_LIMIT"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_SOC_LIMIT": "100"
+      },
+      "boundary_validation": {
+        "original_start": 67,
+        "original_size": 1,
+        "actual_start": 67,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 68,
+      "block_size": 1,
+      "end_register": 68,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_START_HOUR",
+        "HOLD_AC_CHARGE_START_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_START_HOUR": "00",
+        "HOLD_AC_CHARGE_START_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 68,
+        "original_size": 1,
+        "actual_start": 68,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 69,
+      "block_size": 1,
+      "end_register": 69,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_END_HOUR",
+        "HOLD_AC_CHARGE_END_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_END_HOUR": "00",
+        "HOLD_AC_CHARGE_END_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 69,
+        "original_size": 1,
+        "actual_start": 69,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 70,
+      "block_size": 1,
+      "end_register": 70,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_START_HOUR_1",
+        "HOLD_AC_CHARGE_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_START_HOUR_1": "00",
+        "HOLD_AC_CHARGE_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 70,
+        "original_size": 1,
+        "actual_start": 70,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 71,
+      "block_size": 1,
+      "end_register": 71,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_END_HOUR_1",
+        "HOLD_AC_CHARGE_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_END_HOUR_1": "00",
+        "HOLD_AC_CHARGE_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 71,
+        "original_size": 1,
+        "actual_start": 71,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 72,
+      "block_size": 1,
+      "end_register": 72,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_START_HOUR_2",
+        "HOLD_AC_CHARGE_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_START_HOUR_2": "00",
+        "HOLD_AC_CHARGE_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 72,
+        "original_size": 1,
+        "actual_start": 72,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 73,
+      "block_size": 1,
+      "end_register": 73,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_END_HOUR_2",
+        "HOLD_AC_CHARGE_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_END_HOUR_2": "00",
+        "HOLD_AC_CHARGE_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 73,
+        "original_size": 1,
+        "actual_start": 73,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 74,
+      "block_size": 1,
+      "end_register": 74,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FORCED_CHG_POWER_CMD"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHG_POWER_CMD": "12"
+      },
+      "boundary_validation": {
+        "original_start": 74,
+        "original_size": 1,
+        "actual_start": 74,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 75,
+      "block_size": 1,
+      "end_register": 75,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FORCED_CHG_SOC_LIMIT"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHG_SOC_LIMIT": "100"
+      },
+      "boundary_validation": {
+        "original_start": 75,
+        "original_size": 1,
+        "actual_start": 75,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 76,
+      "block_size": 1,
+      "end_register": 76,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_START_HOUR",
+        "HOLD_FORCED_CHARGE_START_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_START_HOUR": "00",
+        "HOLD_FORCED_CHARGE_START_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 76,
+        "original_size": 1,
+        "actual_start": 76,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 77,
+      "block_size": 1,
+      "end_register": 77,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_END_HOUR",
+        "HOLD_FORCED_CHARGE_END_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_END_HOUR": "23",
+        "HOLD_FORCED_CHARGE_END_MINUTE": "59"
+      },
+      "boundary_validation": {
+        "original_start": 77,
+        "original_size": 1,
+        "actual_start": 77,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 78,
+      "block_size": 1,
+      "end_register": 78,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_START_HOUR_1",
+        "HOLD_FORCED_CHARGE_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_START_HOUR_1": "00",
+        "HOLD_FORCED_CHARGE_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 78,
+        "original_size": 1,
+        "actual_start": 78,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 79,
+      "block_size": 1,
+      "end_register": 79,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_END_HOUR_1",
+        "HOLD_FORCED_CHARGE_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_END_HOUR_1": "00",
+        "HOLD_FORCED_CHARGE_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 79,
+        "original_size": 1,
+        "actual_start": 79,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 80,
+      "block_size": 1,
+      "end_register": 80,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_START_HOUR_2",
+        "HOLD_FORCED_CHARGE_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_START_HOUR_2": "00",
+        "HOLD_FORCED_CHARGE_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 80,
+        "original_size": 1,
+        "actual_start": 80,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 81,
+      "block_size": 1,
+      "end_register": 81,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_END_HOUR_2",
+        "HOLD_FORCED_CHARGE_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_END_HOUR_2": "00",
+        "HOLD_FORCED_CHARGE_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 81,
+        "original_size": 1,
+        "actual_start": 81,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 82,
+      "block_size": 1,
+      "end_register": 82,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHG_POWER_CMD"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHG_POWER_CMD": "12"
+      },
+      "boundary_validation": {
+        "original_start": 82,
+        "original_size": 1,
+        "actual_start": 82,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 83,
+      "block_size": 1,
+      "end_register": 83,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHG_SOC_LIMIT"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHG_SOC_LIMIT": "20"
+      },
+      "boundary_validation": {
+        "original_start": 83,
+        "original_size": 1,
+        "actual_start": 83,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 84,
+      "block_size": 1,
+      "end_register": 84,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_START_HOUR",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_START_HOUR": "00",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 84,
+        "original_size": 1,
+        "actual_start": 84,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 85,
+      "block_size": 1,
+      "end_register": 85,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_END_HOUR",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_END_HOUR": "00",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 85,
+        "original_size": 1,
+        "actual_start": 85,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 86,
+      "block_size": 1,
+      "end_register": 86,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_START_HOUR_1",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_START_HOUR_1": "00",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 86,
+        "original_size": 1,
+        "actual_start": 86,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 87,
+      "block_size": 1,
+      "end_register": 87,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_END_HOUR_1",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_END_HOUR_1": "00",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 87,
+        "original_size": 1,
+        "actual_start": 87,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 88,
+      "block_size": 1,
+      "end_register": 88,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_START_HOUR_2",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_START_HOUR_2": "00",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 88,
+        "original_size": 1,
+        "actual_start": 88,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 89,
+      "block_size": 1,
+      "end_register": 89,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_END_HOUR_2",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_END_HOUR_2": "00",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 89,
+        "original_size": 1,
+        "actual_start": 89,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 90,
+      "block_size": 1,
+      "end_register": 90,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_EPS_VOLT_SET"
+      ],
+      "sample_values": {
+        "HOLD_EPS_VOLT_SET": "240"
+      },
+      "boundary_validation": {
+        "original_start": 90,
+        "original_size": 1,
+        "actual_start": 90,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 91,
+      "block_size": 1,
+      "end_register": 91,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_EPS_FREQ_SET"
+      ],
+      "sample_values": {
+        "HOLD_EPS_FREQ_SET": "60"
+      },
+      "boundary_validation": {
+        "original_start": 91,
+        "original_size": 1,
+        "actual_start": 91,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 92,
+      "block_size": 5,
+      "end_register": 96,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_DELAY_TIME_FOR_QV_CURVE"
+      ],
+      "sample_values": {
+        "HOLD_DELAY_TIME_FOR_QV_CURVE": "5"
+      },
+      "boundary_validation": {
+        "original_start": 92,
+        "original_size": 5,
+        "actual_start": 96,
+        "actual_size": 1,
+        "leading_empty_registers": 4
+      }
+    },
+    {
+      "start_register": 97,
+      "block_size": 1,
+      "end_register": 97,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_DELAY_TIME_FOR_OVER_F_DERATE"
+      ],
+      "sample_values": {
+        "HOLD_DELAY_TIME_FOR_OVER_F_DERATE": "0"
+      },
+      "boundary_validation": {
+        "original_start": 97,
+        "original_size": 1,
+        "actual_start": 97,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 98,
+      "block_size": 2,
+      "end_register": 99,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_CHARGE_VOLT_REF"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_CHARGE_VOLT_REF": "55"
+      },
+      "boundary_validation": {
+        "original_start": 98,
+        "original_size": 2,
+        "actual_start": 99,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 100,
+      "block_size": 1,
+      "end_register": 100,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT": "40"
+      },
+      "boundary_validation": {
+        "original_start": 100,
+        "original_size": 1,
+        "actual_start": 100,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 101,
+      "block_size": 1,
+      "end_register": 101,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_CHARGE_RATE"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_CHARGE_RATE": "250"
+      },
+      "boundary_validation": {
+        "original_start": 101,
+        "original_size": 1,
+        "actual_start": 101,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 102,
+      "block_size": 1,
+      "end_register": 102,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_DISCHARGE_RATE"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_DISCHARGE_RATE": "250"
+      },
+      "boundary_validation": {
+        "original_start": 102,
+        "original_size": 1,
+        "actual_start": 102,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 103,
+      "block_size": 1,
+      "end_register": 103,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FEED_IN_GRID_POWER_PERCENT"
+      ],
+      "sample_values": {
+        "HOLD_FEED_IN_GRID_POWER_PERCENT": "0"
+      },
+      "boundary_validation": {
+        "original_start": 103,
+        "original_size": 1,
+        "actual_start": 103,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 104,
+      "block_size": 2,
+      "end_register": 105,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_DISCHG_CUT_OFF_SOC_EOD"
+      ],
+      "sample_values": {
+        "HOLD_DISCHG_CUT_OFF_SOC_EOD": "1"
+      },
+      "boundary_validation": {
+        "original_start": 104,
+        "original_size": 2,
+        "actual_start": 105,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 106,
+      "block_size": 1,
+      "end_register": 106,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_DISCHG"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_DISCHG": "-20"
+      },
+      "boundary_validation": {
+        "original_start": 106,
+        "original_size": 1,
+        "actual_start": 106,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 107,
+      "block_size": 1,
+      "end_register": 107,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_DISCHG"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_DISCHG": "55"
+      },
+      "boundary_validation": {
+        "original_start": 107,
+        "original_size": 1,
+        "actual_start": 107,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 108,
+      "block_size": 1,
+      "end_register": 108,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_CHG"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_CHG": "0"
+      },
+      "boundary_validation": {
+        "original_start": 108,
+        "original_size": 1,
+        "actual_start": 108,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 109,
+      "block_size": 1,
+      "end_register": 109,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_CHG"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_CHG": "40"
+      },
+      "boundary_validation": {
+        "original_start": 109,
+        "original_size": 1,
+        "actual_start": 109,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 110,
+      "block_size": 1,
+      "end_register": 110,
+      "parameter_count": 14,
+      "parameter_keys": [
+        "BIT_CT_SAMPLE_RATIO",
+        "BIT_PVCT_SAMPLE_RATIO",
+        "BIT_PVCT_SAMPLE_TYPE",
+        "BIT_WORKING_MODE",
+        "FUNC_BATTERY_ECO_EN",
+        "FUNC_BAT_SHARED",
+        "FUNC_BUZZER_EN",
+        "FUNC_CHARGE_LAST",
+        "FUNC_GO_TO_OFFGRID",
+        "FUNC_GREEN_EN",
+        "FUNC_MICRO_GRID_EN",
+        "FUNC_PV_GRID_OFF_EN",
+        "FUNC_RUN_WITHOUT_GRID",
+        "FUNC_TAKE_LOAD_TOGETHER"
+      ],
+      "sample_values": {
+        "FUNC_PV_GRID_OFF_EN": false,
+        "FUNC_RUN_WITHOUT_GRID": true,
+        "FUNC_MICRO_GRID_EN": false,
+        "FUNC_BAT_SHARED": true,
+        "FUNC_CHARGE_LAST": false,
+        "FUNC_BUZZER_EN": false,
+        "FUNC_TAKE_LOAD_TOGETHER": true,
+        "FUNC_GO_TO_OFFGRID": false,
+        "FUNC_GREEN_EN": true,
+        "FUNC_BATTERY_ECO_EN": false,
+        "BIT_WORKING_MODE": 0,
+        "BIT_PVCT_SAMPLE_TYPE": 0,
+        "BIT_PVCT_SAMPLE_RATIO": 0,
+        "BIT_CT_SAMPLE_RATIO": 1
+      },
+      "boundary_validation": {
+        "original_start": 110,
+        "original_size": 1,
+        "actual_start": 110,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 111,
+      "block_size": 2,
+      "end_register": 112,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_SET_MASTER_OR_SLAVE"
+      ],
+      "sample_values": {
+        "HOLD_SET_MASTER_OR_SLAVE": "1"
+      },
+      "boundary_validation": {
+        "original_start": 111,
+        "original_size": 2,
+        "actual_start": 112,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 113,
+      "block_size": 1,
+      "end_register": 113,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_SET_COMPOSED_PHASE"
+      ],
+      "sample_values": {
+        "HOLD_SET_COMPOSED_PHASE": "257"
+      },
+      "boundary_validation": {
+        "original_start": 113,
+        "original_size": 1,
+        "actual_start": 113,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 114,
+      "block_size": 2,
+      "end_register": 115,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "_12K_HOLD_OVF_DERATE_START_POINT"
+      ],
+      "sample_values": {
+        "_12K_HOLD_OVF_DERATE_START_POINT": "60.04"
+      },
+      "boundary_validation": {
+        "original_start": 114,
+        "original_size": 2,
+        "actual_start": 115,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 116,
+      "block_size": 1,
+      "end_register": 116,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_P_TO_USER_START_DISCHG"
+      ],
+      "sample_values": {
+        "HOLD_P_TO_USER_START_DISCHG": "100"
+      },
+      "boundary_validation": {
+        "original_start": 116,
+        "original_size": 1,
+        "actual_start": 116,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 117,
+      "block_size": 2,
+      "end_register": 118,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_VBAT_START_DERATING"
+      ],
+      "sample_values": {
+        "HOLD_VBAT_START_DERATING": "40"
+      },
+      "boundary_validation": {
+        "original_start": 117,
+        "original_size": 2,
+        "actual_start": 118,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 119,
+      "block_size": 1,
+      "end_register": 119,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_CT_POWER_OFFSET"
+      ],
+      "sample_values": {
+        "HOLD_CT_POWER_OFFSET": "0"
+      },
+      "boundary_validation": {
+        "original_start": 119,
+        "original_size": 1,
+        "actual_start": 119,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 120,
+      "block_size": 1,
+      "end_register": 120,
+      "parameter_count": 7,
+      "parameter_keys": [
+        "BIT_AC_CHARGE_TYPE",
+        "BIT_DISCHG_CONTROL_TYPE",
+        "BIT_GENERATOR_CHARGE_TYPE",
+        "BIT_ON_GRID_EOD_TYPE",
+        "FUNC_HALF_HOUR_AC_CHG_START_EN",
+        "FUNC_PHASE_INDEPEND_COMPENSATE_EN",
+        "FUNC_SNA_BAT_DISCHARGE_CONTROL"
+      ],
+      "sample_values": {
+        "FUNC_HALF_HOUR_AC_CHG_START_EN": false,
+        "FUNC_SNA_BAT_DISCHARGE_CONTROL": false,
+        "FUNC_PHASE_INDEPEND_COMPENSATE_EN": false,
+        "BIT_AC_CHARGE_TYPE": 0,
+        "BIT_DISCHG_CONTROL_TYPE": 0,
+        "BIT_ON_GRID_EOD_TYPE": 0,
+        "BIT_GENERATOR_CHARGE_TYPE": 0
+      },
+      "boundary_validation": {
+        "original_start": 120,
+        "original_size": 1,
+        "actual_start": 120,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 121,
+      "block_size": 1,
+      "end_register": 121,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_MIN_Q_PERCENT_FOR_QV"
+      ],
+      "sample_values": {
+        "HOLD_MIN_Q_PERCENT_FOR_QV": "0"
+      },
+      "boundary_validation": {
+        "original_start": 121,
+        "original_size": 1,
+        "actual_start": 121,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 122,
+      "block_size": 1,
+      "end_register": 122,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_MAINTENANCE_COUNT"
+      ],
+      "sample_values": {
+        "HOLD_MAINTENANCE_COUNT": "0"
+      },
+      "boundary_validation": {
+        "original_start": 122,
+        "original_size": 1,
+        "actual_start": 122,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 123,
+      "block_size": 3,
+      "end_register": 125,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_SOC_LOW_LIMIT_EPS_DISCHG"
+      ],
+      "sample_values": {
+        "HOLD_SOC_LOW_LIMIT_EPS_DISCHG": "1"
+      },
+      "boundary_validation": {
+        "original_start": 123,
+        "original_size": 3,
+        "actual_start": 125,
+        "actual_size": 1,
+        "leading_empty_registers": 2
+      }
+    }
+  ],
+  "all_parameter_names": [
+    "BIT_AC_CHARGE_TYPE",
+    "BIT_CT_SAMPLE_RATIO",
+    "BIT_DEVICE_TYPE_ODM",
+    "BIT_DISCHG_CONTROL_TYPE",
+    "BIT_GENERATOR_CHARGE_TYPE",
+    "BIT_MACHINE_TYPE",
+    "BIT_ON_GRID_EOD_TYPE",
+    "BIT_PVCT_SAMPLE_RATIO",
+    "BIT_PVCT_SAMPLE_TYPE",
+    "BIT_WORKING_MODE",
+    "FUNC_AC_CHARGE",
+    "FUNC_ANTI_ISLAND_EN",
+    "FUNC_BATTERY_ECO_EN",
+    "FUNC_BAT_SHARED",
+    "FUNC_BUZZER_EN",
+    "FUNC_CHARGE_LAST",
+    "FUNC_DCI_EN",
+    "FUNC_DRMS_EN",
+    "FUNC_EPS_EN",
+    "FUNC_FEED_IN_GRID_EN",
+    "FUNC_FORCED_CHG_EN",
+    "FUNC_FORCED_DISCHG_EN",
+    "FUNC_GFCI_EN",
+    "FUNC_GO_TO_OFFGRID",
+    "FUNC_GREEN_EN",
+    "FUNC_GRID_ON_POWER_SS_EN",
+    "FUNC_HALF_HOUR_AC_CHG_START_EN",
+    "FUNC_ISO_EN",
+    "FUNC_LSP_AC_CHARGE",
+    "FUNC_LSP_BATT_VOLT_OR_SOC",
+    "FUNC_LSP_BAT_ACTIVATION_EN",
+    "FUNC_LSP_BYPASS_EN",
+    "FUNC_LSP_BYPASS_MODE_EN",
+    "FUNC_LSP_CHARGE_PRIORITY_EN",
+    "FUNC_LSP_FAN_CHECK_EN",
+    "FUNC_LSP_ISO_EN",
+    "FUNC_LSP_LCD_REMOTE_DIS_CHG_EN",
+    "FUNC_LSP_SELF_CONSUMPTION_EN",
+    "FUNC_LSP_SET_TO_STANDBY",
+    "FUNC_LSP_WHOLE_BAT_FIRST_1_EN",
+    "FUNC_LSP_WHOLE_BAT_FIRST_2_EN",
+    "FUNC_LSP_WHOLE_BAT_FIRST_3_EN",
+    "FUNC_LSP_WHOLE_BYPASS_1_EN",
+    "FUNC_LSP_WHOLE_BYPASS_2_EN",
+    "FUNC_LSP_WHOLE_BYPASS_3_EN",
+    "FUNC_LSP_WHOLE_DAY_SCHEDULE_EN",
+    "FUNC_LSP_WHOLE_SELF_CONSUMPTION_1_EN",
+    "FUNC_LSP_WHOLE_SELF_CONSUMPTION_2_EN",
+    "FUNC_LSP_WHOLE_SELF_CONSUMPTION_3_EN",
+    "FUNC_LVRT_EN",
+    "FUNC_MICRO_GRID_EN",
+    "FUNC_NEUTRAL_DETECT_EN",
+    "FUNC_OVF_LOAD_DERATE_EN",
+    "FUNC_PHASE_INDEPEND_COMPENSATE_EN",
+    "FUNC_PV_GRID_OFF_EN",
+    "FUNC_RUN_WITHOUT_GRID",
+    "FUNC_SET_TO_STANDBY",
+    "FUNC_SNA_BAT_DISCHARGE_CONTROL",
+    "FUNC_SW_SEAMLESSLY_EN",
+    "FUNC_TAKE_LOAD_TOGETHER",
+    "HOLD_ACTIVE_POWER_PERCENT_CMD",
+    "HOLD_AC_CHARGE_END_HOUR",
+    "HOLD_AC_CHARGE_END_HOUR_1",
+    "HOLD_AC_CHARGE_END_HOUR_2",
+    "HOLD_AC_CHARGE_END_MINUTE",
+    "HOLD_AC_CHARGE_END_MINUTE_1",
+    "HOLD_AC_CHARGE_END_MINUTE_2",
+    "HOLD_AC_CHARGE_POWER_CMD",
+    "HOLD_AC_CHARGE_SOC_LIMIT",
+    "HOLD_AC_CHARGE_START_HOUR",
+    "HOLD_AC_CHARGE_START_HOUR_1",
+    "HOLD_AC_CHARGE_START_HOUR_2",
+    "HOLD_AC_CHARGE_START_MINUTE",
+    "HOLD_AC_CHARGE_START_MINUTE_1",
+    "HOLD_AC_CHARGE_START_MINUTE_2",
+    "HOLD_CHARGE_POWER_PERCENT_CMD",
+    "HOLD_COM_ADDR",
+    "HOLD_CONNECT_TIME",
+    "HOLD_CT_POWER_OFFSET",
+    "HOLD_DELAY_TIME_FOR_OVER_F_DERATE",
+    "HOLD_DELAY_TIME_FOR_QV_CURVE",
+    "HOLD_DEVICE_TYPE_CODE",
+    "HOLD_DISCHG_CUT_OFF_SOC_EOD",
+    "HOLD_DISCHG_POWER_PERCENT_CMD",
+    "HOLD_EPS_FREQ_SET",
+    "HOLD_EPS_VOLT_SET",
+    "HOLD_FEED_IN_GRID_POWER_PERCENT",
+    "HOLD_FORCED_CHARGE_END_HOUR",
+    "HOLD_FORCED_CHARGE_END_HOUR_1",
+    "HOLD_FORCED_CHARGE_END_HOUR_2",
+    "HOLD_FORCED_CHARGE_END_MINUTE",
+    "HOLD_FORCED_CHARGE_END_MINUTE_1",
+    "HOLD_FORCED_CHARGE_END_MINUTE_2",
+    "HOLD_FORCED_CHARGE_START_HOUR",
+    "HOLD_FORCED_CHARGE_START_HOUR_1",
+    "HOLD_FORCED_CHARGE_START_HOUR_2",
+    "HOLD_FORCED_CHARGE_START_MINUTE",
+    "HOLD_FORCED_CHARGE_START_MINUTE_1",
+    "HOLD_FORCED_CHARGE_START_MINUTE_2",
+    "HOLD_FORCED_CHG_POWER_CMD",
+    "HOLD_FORCED_CHG_SOC_LIMIT",
+    "HOLD_FORCED_DISCHARGE_END_HOUR",
+    "HOLD_FORCED_DISCHARGE_END_HOUR_1",
+    "HOLD_FORCED_DISCHARGE_END_HOUR_2",
+    "HOLD_FORCED_DISCHARGE_END_MINUTE",
+    "HOLD_FORCED_DISCHARGE_END_MINUTE_1",
+    "HOLD_FORCED_DISCHARGE_END_MINUTE_2",
+    "HOLD_FORCED_DISCHARGE_START_HOUR",
+    "HOLD_FORCED_DISCHARGE_START_HOUR_1",
+    "HOLD_FORCED_DISCHARGE_START_HOUR_2",
+    "HOLD_FORCED_DISCHARGE_START_MINUTE",
+    "HOLD_FORCED_DISCHARGE_START_MINUTE_1",
+    "HOLD_FORCED_DISCHARGE_START_MINUTE_2",
+    "HOLD_FORCED_DISCHG_POWER_CMD",
+    "HOLD_FORCED_DISCHG_SOC_LIMIT",
+    "HOLD_FW_CODE",
+    "HOLD_GRID_FREQ_CONN_HIGH",
+    "HOLD_GRID_FREQ_CONN_LOW",
+    "HOLD_GRID_FREQ_LIMIT1_HIGH",
+    "HOLD_GRID_FREQ_LIMIT1_HIGH_TIME",
+    "HOLD_GRID_FREQ_LIMIT1_LOW",
+    "HOLD_GRID_FREQ_LIMIT1_LOW_TIME",
+    "HOLD_GRID_FREQ_LIMIT2_HIGH",
+    "HOLD_GRID_FREQ_LIMIT2_HIGH_TIME",
+    "HOLD_GRID_FREQ_LIMIT2_LOW",
+    "HOLD_GRID_FREQ_LIMIT2_LOW_TIME",
+    "HOLD_GRID_FREQ_LIMIT3_HIGH",
+    "HOLD_GRID_FREQ_LIMIT3_HIGH_TIME",
+    "HOLD_GRID_FREQ_LIMIT3_LOW",
+    "HOLD_GRID_FREQ_LIMIT3_LOW_TIME",
+    "HOLD_GRID_VOLT_CONN_HIGH",
+    "HOLD_GRID_VOLT_CONN_LOW",
+    "HOLD_GRID_VOLT_LIMIT1_HIGH",
+    "HOLD_GRID_VOLT_LIMIT1_HIGH_TIME",
+    "HOLD_GRID_VOLT_LIMIT1_LOW",
+    "HOLD_GRID_VOLT_LIMIT1_LOW_TIME",
+    "HOLD_GRID_VOLT_LIMIT2_HIGH",
+    "HOLD_GRID_VOLT_LIMIT2_HIGH_TIME",
+    "HOLD_GRID_VOLT_LIMIT2_LOW",
+    "HOLD_GRID_VOLT_LIMIT2_LOW_TIME",
+    "HOLD_GRID_VOLT_LIMIT3_HIGH",
+    "HOLD_GRID_VOLT_LIMIT3_HIGH_TIME",
+    "HOLD_GRID_VOLT_LIMIT3_LOW",
+    "HOLD_GRID_VOLT_LIMIT3_LOW_TIME",
+    "HOLD_GRID_VOLT_MOV_AVG_HIGH",
+    "HOLD_LANGUAGE",
+    "HOLD_LEAD_ACID_CHARGE_RATE",
+    "HOLD_LEAD_ACID_CHARGE_VOLT_REF",
+    "HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT",
+    "HOLD_LEAD_ACID_DISCHARGE_RATE",
+    "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_CHG",
+    "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_DISCHG",
+    "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_CHG",
+    "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_DISCHG",
+    "HOLD_MAINTENANCE_COUNT",
+    "HOLD_MAX_Q_PERCENT_FOR_QV",
+    "HOLD_MIN_Q_PERCENT_FOR_QV",
+    "HOLD_MODEL",
+    "HOLD_MODEL_batteryType",
+    "HOLD_MODEL_leadAcidType",
+    "HOLD_MODEL_lithiumType",
+    "HOLD_MODEL_measurement",
+    "HOLD_MODEL_meterBrand",
+    "HOLD_MODEL_meterType",
+    "HOLD_MODEL_powerRating",
+    "HOLD_MODEL_rule",
+    "HOLD_MODEL_ruleMask",
+    "HOLD_MODEL_usVersion",
+    "HOLD_MODEL_wirelessMeter",
+    "HOLD_PF_CMD",
+    "HOLD_PF_CMD_TEXT",
+    "HOLD_POWER_SOFT_START_SLOPE",
+    "HOLD_PV_INPUT_MODE",
+    "HOLD_P_TO_USER_START_DISCHG",
+    "HOLD_REACTIVE_POWER_CMD_TYPE",
+    "HOLD_REACTIVE_POWER_PERCENT_CMD",
+    "HOLD_RECONNECT_TIME",
+    "HOLD_SERIAL_NUM",
+    "HOLD_SET_COMPOSED_PHASE",
+    "HOLD_SET_MASTER_OR_SLAVE",
+    "HOLD_SOC_LOW_LIMIT_EPS_DISCHG",
+    "HOLD_START_PV_VOLT",
+    "HOLD_TIME",
+    "HOLD_V1H",
+    "HOLD_V1L",
+    "HOLD_V2H",
+    "HOLD_V2L",
+    "HOLD_VBAT_START_DERATING",
+    "INPUT_BATTERY_VOLTAGE",
+    "_12K_HOLD_OVF_DERATE_START_POINT"
+  ]
+}
