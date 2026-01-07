@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-01-06
+
+### Added
+
+- **Transport Abstraction Layer** - New pluggable transport system for local and cloud communication:
+  - `BaseTransport` - Abstract base class defining the transport protocol interface
+  - `HTTPTransport` - Cloud API transport wrapping `LuxpowerClient`
+  - `ModbusTransport` - Local Modbus TCP transport for direct inverter communication
+  - `TransportCapabilities` - Dataclass describing transport features (read/write, local/cloud, auth)
+  - Factory functions: `create_http_transport()`, `create_modbus_transport()`
+
+- **Unified Data Models** - Transport-agnostic data structures:
+  - `InverterRuntimeData` - Real-time inverter metrics (PV, battery, grid, temperatures)
+  - `InverterEnergyData` - Energy statistics (today/total for PV, charge, discharge, import, export)
+  - `BatteryBankData` - Aggregate battery bank information
+  - `BatteryData` - Individual battery module data
+  - All dataclasses are frozen (immutable) with validation
+
+- **Modbus TCP Support** - Direct local communication via RS485-to-Ethernet adapters:
+  - Efficient register grouping (respects 40-register Modbus limit)
+  - Concurrent register group reads for faster data acquisition
+  - Consecutive parameter batching for optimized writes
+  - Automatic chunking for large parameter reads (>40 registers)
+  - Optional dependency: `uv add pylxpweb[modbus]` or `uv add pymodbus`
+
+- **Async Context Manager** - Both transports support `async with` for automatic cleanup:
+  ```python
+  async with ModbusTransport(host="192.168.1.100", serial="CE12345678") as transport:
+      runtime = await transport.read_runtime()
+  ```
+
+### Changed
+
+- **pymodbus dependency** - Updated to `>=3.11.4` (latest stable)
+
+### Testing
+
+- **756 unit tests** (all passing)
+- **83.46% coverage** (above 80% threshold)
+- **Code style**: 100% (ruff: 0 errors)
+- **Type safety**: 100% (mypy strict: 0 errors)
+
 ## [0.4.4] - 2025-12-31
 
 ### Added

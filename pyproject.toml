@@ -1,6 +1,6 @@
 [project]
 name = "pylxpweb"
-version = "0.4.4"
+version = "0.5.0"
 description = "Python client library for Luxpower/EG4 inverter web monitoring API"
 readme = "README.md"
 authors = [
@@ -26,7 +26,7 @@ classifiers = [
 
 [project.optional-dependencies]
 modbus = [
-    "pymodbus>=3.7.0",
+    "pymodbus>=3.11.4",
 ]
 dev = [
     "pytest>=9.0.1",
@@ -37,7 +37,7 @@ dev = [
     "ruff>=0.14.5",
 ]
 all = [
-    "pymodbus>=3.7.0",
+    "pymodbus>=3.11.4",
 ]
 
 [project.scripts]

@@ -9,6 +9,7 @@ import pytest
 from pylxpweb.transports.exceptions import (
     TransportConnectionError,
     TransportReadError,
+    TransportWriteError,
 )
 from pylxpweb.transports.modbus import ModbusTransport
 
@@ -293,3 +294,176 @@ class TestModbusRegisterReading:
 
             # Verify call_count tracks the 2 calls
             assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_read_parameters_not_connected(self) -> None:
+        """Test parameter read when not connected."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with pytest.raises(TransportConnectionError, match="Transport not connected"):
+            await transport.read_parameters(0, 10)
+
+    @pytest.mark.asyncio
+    async def test_read_parameters_modbus_error(self) -> None:
+        """Test parameter read with Modbus error."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+
+            # Mock error response
+            mock_response = MagicMock()
+            mock_response.isError.return_value = True
+
+            mock_client.read_holding_registers = AsyncMock(return_value=mock_response)
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+
+            with pytest.raises(TransportReadError, match="Modbus read error"):
+                await transport.read_parameters(0, 10)
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_success(self) -> None:
+        """Test successful parameter write."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+
+            # Mock successful write response
+            mock_response = MagicMock()
+            mock_response.isError.return_value = False
+
+            mock_client.write_registers = AsyncMock(return_value=mock_response)
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+            result = await transport.write_parameters({0: 100, 1: 200})
+
+            assert result is True
+            mock_client.write_registers.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_not_connected(self) -> None:
+        """Test parameter write when not connected."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with pytest.raises(TransportConnectionError, match="Transport not connected"):
+            await transport.write_parameters({0: 100})
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_modbus_error(self) -> None:
+        """Test parameter write with Modbus error."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+
+            # Mock error response
+            mock_response = MagicMock()
+            mock_response.isError.return_value = True
+
+            mock_client.write_registers = AsyncMock(return_value=mock_response)
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+
+            with pytest.raises(TransportWriteError, match="Modbus write error"):
+                await transport.write_parameters({0: 100})
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_consecutive_batching(self) -> None:
+        """Test that consecutive parameters are batched into single writes."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+
+            mock_response = MagicMock()
+            mock_response.isError.return_value = False
+
+            mock_client.write_registers = AsyncMock(return_value=mock_response)
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+
+            # Write consecutive addresses - should be batched
+            result = await transport.write_parameters({0: 100, 1: 200, 2: 300})
+            assert result is True
+
+            # Should be called once with all 3 values
+            mock_client.write_registers.assert_awaited_once()
+            call_args = mock_client.write_registers.call_args
+            assert call_args.kwargs["address"] == 0
+            assert call_args.kwargs["values"] == [100, 200, 300]
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_non_consecutive_multiple_calls(self) -> None:
+        """Test that non-consecutive parameters result in multiple writes."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+
+            mock_response = MagicMock()
+            mock_response.isError.return_value = False
+
+            mock_client.write_registers = AsyncMock(return_value=mock_response)
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+
+            # Write non-consecutive addresses - should result in multiple calls
+            result = await transport.write_parameters({0: 100, 5: 500, 10: 1000})
+            assert result is True
+
+            # Should be called 3 times (one for each non-consecutive address)
+            assert mock_client.write_registers.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_async_context_manager(self) -> None:
+        """Test async context manager (async with)."""
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+            mock_client.close = MagicMock()
+            mock_client_class.return_value = mock_client
+
+            transport = ModbusTransport(
+                host="192.168.1.100",
+                serial="CE12345678",
+            )
+
+            async with transport as t:
+                assert t is transport
+                assert transport.is_connected is True
+
+            assert transport.is_connected is False
+            mock_client.close.assert_called_once()

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerAuthError
 from pylxpweb.transports.exceptions import (
     TransportConnectionError,
     TransportReadError,
@@ -53,11 +54,11 @@ class TestHTTPTransport:
     async def test_connect_failure(self) -> None:
         """Test connection failure."""
         client = MagicMock()
-        client.login = AsyncMock(side_effect=Exception("Auth failed"))
+        client.login = AsyncMock(side_effect=LuxpowerAuthError("Auth failed"))
 
         transport = HTTPTransport(client, serial="CE12345678")
 
-        with pytest.raises(TransportConnectionError, match="Failed to authenticate"):
+        with pytest.raises(TransportConnectionError, match="Authentication failed"):
             await transport.connect()
 
     @pytest.mark.asyncio
@@ -139,7 +140,9 @@ class TestHTTPTransport:
         """Test runtime read with API error."""
         client = MagicMock()
         client.login = AsyncMock()
-        client.api.devices.get_inverter_runtime = AsyncMock(side_effect=Exception("API error"))
+        client.api.devices.get_inverter_runtime = AsyncMock(
+            side_effect=LuxpowerAPIError("API error")
+        )
 
         transport = HTTPTransport(client, serial="CE12345678")
         await transport.connect()
@@ -233,3 +236,100 @@ class TestHTTPTransport:
 
         await transport.disconnect()
         assert transport.is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_async_context_manager(self) -> None:
+        """Test async context manager (async with)."""
+        client = MagicMock()
+        client.login = AsyncMock()
+
+        transport = HTTPTransport(client, serial="CE12345678")
+
+        async with transport as t:
+            assert t is transport
+            assert transport.is_connected is True
+
+        assert transport.is_connected is False
+        client.login.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_read_parameters_success(self) -> None:
+        """Test successful parameter read."""
+        client = MagicMock()
+        client.login = AsyncMock()
+
+        # Create mock parameter response
+        mock_response = MagicMock()
+        mock_response.parameters = {"0": 100, "1": 200, "2": 300}
+
+        client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        params = await transport.read_parameters(0, 3)
+
+        assert params == {0: 100, 1: 200, 2: 300}
+        client.api.control.read_parameters.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_read_parameters_not_connected(self) -> None:
+        """Test parameter read when not connected."""
+        client = MagicMock()
+        transport = HTTPTransport(client, serial="CE12345678")
+
+        with pytest.raises(TransportConnectionError, match="Transport not connected"):
+            await transport.read_parameters(0, 10)
+
+    @pytest.mark.asyncio
+    async def test_read_parameters_api_error(self) -> None:
+        """Test parameter read with API error."""
+        client = MagicMock()
+        client.login = AsyncMock()
+        client.api.control.read_parameters = AsyncMock(side_effect=LuxpowerAPIError("API error"))
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        with pytest.raises(TransportReadError, match="Failed to read parameters"):
+            await transport.read_parameters(0, 10)
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_success(self) -> None:
+        """Test successful parameter write."""
+        client = MagicMock()
+        client.login = AsyncMock()
+        client.api.control.write_parameters = AsyncMock()
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        result = await transport.write_parameters({0: 100, 1: 200})
+
+        assert result is True
+        client.api.control.write_parameters.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_not_connected(self) -> None:
+        """Test parameter write when not connected."""
+
+        client = MagicMock()
+        transport = HTTPTransport(client, serial="CE12345678")
+
+        with pytest.raises(TransportConnectionError, match="Transport not connected"):
+            await transport.write_parameters({0: 100})
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_api_error(self) -> None:
+        """Test parameter write with API error."""
+        from pylxpweb.transports.exceptions import TransportWriteError
+
+        client = MagicMock()
+        client.login = AsyncMock()
+        client.api.control.write_parameters = AsyncMock(side_effect=LuxpowerAPIError("API error"))
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        with pytest.raises(TransportWriteError, match="Failed to write parameters"):
+            await transport.write_parameters({0: 100})

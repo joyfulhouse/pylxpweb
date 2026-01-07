@@ -7,7 +7,7 @@ implementations must follow. Using Protocol allows for structural subtyping
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, Self, runtime_checkable
 
 if TYPE_CHECKING:
     from .capabilities import TransportCapabilities
@@ -152,6 +152,10 @@ class BaseTransport:
 
     Transport implementations can inherit from this class to get
     common utilities while implementing the InverterTransport protocol.
+
+    Supports async context manager for automatic connection management:
+        async with transport:
+            data = await transport.read_runtime()
     """
 
     def __init__(self, serial: str) -> None:
@@ -172,6 +176,32 @@ class BaseTransport:
     def is_connected(self) -> bool:
         """Check if transport is connected."""
         return self._connected
+
+    async def __aenter__(self) -> Self:
+        """Enter async context manager, connecting the transport.
+
+        Returns:
+            Self after connecting
+        """
+        await self.connect()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        """Exit async context manager, disconnecting the transport."""
+        await self.disconnect()
+
+    async def connect(self) -> None:
+        """Establish connection. Must be implemented by subclasses."""
+        raise NotImplementedError
+
+    async def disconnect(self) -> None:
+        """Close connection. Must be implemented by subclasses."""
+        raise NotImplementedError
 
     def _ensure_connected(self) -> None:
         """Ensure transport is connected.

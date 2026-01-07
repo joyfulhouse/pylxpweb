@@ -63,7 +63,7 @@ class ModbusTransport(BaseTransport):
 
     Note:
         Requires the `pymodbus` package to be installed:
-        pip install pymodbus>=3.0
+        uv add pymodbus
     """
 
     def __init__(
@@ -144,11 +144,19 @@ class ModbusTransport(BaseTransport):
 
         except ImportError as err:
             raise TransportConnectionError(
-                "pymodbus package not installed. Install with: pip install pymodbus>=3.0"
+                "pymodbus package not installed. Install with: uv add pymodbus"
             ) from err
-        except Exception as err:
+        except (TimeoutError, OSError) as err:
+            _LOGGER.error(
+                "Failed to connect to Modbus gateway at %s:%s: %s",
+                self._host,
+                self._port,
+                err,
+            )
             raise TransportConnectionError(
-                f"Failed to connect to {self._host}:{self._port}: {err}"
+                f"Failed to connect to {self._host}:{self._port}: {err}. "
+                "Verify: (1) IP address is correct, (2) port 502 is not blocked, "
+                "(3) Modbus TCP is enabled on the inverter/datalogger."
             ) from err
 
     async def disconnect(self) -> None:
@@ -194,15 +202,31 @@ class ModbusTransport(BaseTransport):
                 )
 
                 if result.isError():
+                    _LOGGER.error(
+                        "Modbus error reading input registers at %d: %s",
+                        address,
+                        result,
+                    )
                     raise TransportReadError(f"Modbus read error at address {address}: {result}")
+
+                if not hasattr(result, "registers") or result.registers is None:
+                    _LOGGER.error(
+                        "Invalid Modbus response at address %d: no registers",
+                        address,
+                    )
+                    raise TransportReadError(
+                        f"Invalid Modbus response at address {address}: no registers in response"
+                    )
 
                 return list(result.registers)
 
             except TimeoutError as err:
+                _LOGGER.error("Timeout reading input registers at %d", address)
                 raise TransportTimeoutError(
                     f"Timeout reading input registers at {address}"
                 ) from err
-            except Exception as err:
+            except OSError as err:
+                _LOGGER.error("Failed to read input registers at %d: %s", address, err)
                 raise TransportReadError(
                     f"Failed to read input registers at {address}: {err}"
                 ) from err
@@ -241,15 +265,31 @@ class ModbusTransport(BaseTransport):
                 )
 
                 if result.isError():
+                    _LOGGER.error(
+                        "Modbus error reading holding registers at %d: %s",
+                        address,
+                        result,
+                    )
                     raise TransportReadError(f"Modbus read error at address {address}: {result}")
+
+                if not hasattr(result, "registers") or result.registers is None:
+                    _LOGGER.error(
+                        "Invalid Modbus response at address %d: no registers",
+                        address,
+                    )
+                    raise TransportReadError(
+                        f"Invalid Modbus response at address {address}: no registers in response"
+                    )
 
                 return list(result.registers)
 
             except TimeoutError as err:
+                _LOGGER.error("Timeout reading holding registers at %d", address)
                 raise TransportTimeoutError(
                     f"Timeout reading holding registers at {address}"
                 ) from err
-            except Exception as err:
+            except OSError as err:
+                _LOGGER.error("Failed to read holding registers at %d: %s", address, err)
                 raise TransportReadError(
                     f"Failed to read holding registers at {address}: {err}"
                 ) from err
@@ -288,13 +328,20 @@ class ModbusTransport(BaseTransport):
                 )
 
                 if result.isError():
+                    _LOGGER.error(
+                        "Modbus error writing registers at %d: %s",
+                        address,
+                        result,
+                    )
                     raise TransportWriteError(f"Modbus write error at address {address}: {result}")
 
                 return True
 
             except TimeoutError as err:
+                _LOGGER.error("Timeout writing registers at %d", address)
                 raise TransportTimeoutError(f"Timeout writing registers at {address}") from err
-            except Exception as err:
+            except OSError as err:
+                _LOGGER.error("Failed to write registers at %d: %s", address, err)
                 raise TransportWriteError(f"Failed to write registers at {address}: {err}") from err
 
     async def read_runtime(self) -> InverterRuntimeData:
@@ -307,21 +354,33 @@ class ModbusTransport(BaseTransport):
             TransportReadError: If read operation fails
         """
         # Read all input register groups concurrently
+        group_names = list(INPUT_REGISTER_GROUPS.keys())
         tasks = [
             self._read_input_registers(start, count)
             for start, count in INPUT_REGISTER_GROUPS.values()
         ]
 
-        try:
-            results = await asyncio.gather(*tasks)
-        except Exception as err:
-            raise TransportReadError(f"Failed to read runtime registers: {err}") from err
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Check for errors in results
+        for group_name, result in zip(group_names, results, strict=True):
+            if isinstance(result, Exception):
+                _LOGGER.error(
+                    "Failed to read register group '%s': %s",
+                    group_name,
+                    result,
+                )
+                raise TransportReadError(
+                    f"Failed to read register group '{group_name}': {result}"
+                ) from result
 
         # Combine results into single register dict
         input_registers: dict[int, int] = {}
         for (_group_name, (start, _count)), values in zip(
             INPUT_REGISTER_GROUPS.items(), results, strict=True
         ):
+            # Type narrowing: we've verified no exceptions above
+            assert isinstance(values, list)
             for offset, value in enumerate(values):
                 input_registers[start + offset] = value
 
@@ -341,21 +400,28 @@ class ModbusTransport(BaseTransport):
         """
         # Read energy-related register groups
         groups_needed = ["status_energy", "advanced"]
-        tasks = [
-            self._read_input_registers(start, count)
-            for name, (start, count) in INPUT_REGISTER_GROUPS.items()
-            if name in groups_needed
-        ]
+        group_list = [(n, s) for n, s in INPUT_REGISTER_GROUPS.items() if n in groups_needed]
+        tasks = [self._read_input_registers(start, count) for _name, (start, count) in group_list]
 
-        try:
-            results = await asyncio.gather(*tasks)
-        except Exception as err:
-            raise TransportReadError(f"Failed to read energy registers: {err}") from err
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Check for errors in results
+        for (group_name, _), result in zip(group_list, results, strict=True):
+            if isinstance(result, Exception):
+                _LOGGER.error(
+                    "Failed to read energy register group '%s': %s",
+                    group_name,
+                    result,
+                )
+                raise TransportReadError(
+                    f"Failed to read energy register group '{group_name}': {result}"
+                ) from result
 
         # Combine results
         input_registers: dict[int, int] = {}
-        group_list = [(n, s) for n, s in INPUT_REGISTER_GROUPS.items() if n in groups_needed]
         for (_group_name, (start, _count)), values in zip(group_list, results, strict=True):
+            # Type narrowing: we've verified no exceptions above
+            assert isinstance(values, list)
             for offset, value in enumerate(values):
                 input_registers[start + offset] = value
 
@@ -368,17 +434,15 @@ class ModbusTransport(BaseTransport):
         Individual battery module data is not available via Modbus.
 
         Returns:
-            Battery bank data with available information
+            Battery bank data with available information, None if no battery
 
         Raises:
             TransportReadError: If read operation fails
         """
         # Battery data comes from input registers
         # We need the power_energy group for battery voltage/current/SOC
-        try:
-            power_regs = await self._read_input_registers(0, 32)
-        except Exception as err:
-            raise TransportReadError(f"Failed to read battery registers: {err}") from err
+        # Note: _read_input_registers already raises appropriate Transport exceptions
+        power_regs = await self._read_input_registers(0, 32)
 
         # Import scaling
         from pylxpweb.constants.scaling import ScaleFactor, apply_scale
@@ -393,6 +457,11 @@ class ModbusTransport(BaseTransport):
 
         # If no battery voltage, assume no battery
         if battery_voltage < 1.0:
+            _LOGGER.debug(
+                "Battery voltage %.2fV is below 1.0V threshold, assuming no battery present. "
+                "If batteries are installed, check Modbus register mapping.",
+                battery_voltage,
+            )
             return None
 
         return BatteryBankData(

@@ -9,9 +9,21 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from pylxpweb.exceptions import (
+    LuxpowerAPIError,
+    LuxpowerAuthError,
+    LuxpowerConnectionError,
+    LuxpowerDeviceError,
+)
+
 from .capabilities import HTTP_CAPABILITIES, TransportCapabilities
 from .data import BatteryBankData, BatteryData, InverterEnergyData, InverterRuntimeData
-from .exceptions import TransportConnectionError, TransportReadError, TransportWriteError
+from .exceptions import (
+    TransportConnectionError,
+    TransportReadError,
+    TransportTimeoutError,
+    TransportWriteError,
+)
 from .protocol import BaseTransport
 
 if TYPE_CHECKING:
@@ -62,8 +74,12 @@ class HTTPTransport(BaseTransport):
         try:
             # Ensure client is authenticated - login() handles session management
             await self._client.login()
-        except Exception as err:
-            raise TransportConnectionError(f"Failed to authenticate with cloud API: {err}") from err
+        except LuxpowerAuthError as err:
+            _LOGGER.error("Authentication failed for %s: %s", self._serial, err)
+            raise TransportConnectionError(f"Authentication failed for cloud API: {err}") from err
+        except (TimeoutError, LuxpowerConnectionError, OSError) as err:
+            _LOGGER.error("Connection failed for %s: %s", self._serial, err)
+            raise TransportConnectionError(f"Failed to connect to cloud API: {err}") from err
 
         self._connected = True
         _LOGGER.debug("HTTP transport connected for %s", self._serial)
@@ -85,13 +101,18 @@ class HTTPTransport(BaseTransport):
 
         Raises:
             TransportReadError: If API call fails
+            TransportTimeoutError: If request times out
         """
         self._ensure_connected()
 
         try:
             runtime = await self._client.api.devices.get_inverter_runtime(self._serial)
             return InverterRuntimeData.from_http_response(runtime)
-        except Exception as err:
+        except TimeoutError as err:
+            _LOGGER.error("Timeout reading runtime data for %s", self._serial)
+            raise TransportTimeoutError(f"Timeout reading runtime data for {self._serial}") from err
+        except (LuxpowerAPIError, LuxpowerDeviceError, LuxpowerConnectionError) as err:
+            _LOGGER.error("Failed to read runtime data for %s: %s", self._serial, err)
             raise TransportReadError(
                 f"Failed to read runtime data for {self._serial}: {err}"
             ) from err
@@ -104,13 +125,18 @@ class HTTPTransport(BaseTransport):
 
         Raises:
             TransportReadError: If API call fails
+            TransportTimeoutError: If request times out
         """
         self._ensure_connected()
 
         try:
             energy = await self._client.api.devices.get_inverter_energy(self._serial)
             return InverterEnergyData.from_http_response(energy)
-        except Exception as err:
+        except TimeoutError as err:
+            _LOGGER.error("Timeout reading energy data for %s", self._serial)
+            raise TransportTimeoutError(f"Timeout reading energy data for {self._serial}") from err
+        except (LuxpowerAPIError, LuxpowerDeviceError, LuxpowerConnectionError) as err:
+            _LOGGER.error("Failed to read energy data for %s: %s", self._serial, err)
             raise TransportReadError(
                 f"Failed to read energy data for {self._serial}: {err}"
             ) from err
@@ -180,7 +206,11 @@ class HTTPTransport(BaseTransport):
                 # Note: BatteryInfo doesn't have soh, temperature, current, status codes
             )
 
-        except Exception as err:
+        except TimeoutError as err:
+            _LOGGER.error("Timeout reading battery data for %s", self._serial)
+            raise TransportTimeoutError(f"Timeout reading battery data for {self._serial}") from err
+        except (LuxpowerAPIError, LuxpowerDeviceError, LuxpowerConnectionError) as err:
+            _LOGGER.error("Failed to read battery data for %s: %s", self._serial, err)
             raise TransportReadError(
                 f"Failed to read battery data for {self._serial}: {err}"
             ) from err
@@ -201,6 +231,7 @@ class HTTPTransport(BaseTransport):
 
         Raises:
             TransportReadError: If API call fails
+            TransportTimeoutError: If request times out
         """
         self._ensure_connected()
 
@@ -228,15 +259,36 @@ class HTTPTransport(BaseTransport):
                         else:
                             # Key is parameter name, need reverse lookup
                             # For now, skip named parameters (they need mapping)
-                            pass
+                            _LOGGER.debug(
+                                "Skipping named parameter %s=%s (address lookup not implemented)",
+                                key,
+                                value,
+                            )
                     elif isinstance(value, (str, float)) and key.isdigit():
                         result[int(key)] = int(float(value))
-                except (ValueError, TypeError):
+                    else:
+                        _LOGGER.debug(
+                            "Skipping parameter with unexpected format: key=%s, value=%s (type=%s)",
+                            key,
+                            value,
+                            type(value).__name__,
+                        )
+                except (ValueError, TypeError) as err:
+                    _LOGGER.warning(
+                        "Failed to parse parameter %s=%s: %s",
+                        key,
+                        value,
+                        err,
+                    )
                     continue
 
             return result
 
-        except Exception as err:
+        except TimeoutError as err:
+            _LOGGER.error("Timeout reading parameters for %s", self._serial)
+            raise TransportTimeoutError(f"Timeout reading parameters for {self._serial}") from err
+        except (LuxpowerAPIError, LuxpowerDeviceError, LuxpowerConnectionError) as err:
+            _LOGGER.error("Failed to read parameters for %s: %s", self._serial, err)
             raise TransportReadError(
                 f"Failed to read parameters for {self._serial}: {err}"
             ) from err
@@ -255,6 +307,7 @@ class HTTPTransport(BaseTransport):
 
         Raises:
             TransportWriteError: If API call fails
+            TransportTimeoutError: If request times out
         """
         self._ensure_connected()
 
@@ -266,7 +319,11 @@ class HTTPTransport(BaseTransport):
             )
             return True
 
-        except Exception as err:
+        except TimeoutError as err:
+            _LOGGER.error("Timeout writing parameters for %s", self._serial)
+            raise TransportTimeoutError(f"Timeout writing parameters for {self._serial}") from err
+        except (LuxpowerAPIError, LuxpowerDeviceError, LuxpowerConnectionError) as err:
+            _LOGGER.error("Failed to write parameters for %s: %s", self._serial, err)
             raise TransportWriteError(
                 f"Failed to write parameters for {self._serial}: {err}"
             ) from err

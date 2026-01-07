@@ -12,16 +12,33 @@ All values are in standard units:
 - Temperature: Celsius (°C)
 - Frequency: Hertz (Hz)
 - Percentage: 0-100 (%)
+
+Data classes include validation in __post_init__ to clamp percentage
+values (SOC, SOH) to valid 0-100 range and log warnings for out-of-range values.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pylxpweb.models import EnergyInfo, InverterRuntime
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _clamp_percentage(value: int, name: str) -> int:
+    """Clamp percentage value to 0-100 range, logging if out of bounds."""
+    if value < 0:
+        _LOGGER.warning("%s value %d is negative, clamping to 0", name, value)
+        return 0
+    if value > 100:
+        _LOGGER.warning("%s value %d exceeds 100%%, clamping to 100", name, value)
+        return 100
+    return value
 
 
 @dataclass
@@ -30,6 +47,9 @@ class InverterRuntimeData:
 
     All values are already scaled to proper units.
     This is the transport-agnostic representation of runtime data.
+
+    Validation:
+        - battery_soc and battery_soh are clamped to 0-100 range
     """
 
     # Timestamp
@@ -100,6 +120,11 @@ class InverterRuntimeData:
     device_status: int = 0  # Status code
     fault_code: int = 0  # Fault code
     warning_code: int = 0  # Warning code
+
+    def __post_init__(self) -> None:
+        """Validate and clamp percentage values."""
+        self.battery_soc = _clamp_percentage(self.battery_soc, "battery_soc")
+        self.battery_soh = _clamp_percentage(self.battery_soh, "battery_soh")
 
     @classmethod
     def from_http_response(cls, runtime: InverterRuntime) -> InverterRuntimeData:
@@ -345,7 +370,11 @@ class InverterEnergyData:
 
         # Modbus energy values are in 0.1 Wh, convert to kWh
         def to_kwh(raw_value: int) -> float:
-            """Convert raw register value to kWh."""
+            """Convert raw register value (0.1 Wh units) to kWh.
+
+            Conversion: raw / 10 = Wh, then / 1000 = kWh
+            Example: 184000 -> 18400 Wh -> 18.4 kWh
+            """
             return apply_scale(raw_value, ScaleFactor.SCALE_10) / 1000.0
 
         return cls(
@@ -380,6 +409,9 @@ class BatteryData:
     """Individual battery module data.
 
     All values are already scaled to proper units.
+
+    Validation:
+        - soc and soh are clamped to 0-100 range
     """
 
     # Identity
@@ -410,12 +442,24 @@ class BatteryData:
     fault_code: int = 0
     warning_code: int = 0
 
+    def __post_init__(self) -> None:
+        """Validate and clamp percentage values."""
+        self.soc = _clamp_percentage(self.soc, "battery_soc")
+        self.soh = _clamp_percentage(self.soh, "battery_soh")
+
 
 @dataclass
 class BatteryBankData:
     """Aggregate battery bank data.
 
     All values are already scaled to proper units.
+
+    Validation:
+        - soc and soh are clamped to 0-100 range
+
+    Note:
+        battery_count reflects the API-reported count and may differ from
+        len(batteries) if the API returns a different count than battery array size.
     """
 
     # Timestamp
@@ -444,3 +488,8 @@ class BatteryBankData:
     # Individual batteries
     battery_count: int = 0
     batteries: list[BatteryData] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Validate and clamp percentage values."""
+        self.soc = _clamp_percentage(self.soc, "battery_bank_soc")
+        self.soh = _clamp_percentage(self.soh, "battery_bank_soh")
