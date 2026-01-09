@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-01-08
+
+### Fixed
+
+- **Modbus BMS Register Mappings** - Corrected register definitions per Yippy's documentation (#97):
+  - Register 5 now properly unpacks SOC (low byte) and SOH (high byte) as packed value
+  - Inverter fault/warning codes at registers 60-63 (32-bit values)
+  - BMS fault/warning codes at registers 99-100
+  - Added BMS data registers 80-112 for cell voltage, temperature, and cycle count
+
+### Added
+
+- **BMS Cell Data in BatteryBankData** - New fields from Modbus BMS registers:
+  - `max_cell_voltage`, `min_cell_voltage` (V, from registers 101-102)
+  - `max_cell_temperature`, `min_cell_temperature` (°C, from registers 103-104)
+  - `cycle_count` (from register 106)
+
+### Changed
+
+- **Register Constants** - Renamed INPUT_* constants for clarity:
+  - `INPUT_SOC` + `INPUT_SOH` → `INPUT_SOC_SOH` (packed register 5)
+  - `INPUT_BMS_FAULT` → `INPUT_BMS_FAULT_CODE` (register 99)
+  - `INPUT_BMS_WARNING` → `INPUT_BMS_WARNING_CODE` (register 100)
+  - Added `INPUT_BMS_*` constants for all BMS passthrough registers
+
 ## [0.5.0] - 2026-01-06
 
 ### Added

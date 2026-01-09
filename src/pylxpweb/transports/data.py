@@ -193,6 +193,11 @@ class InverterRuntimeData:
     ) -> InverterRuntimeData:
         """Create from Modbus input register values.
 
+        Register mappings based on:
+        - EG4-18KPV-12LV Modbus Protocol specification
+        - eg4-modbus-monitor project (https://github.com/galets/eg4-modbus-monitor)
+        - Yippy's BMS documentation (https://github.com/joyfulhouse/pylxpweb/issues/97)
+
         Args:
             input_registers: Dict mapping register address to raw value
 
@@ -222,6 +227,27 @@ class InverterRuntimeData:
         eps_power = get_reg_pair(30, 31)
         load_power = get_reg_pair(34, 35)
 
+        # Register 5 contains packed SOC (low byte) and SOH (high byte)
+        # Source: eg4-modbus-monitor project
+        soc_soh_packed = get_reg(5)
+        battery_soc = soc_soh_packed & 0xFF  # Low byte = SOC
+        battery_soh = (soc_soh_packed >> 8) & 0xFF  # High byte = SOH
+
+        # Inverter fault/warning codes (32-bit values at registers 60-63)
+        # Source: eg4-modbus-monitor project
+        inverter_fault_code = get_reg_pair(60, 61)
+        inverter_warning_code = get_reg_pair(62, 63)
+
+        # BMS fault/warning codes (registers 99-100)
+        # Source: Yippy's documentation - these are BMS-specific codes
+        bms_fault_code = get_reg(99)
+        bms_warning_code = get_reg(100)
+
+        # Combine fault/warning codes (inverter + BMS)
+        # Use inverter codes as primary, BMS codes if inverter has none
+        fault_code = inverter_fault_code if inverter_fault_code else bms_fault_code
+        warning_code = inverter_warning_code if inverter_warning_code else bms_warning_code
+
         return cls(
             timestamp=datetime.now(),
             # PV
@@ -232,13 +258,14 @@ class InverterRuntimeData:
             pv3_voltage=apply_scale(get_reg(3), ScaleFactor.SCALE_10),
             pv3_power=float(pv3_power),
             pv_total_power=float(pv1_power + pv2_power + pv3_power),
-            # Battery
+            # Battery - SOC/SOH from packed register 5
             battery_voltage=apply_scale(get_reg(4), ScaleFactor.SCALE_100),
-            battery_current=apply_scale(get_reg(75), ScaleFactor.SCALE_100),  # Battery current (A)
-            battery_soc=get_reg(5),
+            battery_current=apply_scale(get_reg(75), ScaleFactor.SCALE_100),
+            battery_soc=battery_soc,
+            battery_soh=battery_soh if battery_soh > 0 else 100,  # Default 100% if not reported
             battery_charge_power=float(charge_power),
             battery_discharge_power=float(discharge_power),
-            battery_temperature=float(get_reg(64)),
+            battery_temperature=float(get_reg(67)),  # Register 67 per eg4-modbus-monitor
             # Grid
             grid_voltage_r=apply_scale(get_reg(16), ScaleFactor.SCALE_10),
             grid_voltage_s=apply_scale(get_reg(17), ScaleFactor.SCALE_10),
@@ -261,17 +288,15 @@ class InverterRuntimeData:
             # Internal
             bus_voltage_1=apply_scale(get_reg(43), ScaleFactor.SCALE_10),
             bus_voltage_2=apply_scale(get_reg(44), ScaleFactor.SCALE_10),
-            # Temperatures
-            internal_temperature=float(get_reg(61)),
-            radiator_temperature_1=float(get_reg(62)),
-            radiator_temperature_2=float(get_reg(63)),
-            battery_control_temperature=float(get_reg(65)),
-            # Status
+            # Temperatures (registers 64-68 per eg4-modbus-monitor)
+            internal_temperature=float(get_reg(64)),
+            radiator_temperature_1=float(get_reg(65)),
+            radiator_temperature_2=float(get_reg(66)),
+            battery_control_temperature=float(get_reg(68)),
+            # Status and fault codes
             device_status=get_reg(0),
-            # BMS data (registers 88-90)
-            battery_soh=get_reg(88, 100),  # State of Health (%)
-            fault_code=get_reg(89),  # BMS fault code
-            warning_code=get_reg(90),  # BMS warning code
+            fault_code=fault_code,
+            warning_code=warning_code,
         )
 
 
@@ -485,6 +510,14 @@ class BatteryBankData:
     # Capacity
     max_capacity: float = 0.0  # Ah
     current_capacity: float = 0.0  # Ah
+
+    # Cell data (from BMS, Modbus registers 101-106)
+    # Source: Yippy's documentation - https://github.com/joyfulhouse/pylxpweb/issues/97
+    max_cell_voltage: float = 0.0  # V (highest cell voltage)
+    min_cell_voltage: float = 0.0  # V (lowest cell voltage)
+    max_cell_temperature: float = 0.0  # °C (highest cell temp)
+    min_cell_temperature: float = 0.0  # °C (lowest cell temp)
+    cycle_count: int = 0  # Charge/discharge cycle count
 
     # Status
     status: int = 0

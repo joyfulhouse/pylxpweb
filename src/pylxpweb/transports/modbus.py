@@ -29,11 +29,12 @@ _LOGGER = logging.getLogger(__name__)
 
 # Register group definitions for efficient reading
 # Based on Modbus 40-register per call limit
+# Source: EG4-18KPV-12LV Modbus Protocol + eg4-modbus-monitor + Yippy's BMS docs
 INPUT_REGISTER_GROUPS = {
-    "power_energy": (0, 32),  # Registers 0-31: Power, voltage, current
-    "status_energy": (32, 29),  # Registers 32-60: Status, energy counters
-    "temperatures": (61, 15),  # Registers 61-75: Temperatures, currents
-    "advanced": (76, 31),  # Registers 76-106: Faults, SOH, PV energy
+    "power_energy": (0, 32),  # Registers 0-31: Power, voltage, SOC/SOH, current
+    "status_energy": (32, 32),  # Registers 32-63: Status, energy, fault/warning codes
+    "temperatures": (64, 16),  # Registers 64-79: Temperatures, currents, fault history
+    "bms_data": (80, 33),  # Registers 80-112: BMS passthrough data (Yippy's docs)
 }
 
 HOLD_REGISTER_GROUPS = {
@@ -424,8 +425,10 @@ class ModbusTransport(BaseTransport):
     async def read_battery(self) -> BatteryBankData | None:
         """Read battery information via Modbus.
 
-        Note: Modbus provides limited battery data compared to HTTP API.
-        Individual battery module data is not available via Modbus.
+        Reads both core battery data (registers 0-31) and BMS passthrough data
+        (registers 80-112) for comprehensive battery monitoring.
+
+        Note: Individual battery module data is not available via Modbus.
 
         Returns:
             Battery bank data with available information, None if no battery
@@ -433,17 +436,20 @@ class ModbusTransport(BaseTransport):
         Raises:
             TransportReadError: If read operation fails
         """
-        # Battery data comes from input registers
-        # We need the power_energy group for battery voltage/current/SOC
-        # Note: _read_input_registers already raises appropriate Transport exceptions
-        power_regs = await self._read_input_registers(0, 32)
-
         # Import scaling
         from pylxpweb.constants.scaling import ScaleFactor, apply_scale
 
+        # Read power/energy registers (0-31) for core battery data
+        power_regs = await self._read_input_registers(0, 32)
+
         # Extract battery data from registers
         battery_voltage = apply_scale(power_regs[4], ScaleFactor.SCALE_100)  # INPUT_V_BAT
-        battery_soc = power_regs[5]  # INPUT_SOC
+
+        # Register 5 contains packed SOC (low byte) and SOH (high byte)
+        # Source: eg4-modbus-monitor project
+        soc_soh_packed = power_regs[5]
+        battery_soc = soc_soh_packed & 0xFF  # Low byte = SOC
+        battery_soh = (soc_soh_packed >> 8) & 0xFF  # High byte = SOH
 
         # Battery charge/discharge power (2-register values)
         charge_power = (power_regs[12] << 16) | power_regs[13]
@@ -458,14 +464,57 @@ class ModbusTransport(BaseTransport):
             )
             return None
 
+        # Read BMS registers (80-112) for additional battery data
+        # These contain BMS passthrough data per Yippy's documentation
+        bms_regs: dict[int, int] = {}
+        try:
+            bms_values = await self._read_input_registers(80, 33)
+            for offset, value in enumerate(bms_values):
+                bms_regs[80 + offset] = value
+        except Exception as e:
+            _LOGGER.warning("Failed to read BMS registers 80-112: %s", e)
+            # Continue with basic battery data even if BMS read fails
+
+        # Extract BMS data if available
+        # Source: Yippy's documentation - https://github.com/joyfulhouse/pylxpweb/issues/97
+        bms_fault_code = bms_regs.get(99, 0)
+        bms_warning_code = bms_regs.get(100, 0)
+        battery_count = bms_regs.get(96, 1)  # Number of batteries in parallel
+
+        # Cell voltage data (registers 101-102, SCALE_1000: mV → V)
+        max_cell_voltage = apply_scale(bms_regs.get(101, 0), ScaleFactor.SCALE_1000)
+        min_cell_voltage = apply_scale(bms_regs.get(102, 0), ScaleFactor.SCALE_1000)
+
+        # Cell temperature data (registers 103-104, SCALE_10: tenths °C → °C, signed)
+        # Note: These are signed values, handle negative temperatures
+        max_cell_temp_raw = bms_regs.get(103, 0)
+        min_cell_temp_raw = bms_regs.get(104, 0)
+        # Convert to signed if needed (values > 32767 are negative in 16-bit signed)
+        if max_cell_temp_raw > 32767:
+            max_cell_temp_raw = max_cell_temp_raw - 65536
+        if min_cell_temp_raw > 32767:
+            min_cell_temp_raw = min_cell_temp_raw - 65536
+        max_cell_temperature = apply_scale(max_cell_temp_raw, ScaleFactor.SCALE_10)
+        min_cell_temperature = apply_scale(min_cell_temp_raw, ScaleFactor.SCALE_10)
+
+        # Cycle count (register 106, no scaling needed)
+        cycle_count = bms_regs.get(106, 0)
+
         return BatteryBankData(
             timestamp=datetime.now(),
             voltage=battery_voltage,
             soc=battery_soc,
+            soh=battery_soh,
             charge_power=float(charge_power),
             discharge_power=float(discharge_power),
-            # Limited data via Modbus
-            battery_count=1,  # Assume at least one battery pack
+            fault_code=bms_fault_code,
+            warning_code=bms_warning_code,
+            battery_count=battery_count if battery_count > 0 else 1,
+            max_cell_voltage=max_cell_voltage,
+            min_cell_voltage=min_cell_voltage,
+            max_cell_temperature=max_cell_temperature,
+            min_cell_temperature=min_cell_temperature,
+            cycle_count=cycle_count,
             batteries=[],  # Individual battery data not available via Modbus
         )
 

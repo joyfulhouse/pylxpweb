@@ -81,12 +81,13 @@ HOLD_BAUD_RATE = 10  # Baud rate index (0-6)
 # ============================================================================
 
 # Power & Energy (Addresses 0-31)
+# Source: EG4-18KPV-12LV Modbus Protocol + eg4-modbus-monitor project
 INPUT_STATUS = 0  # Device status code
 INPUT_V_PV1 = 1  # PV1 voltage (V, /10)
 INPUT_V_PV2 = 2  # PV2 voltage (V, /10)
 INPUT_V_PV3 = 3  # PV3 voltage (V, /10)
 INPUT_V_BAT = 4  # Battery voltage (V, /100)
-INPUT_SOC = 5  # State of Charge (%)
+INPUT_SOC_SOH = 5  # Packed: SOC (low byte, %), SOH (high byte, %)
 INPUT_P_PV1 = (6, 7)  # PV1 power (W, 2 registers)
 INPUT_P_PV2 = (8, 9)  # PV2 power (W, 2 registers)
 INPUT_P_PV3 = (10, 11)  # PV3 power (W, 2 registers)
@@ -105,7 +106,7 @@ INPUT_V_EPS_T = 28  # EPS T-phase voltage (V, /10)
 INPUT_F_EPS = 29  # EPS frequency (Hz, /100)
 INPUT_P_EPS = (30, 31)  # EPS output power (W, 2 registers)
 
-# System Status (Addresses 32-60)
+# System Status (Addresses 32-59)
 INPUT_S_EPS = 32  # EPS status
 INPUT_P_TO_GRID = 33  # Export to grid power (W)
 INPUT_P_TO_USER = (34, 35)  # Load consumption power (W, 2 registers)
@@ -126,45 +127,79 @@ INPUT_E_EPS_DAY = (53, 54)  # Daily EPS energy (Wh after /10, 2 registers)
 INPUT_E_TO_GRID_DAY = (55, 56)  # Daily export energy (Wh after /10, 2 registers)
 INPUT_E_TO_USER_DAY = (57, 58)  # Daily load energy (Wh after /10, 2 registers)
 INPUT_V_BAT_LIMIT = 59  # Max charge voltage (V, /100)
-INPUT_I_BAT_LIMIT = 60  # Max charge current (A, /10)
 
-# Temperature Sensors (Addresses 61-75)
-INPUT_T_INNER = 61  # Internal temperature (°C)
-INPUT_T_RADIATOR_1 = 62  # Radiator 1 temperature (°C)
-INPUT_T_RADIATOR_2 = 63  # Radiator 2 temperature (°C)
-INPUT_T_BAT = 64  # Battery temperature (°C)
-INPUT_T_BAT_CONTROL = 65  # Battery control temp (°C)
-INPUT_I_REC_R = 66  # Grid R-phase current (A, /100)
-INPUT_I_REC_S = 67  # Grid S-phase current (A, /100)
-INPUT_I_REC_T = 68  # Grid T-phase current (A, /100)
-INPUT_I_INV_R = 69  # Inverter R-phase current (A, /100)
-INPUT_I_INV_S = 70  # Inverter S-phase current (A, /100)
-INPUT_I_INV_T = 71  # Inverter T-phase current (A, /100)
+# Inverter Fault/Warning Codes (Addresses 60-63)
+# Source: eg4-modbus-monitor project
+INPUT_FAULT_CODE = (60, 61)  # Inverter fault code (32-bit, 2 registers)
+INPUT_WARNING_CODE = (62, 63)  # Inverter warning code (32-bit, 2 registers)
+
+# Temperature Sensors & Currents (Addresses 64-75)
+# Source: eg4-modbus-monitor project
+INPUT_T_INNER = 64  # Internal temperature (°C, signed)
+INPUT_T_RADIATOR_1 = 65  # Radiator 1 temperature (°C)
+INPUT_T_RADIATOR_2 = 66  # Radiator 2 temperature (°C)
+INPUT_T_BAT = 67  # Battery temperature (°C)
+INPUT_T_BAT_CONTROL = 68  # Battery control temp (°C)
+INPUT_RUNNING_TIME = (69, 70)  # Running time (seconds, 32-bit)
 INPUT_I_PV1 = 72  # PV1 current (A, /100)
 INPUT_I_PV2 = 73  # PV2 current (A, /100)
 INPUT_I_PV3 = 74  # PV3 current (A, /100)
 INPUT_I_BAT = 75  # Battery current (A, /100)
 
-# Advanced Status (Addresses 76-106)
+# Internal Fault History (Addresses 76-79)
 INPUT_INTERNAL_FAULT = (76, 77)  # Internal fault code (2 registers)
 INPUT_FAULT_HISTORY_1 = (78, 79)  # Fault history 1 (2 registers)
-INPUT_FAULT_HISTORY_2 = (80, 81)  # Fault history 2 (2 registers)
-INPUT_FAULT_HISTORY_3 = (82, 83)  # Fault history 3 (2 registers)
-INPUT_FAULT_HISTORY_4 = (84, 85)  # Fault history 4 (2 registers)
-INPUT_FAULT_HISTORY_5 = (86, 87)  # Fault history 5 (2 registers)
-INPUT_SOH = 88  # State of Health (%)
-INPUT_BMS_FAULT = 89  # BMS fault code
-INPUT_BMS_WARNING = 90  # BMS warning code
-INPUT_E_PV1_ALL = (91, 92)  # Total PV1 energy (kWh, /10, 2 registers)
-INPUT_E_PV2_ALL = (93, 94)  # Total PV2 energy (kWh, /10, 2 registers)
-INPUT_E_PV3_ALL = (95, 96)  # Total PV3 energy (kWh, /10, 2 registers)
-INPUT_E_PV1_DAY = (97, 98)  # Daily PV1 energy (kWh, /10, 2 registers)
-INPUT_E_PV2_DAY = (99, 100)  # Daily PV2 energy (kWh, /10, 2 registers)
-INPUT_E_PV3_DAY = (101, 102)  # Daily PV3 energy (kWh, /10, 2 registers)
-INPUT_MAX_CHG_CURR = 103  # Max charge current (A, /10)
-INPUT_MAX_DISCHG_CURR = 104  # Max discharge current (A, /10)
-INPUT_CHARGE_VOLT_REF = 105  # Charge voltage reference (V, /100)
-INPUT_DISCHARGE_VOLT_REF = 106  # Discharge voltage ref (V, /100)
+
+# ============================================================================
+# BMS DATA REGISTERS (Addresses 80-112)
+# ============================================================================
+# Source: Yippy's documentation from issue #97
+# https://github.com/joyfulhouse/pylxpweb/issues/97
+# These registers contain BMS passthrough data from the battery management system.
+
+# BMS Configuration Limits (Addresses 80-84)
+INPUT_BMS_BAT_TYPE = 80  # Battery type/brand and communication type (CAN=0, 485=1)
+INPUT_BMS_MAX_CHG_CURR = 81  # BMS max charging current (A, /100)
+INPUT_BMS_MAX_DISCHG_CURR = 82  # BMS max discharging current (A, /100)
+INPUT_BMS_CHARGE_VOLT_REF = 83  # BMS recommended charge voltage (V, /10)
+INPUT_BMS_DISCHG_CUT_VOLT = 84  # BMS discharge cutoff voltage (V, /10)
+
+# BMS Status Registers (Addresses 85-95)
+INPUT_BMS_STATUS_0 = 85  # BMS status register 0
+INPUT_BMS_STATUS_1 = 86  # BMS status register 1
+INPUT_BMS_STATUS_2 = 87  # BMS status register 2
+INPUT_BMS_STATUS_3 = 88  # BMS status register 3
+INPUT_BMS_STATUS_4 = 89  # BMS status register 4
+INPUT_BMS_STATUS_5 = 90  # BMS status register 5
+INPUT_BMS_STATUS_6 = 91  # BMS status register 6
+INPUT_BMS_STATUS_7 = 92  # BMS status register 7
+INPUT_BMS_STATUS_8 = 93  # BMS status register 8
+INPUT_BMS_STATUS_9 = 94  # BMS status register 9
+INPUT_BMS_STATUS_INV = 95  # Inverter-aggregated battery status
+
+# BMS Battery Info (Addresses 96-100)
+INPUT_BMS_PARALLEL_NUM = 96  # Number of batteries in parallel
+INPUT_BMS_CAPACITY = 97  # Battery capacity (Ah)
+INPUT_BMS_CURRENT = 98  # BMS battery current (A, /100, signed)
+INPUT_BMS_FAULT_CODE = 99  # BMS fault code
+INPUT_BMS_WARNING_CODE = 100  # BMS warning code
+
+# BMS Cell Data (Addresses 101-107)
+INPUT_BMS_MAX_CELL_VOLT = 101  # Maximum cell voltage (V, /1000)
+INPUT_BMS_MIN_CELL_VOLT = 102  # Minimum cell voltage (V, /1000)
+INPUT_BMS_MAX_CELL_TEMP = 103  # Maximum cell temperature (°C, /10, signed)
+INPUT_BMS_MIN_CELL_TEMP = 104  # Minimum cell temperature (°C, /10, signed)
+INPUT_BMS_FW_STATE = 105  # BMS firmware update state (bits 0-2), GenDryContact (bit 4)
+INPUT_BMS_CYCLE_COUNT = 106  # Charge/discharge cycle count
+INPUT_BMS_INV_VOLT_SAMPLE = 107  # Inverter-sampled battery voltage (V, /10)
+
+# Additional Temperature Sensors (Addresses 108-112)
+# Source: Yippy's documentation - may be BMS temperature sensors
+INPUT_T1 = 108  # Temperature sensor 1 (°C, /10) - 12K BT temperature
+INPUT_T2 = 109  # Temperature sensor 2 (°C, /10) - reserved
+INPUT_T3 = 110  # Temperature sensor 3 (°C, /10) - reserved
+INPUT_T4 = 111  # Temperature sensor 4 (°C, /10) - reserved
+INPUT_T5 = 112  # Temperature sensor 5 (°C, /10) - reserved
 
 # ============================================================================
 # PARAMETER GROUPS FOR EFFICIENT READING

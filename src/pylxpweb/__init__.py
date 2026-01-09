@@ -59,7 +59,7 @@ from .exceptions import (
 )
 from .models import DongleStatus, FirmwareUpdateInfo, OperatingMode
 
-__version__ = "0.5.0"
+__version__ = "0.5.3"
 __all__ = [
     "LuxpowerClient",
     "LuxpowerError",
