@@ -210,6 +210,15 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
                 # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch battery data for %s: %s", self.serial_number, err)
+            except Exception as err:
+                # Catch any other exceptions (e.g., ValidationError from unexpected API response)
+                # Log at warning level since this indicates an unexpected issue
+                _LOGGER.warning(
+                    "Unexpected error fetching battery data for %s: %s (%s)",
+                    self.serial_number,
+                    err,
+                    type(err).__name__,
+                )
 
     async def _fetch_parameters(self) -> None:
         """Fetch all parameters with caching.
