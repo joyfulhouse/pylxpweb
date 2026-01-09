@@ -488,6 +488,326 @@ class MIDRuntimePropertiesMixin:
         return self._runtime.midboxData.smartPort4Status
 
     # ===========================================
+    # Power Properties - Smart Load 1
+    # ===========================================
+
+    @property
+    def smart_load1_l1_power(self) -> int:
+        """Get Smart Load 1 L1 active power in watts.
+
+        Returns:
+            Smart Load 1 L1 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.smartLoad1L1ActivePower
+
+    @property
+    def smart_load1_l2_power(self) -> int:
+        """Get Smart Load 1 L2 active power in watts.
+
+        Returns:
+            Smart Load 1 L2 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.smartLoad1L2ActivePower
+
+    @property
+    def smart_load1_power(self) -> int:
+        """Get Smart Load 1 total power in watts (L1 + L2).
+
+        Returns:
+            Smart Load 1 total power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return (
+            self._runtime.midboxData.smartLoad1L1ActivePower
+            + self._runtime.midboxData.smartLoad1L2ActivePower
+        )
+
+    # ===========================================
+    # Power Properties - Smart Load 2
+    # ===========================================
+
+    @property
+    def smart_load2_l1_power(self) -> int:
+        """Get Smart Load 2 L1 active power in watts.
+
+        Returns:
+            Smart Load 2 L1 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.smartLoad2L1ActivePower
+
+    @property
+    def smart_load2_l2_power(self) -> int:
+        """Get Smart Load 2 L2 active power in watts.
+
+        Returns:
+            Smart Load 2 L2 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.smartLoad2L2ActivePower
+
+    @property
+    def smart_load2_power(self) -> int:
+        """Get Smart Load 2 total power in watts (L1 + L2).
+
+        Returns:
+            Smart Load 2 total power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return (
+            self._runtime.midboxData.smartLoad2L1ActivePower
+            + self._runtime.midboxData.smartLoad2L2ActivePower
+        )
+
+    # ===========================================
+    # Power Properties - Smart Load 3
+    # ===========================================
+
+    @property
+    def smart_load3_l1_power(self) -> int:
+        """Get Smart Load 3 L1 active power in watts.
+
+        Returns:
+            Smart Load 3 L1 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.smartLoad3L1ActivePower
+
+    @property
+    def smart_load3_l2_power(self) -> int:
+        """Get Smart Load 3 L2 active power in watts.
+
+        Returns:
+            Smart Load 3 L2 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.smartLoad3L2ActivePower
+
+    @property
+    def smart_load3_power(self) -> int:
+        """Get Smart Load 3 total power in watts (L1 + L2).
+
+        Returns:
+            Smart Load 3 total power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return (
+            self._runtime.midboxData.smartLoad3L1ActivePower
+            + self._runtime.midboxData.smartLoad3L2ActivePower
+        )
+
+    # ===========================================
+    # Power Properties - Smart Load 4
+    # ===========================================
+
+    @property
+    def smart_load4_l1_power(self) -> int:
+        """Get Smart Load 4 L1 active power in watts.
+
+        Returns:
+            Smart Load 4 L1 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.smartLoad4L1ActivePower
+
+    @property
+    def smart_load4_l2_power(self) -> int:
+        """Get Smart Load 4 L2 active power in watts.
+
+        Returns:
+            Smart Load 4 L2 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.smartLoad4L2ActivePower
+
+    @property
+    def smart_load4_power(self) -> int:
+        """Get Smart Load 4 total power in watts (L1 + L2).
+
+        Returns:
+            Smart Load 4 total power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return (
+            self._runtime.midboxData.smartLoad4L1ActivePower
+            + self._runtime.midboxData.smartLoad4L2ActivePower
+        )
+
+    # ===========================================
+    # Power Properties - AC Couple 1
+    # ===========================================
+
+    @property
+    def ac_couple1_l1_power(self) -> int:
+        """Get AC Couple 1 L1 active power in watts.
+
+        Returns:
+            AC Couple 1 L1 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.acCouple1L1ActivePower
+
+    @property
+    def ac_couple1_l2_power(self) -> int:
+        """Get AC Couple 1 L2 active power in watts.
+
+        Returns:
+            AC Couple 1 L2 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.acCouple1L2ActivePower
+
+    @property
+    def ac_couple1_power(self) -> int:
+        """Get AC Couple 1 total power in watts (L1 + L2).
+
+        Returns:
+            AC Couple 1 total power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return (
+            self._runtime.midboxData.acCouple1L1ActivePower
+            + self._runtime.midboxData.acCouple1L2ActivePower
+        )
+
+    # ===========================================
+    # Power Properties - AC Couple 2
+    # ===========================================
+
+    @property
+    def ac_couple2_l1_power(self) -> int:
+        """Get AC Couple 2 L1 active power in watts.
+
+        Returns:
+            AC Couple 2 L1 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.acCouple2L1ActivePower
+
+    @property
+    def ac_couple2_l2_power(self) -> int:
+        """Get AC Couple 2 L2 active power in watts.
+
+        Returns:
+            AC Couple 2 L2 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.acCouple2L2ActivePower
+
+    @property
+    def ac_couple2_power(self) -> int:
+        """Get AC Couple 2 total power in watts (L1 + L2).
+
+        Returns:
+            AC Couple 2 total power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return (
+            self._runtime.midboxData.acCouple2L1ActivePower
+            + self._runtime.midboxData.acCouple2L2ActivePower
+        )
+
+    # ===========================================
+    # Power Properties - AC Couple 3
+    # ===========================================
+
+    @property
+    def ac_couple3_l1_power(self) -> int:
+        """Get AC Couple 3 L1 active power in watts.
+
+        Returns:
+            AC Couple 3 L1 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.acCouple3L1ActivePower
+
+    @property
+    def ac_couple3_l2_power(self) -> int:
+        """Get AC Couple 3 L2 active power in watts.
+
+        Returns:
+            AC Couple 3 L2 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.acCouple3L2ActivePower
+
+    @property
+    def ac_couple3_power(self) -> int:
+        """Get AC Couple 3 total power in watts (L1 + L2).
+
+        Returns:
+            AC Couple 3 total power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return (
+            self._runtime.midboxData.acCouple3L1ActivePower
+            + self._runtime.midboxData.acCouple3L2ActivePower
+        )
+
+    # ===========================================
+    # Power Properties - AC Couple 4
+    # ===========================================
+
+    @property
+    def ac_couple4_l1_power(self) -> int:
+        """Get AC Couple 4 L1 active power in watts.
+
+        Returns:
+            AC Couple 4 L1 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.acCouple4L1ActivePower
+
+    @property
+    def ac_couple4_l2_power(self) -> int:
+        """Get AC Couple 4 L2 active power in watts.
+
+        Returns:
+            AC Couple 4 L2 power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return self._runtime.midboxData.acCouple4L2ActivePower
+
+    @property
+    def ac_couple4_power(self) -> int:
+        """Get AC Couple 4 total power in watts (L1 + L2).
+
+        Returns:
+            AC Couple 4 total power, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+        return (
+            self._runtime.midboxData.acCouple4L1ActivePower
+            + self._runtime.midboxData.acCouple4L2ActivePower
+        )
+
+    # ===========================================
     # System Status & Info
     # ===========================================
 

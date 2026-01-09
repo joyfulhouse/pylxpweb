@@ -813,6 +813,48 @@ class MidboxData(BaseModel):
     gridFreq: int
 
     # ===========================================
+    # Smart Load Power Fields (watts, no scaling)
+    # Optional - not all devices report all fields
+    # ===========================================
+
+    # Smart Load 1 Power (per-phase)
+    smartLoad1L1ActivePower: int = 0
+    smartLoad1L2ActivePower: int = 0
+
+    # Smart Load 2 Power (per-phase)
+    smartLoad2L1ActivePower: int = 0
+    smartLoad2L2ActivePower: int = 0
+
+    # Smart Load 3 Power (per-phase)
+    smartLoad3L1ActivePower: int = 0
+    smartLoad3L2ActivePower: int = 0
+
+    # Smart Load 4 Power (per-phase)
+    smartLoad4L1ActivePower: int = 0
+    smartLoad4L2ActivePower: int = 0
+
+    # ===========================================
+    # AC Couple Power Fields (watts, no scaling)
+    # Optional - not all devices report all fields
+    # ===========================================
+
+    # AC Couple 1 Power (per-phase)
+    acCouple1L1ActivePower: int = 0
+    acCouple1L2ActivePower: int = 0
+
+    # AC Couple 2 Power (per-phase)
+    acCouple2L1ActivePower: int = 0
+    acCouple2L2ActivePower: int = 0
+
+    # AC Couple 3 Power (per-phase)
+    acCouple3L1ActivePower: int = 0
+    acCouple3L2ActivePower: int = 0
+
+    # AC Couple 4 Power (per-phase)
+    acCouple4L1ActivePower: int = 0
+    acCouple4L2ActivePower: int = 0
+
+    # ===========================================
     # Energy Fields (÷10 for kWh)
     # Optional - not all devices report all fields
     # ===========================================
