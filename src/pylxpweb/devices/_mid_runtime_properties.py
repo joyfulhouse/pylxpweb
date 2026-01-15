@@ -864,6 +864,17 @@ class MIDRuntimePropertiesMixin:
         """
         return self._runtime is not None
 
+    @property
+    def is_off_grid(self) -> bool:
+        """Check if the system is operating in off-grid/EPS mode.
+
+        Returns:
+            True if off-grid (on battery backup), False if grid is available.
+        """
+        if self._runtime is None:
+            return False
+        return bool(getattr(self._runtime, "isOffGrid", False))
+
     # ===========================================
     # Energy Properties - UPS
     # ===========================================

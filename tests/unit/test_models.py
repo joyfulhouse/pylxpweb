@@ -379,7 +379,7 @@ class TestDatalogListResponse:
 
     def test_parse_datalog_list(self) -> None:
         """Test parsing datalog list response."""
-        from pylxpweb.models import DatalogListItem, DatalogListResponse
+        from pylxpweb.models import DatalogListResponse
 
         data = {
             "total": 2,

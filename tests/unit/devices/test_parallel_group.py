@@ -434,12 +434,8 @@ class TestParallelGroupAggregateBattery:
         # Inverter 2: 400 Ah capacity, 75% SOC (300 Ah current)
         # Weighted average: (100 + 300) / (200 + 400) * 100 = 66.7%
         group.inverters = [
-            self._create_mock_inverter_with_battery(
-                max_capacity=200, current_capacity=100.0
-            ),
-            self._create_mock_inverter_with_battery(
-                max_capacity=400, current_capacity=300.0
-            ),
+            self._create_mock_inverter_with_battery(max_capacity=200, current_capacity=100.0),
+            self._create_mock_inverter_with_battery(max_capacity=400, current_capacity=300.0),
         ]
 
         # (100 + 300) / (200 + 400) * 100 = 66.666...
@@ -479,9 +475,7 @@ class TestParallelGroupAggregateBattery:
 
         assert group.battery_current_capacity == 420.8
 
-    def test_battery_voltage_average(
-        self, mock_client: LuxpowerClient, mock_station: Mock
-    ) -> None:
+    def test_battery_voltage_average(self, mock_client: LuxpowerClient, mock_station: Mock) -> None:
         """Test voltage is averaged across inverters."""
         group = ParallelGroup(
             client=mock_client,
@@ -496,9 +490,7 @@ class TestParallelGroupAggregateBattery:
 
         assert group.battery_voltage == 53.0
 
-    def test_battery_count_sum(
-        self, mock_client: LuxpowerClient, mock_station: Mock
-    ) -> None:
+    def test_battery_count_sum(self, mock_client: LuxpowerClient, mock_station: Mock) -> None:
         """Test battery count sums across inverters."""
         group = ParallelGroup(
             client=mock_client,
