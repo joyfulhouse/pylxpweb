@@ -81,6 +81,42 @@ class TestLoginResponse:
                 # Should show first 2 and last 2 digits only
                 assert serial.count("*") > 0
 
+    def test_parse_eu_server_techinfo_empty(self) -> None:
+        """Test parsing login response with EU server's minimal techInfo.
+
+        EU Luxpower server (eu.luxpowertek.com) returns techInfo with only
+        techInfoCount=0, without techInfoType1/techInfo1 fields.
+        Regression test for GitHub issue #84.
+        """
+        data = load_sample("login.json")
+        # Simulate EU server response: only techInfoCount, no other fields
+        data["techInfo"] = {"techInfoCount": 0}
+        model = LoginResponse.model_validate(data)
+
+        assert model.techInfo is not None
+        assert model.techInfo.techInfoCount == 0
+        assert model.techInfo.techInfoType1 is None
+        assert model.techInfo.techInfo1 is None
+
+    def test_parse_techinfo_with_all_fields(self) -> None:
+        """Test parsing login response with full techInfo fields."""
+        data = load_sample("login.json")
+        data["techInfo"] = {
+            "techInfoCount": 2,
+            "techInfoType1": "Phone",
+            "techInfo1": "1-800-555-1234",
+            "techInfoType2": "Email",
+            "techInfo2": "support@example.com",
+        }
+        model = LoginResponse.model_validate(data)
+
+        assert model.techInfo is not None
+        assert model.techInfo.techInfoCount == 2
+        assert model.techInfo.techInfoType1 == "Phone"
+        assert model.techInfo.techInfo1 == "1-800-555-1234"
+        assert model.techInfo.techInfoType2 == "Email"
+        assert model.techInfo.techInfo2 == "support@example.com"
+
 
 class TestPlantInfo:
     """Test PlantInfo model."""
@@ -336,3 +372,99 @@ class TestDongleStatus:
         assert model.success is False
         # Even with success=false, the msg value should be preserved
         assert model.msg == "error"
+
+
+class TestDatalogListResponse:
+    """Test DatalogListItem and DatalogListResponse models."""
+
+    def test_parse_datalog_list(self) -> None:
+        """Test parsing datalog list response."""
+        from pylxpweb.models import DatalogListItem, DatalogListResponse
+
+        data = {
+            "total": 2,
+            "rows": [
+                {
+                    "datalogSn": "BC34000380",
+                    "plantId": 19147,
+                    "plantName": "Test Plant",
+                    "endUserAccount": "testuser",
+                    "datalogType": "WLAN",
+                    "datalogTypeText": "WLAN",
+                    "createDate": "2025-06-19",
+                    "lost": False,
+                    "serverId": 1,
+                    "lastUpdateTime": "2026-01-14 17:35:16",
+                },
+                {
+                    "datalogSn": "BC42900293",
+                    "plantId": 19147,
+                    "plantName": "Test Plant",
+                    "endUserAccount": "testuser",
+                    "datalogType": "WLAN",
+                    "datalogTypeText": "WLAN",
+                    "createDate": "2025-06-19",
+                    "lost": True,
+                    "serverId": 5,
+                    "lastUpdateTime": "2026-01-14 17:33:56",
+                },
+            ],
+        }
+        model = DatalogListResponse.model_validate(data)
+
+        assert model.total == 2
+        assert len(model.rows) == 2
+
+        # First datalog is online (lost=False)
+        assert model.rows[0].datalogSn == "BC34000380"
+        assert model.rows[0].lost is False
+        assert model.rows[0].is_online is True
+        assert model.rows[0].status_text == "Online"
+
+        # Second datalog is offline (lost=True)
+        assert model.rows[1].datalogSn == "BC42900293"
+        assert model.rows[1].lost is True
+        assert model.rows[1].is_online is False
+        assert model.rows[1].status_text == "Offline"
+
+    def test_get_status_by_serial(self) -> None:
+        """Test get_status_by_serial helper method."""
+        from pylxpweb.models import DatalogListResponse
+
+        data = {
+            "total": 2,
+            "rows": [
+                {
+                    "datalogSn": "BC34000380",
+                    "plantId": 19147,
+                    "plantName": "Test",
+                    "endUserAccount": "test",
+                    "datalogType": "WLAN",
+                    "datalogTypeText": "WLAN",
+                    "createDate": "2025-06-19",
+                    "lost": False,
+                    "serverId": 1,
+                    "lastUpdateTime": "2026-01-14 17:35:16",
+                },
+                {
+                    "datalogSn": "BC42900293",
+                    "plantId": 19147,
+                    "plantName": "Test",
+                    "endUserAccount": "test",
+                    "datalogType": "WLAN",
+                    "datalogTypeText": "WLAN",
+                    "createDate": "2025-06-19",
+                    "lost": True,
+                    "serverId": 5,
+                    "lastUpdateTime": "2026-01-14 17:33:56",
+                },
+            ],
+        }
+        model = DatalogListResponse.model_validate(data)
+
+        # Known serials
+        assert model.get_status_by_serial("BC34000380") is True  # Online
+        assert model.get_status_by_serial("BC42900293") is False  # Offline
+
+        # Unknown serial
+        assert model.get_status_by_serial("BC00000000") is None

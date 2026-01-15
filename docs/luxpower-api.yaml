@@ -119,6 +119,8 @@ tags:
     description: User settings and favorites
   - name: Analytics
     description: Charts and historical data
+  - name: System Configuration
+    description: Datalog (dongle) management and system configuration
 
 paths:
   /api/login:
@@ -2075,6 +2077,107 @@ paths:
                 type: string
                 format: binary
 
+  /web/config/datalog/list:
+    post:
+      tags:
+        - System Configuration
+      summary: List all datalogs (dongles) with connection status
+      description: |
+        Retrieve all datalogs (communication modules/dongles) for a plant or all plants.
+
+        **Use Case**: Efficiently get connection status for all dongles in a single request,
+        rather than calling findOnlineDatalog for each dongle individually.
+
+        **Response Fields**:
+        - `datalogSn`: Dongle serial number (e.g., "BC34000380")
+        - `plantId`: Associated plant ID
+        - `plantName`: Plant display name
+        - `lost`: Connection status (true = offline/disconnected, false = online/connected)
+        - `lastUpdateTime`: Last communication timestamp
+        - `datalogType`: Connection type (e.g., "WLAN")
+
+        **Relationship to Inverters**:
+        Each inverter has a `datalogSn` field (from `/api/inverter/getInverterInfo`)
+        that maps to one of these datalogs. Multiple inverters can share one dongle.
+
+        **Note**: The `lost` field uses inverse logic - `lost: false` means the dongle is online.
+      operationId: getDatalogList
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                page:
+                  type: integer
+                  description: Page number (1-indexed)
+                  default: 1
+                  example: 1
+                rows:
+                  type: integer
+                  description: Number of rows per page
+                  default: 30
+                  example: 30
+                plantId:
+                  type: integer
+                  description: Plant ID to filter by. Use -1 for all plants.
+                  default: -1
+                  example: 19147
+                searchType:
+                  type: string
+                  description: Search type
+                  default: serialNum
+                  example: serialNum
+                searchText:
+                  type: string
+                  description: Search text (empty for all)
+                  default: ""
+                  example: ""
+      responses:
+        '200':
+          description: Datalog list with connection status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DatalogListResponse'
+
+  /api/system/cluster/search/findOnlineDatalog:
+    post:
+      tags:
+        - System Configuration
+      summary: Check single dongle connection status
+      description: |
+        Check if a specific dongle (datalog) is currently online and communicating.
+
+        **Response Values**:
+        - `msg: "current"` - Dongle is online and actively communicating
+        - `msg: ""` (empty) - Dongle is offline or not responding
+
+        **Note**: For checking multiple dongles, use `/web/config/datalog/list` instead
+        as it returns all dongle statuses in a single request.
+      operationId: findOnlineDatalog
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - serialNum
+              properties:
+                serialNum:
+                  type: string
+                  description: Datalog serial number
+                  example: BC34000380
+      responses:
+        '200':
+          description: Dongle connection status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DongleStatus'
+
 components:
   securitySchemes:
     cookieAuth:
@@ -3507,6 +3610,77 @@ components:
               cloudCover:
                 type: integer
                 example: 10
+
+    DatalogListResponse:
+      type: object
+      description: Response from datalog list endpoint
+      properties:
+        total:
+          type: integer
+          description: Total number of datalogs
+          example: 3
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/DatalogListItem'
+
+    DatalogListItem:
+      type: object
+      description: Individual datalog (dongle) information
+      properties:
+        datalogSn:
+          type: string
+          description: Datalog serial number
+          example: "BC34000380"
+        plantId:
+          type: integer
+          description: Associated plant ID
+          example: 19147
+        plantName:
+          type: string
+          description: Plant display name
+          example: "My Solar Plant"
+        endUserAccount:
+          type: string
+          description: End user account name
+          example: "johnsmith"
+        datalogType:
+          type: string
+          description: Connection type
+          example: "WLAN"
+        datalogTypeText:
+          type: string
+          description: Connection type display text
+          example: "WLAN"
+        createDate:
+          type: string
+          format: date
+          description: Date datalog was registered
+          example: "2025-06-19"
+        lost:
+          type: boolean
+          description: Connection status (true = offline/disconnected, false = online/connected)
+          example: false
+        serverId:
+          type: integer
+          description: Server ID
+          example: 1
+        lastUpdateTime:
+          type: string
+          description: Last communication timestamp
+          example: "2026-01-14 17:35:16"
+
+    DongleStatus:
+      type: object
+      description: Single dongle connection status response
+      properties:
+        success:
+          type: boolean
+          example: true
+        msg:
+          type: string
+          description: Status message ("current" = online, empty = offline)
+          example: "current"
 
 security:
   - cookieAuth: []

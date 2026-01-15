@@ -16,6 +16,7 @@ from pylxpweb.endpoints.base import BaseEndpoint
 from pylxpweb.models import (
     BatteryInfo,
     BatteryListResponse,
+    DatalogListResponse,
     DongleStatus,
     EnergyInfo,
     InverterInfo,
@@ -411,6 +412,56 @@ class DeviceEndpoints(BaseEndpoint):
             data=data,
         )
         return DongleStatus.model_validate(response)
+
+    async def get_datalog_list(
+        self,
+        plant_id: int = -1,
+        page: int = 1,
+        rows: int = 30,
+    ) -> DatalogListResponse:
+        """Get list of all datalogs (dongles) with their connection status.
+
+        This endpoint efficiently retrieves all datalogs for a plant in a single
+        request, including their online/offline status via the `lost` field.
+
+        This is more efficient than calling get_dongle_status() for each dongle
+        individually, especially for plants with multiple devices.
+
+        Args:
+            plant_id: Plant ID to filter by. Use -1 (default) for all plants.
+            page: Page number for pagination (default: 1)
+            rows: Number of rows per page (default: 30)
+
+        Returns:
+            DatalogListResponse: List of datalogs with connection status
+
+        Example:
+            # Get all datalogs for a specific plant
+            response = await client.devices.get_datalog_list(plant_id=19147)
+            for datalog in response.rows:
+                status = "online" if datalog.is_online else "offline"
+                print(f"Datalog {datalog.datalogSn}: {status}")
+                print(f"  Last update: {datalog.lastUpdateTime}")
+
+            # Check status for a specific datalog
+            is_online = response.get_status_by_serial("BC34000380")
+        """
+        await self.client._ensure_authenticated()
+
+        data = {
+            "page": page,
+            "rows": rows,
+            "plantId": plant_id,
+            "searchType": "serialNum",
+            "searchText": "",
+        }
+
+        response = await self.client._request(
+            "POST",
+            "/WManage/web/config/datalog/list",
+            data=data,
+        )
+        return DatalogListResponse.model_validate(response)
 
     # ============================================================================
     # Convenience Methods

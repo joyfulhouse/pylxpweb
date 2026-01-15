@@ -168,12 +168,14 @@ class PlantBasic(BaseModel):
 class TechInfo(BaseModel):
     """Technical support information.
 
-    Note: techInfoType2/techInfo2 are optional as some regional APIs
-    (e.g., EU Luxpower) may only return one tech info item.
+    Note: All techInfo fields are optional as regional APIs vary:
+    - EU Luxpower may return only techInfoCount=0 with no other fields
+    - US EG4 returns techInfoType1/techInfo1 even when techInfoCount=0
+    - techInfoType2/techInfo2 are only present when techInfoCount >= 2
     """
 
-    techInfoType1: str
-    techInfo1: str
+    techInfoType1: str | None = None
+    techInfo1: str | None = None
     techInfoType2: str | None = None
     techInfo2: str | None = None
     techInfoCount: int
@@ -1473,3 +1475,78 @@ class DongleStatus(BaseModel):
             "Online" or "Offline" based on dongle status.
         """
         return "Online" if self.is_online else "Offline"
+
+
+class DatalogListItem(BaseModel):
+    """Individual datalog (dongle) information from datalog/list endpoint.
+
+    The datalog is the communication module (dongle) that connects inverters
+    to the cloud monitoring service. This endpoint provides all datalogs
+    for a plant with their connection status.
+
+    Note: The `lost` field indicates disconnection (true = disconnected/offline,
+    false = connected/online). This is the inverse of typical "online" semantics.
+    """
+
+    datalogSn: str
+    plantId: int
+    plantName: str
+    endUserAccount: str
+    datalogType: str  # e.g., "WLAN"
+    datalogTypeText: str  # e.g., "WLAN"
+    createDate: str  # e.g., "2025-06-19"
+    lost: bool  # true = disconnected, false = connected
+    serverId: int
+    lastUpdateTime: str  # e.g., "2026-01-14 17:35:16"
+
+    @property
+    def is_online(self) -> bool:
+        """Check if the datalog is currently online.
+
+        Returns:
+            True if datalog is connected, False if disconnected.
+        """
+        return not self.lost
+
+    @property
+    def status_text(self) -> str:
+        """Get human-readable status text.
+
+        Returns:
+            "Online" or "Offline" based on connection status.
+        """
+        return "Online" if self.is_online else "Offline"
+
+
+class DatalogListResponse(BaseModel):
+    """Response from datalog/list endpoint.
+
+    Returns all datalogs (dongles) for a plant or all plants accessible
+    to the user. Use plantId=-1 to get all datalogs across all plants.
+
+    Example:
+        ```python
+        # Get all datalogs for a specific plant
+        response = await client.devices.get_datalog_list(plant_id=19147)
+        for datalog in response.rows:
+            status = "online" if datalog.is_online else "offline"
+            print(f"Datalog {datalog.datalogSn}: {status}")
+        ```
+    """
+
+    total: int
+    rows: list[DatalogListItem]
+
+    def get_status_by_serial(self, datalog_sn: str) -> bool | None:
+        """Get online status for a specific datalog serial.
+
+        Args:
+            datalog_sn: Datalog serial number
+
+        Returns:
+            True if online, False if offline, None if not found
+        """
+        for item in self.rows:
+            if item.datalogSn == datalog_sn:
+                return item.is_online
+        return None

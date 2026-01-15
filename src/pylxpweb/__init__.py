@@ -57,9 +57,15 @@ from .exceptions import (
     LuxpowerDeviceOfflineError,
     LuxpowerError,
 )
-from .models import DongleStatus, FirmwareUpdateInfo, OperatingMode
+from .models import (
+    DatalogListItem,
+    DatalogListResponse,
+    DongleStatus,
+    FirmwareUpdateInfo,
+    OperatingMode,
+)
 
-__version__ = "0.5.3"
+__version__ = "0.5.8"
 __all__ = [
     "LuxpowerClient",
     "LuxpowerError",
@@ -77,6 +83,8 @@ __all__ = [
     "ExportEndpoints",
     "FirmwareEndpoints",
     # Models
+    "DatalogListItem",
+    "DatalogListResponse",
     "DongleStatus",
     "FirmwareUpdateInfo",
     # Enums
