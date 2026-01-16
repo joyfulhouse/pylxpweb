@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
     from .battery import Battery
     from .inverters.base import BaseInverter
+    from .mid_device import MIDDevice
     from .parallel_group import ParallelGroup
 
 
@@ -124,6 +125,7 @@ class Station(BaseDevice):
         # Device collections (loaded by _load_devices)
         self.parallel_groups: list[ParallelGroup] = []
         self.standalone_inverters: list[BaseInverter] = []
+        self.standalone_mid_devices: list[MIDDevice] = []
         self.weather: dict[str, Any] | None = None  # Weather data (optional)
 
     def detect_dst_status(self) -> bool | None:
@@ -361,6 +363,23 @@ class Station(BaseDevice):
                 batteries.extend(inverter._battery_bank.batteries)
         return batteries
 
+    @property
+    def all_mid_devices(self) -> list[MIDDevice]:
+        """Get all MID devices (GridBOSS) in this station.
+
+        Returns:
+            List of all MID device objects, from both parallel groups and standalone.
+        """
+
+        mid_devices: list[MIDDevice] = []
+        # Add MID devices from parallel groups
+        for group in self.parallel_groups:
+            if group.mid_device:
+                mid_devices.append(group.mid_device)
+        # Add standalone MID devices
+        mid_devices.extend(self.standalone_mid_devices)
+        return mid_devices
+
     async def refresh(self) -> None:
         """Refresh station metadata.
 
@@ -391,10 +410,9 @@ class Station(BaseDevice):
         for inverter in self.all_inverters:
             tasks.append(inverter.refresh())
 
-        # Refresh MID devices (check for None, mid_device always has refresh method)
-        for group in self.parallel_groups:
-            if group.mid_device:
-                tasks.append(group.mid_device.refresh())
+        # Refresh all MID devices (from parallel groups and standalone)
+        for mid_device in self.all_mid_devices:
+            tasks.append(mid_device.refresh())
 
         # Execute concurrently, ignore exceptions (partial failure OK)
         if tasks:
@@ -788,7 +806,7 @@ class Station(BaseDevice):
         parallel_group_name: str | None,
         groups_lookup: dict[str, ParallelGroup],
     ) -> None:
-        """Assign MID device to parallel group.
+        """Assign MID device to parallel group or standalone list.
 
         Args:
             serial_num: MID device serial number.
@@ -810,13 +828,17 @@ class Station(BaseDevice):
                     parallel_group_name,
                 )
             else:
-                _LOGGER.warning(
-                    "Parallel group '%s' not found for MID device %s",
+                # Parallel group not found - treat as standalone
+                self.standalone_mid_devices.append(mid_device)
+                _LOGGER.debug(
+                    "Parallel group '%s' not found for MID device %s - treating as standalone",
                     parallel_group_name,
                     serial_num,
                 )
         else:
-            _LOGGER.warning("MID device %s has no parallel group assignment", serial_num)
+            # Standalone MID device (no inverters in system)
+            self.standalone_mid_devices.append(mid_device)
+            _LOGGER.debug("Assigned MID device %s as standalone", serial_num)
 
     def _assign_inverter(
         self,
