@@ -362,3 +362,145 @@ class TestPropertyTypes:
         for prop in bool_properties:
             value = getattr(mid_device_with_runtime, prop)
             assert isinstance(value, bool), f"{prop} should return bool, got {type(value)}"
+
+
+class TestACCouplePowerRemapping:
+    """Tests for AC Couple power remapping based on Smart Port status.
+
+    The EG4 API only provides power data in smartLoad*L*ActivePower fields.
+    When a port is configured for AC Couple mode (status=2), the AC Couple
+    power properties should read from the Smart Load fields to get actual
+    power values.
+
+    See GitHub issue #87 for context.
+    """
+
+    @pytest.fixture
+    def mid_device_ac_couple_mode(self) -> MIDDevice:
+        """Create MID device with ports in AC Couple mode and Smart Load data."""
+        mock_client = MagicMock()
+
+        mid_device = MIDDevice(
+            client=mock_client,
+            serial_number="4524850115",
+            model="GridBOSS",
+        )
+
+        # Create runtime data simulating real API response where:
+        # - Smart Port 1 is in AC Couple mode (status=2)
+        # - Smart Port 4 is in AC Couple mode (status=2)
+        # - Smart Load power fields have actual data (as the API provides)
+        # - AC Couple power fields are 0 (API doesn't populate these)
+        midbox_data = MidboxData.model_construct(
+            # Smart Port Status - ports 1 and 4 in AC Couple mode
+            smartPort1Status=2,  # AC Couple mode
+            smartPort2Status=0,  # Unused
+            smartPort3Status=1,  # Smart Load mode
+            smartPort4Status=2,  # AC Couple mode
+            # Smart Load power fields - this is where API provides data
+            smartLoad1L1ActivePower=-1019,  # Port 1 L1 power
+            smartLoad1L2ActivePower=-1020,  # Port 1 L2 power
+            smartLoad2L1ActivePower=0,
+            smartLoad2L2ActivePower=0,
+            smartLoad3L1ActivePower=500,  # Port 3 is Smart Load mode
+            smartLoad3L2ActivePower=600,
+            smartLoad4L1ActivePower=800,  # Port 4 L1 power
+            smartLoad4L2ActivePower=900,  # Port 4 L2 power
+            # AC Couple power fields - API doesn't provide these (defaults to 0)
+            acCouple1L1ActivePower=0,
+            acCouple1L2ActivePower=0,
+            acCouple2L1ActivePower=0,
+            acCouple2L2ActivePower=0,
+            acCouple3L1ActivePower=0,
+            acCouple3L2ActivePower=0,
+            acCouple4L1ActivePower=0,
+            acCouple4L2ActivePower=0,
+            # Required fields
+            status=0,
+            serverTime="2025-11-22 10:30:00",
+            deviceTime="2025-11-22 10:30:05",
+            gridRmsVolt=2420,
+            upsRmsVolt=2400,
+            genRmsVolt=0,
+            gridL1RmsVolt=1210,
+            gridL2RmsVolt=1210,
+            upsL1RmsVolt=1200,
+            upsL2RmsVolt=1200,
+            genL1RmsVolt=0,
+            genL2RmsVolt=0,
+            gridL1RmsCurr=0,
+            gridL2RmsCurr=0,
+            loadL1RmsCurr=0,
+            loadL2RmsCurr=0,
+            genL1RmsCurr=0,
+            genL2RmsCurr=0,
+            upsL1RmsCurr=0,
+            upsL2RmsCurr=0,
+            gridL1ActivePower=0,
+            gridL2ActivePower=0,
+            loadL1ActivePower=0,
+            loadL2ActivePower=0,
+            genL1ActivePower=0,
+            genL2ActivePower=0,
+            upsL1ActivePower=0,
+            upsL2ActivePower=0,
+            hybridPower=0,
+            gridFreq=6000,
+        )
+
+        runtime = MidboxRuntime.model_construct(
+            midboxData=midbox_data,
+            fwCode="v1.0.0",
+        )
+
+        mid_device._runtime = runtime
+        return mid_device
+
+    def test_ac_couple_power_reads_from_smart_load_when_ac_couple_mode(
+        self, mid_device_ac_couple_mode
+    ):
+        """Verify AC Couple power reads Smart Load data when port is in AC Couple mode."""
+        device = mid_device_ac_couple_mode
+
+        # Port 1 is in AC Couple mode (status=2)
+        # Should read from smartLoad1L*ActivePower fields
+        assert device.ac_couple1_l1_power == -1019
+        assert device.ac_couple1_l2_power == -1020
+        assert device.ac_couple1_power == -2039  # Sum of L1 + L2
+
+        # Port 4 is in AC Couple mode (status=2)
+        # Should read from smartLoad4L*ActivePower fields
+        assert device.ac_couple4_l1_power == 800
+        assert device.ac_couple4_l2_power == 900
+        assert device.ac_couple4_power == 1700  # Sum of L1 + L2
+
+    def test_ac_couple_power_returns_zero_when_not_ac_couple_mode(
+        self, mid_device_ac_couple_mode
+    ):
+        """Verify AC Couple power returns 0 when port is not in AC Couple mode."""
+        device = mid_device_ac_couple_mode
+
+        # Port 2 is unused (status=0)
+        # Should return 0 from acCouple2L*ActivePower fields
+        assert device.ac_couple2_l1_power == 0
+        assert device.ac_couple2_l2_power == 0
+        assert device.ac_couple2_power == 0
+
+        # Port 3 is in Smart Load mode (status=1)
+        # Should return 0 from acCouple3L*ActivePower fields (not from smartLoad)
+        assert device.ac_couple3_l1_power == 0
+        assert device.ac_couple3_l2_power == 0
+        assert device.ac_couple3_power == 0
+
+    def test_smart_load_power_unaffected_by_remapping(self, mid_device_ac_couple_mode):
+        """Verify Smart Load power properties always read from Smart Load fields."""
+        device = mid_device_ac_couple_mode
+
+        # Smart Load properties should always return Smart Load field values
+        # regardless of port status
+        assert device.smart_load1_l1_power == -1019
+        assert device.smart_load1_l2_power == -1020
+        assert device.smart_load3_l1_power == 500
+        assert device.smart_load3_l2_power == 600
+        assert device.smart_load4_l1_power == 800
+        assert device.smart_load4_l2_power == 900

@@ -29,6 +29,40 @@ class MIDRuntimePropertiesMixin:
     _runtime: MidboxRuntime | None
 
     # ===========================================
+    # Smart Port Power Helper Methods
+    # ===========================================
+
+    def _get_ac_couple_power(self, port: int, phase: str) -> int:
+        """Get AC Couple power for a port, using Smart Load data when in AC Couple mode.
+
+        The EG4 API only provides power data in smartLoad*L*ActivePower fields.
+        The acCouple*L*ActivePower fields don't exist in the API response and
+        default to 0. When a port is configured for AC Couple mode (status=2),
+        we read from the Smart Load fields to get the actual power values.
+
+        Args:
+            port: Port number (1-4)
+            phase: Phase identifier ("l1" or "l2")
+
+        Returns:
+            Power in watts, or 0 if no data.
+        """
+        if self._runtime is None:
+            return 0
+
+        midbox = self._runtime.midboxData
+
+        # Check port status - 2 means AC Couple mode
+        port_status = getattr(midbox, f"smartPort{port}Status", 0)
+
+        if port_status == 2:
+            # AC Couple mode - read from Smart Load fields (where API provides data)
+            return int(getattr(midbox, f"smartLoad{port}{phase.upper()}ActivePower", 0))
+        else:
+            # Not in AC Couple mode - return the (likely 0) AC Couple field
+            return int(getattr(midbox, f"acCouple{port}{phase.upper()}ActivePower", 0))
+
+    # ===========================================
     # Voltage Properties - Aggregate
     # ===========================================
 
@@ -655,37 +689,40 @@ class MIDRuntimePropertiesMixin:
     def ac_couple1_l1_power(self) -> int:
         """Get AC Couple 1 L1 active power in watts.
 
+        Note: When port 1 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 1 L1 power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return self._runtime.midboxData.acCouple1L1ActivePower
+        return self._get_ac_couple_power(1, "l1")
 
     @property
     def ac_couple1_l2_power(self) -> int:
         """Get AC Couple 1 L2 active power in watts.
 
+        Note: When port 1 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 1 L2 power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return self._runtime.midboxData.acCouple1L2ActivePower
+        return self._get_ac_couple_power(1, "l2")
 
     @property
     def ac_couple1_power(self) -> int:
         """Get AC Couple 1 total power in watts (L1 + L2).
 
+        Note: When port 1 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 1 total power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return (
-            self._runtime.midboxData.acCouple1L1ActivePower
-            + self._runtime.midboxData.acCouple1L2ActivePower
-        )
+        return self._get_ac_couple_power(1, "l1") + self._get_ac_couple_power(1, "l2")
 
     # ===========================================
     # Power Properties - AC Couple 2
@@ -695,37 +732,40 @@ class MIDRuntimePropertiesMixin:
     def ac_couple2_l1_power(self) -> int:
         """Get AC Couple 2 L1 active power in watts.
 
+        Note: When port 2 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 2 L1 power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return self._runtime.midboxData.acCouple2L1ActivePower
+        return self._get_ac_couple_power(2, "l1")
 
     @property
     def ac_couple2_l2_power(self) -> int:
         """Get AC Couple 2 L2 active power in watts.
 
+        Note: When port 2 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 2 L2 power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return self._runtime.midboxData.acCouple2L2ActivePower
+        return self._get_ac_couple_power(2, "l2")
 
     @property
     def ac_couple2_power(self) -> int:
         """Get AC Couple 2 total power in watts (L1 + L2).
 
+        Note: When port 2 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 2 total power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return (
-            self._runtime.midboxData.acCouple2L1ActivePower
-            + self._runtime.midboxData.acCouple2L2ActivePower
-        )
+        return self._get_ac_couple_power(2, "l1") + self._get_ac_couple_power(2, "l2")
 
     # ===========================================
     # Power Properties - AC Couple 3
@@ -735,37 +775,40 @@ class MIDRuntimePropertiesMixin:
     def ac_couple3_l1_power(self) -> int:
         """Get AC Couple 3 L1 active power in watts.
 
+        Note: When port 3 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 3 L1 power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return self._runtime.midboxData.acCouple3L1ActivePower
+        return self._get_ac_couple_power(3, "l1")
 
     @property
     def ac_couple3_l2_power(self) -> int:
         """Get AC Couple 3 L2 active power in watts.
 
+        Note: When port 3 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 3 L2 power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return self._runtime.midboxData.acCouple3L2ActivePower
+        return self._get_ac_couple_power(3, "l2")
 
     @property
     def ac_couple3_power(self) -> int:
         """Get AC Couple 3 total power in watts (L1 + L2).
 
+        Note: When port 3 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 3 total power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return (
-            self._runtime.midboxData.acCouple3L1ActivePower
-            + self._runtime.midboxData.acCouple3L2ActivePower
-        )
+        return self._get_ac_couple_power(3, "l1") + self._get_ac_couple_power(3, "l2")
 
     # ===========================================
     # Power Properties - AC Couple 4
@@ -775,37 +818,40 @@ class MIDRuntimePropertiesMixin:
     def ac_couple4_l1_power(self) -> int:
         """Get AC Couple 4 L1 active power in watts.
 
+        Note: When port 4 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 4 L1 power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return self._runtime.midboxData.acCouple4L1ActivePower
+        return self._get_ac_couple_power(4, "l1")
 
     @property
     def ac_couple4_l2_power(self) -> int:
         """Get AC Couple 4 L2 active power in watts.
 
+        Note: When port 4 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 4 L2 power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return self._runtime.midboxData.acCouple4L2ActivePower
+        return self._get_ac_couple_power(4, "l2")
 
     @property
     def ac_couple4_power(self) -> int:
         """Get AC Couple 4 total power in watts (L1 + L2).
 
+        Note: When port 4 is in AC Couple mode (status=2), this reads from
+        the Smart Load power fields since the API doesn't provide separate
+        AC Couple power data.
+
         Returns:
             AC Couple 4 total power, or 0 if no data.
         """
-        if self._runtime is None:
-            return 0
-        return (
-            self._runtime.midboxData.acCouple4L1ActivePower
-            + self._runtime.midboxData.acCouple4L2ActivePower
-        )
+        return self._get_ac_couple_power(4, "l1") + self._get_ac_couple_power(4, "l2")
 
     # ===========================================
     # System Status & Info
