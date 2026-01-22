@@ -17,6 +17,14 @@ Example:
     )
     async with transport:
         runtime = await transport.read_runtime()
+
+    # Modbus Transport with specific inverter family (for LXP-EU models)
+    from pylxpweb.devices.inverters._features import InverterFamily
+    transport = create_modbus_transport(
+        host="192.168.1.100",
+        serial="CE12345678",
+        inverter_family=InverterFamily.LXP_EU,
+    )
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ from .modbus import ModbusTransport
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
+    from pylxpweb.devices.inverters._features import InverterFamily
 
 
 def create_http_transport(
@@ -65,11 +74,22 @@ def create_modbus_transport(
     port: int = 502,
     unit_id: int = 1,
     timeout: float = 10.0,
+    inverter_family: InverterFamily | None = None,
 ) -> ModbusTransport:
     """Create a Modbus TCP transport for local network communication.
 
     This allows direct communication with the inverter over the local network
     without requiring cloud connectivity.
+
+    IMPORTANT: Single-Client Limitation
+    ------------------------------------
+    Modbus TCP supports only ONE concurrent connection per gateway/inverter.
+    Running multiple clients (e.g., Home Assistant + custom script) causes:
+    - Transaction ID desynchronization
+    - "Request cancelled outside pymodbus" errors
+    - Intermittent timeouts and data corruption
+
+    Ensure only ONE integration/script connects to each inverter at a time.
 
     Args:
         host: Inverter IP address or hostname
@@ -77,11 +97,16 @@ def create_modbus_transport(
         port: Modbus TCP port (default: 502)
         unit_id: Modbus unit/slave ID (default: 1)
         timeout: Operation timeout in seconds (default: 10.0)
+        inverter_family: Inverter model family for correct register mapping.
+            If None, defaults to PV_SERIES (EG4-18KPV) for backward
+            compatibility. Use InverterFamily.LXP_EU for LXP-EU 12K and
+            similar European models which have different register layouts.
 
     Returns:
         ModbusTransport instance ready for use
 
     Example:
+        # Default usage (PV_SERIES/EG4-18KPV register map)
         transport = create_modbus_transport(
             host="192.168.1.100",
             serial="CE12345678",
@@ -91,9 +116,14 @@ def create_modbus_transport(
             runtime = await transport.read_runtime()
             print(f"PV Power: {runtime.pv_total_power}W")
 
-            battery = await transport.read_battery()
-            if battery:
-                print(f"Battery SOC: {battery.soc}%")
+        # LXP-EU 12K with explicit family
+        from pylxpweb.devices.inverters._features import InverterFamily
+
+        transport = create_modbus_transport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            inverter_family=InverterFamily.LXP_EU,
+        )
 
     Note:
         Modbus communication requires:
@@ -110,6 +140,7 @@ def create_modbus_transport(
         port=port,
         unit_id=unit_id,
         timeout=timeout,
+        inverter_family=inverter_family,
     )
 
 

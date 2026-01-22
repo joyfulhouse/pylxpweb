@@ -445,11 +445,11 @@ class ParallelGroup:
         Returns:
             Average battery voltage in volts, or None if no battery data.
         """
-        voltages = []
+        voltages: list[float] = []
         for inverter in self.inverters:
             if inverter.battery_bank:
                 voltage = inverter.battery_bank.voltage
-                if voltage and voltage > 0:
+                if voltage is not None and voltage > 0:
                     voltages.append(voltage)
 
         if voltages:

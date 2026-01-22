@@ -474,9 +474,7 @@ class TestACCouplePowerRemapping:
         assert device.ac_couple4_l2_power == 900
         assert device.ac_couple4_power == 1700  # Sum of L1 + L2
 
-    def test_ac_couple_power_returns_zero_when_not_ac_couple_mode(
-        self, mid_device_ac_couple_mode
-    ):
+    def test_ac_couple_power_returns_zero_when_not_ac_couple_mode(self, mid_device_ac_couple_mode):
         """Verify AC Couple power returns 0 when port is not in AC Couple mode."""
         device = mid_device_ac_couple_mode
 

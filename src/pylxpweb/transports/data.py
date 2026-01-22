@@ -26,8 +26,74 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pylxpweb.models import EnergyInfo, InverterRuntime
+    from pylxpweb.transports.register_maps import (
+        EnergyRegisterMap,
+        RegisterField,
+        RuntimeRegisterMap,
+    )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _read_register_field(
+    registers: dict[int, int],
+    field_def: RegisterField | None,
+    default: int = 0,
+) -> int:
+    """Read a value from registers using a RegisterField definition.
+
+    Args:
+        registers: Dict mapping register address to raw value
+        field_def: RegisterField defining how to read the value, or None
+        default: Default value if field is None or register not found
+
+    Returns:
+        Raw integer value (no scaling applied yet)
+    """
+    if field_def is None:
+        return default
+
+    if field_def.bit_width == 32:
+        # 32-bit value: high word at address, low word at address+1
+        high = registers.get(field_def.address, 0)
+        low = registers.get(field_def.address + 1, 0)
+        value = (high << 16) | low
+    else:
+        # 16-bit value
+        value = registers.get(field_def.address, default)
+
+    # Handle signed values
+    if field_def.signed:
+        if field_def.bit_width == 16 and value > 32767:
+            value = value - 65536
+        elif field_def.bit_width == 32 and value > 2147483647:
+            value = value - 4294967296
+
+    return value
+
+
+def _read_and_scale_field(
+    registers: dict[int, int],
+    field_def: RegisterField | None,
+    default: float = 0.0,
+) -> float:
+    """Read a value from registers and apply scaling.
+
+    Args:
+        registers: Dict mapping register address to raw value
+        field_def: RegisterField defining how to read and scale the value
+        default: Default value if field is None or register not found
+
+    Returns:
+        Scaled floating-point value
+    """
+    if field_def is None:
+        return default
+
+    from pylxpweb.constants.scaling import apply_scale
+
+    raw_value = _read_register_field(registers, field_def, int(default))
+    return apply_scale(raw_value, field_def.scale_factor)
 
 
 def _clamp_percentage(value: int, name: str) -> int:
@@ -114,7 +180,6 @@ class InverterRuntimeData:
     internal_temperature: float = 0.0  # °C
     radiator_temperature_1: float = 0.0  # °C
     radiator_temperature_2: float = 0.0  # °C
-    battery_control_temperature: float = 0.0  # °C
 
     # Status
     device_status: int = 0  # Status code
@@ -190,6 +255,7 @@ class InverterRuntimeData:
     def from_modbus_registers(
         cls,
         input_registers: dict[int, int],
+        register_map: RuntimeRegisterMap | None = None,
     ) -> InverterRuntimeData:
         """Create from Modbus input register values.
 
@@ -197,104 +263,107 @@ class InverterRuntimeData:
         - EG4-18KPV-12LV Modbus Protocol specification
         - eg4-modbus-monitor project (https://github.com/galets/eg4-modbus-monitor)
         - Yippy's BMS documentation (https://github.com/joyfulhouse/pylxpweb/issues/97)
+        - Yippy's LXP-EU 12K corrections (https://github.com/joyfulhouse/pylxpweb/issues/52)
 
         Args:
             input_registers: Dict mapping register address to raw value
+            register_map: Optional RuntimeRegisterMap for model-specific register
+                locations. If None, defaults to PV_SERIES_RUNTIME_MAP for
+                backward compatibility.
 
         Returns:
             Transport-agnostic runtime data with scaling applied
         """
-        from pylxpweb.constants.scaling import ScaleFactor, apply_scale
+        from pylxpweb.transports.register_maps import PV_SERIES_RUNTIME_MAP
 
-        def get_reg(addr: int, default: int = 0) -> int:
-            """Get register value with default."""
-            return input_registers.get(addr, default)
+        # Use default map if none provided (backward compatible)
+        if register_map is None:
+            register_map = PV_SERIES_RUNTIME_MAP
 
-        def get_reg_pair(high_addr: int, low_addr: int) -> int:
-            """Get 32-bit value from register pair (high, low)."""
-            high = get_reg(high_addr)
-            low = get_reg(low_addr)
-            return (high << 16) | low
+        # Read power values using register map
+        pv1_power = _read_and_scale_field(input_registers, register_map.pv1_power)
+        pv2_power = _read_and_scale_field(input_registers, register_map.pv2_power)
+        pv3_power = _read_and_scale_field(input_registers, register_map.pv3_power)
+        charge_power = _read_and_scale_field(input_registers, register_map.charge_power)
+        discharge_power = _read_and_scale_field(input_registers, register_map.discharge_power)
+        inverter_power = _read_and_scale_field(input_registers, register_map.inverter_power)
+        grid_power = _read_and_scale_field(input_registers, register_map.grid_power)
+        eps_power = _read_and_scale_field(input_registers, register_map.eps_power)
+        load_power = _read_and_scale_field(input_registers, register_map.load_power)
 
-        # Get power values from register pairs
-        pv1_power = get_reg_pair(6, 7)
-        pv2_power = get_reg_pair(8, 9)
-        pv3_power = get_reg_pair(10, 11)
-        charge_power = get_reg_pair(12, 13)
-        discharge_power = get_reg_pair(14, 15)
-        inverter_power = get_reg_pair(20, 21)
-        grid_power = get_reg_pair(22, 23)
-        eps_power = get_reg_pair(30, 31)
-        load_power = get_reg_pair(34, 35)
+        # SOC/SOH packed register (low byte = SOC, high byte = SOH)
+        soc_soh_packed = _read_register_field(input_registers, register_map.soc_soh_packed)
+        battery_soc = soc_soh_packed & 0xFF
+        battery_soh = (soc_soh_packed >> 8) & 0xFF
 
-        # Register 5 contains packed SOC (low byte) and SOH (high byte)
-        # Source: eg4-modbus-monitor project
-        soc_soh_packed = get_reg(5)
-        battery_soc = soc_soh_packed & 0xFF  # Low byte = SOC
-        battery_soh = (soc_soh_packed >> 8) & 0xFF  # High byte = SOH
-
-        # Inverter fault/warning codes (32-bit values at registers 60-63)
-        # Source: eg4-modbus-monitor project
-        inverter_fault_code = get_reg_pair(60, 61)
-        inverter_warning_code = get_reg_pair(62, 63)
-
-        # BMS fault/warning codes (registers 99-100)
-        # Source: Yippy's documentation - these are BMS-specific codes
-        bms_fault_code = get_reg(99)
-        bms_warning_code = get_reg(100)
+        # Fault/warning codes
+        inverter_fault_code = _read_register_field(
+            input_registers, register_map.inverter_fault_code
+        )
+        inverter_warning_code = _read_register_field(
+            input_registers, register_map.inverter_warning_code
+        )
+        bms_fault_code = _read_register_field(input_registers, register_map.bms_fault_code)
+        bms_warning_code = _read_register_field(input_registers, register_map.bms_warning_code)
 
         # Combine fault/warning codes (inverter + BMS)
-        # Use inverter codes as primary, BMS codes if inverter has none
         fault_code = inverter_fault_code if inverter_fault_code else bms_fault_code
         warning_code = inverter_warning_code if inverter_warning_code else bms_warning_code
 
         return cls(
             timestamp=datetime.now(),
             # PV
-            pv1_voltage=apply_scale(get_reg(1), ScaleFactor.SCALE_10),
-            pv1_power=float(pv1_power),
-            pv2_voltage=apply_scale(get_reg(2), ScaleFactor.SCALE_10),
-            pv2_power=float(pv2_power),
-            pv3_voltage=apply_scale(get_reg(3), ScaleFactor.SCALE_10),
-            pv3_power=float(pv3_power),
-            pv_total_power=float(pv1_power + pv2_power + pv3_power),
-            # Battery - SOC/SOH from packed register 5
-            battery_voltage=apply_scale(get_reg(4), ScaleFactor.SCALE_100),
-            battery_current=apply_scale(get_reg(75), ScaleFactor.SCALE_100),
+            pv1_voltage=_read_and_scale_field(input_registers, register_map.pv1_voltage),
+            pv1_power=pv1_power,
+            pv2_voltage=_read_and_scale_field(input_registers, register_map.pv2_voltage),
+            pv2_power=pv2_power,
+            pv3_voltage=_read_and_scale_field(input_registers, register_map.pv3_voltage),
+            pv3_power=pv3_power,
+            pv_total_power=pv1_power + pv2_power + pv3_power,
+            # Battery - SOC/SOH from packed register
+            battery_voltage=_read_and_scale_field(input_registers, register_map.battery_voltage),
+            battery_current=_read_and_scale_field(input_registers, register_map.battery_current),
             battery_soc=battery_soc,
-            battery_soh=battery_soh if battery_soh > 0 else 100,  # Default 100% if not reported
-            battery_charge_power=float(charge_power),
-            battery_discharge_power=float(discharge_power),
-            battery_temperature=float(get_reg(67)),  # Register 67 per eg4-modbus-monitor
+            battery_soh=battery_soh if battery_soh > 0 else 100,
+            battery_charge_power=charge_power,
+            battery_discharge_power=discharge_power,
+            battery_temperature=_read_and_scale_field(
+                input_registers, register_map.battery_temperature
+            ),
             # Grid
-            grid_voltage_r=apply_scale(get_reg(16), ScaleFactor.SCALE_10),
-            grid_voltage_s=apply_scale(get_reg(17), ScaleFactor.SCALE_10),
-            grid_voltage_t=apply_scale(get_reg(18), ScaleFactor.SCALE_10),
-            grid_frequency=apply_scale(get_reg(19), ScaleFactor.SCALE_100),
-            grid_power=float(grid_power),
-            power_to_grid=float(get_reg(33)),
-            power_from_grid=float(grid_power),
+            grid_voltage_r=_read_and_scale_field(input_registers, register_map.grid_voltage_r),
+            grid_voltage_s=_read_and_scale_field(input_registers, register_map.grid_voltage_s),
+            grid_voltage_t=_read_and_scale_field(input_registers, register_map.grid_voltage_t),
+            grid_frequency=_read_and_scale_field(input_registers, register_map.grid_frequency),
+            grid_power=grid_power,
+            power_to_grid=_read_and_scale_field(input_registers, register_map.power_to_grid),
+            power_from_grid=grid_power,
             # Inverter
-            inverter_power=float(inverter_power),
+            inverter_power=inverter_power,
             # EPS
-            eps_voltage_r=apply_scale(get_reg(26), ScaleFactor.SCALE_10),
-            eps_voltage_s=apply_scale(get_reg(27), ScaleFactor.SCALE_10),
-            eps_voltage_t=apply_scale(get_reg(28), ScaleFactor.SCALE_10),
-            eps_frequency=apply_scale(get_reg(29), ScaleFactor.SCALE_100),
-            eps_power=float(eps_power),
-            eps_status=get_reg(32),
+            eps_voltage_r=_read_and_scale_field(input_registers, register_map.eps_voltage_r),
+            eps_voltage_s=_read_and_scale_field(input_registers, register_map.eps_voltage_s),
+            eps_voltage_t=_read_and_scale_field(input_registers, register_map.eps_voltage_t),
+            eps_frequency=_read_and_scale_field(input_registers, register_map.eps_frequency),
+            eps_power=eps_power,
+            eps_status=_read_register_field(input_registers, register_map.eps_status),
             # Load
-            load_power=float(load_power),
+            load_power=load_power,
             # Internal
-            bus_voltage_1=apply_scale(get_reg(43), ScaleFactor.SCALE_10),
-            bus_voltage_2=apply_scale(get_reg(44), ScaleFactor.SCALE_10),
-            # Temperatures (registers 64-68 per eg4-modbus-monitor)
-            internal_temperature=float(get_reg(64)),
-            radiator_temperature_1=float(get_reg(65)),
-            radiator_temperature_2=float(get_reg(66)),
-            battery_control_temperature=float(get_reg(68)),
+            bus_voltage_1=_read_and_scale_field(input_registers, register_map.bus_voltage_1),
+            bus_voltage_2=_read_and_scale_field(input_registers, register_map.bus_voltage_2),
+            # Temperatures
+            internal_temperature=_read_and_scale_field(
+                input_registers, register_map.internal_temperature
+            ),
+            radiator_temperature_1=_read_and_scale_field(
+                input_registers, register_map.radiator_temperature_1
+            ),
+            radiator_temperature_2=_read_and_scale_field(
+                input_registers, register_map.radiator_temperature_2
+            ),
             # Status and fault codes
-            device_status=get_reg(0),
+            device_status=_read_register_field(input_registers, register_map.device_status),
             fault_code=fault_code,
             warning_code=warning_code,
         )
@@ -378,60 +447,102 @@ class InverterEnergyData:
     def from_modbus_registers(
         cls,
         input_registers: dict[int, int],
+        register_map: EnergyRegisterMap | None = None,
     ) -> InverterEnergyData:
         """Create from Modbus input register values.
 
         Args:
             input_registers: Dict mapping register address to raw value
+            register_map: Optional EnergyRegisterMap for model-specific register
+                locations. If None, defaults to PV_SERIES_ENERGY_MAP for
+                backward compatibility.
 
         Returns:
             Transport-agnostic energy data with scaling applied
         """
-        from pylxpweb.constants.scaling import ScaleFactor, apply_scale
+        from pylxpweb.transports.register_maps import PV_SERIES_ENERGY_MAP
 
-        def get_reg(addr: int, default: int = 0) -> int:
-            """Get register value with default."""
-            return input_registers.get(addr, default)
+        # Use default map if none provided (backward compatible)
+        if register_map is None:
+            register_map = PV_SERIES_ENERGY_MAP
 
-        def get_reg_pair(high_addr: int, low_addr: int) -> int:
-            """Get 32-bit value from register pair."""
-            high = get_reg(high_addr)
-            low = get_reg(low_addr)
-            return (high << 16) | low
+        def read_energy_field(
+            field_def: RegisterField | None,
+            is_lifetime_kwh: bool = False,
+        ) -> float:
+            """Read an energy field and convert to kWh.
 
-        # Modbus energy values are in 0.1 Wh, convert to kWh
-        def to_kwh(raw_value: int) -> float:
-            """Convert raw register value (0.1 Wh units) to kWh.
+            Args:
+                field_def: RegisterField for the energy value
+                is_lifetime_kwh: If True, the raw value is in kWh (multiply by 1000
+                    before applying scale to get Wh, then divide by 1000 for kWh)
 
-            Conversion: raw / 10 = Wh, then / 1000 = kWh
-            Example: 184000 -> 18400 Wh -> 18.4 kWh
+            Returns:
+                Energy value in kWh
             """
-            return apply_scale(raw_value, ScaleFactor.SCALE_10) / 1000.0
+            if field_def is None:
+                return 0.0
+
+            raw_value = _read_register_field(input_registers, field_def)
+
+            if is_lifetime_kwh:
+                # PV_SERIES lifetime registers are in kWh directly (single register)
+                # No scaling needed, just return as float
+                return float(raw_value)
+
+            # Normal energy values are in 0.1 Wh, convert to kWh
+            # raw / scale_factor = Wh, then / 1000 = kWh
+            from pylxpweb.constants.scaling import apply_scale
+
+            wh_value = apply_scale(raw_value, field_def.scale_factor)
+            return wh_value / 1000.0
+
+        # Check if lifetime energy uses single-register kWh format (PV_SERIES)
+        # or 32-bit 0.1 Wh format (LXP_EU)
+        lifetime_is_kwh = (
+            register_map.inverter_energy_total is not None
+            and register_map.inverter_energy_total.bit_width == 16
+            and register_map.inverter_energy_total.scale_factor.value == 1
+        )
 
         return cls(
             timestamp=datetime.now(),
-            # Daily energy from register pairs
-            inverter_energy_today=to_kwh(get_reg_pair(45, 46)),
-            grid_import_today=to_kwh(get_reg_pair(47, 48)),
-            charge_energy_today=to_kwh(get_reg_pair(49, 50)),
-            discharge_energy_today=to_kwh(get_reg_pair(51, 52)),
-            eps_energy_today=to_kwh(get_reg_pair(53, 54)),
-            grid_export_today=to_kwh(get_reg_pair(55, 56)),
-            load_energy_today=to_kwh(get_reg_pair(57, 58)),
-            pv1_energy_today=to_kwh(get_reg_pair(97, 98)),
-            pv2_energy_today=to_kwh(get_reg_pair(99, 100)),
-            pv3_energy_today=to_kwh(get_reg_pair(101, 102)),
+            # Daily energy
+            inverter_energy_today=read_energy_field(register_map.inverter_energy_today),
+            grid_import_today=read_energy_field(register_map.grid_import_today),
+            charge_energy_today=read_energy_field(register_map.charge_energy_today),
+            discharge_energy_today=read_energy_field(register_map.discharge_energy_today),
+            eps_energy_today=read_energy_field(register_map.eps_energy_today),
+            grid_export_today=read_energy_field(register_map.grid_export_today),
+            load_energy_today=read_energy_field(register_map.load_energy_today),
+            pv1_energy_today=read_energy_field(register_map.pv1_energy_today),
+            pv2_energy_today=read_energy_field(register_map.pv2_energy_today),
+            pv3_energy_today=read_energy_field(register_map.pv3_energy_today),
             # Lifetime energy
-            inverter_energy_total=to_kwh(get_reg(36) * 1000),
-            grid_import_total=to_kwh(get_reg(37) * 1000),
-            charge_energy_total=to_kwh(get_reg(38) * 1000),
-            discharge_energy_total=to_kwh(get_reg(39) * 1000),
-            eps_energy_total=to_kwh(get_reg(40) * 1000),
-            grid_export_total=to_kwh(get_reg(41) * 1000),
-            load_energy_total=to_kwh(get_reg(42) * 1000),
-            pv1_energy_total=to_kwh(get_reg_pair(91, 92)),
-            pv2_energy_total=to_kwh(get_reg_pair(93, 94)),
-            pv3_energy_total=to_kwh(get_reg_pair(95, 96)),
+            inverter_energy_total=read_energy_field(
+                register_map.inverter_energy_total, is_lifetime_kwh=lifetime_is_kwh
+            ),
+            grid_import_total=read_energy_field(
+                register_map.grid_import_total, is_lifetime_kwh=lifetime_is_kwh
+            ),
+            charge_energy_total=read_energy_field(
+                register_map.charge_energy_total, is_lifetime_kwh=lifetime_is_kwh
+            ),
+            discharge_energy_total=read_energy_field(
+                register_map.discharge_energy_total, is_lifetime_kwh=lifetime_is_kwh
+            ),
+            eps_energy_total=read_energy_field(
+                register_map.eps_energy_total, is_lifetime_kwh=lifetime_is_kwh
+            ),
+            grid_export_total=read_energy_field(
+                register_map.grid_export_total, is_lifetime_kwh=lifetime_is_kwh
+            ),
+            load_energy_total=read_energy_field(
+                register_map.load_energy_total, is_lifetime_kwh=lifetime_is_kwh
+            ),
+            pv1_energy_total=read_energy_field(register_map.pv1_energy_total),
+            pv2_energy_total=read_energy_field(register_map.pv2_energy_total),
+            pv3_energy_total=read_energy_field(register_map.pv3_energy_total),
         )
 
 
