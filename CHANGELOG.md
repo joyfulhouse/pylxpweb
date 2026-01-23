@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.12] - 2026-01-23
+
+### Added
+
+- **Model-Specific Modbus Register Maps** - Support for different inverter families with varying register layouts (#103):
+  - `RegisterField` dataclass for defining individual register fields with address, bit width, scaling, and signed support
+  - `RuntimeRegisterMap` and `EnergyRegisterMap` dataclasses for complete register definitions
+  - `PV_SERIES_RUNTIME_MAP` and `PV_SERIES_ENERGY_MAP` for EG4-18KPV (32-bit power values)
+  - `LXP_EU_RUNTIME_MAP` and `LXP_EU_ENERGY_MAP` for LXP-EU 12K (16-bit power values, 4-register offset)
+  - `get_runtime_map()` and `get_energy_map()` factory functions for family-based map selection
+  - `inverter_family` parameter added to `ModbusTransport` and `create_modbus_transport()`
+
+### Fixed
+
+- **Modbus Timeout Handling** - Removed `asyncio.wait_for()` wrapper from Modbus reads (#103):
+  - Pymodbus handles timeouts internally; double-timeout caused transaction ID desynchronization
+  - Now properly catches `ModbusIOException` for timeout detection
+  - Added single-client limitation documentation (Modbus TCP supports only one concurrent connection)
+
+- **Register Collision Fix** - Per-PV string energy fields set to `None` (#103):
+  - Registers 91-102 are BMS data, not per-PV string energy
+  - Per-PV string energy counters are not available via Modbus (only aggregate energy)
+  - Per-PV string power (registers 6-11) remains available in runtime data
+
+### Removed
+
+- **Flaky Integration Test** - Removed `test_concurrent_refresh_efficiency` (#103):
+  - Test had timing-dependent assertions that failed under caching conditions
+
 ## [0.5.3] - 2026-01-08
 
 ### Fixed
