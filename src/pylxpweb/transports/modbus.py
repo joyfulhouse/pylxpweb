@@ -3,14 +3,26 @@
 This module provides the ModbusTransport class for direct local
 communication with inverters via Modbus TCP (typically through
 a Waveshare RS485-to-Ethernet adapter).
+
+IMPORTANT: Single-Client Limitation
+------------------------------------
+Modbus TCP supports only ONE concurrent connection per gateway/inverter.
+Running multiple clients (e.g., Home Assistant + custom script) causes:
+- Transaction ID desynchronization
+- "Request cancelled outside pymodbus" errors
+- Intermittent timeouts and data corruption
+
+Ensure only ONE integration/script connects to each inverter at a time.
+Disable other Modbus integrations before using this transport.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
+
+from pymodbus.exceptions import ModbusIOException
 
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .data import BatteryBankData, InverterEnergyData, InverterRuntimeData
@@ -24,6 +36,9 @@ from .protocol import BaseTransport
 
 if TYPE_CHECKING:
     from pymodbus.client import AsyncModbusTcpClient
+
+    from pylxpweb.devices.inverters._features import InverterFamily
+    from pylxpweb.transports.register_maps import EnergyRegisterMap, RuntimeRegisterMap
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +71,17 @@ class ModbusTransport(BaseTransport):
     This transport connects directly to the inverter via a Modbus TCP
     gateway (e.g., Waveshare RS485-to-Ethernet adapter).
 
+    IMPORTANT: Single-Client Limitation
+    ------------------------------------
+    Modbus TCP supports only ONE concurrent connection per gateway/inverter.
+    Running multiple clients (e.g., Home Assistant + custom script) causes:
+    - Transaction ID desynchronization
+    - "Request cancelled outside pymodbus" errors
+    - Intermittent timeouts and data corruption
+
+    Ensure only ONE integration/script connects to each inverter at a time.
+    Disable other Modbus integrations before using this transport.
+
     Example:
         transport = ModbusTransport(
             host="192.168.1.100",
@@ -79,6 +105,7 @@ class ModbusTransport(BaseTransport):
         unit_id: int = 1,
         serial: str = "",
         timeout: float = 10.0,
+        inverter_family: InverterFamily | None = None,
     ) -> None:
         """Initialize Modbus transport.
 
@@ -88,12 +115,18 @@ class ModbusTransport(BaseTransport):
             unit_id: Modbus unit/slave ID (default 1)
             serial: Inverter serial number (for identification)
             timeout: Connection and operation timeout in seconds
+            inverter_family: Inverter model family for correct register mapping.
+                If None, defaults to PV_SERIES (EG4-18KPV) for backward
+                compatibility. Use InverterFamily.LXP_EU for LXP-EU models.
         """
+        import asyncio
+
         super().__init__(serial)
         self._host = host
         self._port = port
         self._unit_id = unit_id
         self._timeout = timeout
+        self._inverter_family = inverter_family
         self._client: AsyncModbusTcpClient | None = None
         self._lock = asyncio.Lock()
 
@@ -116,6 +149,25 @@ class ModbusTransport(BaseTransport):
     def unit_id(self) -> int:
         """Get the Modbus unit/slave ID."""
         return self._unit_id
+
+    @property
+    def inverter_family(self) -> InverterFamily | None:
+        """Get the inverter family for register mapping."""
+        return self._inverter_family
+
+    @property
+    def runtime_register_map(self) -> RuntimeRegisterMap:
+        """Get the runtime register map for this inverter family."""
+        from pylxpweb.transports.register_maps import get_runtime_map
+
+        return get_runtime_map(self._inverter_family)
+
+    @property
+    def energy_register_map(self) -> EnergyRegisterMap:
+        """Get the energy register map for this inverter family."""
+        from pylxpweb.transports.register_maps import get_energy_map
+
+        return get_energy_map(self._inverter_family)
 
     async def connect(self) -> None:
         """Establish Modbus TCP connection.
@@ -190,6 +242,12 @@ class ModbusTransport(BaseTransport):
 
         Raises:
             TransportReadError: If read fails
+            TransportTimeoutError: If operation times out
+
+        Note:
+            Timeout handling is delegated to pymodbus internally. We don't use
+            asyncio.wait_for() because the double-timeout causes transaction ID
+            desynchronization issues with pymodbus when timeouts occur.
         """
         self._ensure_connected()
 
@@ -198,13 +256,12 @@ class ModbusTransport(BaseTransport):
 
         async with self._lock:
             try:
-                result = await asyncio.wait_for(
-                    self._client.read_input_registers(
-                        address=address,
-                        count=min(count, 40),
-                        device_id=self._unit_id,
-                    ),
-                    timeout=self._timeout,
+                # Let pymodbus handle timeout internally (set at client init)
+                # Do NOT wrap with asyncio.wait_for() - causes transaction ID issues
+                result = await self._client.read_input_registers(
+                    address=address,
+                    count=min(count, 40),
+                    device_id=self._unit_id,
                 )
 
                 if result.isError():
@@ -226,6 +283,18 @@ class ModbusTransport(BaseTransport):
 
                 return list(result.registers)
 
+            except ModbusIOException as err:
+                # pymodbus raises ModbusIOException for timeouts and connection issues
+                error_msg = str(err)
+                if "timeout" in error_msg.lower():
+                    _LOGGER.error("Timeout reading input registers at %d", address)
+                    raise TransportTimeoutError(
+                        f"Timeout reading input registers at {address}"
+                    ) from err
+                _LOGGER.error("Failed to read input registers at %d: %s", address, err)
+                raise TransportReadError(
+                    f"Failed to read input registers at {address}: {err}"
+                ) from err
             except TimeoutError as err:
                 _LOGGER.error("Timeout reading input registers at %d", address)
                 raise TransportTimeoutError(
@@ -253,6 +322,7 @@ class ModbusTransport(BaseTransport):
 
         Raises:
             TransportReadError: If read fails
+            TransportTimeoutError: If operation times out
         """
         self._ensure_connected()
 
@@ -261,13 +331,11 @@ class ModbusTransport(BaseTransport):
 
         async with self._lock:
             try:
-                result = await asyncio.wait_for(
-                    self._client.read_holding_registers(
-                        address=address,
-                        count=min(count, 40),
-                        device_id=self._unit_id,
-                    ),
-                    timeout=self._timeout,
+                # Let pymodbus handle timeout internally
+                result = await self._client.read_holding_registers(
+                    address=address,
+                    count=min(count, 40),
+                    device_id=self._unit_id,
                 )
 
                 if result.isError():
@@ -289,6 +357,17 @@ class ModbusTransport(BaseTransport):
 
                 return list(result.registers)
 
+            except ModbusIOException as err:
+                error_msg = str(err)
+                if "timeout" in error_msg.lower():
+                    _LOGGER.error("Timeout reading holding registers at %d", address)
+                    raise TransportTimeoutError(
+                        f"Timeout reading holding registers at {address}"
+                    ) from err
+                _LOGGER.error("Failed to read holding registers at %d: %s", address, err)
+                raise TransportReadError(
+                    f"Failed to read holding registers at {address}: {err}"
+                ) from err
             except TimeoutError as err:
                 _LOGGER.error("Timeout reading holding registers at %d", address)
                 raise TransportTimeoutError(
@@ -316,6 +395,7 @@ class ModbusTransport(BaseTransport):
 
         Raises:
             TransportWriteError: If write fails
+            TransportTimeoutError: If operation times out
         """
         self._ensure_connected()
 
@@ -324,13 +404,11 @@ class ModbusTransport(BaseTransport):
 
         async with self._lock:
             try:
-                result = await asyncio.wait_for(
-                    self._client.write_registers(
-                        address=address,
-                        values=values,
-                        device_id=self._unit_id,
-                    ),
-                    timeout=self._timeout,
+                # Let pymodbus handle timeout internally
+                result = await self._client.write_registers(
+                    address=address,
+                    values=values,
+                    device_id=self._unit_id,
                 )
 
                 if result.isError():
@@ -343,6 +421,13 @@ class ModbusTransport(BaseTransport):
 
                 return True
 
+            except ModbusIOException as err:
+                error_msg = str(err)
+                if "timeout" in error_msg.lower():
+                    _LOGGER.error("Timeout writing registers at %d", address)
+                    raise TransportTimeoutError(f"Timeout writing registers at {address}") from err
+                _LOGGER.error("Failed to write registers at %d: %s", address, err)
+                raise TransportWriteError(f"Failed to write registers at {address}: {err}") from err
             except TimeoutError as err:
                 _LOGGER.error("Timeout writing registers at %d", address)
                 raise TransportTimeoutError(f"Timeout writing registers at {address}") from err
@@ -352,6 +437,11 @@ class ModbusTransport(BaseTransport):
 
     async def read_runtime(self) -> InverterRuntimeData:
         """Read runtime data via Modbus input registers.
+
+        Uses the appropriate register map based on the inverter_family parameter
+        set during transport initialization. Different inverter families have
+        different register layouts (e.g., PV_SERIES uses 32-bit power values,
+        LXP_EU uses 16-bit power values with offset addresses).
 
         Note: Register reads are serialized (not concurrent) to prevent
         transaction ID desynchronization issues with pymodbus and some
@@ -382,13 +472,14 @@ class ModbusTransport(BaseTransport):
                     f"Failed to read register group '{group_name}': {e}"
                 ) from e
 
-        return InverterRuntimeData.from_modbus_registers(input_registers)
+        return InverterRuntimeData.from_modbus_registers(input_registers, self.runtime_register_map)
 
     async def read_energy(self) -> InverterEnergyData:
         """Read energy statistics via Modbus input registers.
 
-        Energy data comes from the same input registers as runtime data,
-        so we read the relevant groups.
+        Uses the appropriate energy register map based on the inverter_family
+        parameter. Different models have different register layouts for energy
+        data (e.g., LXP_EU uses 16-bit daily values vs 32-bit for PV_SERIES).
 
         Note: Register reads are serialized to prevent transaction ID issues.
 
@@ -399,7 +490,7 @@ class ModbusTransport(BaseTransport):
             TransportReadError: If read operation fails
         """
         # Read energy-related register groups sequentially
-        groups_needed = ["status_energy", "advanced"]
+        groups_needed = ["status_energy", "bms_data"]
         input_registers: dict[int, int] = {}
 
         for group_name, (start, count) in INPUT_REGISTER_GROUPS.items():
@@ -420,7 +511,7 @@ class ModbusTransport(BaseTransport):
                     f"Failed to read energy register group '{group_name}': {e}"
                 ) from e
 
-        return InverterEnergyData.from_modbus_registers(input_registers)
+        return InverterEnergyData.from_modbus_registers(input_registers, self.energy_register_map)
 
     async def read_battery(self) -> BatteryBankData | None:
         """Read battery information via Modbus.

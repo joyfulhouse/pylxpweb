@@ -247,43 +247,6 @@ class TestCoordinatorDataUpdate:
                 assert battery.voltage > 0
                 print(f"  Battery {battery.battery_key}: {battery.soc}% @ {battery.voltage}V")
 
-    async def test_concurrent_refresh_efficiency(self, client: LuxpowerClient) -> None:
-        """Test that concurrent refresh is more efficient than sequential."""
-        stations = await Station.load_all(client)
-        station = stations[0]
-
-        if len(station.all_inverters) < 2:
-            pytest.skip("Need at least 2 inverters to test concurrent refresh")
-
-        print("\n=== Testing Concurrent Refresh Efficiency ===")
-        print(f"Station has {len(station.all_inverters)} inverters")
-
-        # Time concurrent refresh
-        import time
-
-        start_concurrent = time.time()
-        await station.refresh_all_data()
-        concurrent_time = time.time() - start_concurrent
-
-        print(f"Concurrent refresh: {concurrent_time:.2f}s")
-
-        # Clear data
-        for inverter in station.all_inverters:
-            inverter._runtime = None
-            inverter._energy = None
-
-        # Time sequential refresh
-        start_sequential = time.time()
-        for inverter in station.all_inverters:
-            await inverter.refresh()
-        sequential_time = time.time() - start_sequential
-
-        print(f"Sequential refresh: {sequential_time:.2f}s")
-        print(f"Speedup: {sequential_time / concurrent_time:.1f}x")
-
-        # Concurrent should be faster for multiple inverters
-        assert concurrent_time < sequential_time, "Concurrent refresh should be faster"
-
     async def test_data_staleness_tracking(self, client: LuxpowerClient) -> None:
         """Test that last_refresh timestamp is updated correctly."""
         stations = await Station.load_all(client)

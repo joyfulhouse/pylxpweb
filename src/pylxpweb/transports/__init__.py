@@ -48,6 +48,17 @@ from .factory import create_http_transport, create_modbus_transport
 from .http import HTTPTransport
 from .modbus import ModbusTransport
 from .protocol import BaseTransport, InverterTransport
+from .register_maps import (
+    LXP_EU_ENERGY_MAP,
+    LXP_EU_RUNTIME_MAP,
+    PV_SERIES_ENERGY_MAP,
+    PV_SERIES_RUNTIME_MAP,
+    EnergyRegisterMap,
+    RegisterField,
+    RuntimeRegisterMap,
+    get_energy_map,
+    get_runtime_map,
+)
 
 __all__ = [
     # Factory functions (recommended)
@@ -68,6 +79,16 @@ __all__ = [
     "InverterEnergyData",
     "BatteryBankData",
     "BatteryData",
+    # Register maps
+    "RegisterField",
+    "RuntimeRegisterMap",
+    "EnergyRegisterMap",
+    "PV_SERIES_RUNTIME_MAP",
+    "PV_SERIES_ENERGY_MAP",
+    "LXP_EU_RUNTIME_MAP",
+    "LXP_EU_ENERGY_MAP",
+    "get_runtime_map",
+    "get_energy_map",
     # Exceptions
     "TransportError",
     "TransportConnectionError",
