@@ -58,6 +58,36 @@ class Location:
     country: str
 
 
+@dataclass
+class AttachResult:
+    """Result of attaching local transports to station devices.
+
+    Attributes:
+        matched: Number of transports successfully attached to devices.
+        unmatched: Number of transports that didn't match any device.
+        failed: Number of transports that failed to connect.
+        unmatched_serials: List of serial numbers that didn't match any device.
+        failed_serials: List of serial numbers that failed to connect.
+
+    Example:
+        >>> result = await station.attach_local_transports(configs)
+        >>> print(f"Attached {result.matched} of {result.total} transports")
+        >>> if result.unmatched_serials:
+        ...     print(f"No devices found for: {result.unmatched_serials}")
+    """
+
+    matched: int
+    unmatched: int
+    failed: int
+    unmatched_serials: list[str]
+    failed_serials: list[str]
+
+    @property
+    def total(self) -> int:
+        """Total number of transport configs processed."""
+        return self.matched + self.unmatched + self.failed
+
+
 class Station(BaseDevice):
     """Represents a complete solar installation.
 
@@ -839,6 +869,164 @@ class Station(BaseDevice):
             False if created via load() or load_all() (cloud API).
         """
         return getattr(self, "_is_local_only", False)
+
+    @property
+    def is_hybrid_mode(self) -> bool:
+        """Check if any device has a local transport attached for hybrid mode.
+
+        Hybrid mode means the station was discovered via HTTP API but has
+        local transports attached for faster/local-only data access.
+
+        Returns:
+            True if at least one device has _local_transport attached,
+            False otherwise.
+        """
+        # Check standalone inverters
+        for inverter in self.standalone_inverters:
+            if getattr(inverter, "_local_transport", None) is not None:
+                return True
+
+        # Check inverters in parallel groups
+        for group in self.parallel_groups:
+            for inverter in group.inverters:
+                if getattr(inverter, "_local_transport", None) is not None:
+                    return True
+            # Check MID device in group
+            if group.mid_device and getattr(group.mid_device, "_local_transport", None) is not None:
+                return True
+
+        # Check standalone MID devices
+        for mid_device in self.standalone_mid_devices:
+            if getattr(mid_device, "_local_transport", None) is not None:
+                return True
+
+        return False
+
+    async def attach_local_transports(self, configs: list[TransportConfig]) -> AttachResult:
+        """Attach local transports to HTTP-discovered devices for hybrid mode.
+
+        This method enables hybrid mode by connecting local transports
+        (Modbus TCP or WiFi Dongle) to devices that were originally
+        discovered via the HTTP API. When a local transport is attached,
+        the device will use it for data fetching instead of HTTP.
+
+        The matching is done by serial number - each transport config's
+        serial must match a device's serial_number in the station.
+
+        Args:
+            configs: List of TransportConfig objects specifying connection
+                details. Each config should have a serial number that
+                matches a device in this station.
+
+        Returns:
+            AttachResult with counts of matched, unmatched, and failed
+            transports, plus lists of problematic serial numbers.
+
+        Example:
+            >>> from pylxpweb.transports import TransportConfig, TransportType
+            >>> configs = [
+            ...     TransportConfig(
+            ...         host="192.168.1.100",
+            ...         port=502,
+            ...         serial="CE12345678",
+            ...         transport_type=TransportType.MODBUS_TCP,
+            ...     ),
+            ... ]
+            >>> result = await station.attach_local_transports(configs)
+            >>> print(f"Attached {result.matched} transports")
+            >>> if result.unmatched_serials:
+            ...     print(f"No devices for: {result.unmatched_serials}")
+
+        Note:
+            - Transports are only attached to devices with matching serial
+            - Connection failures are logged and skipped (partial success OK)
+            - Use is_hybrid_mode property to check if any transports attached
+        """
+        if not configs:
+            return AttachResult(
+                matched=0, unmatched=0, failed=0, unmatched_serials=[], failed_serials=[]
+            )
+
+        # Build device lookup by serial number
+        device_lookup: dict[str, Any] = {}
+
+        # Add standalone inverters
+        for inverter in self.standalone_inverters:
+            device_lookup[inverter.serial_number] = inverter
+
+        # Add inverters from parallel groups
+        for group in self.parallel_groups:
+            for inverter in group.inverters:
+                device_lookup[inverter.serial_number] = inverter
+            # Add MID device if present
+            if group.mid_device:
+                device_lookup[group.mid_device.serial_number] = group.mid_device
+
+        # Add standalone MID devices
+        for mid_device in self.standalone_mid_devices:
+            device_lookup[mid_device.serial_number] = mid_device
+
+        matched = 0
+        unmatched = 0
+        failed = 0
+        unmatched_serials: list[str] = []
+        failed_serials: list[str] = []
+
+        for config in configs:
+            try:
+                config.validate()
+                transport = create_transport_from_config(config)
+                await transport.connect()
+
+                # Find matching device
+                device = device_lookup.get(config.serial)
+                if device is None:
+                    _LOGGER.warning(
+                        "No device found with serial %s for transport %s:%d",
+                        config.serial,
+                        config.host,
+                        config.port,
+                    )
+                    unmatched += 1
+                    unmatched_serials.append(config.serial)
+                    continue
+
+                # Attach transport to device
+                device._local_transport = transport
+                matched += 1
+                _LOGGER.info(
+                    "Attached %s transport to device %s at %s:%d",
+                    config.transport_type.value,
+                    config.serial,
+                    config.host,
+                    config.port,
+                )
+
+            except Exception as e:
+                _LOGGER.warning(
+                    "Failed to attach transport for %s at %s:%d: %s",
+                    config.serial,
+                    config.host,
+                    config.port,
+                    e,
+                )
+                failed += 1
+                failed_serials.append(config.serial)
+
+        _LOGGER.info(
+            "Transport attachment complete: %d matched, %d unmatched, %d failed",
+            matched,
+            unmatched,
+            failed,
+        )
+
+        return AttachResult(
+            matched=matched,
+            unmatched=unmatched,
+            failed=failed,
+            unmatched_serials=unmatched_serials,
+            failed_serials=failed_serials,
+        )
 
     async def _load_devices(self) -> None:
         """Load device hierarchy from API.

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 
@@ -64,6 +64,12 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
 
         # Runtime data (private - use properties for access)
         self._runtime: MidboxRuntime | None = None
+
+        # Optional local transport for hybrid mode
+        # This is set by Station.attach_local_transports() for HTTP-discovered devices
+        # Note: MID devices don't currently use transport for data, but we need
+        # the attribute for consistent handling in Station.attach_local_transports()
+        self._local_transport: Any | None = None
 
         # Initialize firmware update detection (from FirmwareUpdateMixin)
         self._init_firmware_update_cache()

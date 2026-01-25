@@ -42,6 +42,7 @@ from .capabilities import (
     MODBUS_CAPABILITIES,
     TransportCapabilities,
 )
+from .config import TransportConfig, TransportType
 from .data import (
     BatteryBankData,
     BatteryData,
@@ -57,7 +58,6 @@ from .exceptions import (
     TransportWriteError,
     UnsupportedOperationError,
 )
-from .config import TransportConfig, TransportType
 from .factory import (
     create_dongle_transport,
     create_http_transport,

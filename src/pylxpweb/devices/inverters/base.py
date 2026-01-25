@@ -99,8 +99,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         super().__init__(client, serial_number, model)
 
-        # Optional transport for direct local communication
+        # Optional transport for direct local communication (local-only mode)
+        # This is set when the inverter is created via from_modbus_transport()
         self._transport: InverterTransport | None = transport
+
+        # Optional local transport for hybrid mode
+        # This is set by Station.attach_local_transports() for HTTP-discovered devices
+        self._local_transport: InverterTransport | None = None
 
         # Runtime data (refreshed frequently) - PRIVATE: use properties for access
         # HTTP API returns InverterRuntime, transport returns InverterRuntimeData
@@ -299,13 +304,40 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
     @property
     def has_transport(self) -> bool:
-        """Check if this inverter uses a local transport.
+        """Check if this inverter uses a local transport (local-only mode).
 
         Returns:
             True if transport mode is active (Modbus/Dongle),
             False if using HTTP API.
         """
         return self._transport is not None
+
+    @property
+    def has_local_transport(self) -> bool:
+        """Check if this inverter has a local transport attached (hybrid mode).
+
+        Returns:
+            True if _local_transport is set (hybrid mode),
+            False otherwise.
+        """
+        return self._local_transport is not None
+
+    @property
+    def _active_transport(self) -> InverterTransport | None:
+        """Get the active transport for data fetching.
+
+        In local-only mode, returns _transport.
+        In hybrid mode, returns _local_transport.
+        In HTTP-only mode, returns None.
+
+        Returns:
+            The transport to use for data operations, or None for HTTP.
+        """
+        # Prefer _local_transport (hybrid) over _transport (local-only)
+        # This allows hybrid mode to override local-only for more flexibility
+        if self._local_transport is not None:
+            return self._local_transport
+        return self._transport
 
     async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
         """Refresh runtime, energy, battery, and optionally parameters from API.
@@ -353,78 +385,125 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     async def _fetch_runtime(self) -> None:
         """Fetch runtime data with caching.
 
-        Uses transport if available, otherwise falls back to HTTP API.
+        Uses local transport (hybrid mode) or transport (local-only mode) if available,
+        otherwise falls back to HTTP API. In hybrid mode, if local transport fails,
+        falls back to HTTP API.
         """
         async with self._runtime_cache_lock:
-            try:
-                if self._transport is not None:
-                    # Use transport for direct local communication
+            transport = self._active_transport
+            transport_failed = False
 
-                    transport_data = await self._transport.read_runtime()
+            # Try transport first if available
+            if transport is not None:
+                try:
+                    transport_data = await transport.read_runtime()
                     # Store transport data directly - we'll expose via properties
                     self._transport_runtime = transport_data
                     self._runtime_cache_time = datetime.now()
-                else:
-                    # Use HTTP API
+                    return  # Success - exit early
+                except Exception as err:
+                    _LOGGER.debug(
+                        "Transport failed for runtime data for %s: %s",
+                        self.serial_number,
+                        err,
+                    )
+                    transport_failed = True
+
+            # Fall back to HTTP API if no transport or transport failed in hybrid mode
+            # Hybrid mode falls back to HTTP; local-only mode does not
+            if transport is None or (transport_failed and self._local_transport is not None):
+                try:
                     runtime_data = await self._client.api.devices.get_inverter_runtime(
                         self.serial_number
                     )
                     self._runtime = runtime_data
                     self._runtime_cache_time = datetime.now()
-            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
-                # Keep existing cached data on API/connection errors
-                _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
-                # Preserve existing cached data
-            except Exception as err:
-                # Catch transport errors as well
-                _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
+                except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
+                    # Keep existing cached data on API/connection errors
+                    _LOGGER.debug(
+                        "Failed to fetch runtime data for %s: %s",
+                        self.serial_number,
+                        err,
+                    )
 
     async def _fetch_energy(self) -> None:
         """Fetch energy data with caching.
 
-        Uses transport if available, otherwise falls back to HTTP API.
+        Uses local transport (hybrid mode) or transport (local-only mode) if available,
+        otherwise falls back to HTTP API. In hybrid mode, if local transport fails,
+        falls back to HTTP API.
         """
         async with self._energy_cache_lock:
-            try:
-                if self._transport is not None:
-                    # Use transport for direct local communication
-                    transport_data = await self._transport.read_energy()
+            transport = self._active_transport
+            transport_failed = False
+
+            # Try transport first if available
+            if transport is not None:
+                try:
+                    transport_data = await transport.read_energy()
                     self._transport_energy = transport_data
                     self._energy_cache_time = datetime.now()
-                else:
-                    # Use HTTP API
+                    return  # Success - exit early
+                except Exception as err:
+                    _LOGGER.debug(
+                        "Transport failed for energy data for %s: %s",
+                        self.serial_number,
+                        err,
+                    )
+                    transport_failed = True
+
+            # Fall back to HTTP API if no transport or transport failed in hybrid mode
+            if transport is None or (transport_failed and self._local_transport is not None):
+                try:
                     energy_data = await self._client.api.devices.get_inverter_energy(
                         self.serial_number
                     )
                     self._energy = energy_data
                     self._energy_cache_time = datetime.now()
-            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
-                # Keep existing cached data on API/connection errors
-                _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
-            except Exception as err:
-                # Catch transport errors as well
-                _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
+                except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
+                    # Keep existing cached data on API/connection errors
+                    _LOGGER.debug(
+                        "Failed to fetch energy data for %s: %s",
+                        self.serial_number,
+                        err,
+                    )
 
     async def _fetch_battery(self) -> None:
         """Fetch battery data with caching.
 
-        Uses transport if available, otherwise falls back to HTTP API.
+        Uses local transport (hybrid mode) or transport (local-only mode) if available,
+        otherwise falls back to HTTP API. In hybrid mode, if local transport fails,
+        falls back to HTTP API.
+
         Note: Transport returns BatteryBankData with aggregate info only
         (individual battery data requires HTTP API).
         """
         async with self._battery_cache_lock:
-            try:
-                if self._transport is not None:
-                    # Use transport for direct local communication
+            transport = self._active_transport
+            transport_failed = False
+
+            # Try transport first if available
+            if transport is not None:
+                try:
                     # Transport returns aggregate BMS data from input registers
-                    transport_battery = await self._transport.read_battery()
+                    transport_battery = await transport.read_battery()
                     if transport_battery is not None:
                         # Store transport battery data in battery bank format
                         # Note: Transport doesn't have individual battery details
                         self._transport_battery = transport_battery
                     self._battery_cache_time = datetime.now()
-                else:
-                    # Use HTTP API for full battery details
+                    return  # Success - exit early
+                except Exception as err:
+                    _LOGGER.debug(
+                        "Transport failed for battery data for %s: %s",
+                        self.serial_number,
+                        err,
+                    )
+                    transport_failed = True
+
+            # Fall back to HTTP API if no transport or transport failed in hybrid mode
+            if transport is None or (transport_failed and self._local_transport is not None):
+                try:
                     battery_data = await self._client.api.devices.get_battery_info(
                         self.serial_number
                     )
@@ -437,24 +516,28 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                         await self._update_batteries(battery_data.batteryArray)
 
                     self._battery_cache_time = datetime.now()
-            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
-                # Keep existing cached data on API/connection errors
-                _LOGGER.debug("Failed to fetch battery data for %s: %s", self.serial_number, err)
-            except Exception as err:
-                # Catch any other exceptions (e.g., ValidationError from unexpected API response)
-                # Log at warning level since this indicates an unexpected issue
-                _LOGGER.warning(
-                    "Unexpected error fetching battery data for %s: %s (%s)",
-                    self.serial_number,
-                    err,
-                    type(err).__name__,
-                )
+                except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
+                    # Keep existing cached data on API/connection errors
+                    _LOGGER.debug(
+                        "Failed to fetch battery data for %s: %s",
+                        self.serial_number,
+                        err,
+                    )
+                except Exception as err:
+                    # Catch any other exceptions (e.g., ValidationError)
+                    _LOGGER.warning(
+                        "Unexpected error fetching battery data for %s: %s (%s)",
+                        self.serial_number,
+                        err,
+                        type(err).__name__,
+                    )
 
     async def _fetch_parameters(self) -> None:
         """Fetch all parameters with caching.
 
-        Uses transport if available for direct Modbus register reads,
-        otherwise fetches from HTTP API (3 concurrent register ranges).
+        Uses local transport (hybrid mode) or transport (local-only mode) if available
+        for direct Modbus register reads, otherwise fetches from HTTP API.
+        In hybrid mode, if local transport fails, falls back to HTTP API.
 
         Register ranges (HTTP mode):
         - Range 1: Registers 0-126 (base parameters)
@@ -462,9 +545,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         - Range 3: Registers 240-366 (extended parameters 2)
         """
         async with self._parameters_cache_lock:
-            try:
-                if self._transport is not None:
-                    # Use transport for direct register reads
+            transport = self._active_transport
+            transport_failed = False
+
+            # Try transport first if available
+            if transport is not None:
+                try:
                     # Read holding registers in groups
                     all_parameters: dict[str, Any] = {}
 
@@ -481,7 +567,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
                     for start, count in register_groups:
                         try:
-                            regs = await self._transport.read_parameters(start, count)
+                            regs = await transport.read_parameters(start, count)
                             # Convert register addresses to parameter names
                             for addr, value in regs.items():
                                 # Store as reg_N for now, mapping done elsewhere
@@ -498,8 +584,20 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     if all_parameters:
                         self.parameters = all_parameters
                         self._parameters_cache_time = datetime.now()
-                else:
-                    # Use HTTP API for full parameter access
+                        return  # Success - exit early
+                    else:
+                        transport_failed = True
+                except Exception as err:
+                    _LOGGER.debug(
+                        "Transport failed for parameters for %s: %s",
+                        self.serial_number,
+                        err,
+                    )
+                    transport_failed = True
+
+            # Fall back to HTTP API if no transport or transport failed in hybrid mode
+            if transport is None or (transport_failed and self._local_transport is not None):
+                try:
                     range_tasks = [
                         self._client.api.control.read_parameters(
                             self.serial_number, 0, MAX_REGISTERS_PER_READ
@@ -515,21 +613,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     responses = await asyncio.gather(*range_tasks, return_exceptions=True)
 
                     # Merge all parameter dictionaries
-                    all_parameters = {}
+                    all_params: dict[str, Any] = {}
                     for response in responses:
                         if not isinstance(response, BaseException):
-                            all_parameters.update(response.parameters)
+                            all_params.update(response.parameters)
 
                     # Only update if we got at least some parameters
-                    if all_parameters:
-                        self.parameters = all_parameters
+                    if all_params:
+                        self.parameters = all_params
                         self._parameters_cache_time = datetime.now()
-            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
-                # Keep existing cached data on API/connection errors
-                _LOGGER.debug("Failed to fetch parameters for %s: %s", self.serial_number, err)
-            except Exception as err:
-                # Catch transport errors as well
-                _LOGGER.debug("Failed to fetch parameters for %s: %s", self.serial_number, err)
+                except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
+                    # Keep existing cached data on API/connection errors
+                    _LOGGER.debug(
+                        "Failed to fetch parameters for %s: %s",
+                        self.serial_number,
+                        err,
+                    )
 
     def to_device_info(self) -> DeviceInfo:
         """Convert to device info model.
