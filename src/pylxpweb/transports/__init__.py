@@ -53,6 +53,12 @@ from .data import (
     InverterEnergyData,
     InverterRuntimeData,
 )
+from .discovery import (
+    DeviceDiscoveryInfo,
+    discover_device_info,
+    get_model_family_name,
+    is_gridboss_device,
+)
 from .dongle import DongleTransport
 from .exceptions import (
     TransportConnectionError,
@@ -94,6 +100,11 @@ __all__ = [
     "TransportType",
     "TransportConfig",
     "AttachResult",
+    # Discovery utilities
+    "DeviceDiscoveryInfo",
+    "discover_device_info",
+    "get_model_family_name",
+    "is_gridboss_device",
     # Capabilities
     "TransportCapabilities",
     "HTTP_CAPABILITIES",

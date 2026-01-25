@@ -92,6 +92,8 @@ from .locations import (
 # REGISTERS MODULE
 # ============================================================================
 from .registers import (
+    DEVICE_TYPE_CODE_FLEXBOSS,
+    DEVICE_TYPE_CODE_GRIDBOSS,
     DEVICE_TYPE_CODE_LXP_EU,
     DEVICE_TYPE_CODE_PV_SERIES,
     DEVICE_TYPE_CODE_SNA,
@@ -425,6 +427,8 @@ __all__ = [
     "DEVICE_TYPE_CODE_SNA",
     "DEVICE_TYPE_CODE_PV_SERIES",
     "DEVICE_TYPE_CODE_LXP_EU",
+    "DEVICE_TYPE_CODE_FLEXBOSS",
+    "DEVICE_TYPE_CODE_GRIDBOSS",
     "get_func_en_bit_mask",
     "set_func_en_bit",
     "get_func_en_bit",

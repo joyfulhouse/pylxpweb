@@ -12,7 +12,12 @@ from abc import abstractmethod
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from pylxpweb.constants import MAX_REGISTERS_PER_READ, SOC_MAX_PERCENT, SOC_MIN_PERCENT
+from pylxpweb.constants import (
+    DEVICE_TYPE_CODE_GRIDBOSS,
+    MAX_REGISTERS_PER_READ,
+    SOC_MAX_PERCENT,
+    SOC_MIN_PERCENT,
+)
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 from pylxpweb.models import OperatingMode
 
@@ -237,6 +242,14 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             params = await transport.read_parameters(19, 1)
             if 19 in params:
                 device_type_code = params[19]
+
+                # Check for GridBOSS/MIDbox - these are not inverters
+                if device_type_code == DEVICE_TYPE_CODE_GRIDBOSS:
+                    raise LuxpowerDeviceError(
+                        f"Device {transport.serial} is a GridBOSS/MIDbox (device type code 50), "
+                        "not an inverter. Use MIDDevice.from_transport() instead."
+                    )
+
                 model_family = DEVICE_TYPE_CODE_TO_FAMILY.get(
                     device_type_code, InverterFamily.UNKNOWN
                 )
@@ -257,6 +270,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                         detected_model = "LXP-EU"  # Default for EU series
                     else:
                         detected_model = "Unknown"
+        except LuxpowerDeviceError:
+            # Re-raise device errors (e.g., GridBOSS detected)
+            raise
         except Exception as err:
             _LOGGER.warning(
                 "Failed to read device type code for %s: %s, using defaults",
