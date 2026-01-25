@@ -653,81 +653,43 @@ class DongleTransport(BaseTransport):
     async def read_battery(self) -> BatteryBankData | None:
         """Read battery information via dongle.
 
+        Uses the register map for correct register addresses and scaling,
+        ensuring extensibility for different inverter families.
+
         Returns:
             Battery bank data with available information, None if no battery
 
         Raises:
             TransportReadError: If read operation fails
         """
-        from pylxpweb.constants.scaling import ScaleFactor, apply_scale
+        # Read power/energy registers (0-31) and BMS registers (80-112)
+        # Combine into single dict for factory method
+        all_registers: dict[int, int] = {}
 
-        # Read power/energy registers (0-31)
+        # Read core battery registers (0-31)
         power_regs = await self._read_input_registers(0, 32)
-
-        # Extract battery data
-        battery_voltage = apply_scale(power_regs[4], ScaleFactor.SCALE_100)
-
-        # Register 5: packed SOC (low byte) and SOH (high byte)
-        soc_soh_packed = power_regs[5]
-        battery_soc = soc_soh_packed & 0xFF
-        battery_soh = (soc_soh_packed >> 8) & 0xFF
-
-        # Battery charge/discharge power (2-register values)
-        charge_power = (power_regs[12] << 16) | power_regs[13]
-        discharge_power = (power_regs[14] << 16) | power_regs[15]
-
-        if battery_voltage < 1.0:
-            _LOGGER.debug(
-                "Battery voltage %.2fV below threshold, assuming no battery",
-                battery_voltage,
-            )
-            return None
+        for i, value in enumerate(power_regs):
+            all_registers[i] = value
 
         # Read BMS registers (80-112)
-        bms_regs: dict[int, int] = {}
         try:
             bms_values = await self._read_input_registers(80, 33)
             for offset, value in enumerate(bms_values):
-                bms_regs[80 + offset] = value
+                all_registers[80 + offset] = value
         except Exception as e:
             _LOGGER.warning("Failed to read BMS registers: %s", e)
 
-        # Extract BMS data
-        bms_fault_code = bms_regs.get(99, 0)
-        bms_warning_code = bms_regs.get(100, 0)
-        battery_count = bms_regs.get(96, 1)
-
-        max_cell_voltage = apply_scale(bms_regs.get(101, 0), ScaleFactor.SCALE_1000)
-        min_cell_voltage = apply_scale(bms_regs.get(102, 0), ScaleFactor.SCALE_1000)
-
-        max_cell_temp_raw = bms_regs.get(103, 0)
-        min_cell_temp_raw = bms_regs.get(104, 0)
-        if max_cell_temp_raw > 32767:
-            max_cell_temp_raw = max_cell_temp_raw - 65536
-        if min_cell_temp_raw > 32767:
-            min_cell_temp_raw = min_cell_temp_raw - 65536
-        max_cell_temperature = apply_scale(max_cell_temp_raw, ScaleFactor.SCALE_10)
-        min_cell_temperature = apply_scale(min_cell_temp_raw, ScaleFactor.SCALE_10)
-
-        cycle_count = bms_regs.get(106, 0)
-
-        return BatteryBankData(
-            timestamp=datetime.now(),
-            voltage=battery_voltage,
-            soc=battery_soc,
-            soh=battery_soh,
-            charge_power=float(charge_power),
-            discharge_power=float(discharge_power),
-            fault_code=bms_fault_code,
-            warning_code=bms_warning_code,
-            battery_count=battery_count if battery_count > 0 else 1,
-            max_cell_voltage=max_cell_voltage,
-            min_cell_voltage=min_cell_voltage,
-            max_cell_temperature=max_cell_temperature,
-            min_cell_temperature=min_cell_temperature,
-            cycle_count=cycle_count,
-            batteries=[],
+        # Use factory method with register map for proper extensibility
+        result = BatteryBankData.from_modbus_registers(
+            all_registers, self.runtime_register_map
         )
+
+        if result is None:
+            _LOGGER.debug(
+                "Battery voltage below threshold, assuming no battery present."
+            )
+
+        return result
 
     async def read_parameters(
         self,

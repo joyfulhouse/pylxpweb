@@ -378,10 +378,11 @@ class TestRegisterMapIntegration:
         from pylxpweb.transports.data import InverterRuntimeData
 
         # Sample registers for LXP_EU (16-bit power values)
+        # Battery voltage uses SCALE_10 (0.1V units) per luxpower-ha-integration
         registers = {
             0: 1,  # Device status
             1: 3800,  # PV1 voltage (380.0V)
-            4: 5100,  # Battery voltage (51.00V)
+            4: 510,  # Battery voltage (51.0V) - raw 510 with SCALE_10
             5: (100 << 8) | 50,  # SOC=50, SOH=100 packed
             7: 4000,  # PV1 power (4000W) - 16-bit at reg 7
             8: 3500,  # PV2 power (3500W) - 16-bit at reg 8

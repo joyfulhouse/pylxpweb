@@ -762,3 +762,85 @@ class BatteryBankData:
         """Validate and clamp percentage values."""
         self.soc = _clamp_percentage(self.soc, "battery_bank_soc")
         self.soh = _clamp_percentage(self.soh, "battery_bank_soh")
+
+    @classmethod
+    def from_modbus_registers(
+        cls,
+        input_registers: dict[int, int],
+        register_map: RuntimeRegisterMap | None = None,
+    ) -> BatteryBankData | None:
+        """Create from Modbus input register values.
+
+        Uses the register map to determine correct register addresses and scaling
+        for each inverter family. This ensures extensibility for future models.
+
+        Args:
+            input_registers: Dict mapping register address to raw value
+            register_map: RuntimeRegisterMap for model-specific register locations.
+                If None, defaults to PV_SERIES_RUNTIME_MAP.
+
+        Returns:
+            BatteryBankData with all values properly scaled, or None if no battery
+        """
+        from pylxpweb.transports.register_maps import PV_SERIES_RUNTIME_MAP
+
+        if register_map is None:
+            register_map = PV_SERIES_RUNTIME_MAP
+
+        # Battery voltage from register map
+        battery_voltage = _read_and_scale_field(input_registers, register_map.battery_voltage)
+
+        # If voltage is too low, assume no battery present
+        if battery_voltage < 1.0:
+            return None
+
+        # SOC/SOH from packed register (low byte = SOC, high byte = SOH)
+        soc_soh_packed = _read_register_field(input_registers, register_map.soc_soh_packed)
+        battery_soc = soc_soh_packed & 0xFF
+        battery_soh = (soc_soh_packed >> 8) & 0xFF
+
+        # Charge/discharge power from register map (16-bit, no scaling)
+        charge_power = _read_and_scale_field(input_registers, register_map.charge_power)
+        discharge_power = _read_and_scale_field(input_registers, register_map.discharge_power)
+
+        # Battery current from register map
+        battery_current = _read_and_scale_field(input_registers, register_map.battery_current)
+
+        # Battery temperature from register map
+        battery_temp = _read_and_scale_field(input_registers, register_map.battery_temperature)
+
+        # BMS data from register map
+        bms_fault_code = _read_register_field(input_registers, register_map.bms_fault_code)
+        bms_warning_code = _read_register_field(input_registers, register_map.bms_warning_code)
+        battery_count = _read_register_field(input_registers, register_map.battery_parallel_num)
+
+        # Cell voltage data from register map (mV -> V via SCALE_1000 in map)
+        max_cell_voltage = _read_and_scale_field(input_registers, register_map.bms_max_cell_voltage)
+        min_cell_voltage = _read_and_scale_field(input_registers, register_map.bms_min_cell_voltage)
+
+        # Cell temperature data from register map (0.1°C -> °C via SCALE_10 in map)
+        max_cell_temp = _read_and_scale_field(input_registers, register_map.bms_max_cell_temperature)
+        min_cell_temp = _read_and_scale_field(input_registers, register_map.bms_min_cell_temperature)
+
+        # Cycle count from register map
+        cycle_count = _read_register_field(input_registers, register_map.bms_cycle_count)
+
+        return cls(
+            timestamp=datetime.now(),
+            voltage=battery_voltage,
+            current=battery_current,
+            soc=battery_soc,
+            soh=battery_soh if battery_soh > 0 else 100,
+            temperature=battery_temp,
+            charge_power=charge_power,
+            discharge_power=discharge_power,
+            fault_code=bms_fault_code,
+            warning_code=bms_warning_code,
+            battery_count=battery_count if battery_count > 0 else 1,
+            max_cell_voltage=max_cell_voltage,
+            min_cell_voltage=min_cell_voltage,
+            max_cell_temperature=max_cell_temp,
+            min_cell_temperature=min_cell_temp,
+            cycle_count=cycle_count,
+            batteries=[],  # Individual battery data not available via Modbus
+        )

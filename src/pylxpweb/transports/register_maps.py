@@ -562,8 +562,8 @@ LXP_EU_RUNTIME_MAP = RuntimeRegisterMap(
     pv1_power=RegisterField(7, 16, ScaleFactor.SCALE_NONE),  # 16-bit at reg 7
     pv2_power=RegisterField(8, 16, ScaleFactor.SCALE_NONE),  # 16-bit at reg 8
     pv3_power=RegisterField(9, 16, ScaleFactor.SCALE_NONE),  # 16-bit at reg 9
-    # Battery
-    battery_voltage=RegisterField(4, 16, ScaleFactor.SCALE_100),
+    # Battery - 0.1V scale per luxpower-ha-integration (I_VBAT)
+    battery_voltage=RegisterField(4, 16, ScaleFactor.SCALE_10),
     battery_current=RegisterField(75, 16, ScaleFactor.SCALE_100, signed=True),  # Same as PV_SERIES
     soc_soh_packed=RegisterField(5, 16, ScaleFactor.SCALE_NONE),
     charge_power=RegisterField(10, 16, ScaleFactor.SCALE_NONE),  # 16-bit at reg 10
