@@ -142,9 +142,7 @@ class TestAttachLocalTransports:
         assert mock_inverter._transport == mock_transport
 
     @pytest.mark.asyncio
-    async def test_attach_unmatched_serial(
-        self, station_with_inverter: Station
-    ) -> None:
+    async def test_attach_unmatched_serial(self, station_with_inverter: Station) -> None:
         """Test attaching transport with non-existent serial."""
         config = TransportConfig(
             host="192.168.1.100",
@@ -188,9 +186,7 @@ class TestAttachLocalTransports:
         assert mock_inverter._transport is None
 
     @pytest.mark.asyncio
-    async def test_attach_multiple_configs(
-        self, mock_client: MagicMock
-    ) -> None:
+    async def test_attach_multiple_configs(self, mock_client: MagicMock) -> None:
         """Test attaching multiple transports."""
         from datetime import datetime
 
@@ -248,9 +244,7 @@ class TestAttachLocalTransports:
         assert inv2._transport == mock_transport2
 
     @pytest.mark.asyncio
-    async def test_attach_mixed_results(
-        self, mock_client: MagicMock
-    ) -> None:
+    async def test_attach_mixed_results(self, mock_client: MagicMock) -> None:
         """Test attaching with mixed success/failure results."""
         from datetime import datetime
 
@@ -300,9 +294,7 @@ class TestAttachLocalTransports:
         assert "CE99999999" in result.unmatched_serials
 
     @pytest.mark.asyncio
-    async def test_attach_empty_configs(
-        self, station_with_inverter: Station
-    ) -> None:
+    async def test_attach_empty_configs(self, station_with_inverter: Station) -> None:
         """Test attaching with empty config list."""
         result = await station_with_inverter.attach_local_transports([])
 
