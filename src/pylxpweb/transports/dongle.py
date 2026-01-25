@@ -34,7 +34,6 @@ from typing import TYPE_CHECKING
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .data import (
     BatteryBankData,
-    InverterDeviceInfo,
     InverterEnergyData,
     InverterRuntimeData,
 )
@@ -336,17 +335,19 @@ class DongleTransport(BaseTransport):
     async def _send_receive(
         self,
         packet: bytes,
+        max_retries: int = 2,
     ) -> list[int]:
-        """Send a packet and receive response.
+        """Send a packet and receive response with retry logic.
 
         Args:
             packet: Packet bytes to send
+            max_retries: Number of retry attempts for empty responses
 
         Returns:
             List of register values from response
 
         Raises:
-            TransportReadError: If send/receive fails
+            TransportReadError: If send/receive fails after retries
             TransportTimeoutError: If operation times out
         """
         self._ensure_connected()
@@ -354,30 +355,71 @@ class DongleTransport(BaseTransport):
         if self._writer is None or self._reader is None:
             raise TransportConnectionError("Socket not initialized")
 
+        last_error: TransportReadError | None = None
+
         async with self._lock:
-            try:
-                # Send packet
-                self._writer.write(packet)
-                await self._writer.drain()
+            for attempt in range(max_retries + 1):
+                try:
+                    # Send packet
+                    self._writer.write(packet)
+                    await self._writer.drain()
 
-                # Receive response
-                response = await asyncio.wait_for(
-                    self._reader.read(RECV_BUFFER_SIZE),
-                    timeout=self._timeout,
-                )
+                    # Receive response with slightly longer timeout for dongles
+                    response = await asyncio.wait_for(
+                        self._reader.read(RECV_BUFFER_SIZE),
+                        timeout=self._timeout,
+                    )
 
-                if not response:
-                    raise TransportReadError("Empty response from dongle")
+                    if not response:
+                        # Empty response - dongle may be slow or blocking requests
+                        if attempt < max_retries:
+                            _LOGGER.debug(
+                                "Empty response from dongle (attempt %d/%d), retrying...",
+                                attempt + 1,
+                                max_retries + 1,
+                            )
+                            # Small delay before retry
+                            await asyncio.sleep(0.5)
+                            continue
+                        # Final attempt failed
+                        raise TransportReadError(
+                            "Empty response from dongle. This may indicate: "
+                            "(1) Dongle firmware is blocking local Modbus access, "
+                            "(2) Connection was closed by dongle, or "
+                            "(3) Dongle requires more time to respond. "
+                            "Try increasing timeout or check dongle firmware version."
+                        )
 
-                # Parse response
-                return self._parse_response(response)
+                    # Parse response
+                    return self._parse_response(response)
 
-            except TimeoutError as err:
-                _LOGGER.error("Timeout waiting for dongle response")
-                raise TransportTimeoutError("Timeout waiting for dongle response") from err
-            except OSError as err:
-                _LOGGER.error("Socket error communicating with dongle: %s", err)
-                raise TransportReadError(f"Socket error: {err}") from err
+                except TimeoutError as err:
+                    _LOGGER.error("Timeout waiting for dongle response")
+                    raise TransportTimeoutError(
+                        "Timeout waiting for dongle response. "
+                        "Recent dongle firmware may block port 8000 for security. "
+                        "Consider using Modbus TCP with RS485 adapter instead."
+                    ) from err
+                except OSError as err:
+                    _LOGGER.error("Socket error communicating with dongle: %s", err)
+                    raise TransportReadError(f"Socket error: {err}") from err
+                except TransportReadError as err:
+                    last_error = err
+                    if attempt < max_retries:
+                        _LOGGER.debug(
+                            "Read error (attempt %d/%d): %s, retrying...",
+                            attempt + 1,
+                            max_retries + 1,
+                            err,
+                        )
+                        await asyncio.sleep(0.5)
+                        continue
+                    raise
+
+        # Should not reach here, but satisfy type checker
+        if last_error:
+            raise last_error
+        raise TransportReadError("Unexpected error in send/receive")
 
     def _parse_response(self, response: bytes) -> list[int]:
         """Parse a dongle response packet.
@@ -679,30 +721,6 @@ class DongleTransport(BaseTransport):
             batteries=[],
         )
 
-    async def read_device_info(self) -> InverterDeviceInfo:
-        """Read device identification and firmware version information.
-
-        Reads holding registers 9-10 which contain firmware version info:
-        - Register 9: Communication firmware version (com_version)
-        - Register 10: Controller firmware version (controller_version)
-
-        Returns:
-            InverterDeviceInfo with firmware versions and serial number
-
-        Raises:
-            TransportReadError: If read operation fails
-        """
-        # Read holding registers 9-10 for version info
-        holding_regs = await self._read_holding_registers(9, 2)
-
-        # Convert list to dict
-        registers = {9 + i: v for i, v in enumerate(holding_regs)}
-
-        return InverterDeviceInfo.from_modbus_registers(
-            holding_registers=registers,
-            serial_number=self._serial,
-        )
-
     async def read_parameters(
         self,
         start_address: int,
@@ -778,3 +796,78 @@ class DongleTransport(BaseTransport):
             await self._write_holding_registers(start_address, values)
 
         return True
+
+    async def read_serial_number(self) -> str:
+        """Read inverter serial number from input registers 115-119.
+
+        The serial number is stored as 10 ASCII characters across 5 registers.
+        Each register contains 2 characters: low byte = char[0], high byte = char[1].
+
+        Returns:
+            10-character serial number string (e.g., "BA12345678")
+        """
+        try:
+            values = await self._read_input_registers(115, 5)
+
+            # Decode ASCII characters from register values
+            chars: list[str] = []
+            for value in values:
+                low_byte = value & 0xFF
+                high_byte = (value >> 8) & 0xFF
+                # Filter out non-printable characters
+                if 32 <= low_byte <= 126:
+                    chars.append(chr(low_byte))
+                if 32 <= high_byte <= 126:
+                    chars.append(chr(high_byte))
+
+            serial = "".join(chars)
+            _LOGGER.debug("Read serial number from dongle: %s", serial)
+            return serial
+        except Exception as err:
+            _LOGGER.debug("Failed to read serial number: %s", err)
+        return ""
+
+    async def read_firmware_version(self) -> str:
+        """Read full firmware version code from holding registers 7-10.
+
+        The firmware information is stored in a specific format:
+        - Registers 7-8: Firmware prefix as byte-swapped ASCII (e.g., "FAAB")
+        - Registers 9-10: Version bytes with special encoding
+
+        Byte layout discovered via diagnostic register reading:
+        - Reg 7: 0x4146 → low byte 'F', high byte 'A' → byte-swapped = "FA"
+        - Reg 8: 0x4241 → low byte 'A', high byte 'B' → byte-swapped = "AB"
+        - Reg 9: v1 is in high byte (e.g., 0x2503 → v1 = 0x25 = 37)
+        - Reg 10: v2 is in low byte (e.g., 0x0125 → v2 = 0x25 = 37)
+
+        The web API returns fwCode like "FAAB-2525" where:
+        - "FAAB" is the device standard/prefix from registers 7-8
+        - "2525" is {v1:02X}{v2:02X} (hex-encoded version bytes)
+
+        Returns:
+            Full firmware code string (e.g., "FAAB-2525")
+            Returns empty string if read fails.
+        """
+        try:
+            # Read holding registers 7-10 (prefix + version)
+            regs = await self._read_holding_registers(7, 4)
+            if len(regs) >= 4:
+                # Extract firmware prefix from registers 7-8 (byte-swapped ASCII)
+                prefix_chars = [
+                    chr(regs[0] & 0xFF),  # Reg 7 low byte
+                    chr((regs[0] >> 8) & 0xFF),  # Reg 7 high byte
+                    chr(regs[1] & 0xFF),  # Reg 8 low byte
+                    chr((regs[1] >> 8) & 0xFF),  # Reg 8 high byte
+                ]
+                prefix = "".join(prefix_chars)
+
+                # Extract version bytes with special encoding
+                v1 = (regs[2] >> 8) & 0xFF  # High byte of register 9
+                v2 = regs[3] & 0xFF  # Low byte of register 10
+
+                firmware = f"{prefix}-{v1:02X}{v2:02X}"
+                _LOGGER.debug("Read firmware version: %s", firmware)
+                return firmware
+        except Exception as err:
+            _LOGGER.debug("Failed to read firmware version: %s", err)
+        return ""

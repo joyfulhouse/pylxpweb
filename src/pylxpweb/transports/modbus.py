@@ -27,7 +27,6 @@ from pymodbus.exceptions import ModbusIOException
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .data import (
     BatteryBankData,
-    InverterDeviceInfo,
     InverterEnergyData,
     InverterRuntimeData,
 )
@@ -739,35 +738,53 @@ class ModbusTransport(BaseTransport):
         _LOGGER.debug("Read serial number from Modbus: %s", serial)
         return serial
 
-    async def read_device_info(self) -> InverterDeviceInfo:
-        """Read device identification and firmware version information.
+    async def read_firmware_version(self) -> str:
+        """Read full firmware version code from holding registers 7-10.
 
-        Reads holding registers 9-10 which contain firmware version info:
-        - Register 9: Communication firmware version (com_version)
-        - Register 10: Controller firmware version (controller_version)
+        The firmware information is stored in a specific format:
+        - Registers 7-8: Firmware prefix as byte-swapped ASCII (e.g., "FAAB")
+        - Registers 9-10: Version bytes with special encoding
+
+        Byte layout discovered via diagnostic register reading:
+        - Reg 7: 0x4146 → low byte 'F', high byte 'A' → byte-swapped = "FA"
+        - Reg 8: 0x4241 → low byte 'A', high byte 'B' → byte-swapped = "AB"
+        - Reg 9: v1 is in high byte (e.g., 0x2503 → v1 = 0x25 = 37)
+        - Reg 10: v2 is in low byte (e.g., 0x0125 → v2 = 0x25 = 37)
+
+        The web API returns fwCode like "FAAB-2525" where:
+        - "FAAB" is the device standard/prefix from registers 7-8
+        - "2525" is {v1:02X}{v2:02X} (hex-encoded version bytes)
 
         Returns:
-            InverterDeviceInfo with firmware versions and serial number
-
-        Raises:
-            TransportReadError: If read operation fails
-
-        Example:
-            >>> transport = ModbusTransport(host="192.168.1.100", serial="BA12345678")
-            >>> await transport.connect()
-            >>> device_info = await transport.read_device_info()
-            >>> print(f"Firmware: {device_info.firmware_version}")
+            Full firmware code string (e.g., "FAAB-2525")
+            Returns empty string if read fails.
         """
-        # Read holding registers 9-10 for version info
-        holding_regs = await self._read_holding_registers(9, 2)
+        try:
+            # Read holding registers 7-10 (prefix + version)
+            regs = await self._read_holding_registers(7, 4)
+            if len(regs) >= 4:
+                # Extract firmware prefix from registers 7-8 (byte-swapped ASCII)
+                # Each register has low byte first, high byte second
+                prefix_chars = [
+                    chr(regs[0] & 0xFF),  # Reg 7 low byte
+                    chr((regs[0] >> 8) & 0xFF),  # Reg 7 high byte
+                    chr(regs[1] & 0xFF),  # Reg 8 low byte
+                    chr((regs[1] >> 8) & 0xFF),  # Reg 8 high byte
+                ]
+                prefix = "".join(prefix_chars)
 
-        # Convert list to dict
-        registers = {9 + i: v for i, v in enumerate(holding_regs)}
+                # Extract version bytes with special encoding
+                # v1 is the HIGH byte of register 9
+                # v2 is the LOW byte of register 10
+                v1 = (regs[2] >> 8) & 0xFF  # High byte of register 9
+                v2 = regs[3] & 0xFF  # Low byte of register 10
 
-        return InverterDeviceInfo.from_modbus_registers(
-            holding_registers=registers,
-            serial_number=self._serial,
-        )
+                firmware = f"{prefix}-{v1:02X}{v2:02X}"
+                _LOGGER.debug("Read firmware version: %s", firmware)
+                return firmware
+        except Exception as err:
+            _LOGGER.debug("Failed to read firmware version: %s", err)
+        return ""
 
     async def validate_serial(self, expected_serial: str) -> bool:
         """Validate that the connected inverter matches the expected serial.

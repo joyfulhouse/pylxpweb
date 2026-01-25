@@ -1,6 +1,6 @@
 [project]
 name = "pylxpweb"
-version = "0.5.16"
+version = "0.5.17"
 description = "Python client library for Luxpower/EG4 inverter web monitoring API"
 readme = "README.md"
 authors = [

@@ -108,56 +108,6 @@ def _clamp_percentage(value: int, name: str) -> int:
 
 
 @dataclass
-class InverterDeviceInfo:
-    """Inverter device identification and version information.
-
-    This data class holds static device information like serial number,
-    firmware versions, and model identification. For Modbus, these come
-    from holding registers 9-10 (com_version, controller_version).
-    """
-
-    # Serial number (10-digit string)
-    serial_number: str = ""
-
-    # Firmware versions from holding registers
-    com_version: int = 0  # Communication firmware version (holding reg 9)
-    controller_version: int = 0  # Controller firmware version (holding reg 10)
-
-    # Derived/formatted version string
-    firmware_version: str = ""
-
-    def __post_init__(self) -> None:
-        """Generate firmware version string from raw version numbers."""
-        if not self.firmware_version and (self.com_version or self.controller_version):
-            # Format as "COM:vXX CTRL:vXX" or similar
-            self.firmware_version = f"v{self.controller_version}.{self.com_version}"
-
-    @classmethod
-    def from_modbus_registers(
-        cls,
-        holding_registers: dict[int, int],
-        serial_number: str = "",
-    ) -> InverterDeviceInfo:
-        """Create InverterDeviceInfo from Modbus holding registers.
-
-        Args:
-            holding_registers: Dict mapping register address to raw value
-            serial_number: Serial number (if already known)
-
-        Returns:
-            InverterDeviceInfo with values from registers
-        """
-        com_version = holding_registers.get(9, 0)
-        controller_version = holding_registers.get(10, 0)
-
-        return cls(
-            serial_number=serial_number,
-            com_version=com_version,
-            controller_version=controller_version,
-        )
-
-
-@dataclass
 class InverterRuntimeData:
     """Real-time inverter operating data.
 
