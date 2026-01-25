@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from pylxpweb.devices.inverters._features import InverterFamily
 from pylxpweb.transports import (
@@ -234,14 +235,14 @@ class TestCreateTransportFromConfig:
             create_transport_from_config(config)
 
     def test_validates_config_before_creation(self) -> None:
-        """Test factory validates config before creating transport."""
-        config = TransportConfig(
-            host="192.168.1.100",
-            port=8000,
-            serial="CE12345678",
-            transport_type=TransportType.WIFI_DONGLE,
-            # Missing dongle_serial - should fail validation
-        )
-
-        with pytest.raises(ValueError, match="dongle_serial required"):
-            create_transport_from_config(config)
+        """Test TransportConfig validates at creation time."""
+        # Validation now happens in TransportConfig.__post_init__
+        # Missing dongle_serial should fail at config creation time
+        with pytest.raises(ValueError, match="dongle_serial is required"):
+            TransportConfig(
+                host="192.168.1.100",
+                port=8000,
+                serial="CE12345678",
+                transport_type=TransportType.WIFI_DONGLE,
+                # Missing dongle_serial - should fail validation
+            )

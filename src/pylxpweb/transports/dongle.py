@@ -844,6 +844,7 @@ class DongleTransport(BaseTransport):
                 raw = raw - 65536
             # Apply scaling
             from pylxpweb.constants.scaling import ScaleFactor
+
             if field.scale_factor == ScaleFactor.SCALE_10:
                 return raw / 10.0
             elif field.scale_factor == ScaleFactor.SCALE_100:

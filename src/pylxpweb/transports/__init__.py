@@ -74,7 +74,6 @@ from .exceptions import (
     TransportWriteError,
     UnsupportedOperationError,
 )
-from .config import TransportConfig, TransportType
 from .factory import (
     create_dongle_transport,
     create_http_transport,

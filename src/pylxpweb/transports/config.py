@@ -133,6 +133,13 @@ class TransportConfig:
         Raises:
             ValueError: If configuration is invalid
         """
+        # HTTP transport has relaxed validation (used for hybrid mode reference only)
+        if self.transport_type == TransportType.HTTP:
+            if not self.serial:
+                raise ValueError("serial is required")
+            return
+
+        # Local transports require host and port
         if not self.host:
             raise ValueError("host is required")
         if self.port <= 0 or self.port > 65535:
