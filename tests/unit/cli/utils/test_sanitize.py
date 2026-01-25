@@ -1,6 +1,5 @@
 """Tests for sanitization utilities."""
 
-import pytest
 
 from pylxpweb.cli.utils.sanitize import sanitize_serial, sanitize_username
 

@@ -333,7 +333,7 @@ class TestDongleResponseParsing:
         )
 
         # Build a Modbus exception response (function code with high bit set)
-        # Data frame: action(1) + modbus_func(1) + inverter_serial(10) + start_reg(2) + exception_code(1)
+        # Data: action(1) + modbus_func(1) + serial(10) + start_reg(2) + exception_code(1)
         data_frame = bytes([0x00, 0x84])  # action=0, func=0x84 (exception for 0x04)
         data_frame += b"CE12345678"  # inverter serial (10 bytes)
         data_frame += struct.pack("<H", 0)  # start register
