@@ -46,7 +46,14 @@ from .protocol import BaseTransport
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
-    from pylxpweb.transports.register_maps import EnergyRegisterMap, RuntimeRegisterMap
+    from pylxpweb.transports.register_maps import (
+        EnergyRegisterMap,
+        RuntimeRegisterMap,
+    )
+
+# Device type codes read from register 19
+DEVICE_TYPE_REGISTER = 19
+DEVICE_TYPE_MIDBOX = 50  # GridBOSS / MID device
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -133,6 +140,7 @@ class DongleTransport(BaseTransport):
         port: int = DEFAULT_PORT,
         timeout: float = DEFAULT_TIMEOUT,
         inverter_family: InverterFamily | None = None,
+        connection_retries: int = 3,
     ) -> None:
         """Initialize WiFi Dongle transport.
 
@@ -145,6 +153,7 @@ class DongleTransport(BaseTransport):
             inverter_family: Inverter model family for correct register mapping.
                 If None, defaults to PV_SERIES (EG4-18KPV) for backward
                 compatibility.
+            connection_retries: Number of connection retry attempts with backoff
         """
         super().__init__(inverter_serial)
         self._host = host
@@ -152,6 +161,7 @@ class DongleTransport(BaseTransport):
         self._dongle_serial = dongle_serial
         self._timeout = timeout
         self._inverter_family = inverter_family
+        self._connection_retries = connection_retries
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
@@ -223,63 +233,109 @@ class DongleTransport(BaseTransport):
             _LOGGER.debug("No initial data from dongle (expected for some models)")
 
     async def connect(self) -> None:
-        """Establish TCP connection to the WiFi dongle.
+        """Establish TCP connection to the WiFi dongle with retry and backoff.
+
+        The dongle only allows one TCP connection at a time. If connection fails,
+        retries with exponential backoff (1s, 2s, 4s, ...) to handle cases where
+        a previous connection wasn't properly released.
 
         Raises:
-            TransportConnectionError: If connection fails
+            TransportConnectionError: If all connection attempts fail
         """
-        try:
-            self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self._host, self._port),
-                timeout=self._timeout,
-            )
+        last_error: Exception | None = None
+        retry_delay = 1.0  # Start with 1 second delay
 
-            self._connected = True
-            _LOGGER.info(
-                "Dongle transport connected to %s:%s (dongle=%s, inverter=%s)",
-                self._host,
-                self._port,
-                self._dongle_serial,
-                self._serial,
-            )
+        for attempt in range(self._connection_retries):
+            try:
+                if attempt > 0:
+                    _LOGGER.info(
+                        "Connection retry %d/%d to %s:%s (waiting %.1fs)...",
+                        attempt,
+                        self._connection_retries - 1,
+                        self._host,
+                        self._port,
+                        retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
 
-            # Discard any initial data the dongle sends after connection
-            # Some dongles send unsolicited packets that can confuse subsequent reads
-            # This is a known behavior documented in luxpower-ha-integration
-            await self._discard_initial_data()
+                self._reader, self._writer = await asyncio.wait_for(
+                    asyncio.open_connection(self._host, self._port),
+                    timeout=self._timeout,
+                )
 
-        except TimeoutError as err:
-            _LOGGER.error(
-                "Timeout connecting to dongle at %s:%s",
-                self._host,
-                self._port,
-            )
+                self._connected = True
+                _LOGGER.info(
+                    "Dongle transport connected to %s:%s (dongle=%s, inverter=%s)%s",
+                    self._host,
+                    self._port,
+                    self._dongle_serial,
+                    self._serial,
+                    f" after {attempt} retries" if attempt > 0 else "",
+                )
+
+                # Discard any initial data the dongle sends after connection
+                # Some dongles send unsolicited packets that can confuse subsequent reads
+                # This is a known behavior documented in luxpower-ha-integration
+                await self._discard_initial_data()
+                return  # Success!
+
+            except TimeoutError as err:
+                last_error = err
+                _LOGGER.warning(
+                    "Timeout connecting to dongle at %s:%s (attempt %d/%d)",
+                    self._host,
+                    self._port,
+                    attempt + 1,
+                    self._connection_retries,
+                )
+            except (OSError, ConnectionRefusedError) as err:
+                last_error = err
+                _LOGGER.warning(
+                    "Connection failed to %s:%s: %s (attempt %d/%d)",
+                    self._host,
+                    self._port,
+                    err,
+                    attempt + 1,
+                    self._connection_retries,
+                )
+
+        # All retries exhausted
+        if isinstance(last_error, TimeoutError):
             raise TransportConnectionError(
-                f"Timeout connecting to {self._host}:{self._port}. "
+                f"Timeout connecting to {self._host}:{self._port} after "
+                f"{self._connection_retries} attempts. "
                 "Verify: (1) IP address is correct, (2) dongle is on network, "
                 "(3) port 8000 is not blocked by firmware."
-            ) from err
-        except OSError as err:
-            _LOGGER.error(
-                "Failed to connect to dongle at %s:%s: %s",
-                self._host,
-                self._port,
-                err,
-            )
+            ) from last_error
+        else:
             raise TransportConnectionError(
-                f"Failed to connect to {self._host}:{self._port}: {err}. "
+                f"Failed to connect to {self._host}:{self._port} after "
+                f"{self._connection_retries} attempts: {last_error}. "
                 "Verify: (1) IP address is correct, (2) dongle is accessible, "
-                "(3) no other client is connected."
-            ) from err
+                "(3) no other client is connected (dongle allows only ONE connection)."
+            ) from last_error
 
     async def disconnect(self) -> None:
-        """Close TCP connection to the dongle."""
+        """Close TCP connection to the dongle.
+
+        Uses timeout on wait_closed() to prevent hanging if the connection
+        is in a bad state. The dongle only supports one connection at a time,
+        so proper cleanup is essential.
+        """
         if self._writer:
             try:
                 self._writer.close()
-                await self._writer.wait_closed()
+                # Use timeout to prevent indefinite hang if connection is stuck
+                await asyncio.wait_for(self._writer.wait_closed(), timeout=5.0)
+            except TimeoutError:
+                _LOGGER.warning(
+                    "Timeout waiting for connection close to %s:%s",
+                    self._host,
+                    self._port,
+                )
             except Exception:  # noqa: BLE001
-                pass  # Ignore errors during disconnect
+                pass  # Ignore other errors during disconnect
 
         self._reader = None
         self._writer = None
@@ -696,6 +752,139 @@ class DongleTransport(BaseTransport):
                 ) from e
 
         return InverterEnergyData.from_modbus_registers(input_registers, self.energy_register_map)
+
+    async def read_device_type(self) -> int:
+        """Read device type code from register 19.
+
+        This can be used to detect whether the connected device is an
+        inverter or a MID/GridBOSS device.
+
+        Known device type codes:
+        - 50: MID/GridBOSS (Microgrid Interconnect Device)
+        - 54: SNA Series
+        - 2092: PV Series (18KPV)
+        - 10284: FlexBOSS21/FlexBOSS18
+
+        Returns:
+            Device type code integer
+
+        Raises:
+            TransportReadError: If read operation fails
+        """
+        # Read register 19 which contains the device type code
+        # Use holding register read (function 0x03) as this is a parameter
+        values = await self._read_holding_registers(DEVICE_TYPE_REGISTER, 1)
+        if not values:
+            raise TransportReadError("Failed to read device type register")
+        return values[0]
+
+    def is_midbox_device(self, device_type_code: int) -> bool:
+        """Check if device type code indicates a MID/GridBOSS device.
+
+        Args:
+            device_type_code: Device type code from read_device_type()
+
+        Returns:
+            True if device is a MID/GridBOSS, False for inverters
+        """
+        return device_type_code == DEVICE_TYPE_MIDBOX
+
+    async def read_midbox_runtime(self) -> dict[str, float | int]:
+        """Read runtime data from a MID/GridBOSS device.
+
+        MID devices use HOLDING registers (function 0x03) for runtime data,
+        unlike inverters which use INPUT registers (function 0x04).
+
+        Returns:
+            Dictionary with MidboxData-compatible field names and values:
+            - gridRmsVolt, upsRmsVolt, genRmsVolt (V)
+            - gridL1RmsVolt, gridL2RmsVolt, etc. (V)
+            - gridL1RmsCurr, gridL2RmsCurr, etc. (A, scaled /100)
+            - gridL1ActivePower, gridL2ActivePower, etc. (W)
+            - gridFreq (Hz, scaled /100)
+
+        Raises:
+            TransportReadError: If read operation fails
+        """
+        from pylxpweb.transports.register_maps import GRIDBOSS_RUNTIME_MAP
+
+        # Read holding registers in groups
+        # Group 1: Registers 0-40 (voltages, currents, power)
+        # Group 2: Registers 128-131 (frequencies)
+        holding_registers: dict[int, int] = {}
+
+        try:
+            # Read voltages, currents, and power (registers 0-40)
+            values = await self._read_holding_registers(0, 40)
+            for offset, value in enumerate(values):
+                holding_registers[offset] = value
+            await asyncio.sleep(0.2)
+
+            # Read frequencies (registers 128-131)
+            freq_values = await self._read_holding_registers(128, 4)
+            for offset, value in enumerate(freq_values):
+                holding_registers[128 + offset] = value
+
+        except Exception as e:
+            _LOGGER.error("Failed to read MID holding registers: %s", e)
+            raise TransportReadError(f"Failed to read MID registers: {e}") from e
+
+        # Extract values using the GridBOSS register map
+        # Map field names to MidboxData-compatible names
+        reg_map = GRIDBOSS_RUNTIME_MAP
+
+        def get_value(field_name: str, default: int = 0) -> float | int:
+            """Extract and scale a register value."""
+            field = getattr(reg_map, field_name, None)
+            if field is None:
+                return default
+            raw = holding_registers.get(field.address, default)
+            # Handle signed values
+            if field.signed and raw > 32767:
+                raw = raw - 65536
+            # Apply scaling
+            from pylxpweb.constants.scaling import ScaleFactor
+            if field.scale_factor == ScaleFactor.SCALE_10:
+                return raw / 10.0
+            elif field.scale_factor == ScaleFactor.SCALE_100:
+                return raw / 100.0
+            return raw
+
+        # Build MidboxData-compatible dictionary
+        return {
+            # Voltages (no scaling - raw volts)
+            "gridRmsVolt": get_value("grid_voltage"),
+            "upsRmsVolt": get_value("ups_voltage"),
+            "genRmsVolt": get_value("gen_voltage"),
+            "gridL1RmsVolt": get_value("grid_l1_voltage"),
+            "gridL2RmsVolt": get_value("grid_l2_voltage"),
+            "upsL1RmsVolt": get_value("ups_l1_voltage"),
+            "upsL2RmsVolt": get_value("ups_l2_voltage"),
+            "genL1RmsVolt": get_value("gen_l1_voltage"),
+            "genL2RmsVolt": get_value("gen_l2_voltage"),
+            # Currents (scaled /100)
+            "gridL1RmsCurr": get_value("grid_l1_current"),
+            "gridL2RmsCurr": get_value("grid_l2_current"),
+            "loadL1RmsCurr": get_value("load_l1_current"),
+            "loadL2RmsCurr": get_value("load_l2_current"),
+            "genL1RmsCurr": get_value("gen_l1_current"),
+            "genL2RmsCurr": get_value("gen_l2_current"),
+            "upsL1RmsCurr": get_value("ups_l1_current"),
+            "upsL2RmsCurr": get_value("ups_l2_current"),
+            # Power (no scaling - raw watts)
+            "gridL1ActivePower": get_value("grid_l1_power"),
+            "gridL2ActivePower": get_value("grid_l2_power"),
+            "loadL1ActivePower": get_value("load_l1_power"),
+            "loadL2ActivePower": get_value("load_l2_power"),
+            "genL1ActivePower": get_value("gen_l1_power"),
+            "genL2ActivePower": get_value("gen_l2_power"),
+            "upsL1ActivePower": get_value("ups_l1_power"),
+            "upsL2ActivePower": get_value("ups_l2_power"),
+            # Frequencies (scaled /100)
+            "phaseLockFreq": get_value("phase_lock_freq"),
+            "gridFreq": get_value("grid_frequency"),
+            "genFreq": get_value("gen_frequency"),
+        }
 
     async def read_battery(self) -> BatteryBankData | None:
         """Read battery information via dongle.

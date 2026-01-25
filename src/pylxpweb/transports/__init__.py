@@ -57,7 +57,13 @@ from .exceptions import (
     TransportWriteError,
     UnsupportedOperationError,
 )
-from .factory import create_dongle_transport, create_http_transport, create_modbus_transport
+from .config import TransportConfig, TransportType
+from .factory import (
+    create_dongle_transport,
+    create_http_transport,
+    create_modbus_transport,
+    create_transport_from_config,
+)
 from .http import HTTPTransport
 from .modbus import ModbusTransport
 from .protocol import BaseTransport, InverterTransport
@@ -78,6 +84,10 @@ __all__ = [
     "create_http_transport",
     "create_modbus_transport",
     "create_dongle_transport",
+    "create_transport_from_config",
+    # Configuration
+    "TransportConfig",
+    "TransportType",
     # Protocol
     "InverterTransport",
     "BaseTransport",

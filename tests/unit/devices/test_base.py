@@ -217,3 +217,69 @@ class TestClientReference:
         assert device1._client is client
         assert device2._client is client
         assert device1._client is device2._client
+
+
+class TestLocalTransportSupport:
+    """Tests for local transport (Modbus/Dongle) support."""
+
+    def test_local_transport_initially_none(self) -> None:
+        """Test that local transport is None by default."""
+        client = LuxpowerClient("test_user", "test_pass")
+        device = ConcreteDevice(client, "1234567890", "TestModel")
+
+        assert device._local_transport is None
+
+    def test_has_local_transport_false_initially(self) -> None:
+        """Test has_local_transport returns False when no transport."""
+        client = LuxpowerClient("test_user", "test_pass")
+        device = ConcreteDevice(client, "1234567890", "TestModel")
+
+        assert device.has_local_transport is False
+
+    def test_has_local_transport_true_when_set(self) -> None:
+        """Test has_local_transport returns True when transport attached."""
+        from unittest.mock import MagicMock
+
+        client = LuxpowerClient("test_user", "test_pass")
+        device = ConcreteDevice(client, "1234567890", "TestModel")
+
+        # Attach mock transport
+        mock_transport = MagicMock()
+        device._local_transport = mock_transport
+
+        assert device.has_local_transport is True
+
+    def test_is_local_only_false_with_credentials(self) -> None:
+        """Test is_local_only returns False when client has credentials."""
+        from unittest.mock import MagicMock
+
+        client = LuxpowerClient("test_user", "test_pass")
+        device = ConcreteDevice(client, "1234567890", "TestModel")
+
+        # Attach mock transport
+        mock_transport = MagicMock()
+        device._local_transport = mock_transport
+
+        assert device.is_local_only is False
+
+    def test_is_local_only_true_without_credentials(self) -> None:
+        """Test is_local_only returns True when client has no credentials."""
+        from unittest.mock import MagicMock
+
+        # Create client without credentials (local-only mode)
+        client = LuxpowerClient("", "")
+        device = ConcreteDevice(client, "1234567890", "TestModel")
+
+        # Attach mock transport
+        mock_transport = MagicMock()
+        device._local_transport = mock_transport
+
+        assert device.is_local_only is True
+
+    def test_is_local_only_false_without_transport(self) -> None:
+        """Test is_local_only returns False when no transport attached."""
+        client = LuxpowerClient("", "")  # Empty credentials
+        device = ConcreteDevice(client, "1234567890", "TestModel")
+
+        # No transport attached
+        assert device.is_local_only is False
