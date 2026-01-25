@@ -28,7 +28,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import struct
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
@@ -324,24 +323,27 @@ class DongleTransport(BaseTransport):
 
         # Build data frame (varies by operation)
         if modbus_func == MODBUS_WRITE_SINGLE:
-            # Write single: address(1) + func(1) + serial(10) + reg(2) + value(2)
+            # Write single: action(1) + func(1) + serial(10) + reg(2) + value(2)
+            # action=0x00 for request (client to inverter), 0x01 for response
             value = values[0] if values else 0
-            data_frame = bytes([0x01, modbus_func]) + inverter_bytes
+            data_frame = bytes([0x00, modbus_func]) + inverter_bytes
             data_frame += struct.pack("<H", start_register)
             data_frame += struct.pack("<H", value)
         elif modbus_func == MODBUS_WRITE_MULTI:
-            # Write multi: address(1) + func(1) + serial(10) + reg(2) + count(2) + bytes(1) + data
+            # Write multi: action(1) + func(1) + serial(10) + reg(2) + count(2) + bytes(1) + data
+            # action=0x00 for request (client to inverter), 0x01 for response
             data_count = len(values) if values else 0
             byte_count = data_count * 2
-            data_frame = bytes([0x01, modbus_func]) + inverter_bytes
+            data_frame = bytes([0x00, modbus_func]) + inverter_bytes
             data_frame += struct.pack("<H", start_register)
             data_frame += struct.pack("<H", data_count)
             data_frame += bytes([byte_count])
             for value in values or []:
                 data_frame += struct.pack("<H", value)
         else:
-            # Read: address(1) + func(1) + serial(10) + reg(2) + count(2)
-            data_frame = bytes([0x01, modbus_func]) + inverter_bytes
+            # Read: action(1) + func(1) + serial(10) + reg(2) + count(2)
+            # action=0x00 for request (client to inverter), 0x01 for response
+            data_frame = bytes([0x00, modbus_func]) + inverter_bytes
             data_frame += struct.pack("<H", start_register)
             data_frame += struct.pack("<H", register_count)
 
@@ -711,14 +713,10 @@ class DongleTransport(BaseTransport):
             _LOGGER.warning("Failed to read BMS registers: %s", e)
 
         # Use factory method with register map for proper extensibility
-        result = BatteryBankData.from_modbus_registers(
-            all_registers, self.runtime_register_map
-        )
+        result = BatteryBankData.from_modbus_registers(all_registers, self.runtime_register_map)
 
         if result is None:
-            _LOGGER.debug(
-                "Battery voltage below threshold, assuming no battery present."
-            )
+            _LOGGER.debug("Battery voltage below threshold, assuming no battery present.")
 
         return result
 

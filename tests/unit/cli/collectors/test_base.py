@@ -2,8 +2,6 @@
 
 from datetime import datetime
 
-import pytest
-
 from pylxpweb.cli.collectors.base import (
     CollectionResult,
     ComparisonResult,

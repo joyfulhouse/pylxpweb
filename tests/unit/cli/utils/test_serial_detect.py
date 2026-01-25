@@ -1,7 +1,5 @@
 """Tests for serial detection utilities."""
 
-import pytest
-
 from pylxpweb.cli.utils.serial_detect import (
     detect_serial_from_registers,
     extract_arm_firmware,

@@ -19,7 +19,6 @@ Disable other Modbus integrations before using this transport.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from pymodbus.exceptions import ModbusIOException
@@ -555,9 +554,7 @@ class ModbusTransport(BaseTransport):
             # Continue with basic battery data even if BMS read fails
 
         # Use factory method with register map for proper extensibility
-        result = BatteryBankData.from_modbus_registers(
-            all_registers, self.runtime_register_map
-        )
+        result = BatteryBankData.from_modbus_registers(all_registers, self.runtime_register_map)
 
         if result is None:
             _LOGGER.debug(
