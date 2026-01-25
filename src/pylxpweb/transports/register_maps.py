@@ -43,21 +43,28 @@ class RegisterField:
     - Bit width: 16-bit (single register) or 32-bit (register pair)
     - Scale factor: How to scale the raw value
     - Signed: Whether the value is signed (two's complement)
+    - Little endian: Word order for 32-bit values
 
-    For 32-bit values, the address is the high word and address+1 is the low word.
+    For 32-bit values:
+    - little_endian=False (default): high word at address, low word at address+1
+    - little_endian=True: low word at address, high word at address+1
 
     Example:
         # 16-bit voltage at register 16, scale by /10
         grid_voltage = RegisterField(16, 16, ScaleFactor.SCALE_10)
 
-        # 32-bit power at registers 6-7, no scaling
+        # 32-bit power at registers 6-7, no scaling (big-endian)
         pv1_power = RegisterField(6, 32, ScaleFactor.SCALE_NONE)
+
+        # 32-bit energy at registers 46-47, little-endian (LuxPower style)
+        energy_total = RegisterField(46, 32, ScaleFactor.SCALE_10, little_endian=True)
     """
 
     address: int
     bit_width: Literal[16, 32] = 16
     scale_factor: ScaleFactor = ScaleFactor.SCALE_NONE
     signed: bool = False
+    little_endian: bool = False  # Word order for 32-bit: low word first if True
 
 
 @dataclass(frozen=True)
@@ -635,21 +642,22 @@ LXP_EU_ENERGY_MAP = EnergyRegisterMap(
     grid_export_today=RegisterField(36, 16, ScaleFactor.SCALE_10),  # I_ETOGRID_DAY
     load_energy_today=RegisterField(32, 16, ScaleFactor.SCALE_10),  # I_EREC_DAY (AC charge)
     # Lifetime energy - 32-bit pairs per luxpower-ha-integration
-    # NOTE: Previous implementation incorrectly used 16-bit. LuxPower uses 32-bit pairs.
-    pv1_energy_total=RegisterField(40, 32, ScaleFactor.SCALE_10),  # I_EPV1_ALL_L/H
-    pv2_energy_total=RegisterField(42, 32, ScaleFactor.SCALE_10),  # I_EPV2_ALL_L/H
-    pv3_energy_total=RegisterField(44, 32, ScaleFactor.SCALE_10),  # I_EPV3_ALL_L/H
-    inverter_energy_total=RegisterField(46, 32, ScaleFactor.SCALE_10),  # I_EINV_ALL_L/H
+    # NOTE: LuxPower uses little-endian word order (Low word at base address)
+    # The _L/_H suffix in luxpower-ha-integration indicates: _L=Low word, _H=High word
+    pv1_energy_total=RegisterField(40, 32, ScaleFactor.SCALE_10, little_endian=True),
+    pv2_energy_total=RegisterField(42, 32, ScaleFactor.SCALE_10, little_endian=True),
+    pv3_energy_total=RegisterField(44, 32, ScaleFactor.SCALE_10, little_endian=True),
+    inverter_energy_total=RegisterField(46, 32, ScaleFactor.SCALE_10, little_endian=True),
     # Swapped to match HTTP API (see daily energy note above)
-    grid_import_total=RegisterField(58, 32, ScaleFactor.SCALE_10),  # I_ETOUSER_ALL_L/H
-    charge_energy_total=RegisterField(50, 32, ScaleFactor.SCALE_10),  # I_ECHG_ALL_L/H
-    discharge_energy_total=RegisterField(52, 32, ScaleFactor.SCALE_10),  # I_EDISCHG_ALL_L/H
-    eps_energy_total=RegisterField(54, 32, ScaleFactor.SCALE_10),  # I_EEPS_ALL_L/H
-    grid_export_total=RegisterField(56, 32, ScaleFactor.SCALE_10),  # I_ETOGRID_ALL_L/H
-    load_energy_total=RegisterField(48, 32, ScaleFactor.SCALE_10),  # I_EREC_ALL_L/H (AC charge)
+    grid_import_total=RegisterField(58, 32, ScaleFactor.SCALE_10, little_endian=True),
+    charge_energy_total=RegisterField(50, 32, ScaleFactor.SCALE_10, little_endian=True),
+    discharge_energy_total=RegisterField(52, 32, ScaleFactor.SCALE_10, little_endian=True),
+    eps_energy_total=RegisterField(54, 32, ScaleFactor.SCALE_10, little_endian=True),
+    grid_export_total=RegisterField(56, 32, ScaleFactor.SCALE_10, little_endian=True),
+    load_energy_total=RegisterField(48, 32, ScaleFactor.SCALE_10, little_endian=True),
     # Generator energy
     generator_energy_today=RegisterField(124, 16, ScaleFactor.SCALE_10),  # I_EGEN_DAY
-    generator_energy_total=RegisterField(125, 32, ScaleFactor.SCALE_10),  # I_EGEN_ALL_L/H
+    generator_energy_total=RegisterField(125, 32, ScaleFactor.SCALE_10, little_endian=True),
 )
 
 

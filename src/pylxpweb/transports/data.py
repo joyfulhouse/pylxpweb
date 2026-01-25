@@ -54,9 +54,15 @@ def _read_register_field(
         return default
 
     if field_def.bit_width == 32:
-        # 32-bit value: high word at address, low word at address+1
-        high = registers.get(field_def.address, 0)
-        low = registers.get(field_def.address + 1, 0)
+        # 32-bit value from two consecutive registers
+        if field_def.little_endian:
+            # Little-endian: low word at address, high word at address+1 (LuxPower style)
+            low = registers.get(field_def.address, 0)
+            high = registers.get(field_def.address + 1, 0)
+        else:
+            # Big-endian: high word at address, low word at address+1 (EG4 style)
+            high = registers.get(field_def.address, 0)
+            low = registers.get(field_def.address + 1, 0)
         value = (high << 16) | low
     else:
         # 16-bit value
