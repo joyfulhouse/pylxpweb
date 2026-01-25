@@ -313,6 +313,42 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         return inverter
 
+    @classmethod
+    async def from_dongle_transport(
+        cls,
+        transport: InverterTransport,
+        model: str | None = None,
+    ) -> BaseInverter:
+        """Create an inverter from a WiFi dongle transport.
+
+        This is an alias for from_modbus_transport() since both methods work
+        identically with any transport implementing the InverterTransport protocol.
+
+        Args:
+            transport: WiFi dongle transport (DongleTransport instance)
+            model: Optional model name override. If not provided, will be
+                determined from device type code.
+
+        Returns:
+            Configured BaseInverter (or subclass) with transport-backed data
+
+        Raises:
+            TransportConnectionError: If transport fails to connect
+            TransportReadError: If device type code cannot be read
+
+        Example:
+            >>> from pylxpweb.transports import create_dongle_transport
+            >>> transport = create_dongle_transport(
+            ...     host="192.168.1.100",
+            ...     dongle_serial="BA12345678",
+            ...     inverter_serial="CE12345678",
+            ... )
+            >>> inverter = await BaseInverter.from_dongle_transport(transport)
+            >>> await inverter.refresh()
+            >>> print(f"SOC: {inverter.battery_soc}%")
+        """
+        return await cls.from_modbus_transport(transport, model=model)
+
     @property
     def has_transport(self) -> bool:
         """Check if this inverter uses a local transport.
