@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pylxpweb.devices.station import Station
-from pylxpweb.transports.config import AttachResult, TransportConfig, TransportType
+from pylxpweb.transports.config import TransportConfig, TransportType
 
 
 @pytest.fixture
