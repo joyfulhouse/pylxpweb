@@ -7,6 +7,7 @@ batteries, and MID devices.
 from .base import BaseDevice
 from .battery import Battery
 from .battery_bank import BatteryBank
+from .discovery import DeviceDiscoveryInfo, discover_device_info
 from .inverters import BaseInverter, GenericInverter, HybridInverter
 from .mid_device import MIDDevice
 from .models import DeviceClass, DeviceInfo, Entity, EntityCategory, StateClass
@@ -18,6 +19,8 @@ __all__ = [
     "Battery",
     "BatteryBank",
     "BaseInverter",
+    "DeviceDiscoveryInfo",
+    "discover_device_info",
     "GenericInverter",
     "HybridInverter",
     "MIDDevice",

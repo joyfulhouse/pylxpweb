@@ -11,15 +11,22 @@ import logging
 import zoneinfo
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pylxpweb.constants import DEVICE_TYPE_GRIDBOSS, parse_hhmm_timezone
+from pylxpweb.devices.discovery import (
+    DeviceDiscoveryInfo,
+    DiscoveryTransport,
+    discover_device_info,
+)
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 from pylxpweb.models import (
     InverterOverviewResponse,
     ParallelGroupDetailsResponse,
     ParallelGroupDeviceItem,
 )
+from pylxpweb.transports.config import TransportConfig
+from pylxpweb.transports.factory import create_transport_from_config
 
 from .base import BaseDevice
 from .models import DeviceInfo, Entity
@@ -127,6 +134,9 @@ class Station(BaseDevice):
         self.standalone_inverters: list[BaseInverter] = []
         self.standalone_mid_devices: list[MIDDevice] = []
         self.weather: dict[str, Any] | None = None  # Weather data (optional)
+
+        # Local-only mode flag (set by from_local_discovery)
+        self._is_local_only: bool = False
 
     def detect_dst_status(self) -> bool | None:
         """Detect if DST should be currently active based on system time and timezone.
@@ -629,6 +639,206 @@ class Station(BaseDevice):
         # Load each station concurrently
         tasks = [cls.load(client, plant.plantId) for plant in plants_response.rows]
         return await asyncio.gather(*tasks)
+
+    @classmethod
+    async def from_local_discovery(
+        cls,
+        configs: list[TransportConfig],
+        station_name: str,
+        plant_id: int,
+        timezone: str = "UTC",
+    ) -> Station:
+        """Create a station from local transports without cloud API.
+
+        This factory method creates a Station and its device hierarchy by
+        connecting to inverters directly via Modbus TCP or WiFi dongle
+        transports. It auto-discovers device types and parallel group
+        membership from register data.
+
+        The resulting station can be used for monitoring and control
+        operations without requiring cloud API credentials.
+
+        Args:
+            configs: List of TransportConfig objects for each device.
+                Each config specifies connection details (host, port, serial)
+                and transport type (MODBUS_TCP or WIFI_DONGLE).
+            station_name: Human-readable name for the station.
+            plant_id: Unique identifier for the station. Use any unique int
+                for local-only operation (e.g., 99999).
+            timezone: Timezone string (IANA format like "America/Los_Angeles"
+                or legacy format like "UTC"). Default: "UTC".
+
+        Returns:
+            Station instance with device hierarchy populated from local
+            discovery. Inverters will have transports attached for direct
+            data fetching.
+
+        Raises:
+            ValueError: If configs list is empty.
+
+        Example:
+            >>> from pylxpweb.transports import TransportConfig, TransportType
+            >>> configs = [
+            ...     TransportConfig(
+            ...         host="192.168.1.100",
+            ...         port=502,
+            ...         serial="CE12345678",
+            ...         transport_type=TransportType.MODBUS_TCP,
+            ...     ),
+            ... ]
+            >>> station = await Station.from_local_discovery(
+            ...     configs=configs,
+            ...     station_name="Home Solar",
+            ...     plant_id=99999,
+            ...     timezone="America/Los_Angeles",
+            ... )
+            >>> print(f"Found {len(station.all_inverters)} inverters")
+
+        Note:
+            - Devices that fail to connect are skipped (partial discovery)
+            - GridBOSS/MID devices are detected by device type code 50
+            - Parallel groups are determined from register 107 values
+            - The station's _client will be a placeholder (no API access)
+        """
+        from pylxpweb import LuxpowerClient
+
+        from .inverters.base import BaseInverter
+        from .mid_device import MIDDevice
+        from .parallel_group import ParallelGroup
+
+        if not configs:
+            raise ValueError("At least one transport config required")
+
+        # Create a placeholder client (no credentials = local-only)
+        # This client provides the interface expected by devices but
+        # won't make any HTTP API calls
+        placeholder_client = LuxpowerClient("", "")
+
+        # Create station instance with minimal metadata
+        location = Location(address="Local", country="")
+        station = cls(
+            client=placeholder_client,
+            plant_id=plant_id,
+            name=station_name,
+            location=location,
+            timezone=timezone,
+            created_date=datetime.now(),
+        )
+
+        # Mark station as local-only
+        station._is_local_only = True
+
+        # Connect to each transport and discover device info
+        discovered_devices: list[tuple[Any, DeviceDiscoveryInfo]] = []
+
+        for config in configs:
+            try:
+                config.validate()
+                transport = create_transport_from_config(config)
+                await transport.connect()
+
+                # Cast to DiscoveryTransport - both ModbusTransport and DongleTransport
+                # implement the required methods (read_device_type, is_midbox_device, etc.)
+                discovery_transport = cast(DiscoveryTransport, transport)
+                info = await discover_device_info(discovery_transport)
+                discovered_devices.append((transport, info))
+                _LOGGER.info(
+                    "Discovered device %s: type=%d, gridboss=%s, parallel=%d",
+                    info.serial,
+                    info.device_type_code,
+                    info.is_gridboss,
+                    info.parallel_number,
+                )
+
+            except Exception as e:
+                _LOGGER.warning(
+                    "Failed to connect to %s:%d (%s): %s",
+                    config.host,
+                    config.port,
+                    config.serial,
+                    e,
+                )
+                continue
+
+        # Group devices by parallel_number
+        # parallel_number=0 means standalone, 1-n means group A-Z
+        groups_by_number: dict[int, list[tuple[Any, DeviceDiscoveryInfo]]] = {}
+        for transport, info in discovered_devices:
+            pn = info.parallel_number
+            if pn not in groups_by_number:
+                groups_by_number[pn] = []
+            groups_by_number[pn].append((transport, info))
+
+        # Process standalone devices (parallel_number=0)
+        if 0 in groups_by_number:
+            for transport, info in groups_by_number[0]:
+                if info.is_gridboss:
+                    mid_device = MIDDevice(
+                        client=placeholder_client,
+                        serial_number=info.serial,
+                        model="GridBOSS",
+                    )
+                    mid_device._local_transport = transport
+                    station.standalone_mid_devices.append(mid_device)
+                else:
+                    inverter = await BaseInverter.from_modbus_transport(transport)
+                    station.standalone_inverters.append(inverter)
+            del groups_by_number[0]
+
+        # Process parallel groups (parallel_number > 0)
+        for group_number in sorted(groups_by_number.keys()):
+            devices_in_group = groups_by_number[group_number]
+            group_name = chr(ord("A") + group_number - 1)  # 1=A, 2=B, etc.
+
+            # Create parallel group
+            first_serial = devices_in_group[0][1].serial if devices_in_group else ""
+            group = ParallelGroup(
+                client=placeholder_client,
+                station=station,
+                name=group_name,
+                first_device_serial=first_serial,
+            )
+
+            # Assign devices to group
+            for transport, info in devices_in_group:
+                if info.is_gridboss:
+                    mid_device = MIDDevice(
+                        client=placeholder_client,
+                        serial_number=info.serial,
+                        model="GridBOSS",
+                    )
+                    mid_device._local_transport = transport
+                    group.mid_device = mid_device
+                else:
+                    inverter = await BaseInverter.from_modbus_transport(transport)
+                    group.inverters.append(inverter)
+
+            station.parallel_groups.append(group)
+            _LOGGER.info(
+                "Created parallel group %s with %d inverter(s) and %s",
+                group_name,
+                len(group.inverters),
+                "GridBOSS" if group.mid_device else "no MID device",
+            )
+
+        _LOGGER.info(
+            "Local discovery complete: %d standalone inverters, %d parallel groups, %d MID devices",
+            len(station.standalone_inverters),
+            len(station.parallel_groups),
+            len(station.all_mid_devices),
+        )
+
+        return station
+
+    @property
+    def is_local_only(self) -> bool:
+        """Check if this station was created from local discovery only.
+
+        Returns:
+            True if station was created via from_local_discovery(),
+            False if created via load() or load_all() (cloud API).
+        """
+        return getattr(self, "_is_local_only", False)
 
     async def _load_devices(self) -> None:
         """Load device hierarchy from API.

@@ -201,6 +201,7 @@ async def discover_device_info(transport: DiscoveryTransport) -> DeviceDiscovery
 
 __all__ = [
     "DeviceDiscoveryInfo",
+    "DiscoveryTransport",
     "discover_device_info",
     "HOLD_PARALLEL_NUMBER",
     "HOLD_PARALLEL_PHASE",
