@@ -15,6 +15,7 @@ from .models import DeviceInfo, Entity
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
+    from pylxpweb.transports.protocol import InverterTransport
 
 
 class BaseDevice(ABC):
@@ -73,6 +74,9 @@ class BaseDevice(ABC):
         self._last_refresh: datetime | None = None
         self._refresh_interval = timedelta(seconds=30)
 
+        # Local transport (Modbus/Dongle) - None means HTTP-only mode
+        self._local_transport: InverterTransport | None = None
+
     @property
     def model(self) -> str:
         """Get device model name.
@@ -93,6 +97,26 @@ class BaseDevice(ABC):
         if self._last_refresh is None:
             return True
         return datetime.now() - self._last_refresh > self._refresh_interval
+
+    @property
+    def has_local_transport(self) -> bool:
+        """Check if device has an attached local transport.
+
+        Returns:
+            True if a local transport (Modbus or Dongle) is attached,
+            False if only HTTP API is available.
+        """
+        return self._local_transport is not None
+
+    @property
+    def is_local_only(self) -> bool:
+        """Check if device is local-only (no HTTP client credentials).
+
+        Returns:
+            True if the device was created from local transport without
+            cloud API credentials, False otherwise.
+        """
+        return self._local_transport is not None and not self._client.username
 
     @abstractmethod
     async def refresh(self) -> None:

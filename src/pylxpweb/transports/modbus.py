@@ -41,7 +41,14 @@ if TYPE_CHECKING:
     from pymodbus.client import AsyncModbusTcpClient
 
     from pylxpweb.devices.inverters._features import InverterFamily
-    from pylxpweb.transports.register_maps import EnergyRegisterMap, RuntimeRegisterMap
+    from pylxpweb.transports.register_maps import (
+        EnergyRegisterMap,
+        RuntimeRegisterMap,
+    )
+
+# Device type codes read from register 19
+DEVICE_TYPE_REGISTER = 19
+DEVICE_TYPE_MIDBOX = 50  # GridBOSS / MID device
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -758,3 +765,134 @@ class ModbusTransport(BaseTransport):
             )
 
         return matches
+
+    async def read_device_type(self) -> int:
+        """Read device type code from register 19.
+
+        This can be used to detect whether the connected device is an
+        inverter or a MID/GridBOSS device.
+
+        Known device type codes:
+        - 50: MID/GridBOSS (Microgrid Interconnect Device)
+        - 54: SNA Series
+        - 2092: PV Series (18KPV)
+        - 10284: FlexBOSS21/FlexBOSS18
+
+        Returns:
+            Device type code integer
+
+        Raises:
+            TransportReadError: If read operation fails
+        """
+        # Read register 19 which contains the device type code
+        # Use holding register read (function 0x03) as this is a parameter
+        values = await self._read_holding_registers(DEVICE_TYPE_REGISTER, 1)
+        if not values:
+            raise TransportReadError("Failed to read device type register")
+        return values[0]
+
+    def is_midbox_device(self, device_type_code: int) -> bool:
+        """Check if device type code indicates a MID/GridBOSS device.
+
+        Args:
+            device_type_code: Device type code from read_device_type()
+
+        Returns:
+            True if device is a MID/GridBOSS, False for inverters
+        """
+        return device_type_code == DEVICE_TYPE_MIDBOX
+
+    async def read_midbox_runtime(self) -> dict[str, float | int]:
+        """Read runtime data from a MID/GridBOSS device.
+
+        MID devices use HOLDING registers (function 0x03) for runtime data,
+        unlike inverters which use INPUT registers (function 0x04).
+
+        Returns:
+            Dictionary with MidboxData-compatible field names and values:
+            - gridRmsVolt, upsRmsVolt, genRmsVolt (V)
+            - gridL1RmsVolt, gridL2RmsVolt, etc. (V)
+            - gridL1RmsCurr, gridL2RmsCurr, etc. (A, scaled /100)
+            - gridL1ActivePower, gridL2ActivePower, etc. (W)
+            - gridFreq (Hz, scaled /100)
+
+        Raises:
+            TransportReadError: If read operation fails
+        """
+        from pylxpweb.constants.scaling import ScaleFactor
+        from pylxpweb.transports.register_maps import GRIDBOSS_RUNTIME_MAP
+
+        # Read holding registers in groups
+        # Group 1: Registers 0-40 (voltages, currents, power)
+        # Group 2: Registers 128-131 (frequencies)
+        holding_registers: dict[int, int] = {}
+
+        try:
+            # Read voltages, currents, and power (registers 0-40)
+            values = await self._read_holding_registers(0, 40)
+            for offset, value in enumerate(values):
+                holding_registers[offset] = value
+
+            # Read frequencies (registers 128-131)
+            freq_values = await self._read_holding_registers(128, 4)
+            for offset, value in enumerate(freq_values):
+                holding_registers[128 + offset] = value
+
+        except Exception as e:
+            _LOGGER.error("Failed to read MID holding registers: %s", e)
+            raise TransportReadError(f"Failed to read MID registers: {e}") from e
+
+        # Extract values using the GridBOSS register map
+        reg_map = GRIDBOSS_RUNTIME_MAP
+
+        def get_value(field_name: str, default: int = 0) -> float | int:
+            """Extract and scale a register value."""
+            field = getattr(reg_map, field_name, None)
+            if field is None:
+                return default
+            raw = holding_registers.get(field.address, default)
+            # Handle signed values
+            if field.signed and raw > 32767:
+                raw = raw - 65536
+            # Apply scaling
+            if field.scale_factor == ScaleFactor.SCALE_10:
+                return raw / 10.0
+            elif field.scale_factor == ScaleFactor.SCALE_100:
+                return raw / 100.0
+            return raw
+
+        # Build MidboxData-compatible dictionary
+        return {
+            # Voltages (no scaling - raw volts)
+            "gridRmsVolt": get_value("grid_voltage"),
+            "upsRmsVolt": get_value("ups_voltage"),
+            "genRmsVolt": get_value("gen_voltage"),
+            "gridL1RmsVolt": get_value("grid_l1_voltage"),
+            "gridL2RmsVolt": get_value("grid_l2_voltage"),
+            "upsL1RmsVolt": get_value("ups_l1_voltage"),
+            "upsL2RmsVolt": get_value("ups_l2_voltage"),
+            "genL1RmsVolt": get_value("gen_l1_voltage"),
+            "genL2RmsVolt": get_value("gen_l2_voltage"),
+            # Currents (scaled /100)
+            "gridL1RmsCurr": get_value("grid_l1_current"),
+            "gridL2RmsCurr": get_value("grid_l2_current"),
+            "loadL1RmsCurr": get_value("load_l1_current"),
+            "loadL2RmsCurr": get_value("load_l2_current"),
+            "genL1RmsCurr": get_value("gen_l1_current"),
+            "genL2RmsCurr": get_value("gen_l2_current"),
+            "upsL1RmsCurr": get_value("ups_l1_current"),
+            "upsL2RmsCurr": get_value("ups_l2_current"),
+            # Power (no scaling - raw watts)
+            "gridL1ActivePower": get_value("grid_l1_power"),
+            "gridL2ActivePower": get_value("grid_l2_power"),
+            "loadL1ActivePower": get_value("load_l1_power"),
+            "loadL2ActivePower": get_value("load_l2_power"),
+            "genL1ActivePower": get_value("gen_l1_power"),
+            "genL2ActivePower": get_value("gen_l2_power"),
+            "upsL1ActivePower": get_value("ups_l1_power"),
+            "upsL2ActivePower": get_value("ups_l2_power"),
+            # Frequencies (scaled /100)
+            "phaseLockFreq": get_value("phase_lock_freq"),
+            "gridFreq": get_value("grid_frequency"),
+            "genFreq": get_value("gen_frequency"),
+        }

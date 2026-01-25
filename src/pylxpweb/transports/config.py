@@ -2,23 +2,44 @@
 
 This module provides configuration classes for defining local transports
 that can be attached to HTTP-discovered devices for hybrid mode operation.
+
+It supports serialization to/from dictionaries for Home Assistant config entries.
+
+Example:
+    # Create a Modbus transport config
+    config = TransportConfig(
+        host="192.168.1.100",
+        port=502,
+        serial="CE12345678",
+        transport_type=TransportType.MODBUS_TCP,
+        inverter_family=InverterFamily.PV_SERIES,
+    )
+    config.validate()
+
+    # Serialize to dict for storage
+    data = config.to_dict()
+
+    # Restore from dict
+    restored = TransportConfig.from_dict(data)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
 
 
-class TransportType(Enum):
+class TransportType(str, Enum):
     """Types of local transports supported for hybrid mode.
 
     These transports can be attached to HTTP-discovered devices to enable
     local data fetching with automatic HTTP fallback.
+
+    String enum for easy serialization and comparison.
     """
 
     MODBUS_TCP = "modbus_tcp"
@@ -26,6 +47,9 @@ class TransportType(Enum):
 
     WIFI_DONGLE = "wifi_dongle"
     """WiFi dongle transport via inverter's built-in WiFi dongle."""
+
+    HTTP = "http"
+    """HTTP cloud API (for hybrid mode reference)."""
 
 
 @dataclass
@@ -35,6 +59,8 @@ class TransportConfig:
     This class holds all parameters needed to create a local transport
     for a specific inverter. Used with Station.attach_local_transports()
     to enable hybrid mode operation.
+
+    Supports validation and serialization for storage in Home Assistant config entries.
 
     Attributes:
         host: IP address or hostname of the transport endpoint.
@@ -88,7 +114,7 @@ class TransportConfig:
     unit_id: int = field(default=1)
     """Modbus unit ID (only for MODBUS_TCP transport)."""
 
-    dongle_serial: str = field(default="")
+    dongle_serial: str | None = field(default=None)
     """Dongle serial number (only for WIFI_DONGLE transport)."""
 
     timeout: float = field(default=10.0)
@@ -96,6 +122,17 @@ class TransportConfig:
 
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
+        self.validate()
+
+    def validate(self) -> None:
+        """Validate configuration completeness.
+
+        Checks that all required fields are present and valid for the
+        specified transport type.
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
         if not self.host:
             raise ValueError("host is required")
         if self.port <= 0 or self.port > 65535:
@@ -104,6 +141,60 @@ class TransportConfig:
             raise ValueError("serial is required")
         if self.transport_type == TransportType.WIFI_DONGLE and not self.dongle_serial:
             raise ValueError("dongle_serial is required for WiFi dongle transport")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert configuration to dictionary for serialization.
+
+        Returns:
+            Dictionary with all configuration values, suitable for
+            JSON serialization and storage in Home Assistant config entries.
+        """
+        return {
+            "host": self.host,
+            "port": self.port,
+            "serial": self.serial,
+            "transport_type": self.transport_type.value,
+            "inverter_family": self.inverter_family.value if self.inverter_family else None,
+            "dongle_serial": self.dongle_serial,
+            "timeout": self.timeout,
+            "unit_id": self.unit_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TransportConfig:
+        """Create configuration from dictionary.
+
+        Args:
+            data: Dictionary with configuration values (from to_dict() or
+                Home Assistant config entry)
+
+        Returns:
+            TransportConfig instance with values from dictionary
+        """
+        from pylxpweb.devices.inverters._features import InverterFamily
+
+        # Parse transport type
+        transport_type_str = data.get("transport_type", "modbus_tcp")
+        transport_type = TransportType(transport_type_str)
+
+        # Parse inverter family if present
+        family_str = data.get("inverter_family")
+        inverter_family = InverterFamily(family_str) if family_str else None
+
+        # Create instance without validation (we'll validate after)
+        instance = object.__new__(cls)
+        instance.host = data.get("host", "")
+        instance.port = data.get("port", 502)
+        instance.serial = data.get("serial", "")
+        instance.transport_type = transport_type
+        instance.inverter_family = inverter_family
+        instance.dongle_serial = data.get("dongle_serial")
+        instance.timeout = data.get("timeout", 10.0)
+        instance.unit_id = data.get("unit_id", 1)
+
+        # Validate the restored config
+        instance.validate()
+        return instance
 
 
 @dataclass
