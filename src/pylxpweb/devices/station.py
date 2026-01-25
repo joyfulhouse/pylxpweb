@@ -762,6 +762,7 @@ class Station(BaseDevice):
         discovered_devices: list[tuple[Any, DeviceDiscoveryInfo]] = []
 
         for config in configs:
+            transport = None
             try:
                 config.validate()
                 transport = create_transport_from_config(config)
@@ -788,6 +789,12 @@ class Station(BaseDevice):
                     config.serial,
                     e,
                 )
+                # Cleanup partially connected transport to prevent resource leak
+                if transport is not None:
+                    try:
+                        await transport.disconnect()
+                    except Exception:  # noqa: S110 - best effort cleanup
+                        _LOGGER.debug("Cleanup disconnect failed for %s", config.serial)
                 continue
 
         # Group devices by parallel_number
@@ -987,6 +994,11 @@ class Station(BaseDevice):
                         config.host,
                         config.port,
                     )
+                    # Close unused transport to prevent resource leak
+                    try:
+                        await transport.disconnect()
+                    except Exception:  # noqa: S110 - best effort cleanup
+                        _LOGGER.debug("Cleanup disconnect failed for %s", config.serial)
                     unmatched += 1
                     unmatched_serials.append(config.serial)
                     continue
