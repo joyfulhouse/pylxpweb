@@ -28,6 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
+    from pylxpweb.transports.config import AttachResult, TransportConfig
 
     from .battery import Battery
     from .inverters.base import BaseInverter
@@ -928,3 +929,140 @@ class Station(BaseDevice):
         """
         plant_details = await self._client.api.plants.get_plant_details(self.id)
         return bool(plant_details.get("daylightSavingTime", False))
+
+    # ============================================================================
+    # Hybrid Mode Support (Local Transports + HTTP Fallback)
+    # ============================================================================
+
+    @property
+    def is_hybrid_mode(self) -> bool:
+        """Check if station is operating in hybrid mode.
+
+        Hybrid mode means at least one inverter has a local transport attached
+        for direct communication, with HTTP API as fallback.
+
+        Returns:
+            True if any inverter has a local transport attached.
+
+        Example:
+            >>> station = await Station.load(client, plant_id)
+            >>> station.is_hybrid_mode
+            False
+            >>> await station.attach_local_transports(configs)
+            >>> station.is_hybrid_mode
+            True
+        """
+        return any(inverter._transport is not None for inverter in self.all_inverters)
+
+    async def attach_local_transports(self, configs: list[TransportConfig]) -> AttachResult:
+        """Attach local transports to HTTP-discovered devices.
+
+        This method enables hybrid mode by connecting local transports
+        (Modbus TCP or WiFi Dongle) to devices discovered via HTTP API.
+        After attachment, devices will use local transport for data fetching
+        with automatic fallback to HTTP on failure.
+
+        Args:
+            configs: List of TransportConfig objects specifying local transports.
+                Each config includes serial, host, port, and transport type.
+
+        Returns:
+            AttachResult with counts of matched, unmatched, and failed attachments.
+
+        Example:
+            ```python
+            from pylxpweb.transports.config import TransportConfig, TransportType
+
+            configs = [
+                TransportConfig(
+                    host="192.168.1.100",
+                    port=502,
+                    serial="CE12345678",
+                    transport_type=TransportType.MODBUS_TCP,
+                    unit_id=1,
+                ),
+            ]
+
+            result = await station.attach_local_transports(configs)
+            print(f"Attached {result.matched} transport(s)")
+            ```
+        """
+        from pylxpweb.transports import (
+            DongleTransport,
+            ModbusTransport,
+            create_dongle_transport,
+            create_modbus_transport,
+        )
+        from pylxpweb.transports.config import AttachResult, TransportType
+
+        result = AttachResult()
+
+        # Build inverter lookup for O(1) matching
+        inverter_lookup = {inv.serial_number: inv for inv in self.all_inverters}
+
+        for config in configs:
+            serial = config.serial
+
+            # Check if inverter exists in station
+            inverter = inverter_lookup.get(serial)
+            if inverter is None:
+                _LOGGER.warning(
+                    "No inverter found with serial %s in station %s",
+                    serial,
+                    self.id,
+                )
+                result.unmatched += 1
+                result.unmatched_serials.append(serial)
+                continue
+
+            # Create and connect transport
+            try:
+                transport: ModbusTransport | DongleTransport
+                if config.transport_type == TransportType.MODBUS_TCP:
+                    transport = create_modbus_transport(
+                        host=config.host,
+                        port=config.port,
+                        unit_id=config.unit_id,
+                        serial=serial,
+                        timeout=config.timeout,
+                        inverter_family=config.inverter_family,
+                    )
+                elif config.transport_type == TransportType.WIFI_DONGLE:
+                    transport = create_dongle_transport(
+                        host=config.host,
+                        port=config.port,
+                        dongle_serial=config.dongle_serial,
+                        inverter_serial=serial,
+                        timeout=config.timeout,
+                        inverter_family=config.inverter_family,
+                    )
+                else:
+                    _LOGGER.error("Unknown transport type: %s", config.transport_type)
+                    result.failed += 1
+                    result.failed_serials.append(serial)
+                    continue
+
+                # Connect the transport
+                await transport.connect()
+
+                # Attach to inverter (use _transport attribute from BaseInverter)
+                inverter._transport = transport
+                result.matched += 1
+                _LOGGER.info(
+                    "Attached %s transport to inverter %s (%s:%d)",
+                    config.transport_type.value,
+                    serial,
+                    config.host,
+                    config.port,
+                )
+
+            except Exception as err:
+                _LOGGER.error(
+                    "Failed to attach transport to inverter %s: %s",
+                    serial,
+                    err,
+                )
+                result.failed += 1
+                result.failed_serials.append(serial)
+
+        return result

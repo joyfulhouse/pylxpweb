@@ -42,6 +42,11 @@ from .capabilities import (
     MODBUS_CAPABILITIES,
     TransportCapabilities,
 )
+from .config import (
+    AttachResult,
+    TransportConfig,
+    TransportType,
+)
 from .data import (
     BatteryBankData,
     BatteryData,
@@ -85,6 +90,10 @@ __all__ = [
     "HTTPTransport",
     "ModbusTransport",
     "DongleTransport",
+    # Configuration (for hybrid mode)
+    "TransportType",
+    "TransportConfig",
+    "AttachResult",
     # Capabilities
     "TransportCapabilities",
     "HTTP_CAPABILITIES",
