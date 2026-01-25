@@ -197,6 +197,32 @@ class DongleTransport(BaseTransport):
 
         return get_energy_map(self._inverter_family)
 
+    async def _discard_initial_data(self) -> None:
+        """Discard any initial data sent by the dongle after connection.
+
+        Some dongles send unsolicited packets immediately after connection.
+        This data must be discarded to avoid confusing subsequent protocol
+        exchanges. We wait up to 1 second for any initial data.
+        """
+        if not self._reader:
+            return
+
+        try:
+            # Wait up to 1 second for any initial data and discard it
+            initial_data = await asyncio.wait_for(
+                self._reader.read(512),
+                timeout=1.0,
+            )
+            if initial_data:
+                _LOGGER.debug(
+                    "Discarded %d bytes of initial data from dongle: %s",
+                    len(initial_data),
+                    initial_data.hex()[:100],  # Log first 50 bytes
+                )
+        except TimeoutError:
+            # No initial data - this is fine
+            _LOGGER.debug("No initial data from dongle (expected for some models)")
+
     async def connect(self) -> None:
         """Establish TCP connection to the WiFi dongle.
 
@@ -217,6 +243,11 @@ class DongleTransport(BaseTransport):
                 self._dongle_serial,
                 self._serial,
             )
+
+            # Discard any initial data the dongle sends after connection
+            # Some dongles send unsolicited packets that can confuse subsequent reads
+            # This is a known behavior documented in luxpower-ha-integration
+            await self._discard_initial_data()
 
         except TimeoutError as err:
             _LOGGER.error(

@@ -112,6 +112,8 @@ class TestDongleConnection:
         )
 
         mock_reader = AsyncMock()
+        # Simulate no initial data (returns empty bytes)
+        mock_reader.read = AsyncMock(return_value=b"")
         mock_writer = MagicMock()
         mock_writer.close = MagicMock()
         mock_writer.wait_closed = AsyncMock()
@@ -168,6 +170,7 @@ class TestDongleConnection:
         )
 
         mock_reader = AsyncMock()
+        mock_reader.read = AsyncMock(return_value=b"")
         mock_writer = MagicMock()
         mock_writer.close = MagicMock()
         mock_writer.wait_closed = AsyncMock()
@@ -189,6 +192,7 @@ class TestDongleConnection:
         )
 
         mock_reader = AsyncMock()
+        mock_reader.read = AsyncMock(return_value=b"")
         mock_writer = MagicMock()
         mock_writer.close = MagicMock()
         mock_writer.wait_closed = AsyncMock()
@@ -398,7 +402,9 @@ class TestDongleRegisterOperations:
         response += struct.pack("<H", crc)
 
         mock_reader = AsyncMock()
-        mock_reader.read = AsyncMock(return_value=response)
+        # First call returns empty (during connect's _discard_initial_data)
+        # Subsequent calls return the response
+        mock_reader.read = AsyncMock(side_effect=[b"", response])
 
         mock_writer = MagicMock()
         mock_writer.write = MagicMock()
