@@ -18,10 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    pass
+from typing import Protocol
 
 _LOGGER = logging.getLogger(__name__)
 
