@@ -45,6 +45,7 @@ from .capabilities import (
 from .data import (
     BatteryBankData,
     BatteryData,
+    InverterDeviceInfo,
     InverterEnergyData,
     InverterRuntimeData,
 )
@@ -91,6 +92,7 @@ __all__ = [
     "MODBUS_CAPABILITIES",
     "DONGLE_CAPABILITIES",
     # Data models
+    "InverterDeviceInfo",
     "InverterRuntimeData",
     "InverterEnergyData",
     "BatteryBankData",

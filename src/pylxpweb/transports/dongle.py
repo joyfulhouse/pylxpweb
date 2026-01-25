@@ -32,7 +32,12 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
-from .data import BatteryBankData, InverterEnergyData, InverterRuntimeData
+from .data import (
+    BatteryBankData,
+    InverterDeviceInfo,
+    InverterEnergyData,
+    InverterRuntimeData,
+)
 from .exceptions import (
     TransportConnectionError,
     TransportReadError,
@@ -672,6 +677,30 @@ class DongleTransport(BaseTransport):
             min_cell_temperature=min_cell_temperature,
             cycle_count=cycle_count,
             batteries=[],
+        )
+
+    async def read_device_info(self) -> InverterDeviceInfo:
+        """Read device identification and firmware version information.
+
+        Reads holding registers 9-10 which contain firmware version info:
+        - Register 9: Communication firmware version (com_version)
+        - Register 10: Controller firmware version (controller_version)
+
+        Returns:
+            InverterDeviceInfo with firmware versions and serial number
+
+        Raises:
+            TransportReadError: If read operation fails
+        """
+        # Read holding registers 9-10 for version info
+        holding_regs = await self._read_holding_registers(9, 2)
+
+        # Convert list to dict
+        registers = {9 + i: v for i, v in enumerate(holding_regs)}
+
+        return InverterDeviceInfo.from_modbus_registers(
+            holding_registers=registers,
+            serial_number=self._serial,
         )
 
     async def read_parameters(

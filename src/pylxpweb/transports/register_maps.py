@@ -508,27 +508,34 @@ PV_SERIES_ENERGY_MAP = EnergyRegisterMap(
     pv2_energy_today=RegisterField(29, 16, ScaleFactor.SCALE_10),  # Epv2_day
     pv3_energy_today=RegisterField(30, 16, ScaleFactor.SCALE_10),  # Epv3_day
     inverter_energy_today=RegisterField(31, 16, ScaleFactor.SCALE_10),  # Einv_day
-    grid_import_today=RegisterField(32, 16, ScaleFactor.SCALE_10),  # Erec_day (AC charge)
+    # NOTE: Swapped grid_import and load_energy to match HTTP API naming convention.
+    # HTTP API 'todayImport' = Modbus 'Etouser' (reg 37), not 'Erec' (reg 32).
+    # This ensures Modbus sensors show same values as HTTP API sensors.
+    grid_import_today=RegisterField(37, 16, ScaleFactor.SCALE_10),  # Etouser_day (HTTP todayImport)
     charge_energy_today=RegisterField(33, 16, ScaleFactor.SCALE_10),  # Echg_day
     discharge_energy_today=RegisterField(34, 16, ScaleFactor.SCALE_10),  # Edischg_day
     eps_energy_today=RegisterField(35, 16, ScaleFactor.SCALE_10),  # Eeps_day
     grid_export_today=RegisterField(36, 16, ScaleFactor.SCALE_10),  # Etogrid_day
-    load_energy_today=RegisterField(37, 16, ScaleFactor.SCALE_10),  # Etouser_day
-    # Lifetime energy - 32-bit pairs, scale 0.1 kWh
-    # Source: galets/eg4-modbus-monitor registers-18kpv.yaml
-    pv1_energy_total=RegisterField(40, 32, ScaleFactor.SCALE_10),  # Epv1_all (regs 40-41)
-    pv2_energy_total=RegisterField(42, 32, ScaleFactor.SCALE_10),  # Epv2_all (regs 42-43)
-    pv3_energy_total=RegisterField(44, 32, ScaleFactor.SCALE_10),  # Epv3_all (regs 44-45)
-    inverter_energy_total=RegisterField(46, 32, ScaleFactor.SCALE_10),  # Einv_all (regs 46-47)
-    grid_import_total=RegisterField(48, 32, ScaleFactor.SCALE_10),  # Erec_all (regs 48-49)
-    charge_energy_total=RegisterField(50, 32, ScaleFactor.SCALE_10),  # Echg_all (regs 50-51)
-    discharge_energy_total=RegisterField(52, 32, ScaleFactor.SCALE_10),  # Edischg_all (52-53)
-    eps_energy_total=RegisterField(54, 32, ScaleFactor.SCALE_10),  # Eeps_all (regs 54-55)
-    grid_export_total=RegisterField(56, 32, ScaleFactor.SCALE_10),  # Etogrid_all (regs 56-57)
-    load_energy_total=RegisterField(58, 32, ScaleFactor.SCALE_10),  # Etouser_all (regs 58-59)
-    # Generator energy (regs 124-126)
+    load_energy_today=RegisterField(32, 16, ScaleFactor.SCALE_10),  # Erec_day - AC charge from grid
+    # Lifetime energy - 16-bit single registers, scale 0.1 kWh
+    # NOTE: galets/eg4-modbus-monitor claims 32-bit pairs, but empirical testing shows
+    # these are 16-bit registers. The "odd" registers (41, 43, etc.) are always 0,
+    # and the "even" registers (40, 42, etc.) match HTTP API values exactly.
+    # Max value: 65535 * 0.1 = 6553.5 kWh per register.
+    pv1_energy_total=RegisterField(40, 16, ScaleFactor.SCALE_10),  # Epv1_all
+    pv2_energy_total=RegisterField(42, 16, ScaleFactor.SCALE_10),  # Epv2_all
+    pv3_energy_total=RegisterField(44, 16, ScaleFactor.SCALE_10),  # Epv3_all
+    inverter_energy_total=RegisterField(46, 16, ScaleFactor.SCALE_10),  # Einv_all
+    # Swapped to match HTTP API (see daily energy note above)
+    grid_import_total=RegisterField(58, 16, ScaleFactor.SCALE_10),  # Etouser_all (HTTP totalImport)
+    charge_energy_total=RegisterField(50, 16, ScaleFactor.SCALE_10),  # Echg_all
+    discharge_energy_total=RegisterField(52, 16, ScaleFactor.SCALE_10),  # Edischg_all
+    eps_energy_total=RegisterField(54, 16, ScaleFactor.SCALE_10),  # Eeps_all
+    grid_export_total=RegisterField(56, 16, ScaleFactor.SCALE_10),  # Etogrid_all
+    load_energy_total=RegisterField(48, 16, ScaleFactor.SCALE_10),  # Erec_all - AC charge from grid
+    # Generator energy
     generator_energy_today=RegisterField(124, 16, ScaleFactor.SCALE_10),  # kWh
-    generator_energy_total=RegisterField(125, 32, ScaleFactor.SCALE_10),  # kWh (regs 125-126)
+    generator_energy_total=RegisterField(125, 16, ScaleFactor.SCALE_10),  # kWh
 )
 
 
@@ -625,21 +632,22 @@ LXP_EU_ENERGY_MAP = EnergyRegisterMap(
     pv1_energy_today=None,
     pv2_energy_today=None,
     pv3_energy_today=None,
-    # Lifetime energy - 32-bit pairs (regs 40-59 per LXP-EU spec)
-    inverter_energy_total=RegisterField(40, 32, ScaleFactor.SCALE_10),  # Regs 40-41
-    grid_import_total=RegisterField(42, 32, ScaleFactor.SCALE_10),  # Regs 42-43
-    charge_energy_total=RegisterField(44, 32, ScaleFactor.SCALE_10),  # Regs 44-45
-    discharge_energy_total=RegisterField(46, 32, ScaleFactor.SCALE_10),  # Regs 46-47
-    eps_energy_total=RegisterField(48, 32, ScaleFactor.SCALE_10),  # Regs 48-49
-    grid_export_total=RegisterField(50, 32, ScaleFactor.SCALE_10),  # Regs 50-51
-    load_energy_total=RegisterField(52, 32, ScaleFactor.SCALE_10),  # Regs 52-53
+    # Lifetime energy - 16-bit single registers (per empirical testing)
+    # NOTE: Documentation claims 32-bit pairs, but actual testing shows 16-bit.
+    inverter_energy_total=RegisterField(40, 16, ScaleFactor.SCALE_10),
+    grid_import_total=RegisterField(42, 16, ScaleFactor.SCALE_10),
+    charge_energy_total=RegisterField(44, 16, ScaleFactor.SCALE_10),
+    discharge_energy_total=RegisterField(46, 16, ScaleFactor.SCALE_10),
+    eps_energy_total=RegisterField(48, 16, ScaleFactor.SCALE_10),
+    grid_export_total=RegisterField(50, 16, ScaleFactor.SCALE_10),
+    load_energy_total=RegisterField(52, 16, ScaleFactor.SCALE_10),
     # Per-PV string lifetime energy not available
     pv1_energy_total=None,
     pv2_energy_total=None,
     pv3_energy_total=None,
-    # Generator energy - same as PV_SERIES
+    # Generator energy
     generator_energy_today=RegisterField(124, 16, ScaleFactor.SCALE_10),
-    generator_energy_total=RegisterField(125, 32, ScaleFactor.SCALE_10),
+    generator_energy_total=RegisterField(125, 16, ScaleFactor.SCALE_10),
 )
 
 

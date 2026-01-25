@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,21 +9,17 @@ import pytest
 
 from pylxpweb.transports.dongle import (
     DEFAULT_PORT,
-    DongleTransport,
-    MODBUS_READ_HOLDING,
     MODBUS_READ_INPUT,
-    MODBUS_WRITE_MULTI,
     MODBUS_WRITE_SINGLE,
     PACKET_PREFIX,
     PROTOCOL_VERSION,
     TCP_FUNC_TRANSLATED,
+    DongleTransport,
     compute_crc16,
 )
 from pylxpweb.transports.exceptions import (
     TransportConnectionError,
     TransportReadError,
-    TransportTimeoutError,
-    TransportWriteError,
 )
 
 
@@ -136,9 +131,11 @@ class TestDongleConnection:
             timeout=1.0,
         )
 
-        with patch("asyncio.open_connection", side_effect=TimeoutError("Connection timed out")):
-            with pytest.raises(TransportConnectionError) as exc_info:
-                await transport.connect()
+        with (
+            patch("asyncio.open_connection", side_effect=TimeoutError("Connection timed out")),
+            pytest.raises(TransportConnectionError) as exc_info,
+        ):
+            await transport.connect()
 
         assert "Timeout" in str(exc_info.value)
         assert transport.is_connected is False
@@ -152,9 +149,11 @@ class TestDongleConnection:
             inverter_serial="CE12345678",
         )
 
-        with patch("asyncio.open_connection", side_effect=ConnectionRefusedError("Connection refused")):
-            with pytest.raises(TransportConnectionError) as exc_info:
-                await transport.connect()
+        with (
+            patch("asyncio.open_connection", side_effect=ConnectionRefusedError()),
+            pytest.raises(TransportConnectionError) as exc_info,
+        ):
+            await transport.connect()
 
         assert "Failed to connect" in str(exc_info.value)
         assert transport.is_connected is False
@@ -295,8 +294,8 @@ class TestDongleResponseParsing:
         )
 
         # Build a mock valid response
-        # Header: prefix(2) + version(2) + frame_length(2) + addr(1) + tcp_func(1) + dongle(10) + data_len(2)
-        # Data: addr(1) + modbus_func(1) + byte_count(1) + registers(N*2 in little-endian) + crc(2)
+        # Header: prefix(2)+ver(2)+frame_len(2)+addr(1)+tcp_func(1)+dongle(10)+data_len(2)
+        # Data: addr(1) + modbus_func(1) + byte_count(1) + registers(N*2 LE) + crc(2)
         # Little-endian: 100 = 0x64 = [0x64, 0x00], 200 = 0xC8 = [0xC8, 0x00]
         data_frame = bytes([0x01, 0x04, 0x04, 0x64, 0x00, 0xC8, 0x00])  # 2 registers: 100, 200
         crc = compute_crc16(data_frame)

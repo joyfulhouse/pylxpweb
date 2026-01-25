@@ -25,7 +25,12 @@ from typing import TYPE_CHECKING
 from pymodbus.exceptions import ModbusIOException
 
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
-from .data import BatteryBankData, InverterEnergyData, InverterRuntimeData
+from .data import (
+    BatteryBankData,
+    InverterDeviceInfo,
+    InverterEnergyData,
+    InverterRuntimeData,
+)
 from .exceptions import (
     TransportConnectionError,
     TransportReadError,
@@ -490,7 +495,9 @@ class ModbusTransport(BaseTransport):
             TransportReadError: If read operation fails
         """
         # Read energy-related register groups sequentially
-        groups_needed = ["status_energy", "bms_data"]
+        # power_energy (0-31) contains PV daily energy at registers 28-30
+        # status_energy (32-63) contains daily/lifetime energy counters
+        groups_needed = ["power_energy", "status_energy", "bms_data"]
         input_registers: dict[int, int] = {}
 
         for group_name, (start, count) in INPUT_REGISTER_GROUPS.items():
@@ -731,6 +738,36 @@ class ModbusTransport(BaseTransport):
         serial = "".join(chars)
         _LOGGER.debug("Read serial number from Modbus: %s", serial)
         return serial
+
+    async def read_device_info(self) -> InverterDeviceInfo:
+        """Read device identification and firmware version information.
+
+        Reads holding registers 9-10 which contain firmware version info:
+        - Register 9: Communication firmware version (com_version)
+        - Register 10: Controller firmware version (controller_version)
+
+        Returns:
+            InverterDeviceInfo with firmware versions and serial number
+
+        Raises:
+            TransportReadError: If read operation fails
+
+        Example:
+            >>> transport = ModbusTransport(host="192.168.1.100", serial="BA12345678")
+            >>> await transport.connect()
+            >>> device_info = await transport.read_device_info()
+            >>> print(f"Firmware: {device_info.firmware_version}")
+        """
+        # Read holding registers 9-10 for version info
+        holding_regs = await self._read_holding_registers(9, 2)
+
+        # Convert list to dict
+        registers = {9 + i: v for i, v in enumerate(holding_regs)}
+
+        return InverterDeviceInfo.from_modbus_registers(
+            holding_registers=registers,
+            serial_number=self._serial,
+        )
 
     async def validate_serial(self, expected_serial: str) -> bool:
         """Validate that the connected inverter matches the expected serial.

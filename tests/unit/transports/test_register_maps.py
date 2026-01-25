@@ -214,18 +214,22 @@ class TestEnergyRegisterMap:
         assert LXP_EU_ENERGY_MAP.inverter_energy_today.bit_width == 16
         assert LXP_EU_ENERGY_MAP.inverter_energy_today.address == 28
 
-    def test_pv_series_lifetime_energy_32bit(self) -> None:
-        """Test PV_SERIES lifetime energy uses 32-bit pairs (validated)."""
+    def test_pv_series_lifetime_energy_16bit(self) -> None:
+        """Test PV_SERIES lifetime energy uses 16-bit registers (empirically validated).
+
+        Note: galets/eg4-modbus-monitor claims 32-bit pairs, but empirical testing
+        shows these are 16-bit registers that match HTTP API values exactly.
+        """
         assert PV_SERIES_ENERGY_MAP.inverter_energy_total is not None
-        assert PV_SERIES_ENERGY_MAP.inverter_energy_total.bit_width == 32
+        assert PV_SERIES_ENERGY_MAP.inverter_energy_total.bit_width == 16
         assert PV_SERIES_ENERGY_MAP.inverter_energy_total.address == 46
         # Scale 0.1 = SCALE_10
         assert PV_SERIES_ENERGY_MAP.inverter_energy_total.scale_factor == ScaleFactor.SCALE_10
 
-    def test_lxp_eu_lifetime_energy_32bit(self) -> None:
-        """Test LXP_EU lifetime energy uses 32-bit 0.1 kWh format."""
+    def test_lxp_eu_lifetime_energy_16bit(self) -> None:
+        """Test LXP_EU lifetime energy uses 16-bit 0.1 kWh format."""
         assert LXP_EU_ENERGY_MAP.inverter_energy_total is not None
-        assert LXP_EU_ENERGY_MAP.inverter_energy_total.bit_width == 32
+        assert LXP_EU_ENERGY_MAP.inverter_energy_total.bit_width == 16
         assert LXP_EU_ENERGY_MAP.inverter_energy_total.address == 40
         assert LXP_EU_ENERGY_MAP.inverter_energy_total.scale_factor == ScaleFactor.SCALE_10
 
@@ -383,18 +387,17 @@ class TestRegisterMapIntegration:
 
         # Sample registers for PV_SERIES energy
         # Daily energy: 16-bit at regs 28-37, scale 0.1 kWh
-        # Lifetime energy: 32-bit pairs at regs 40-59, scale 0.1 kWh
+        # Lifetime energy: 16-bit registers (not 32-bit pairs as docs claim), scale 0.1 kWh
         registers = {
             31: 184,  # Inverter energy today (18.4 kWh after scaling)
-            46: 0,  # Inverter energy total high word
-            47: 50000,  # Inverter energy total low word (5000.0 kWh)
+            46: 50000,  # Inverter energy total (5000.0 kWh) - 16-bit register
         }
 
         result = InverterEnergyData.from_modbus_registers(registers, PV_SERIES_ENERGY_MAP)
 
         # Daily: raw / 10 = kWh
         assert result.inverter_energy_today == pytest.approx(18.4, rel=0.01)
-        # Lifetime: 32-bit combined / 10 = kWh
+        # Lifetime: 16-bit value / 10 = kWh
         assert result.inverter_energy_total == pytest.approx(5000.0, rel=0.01)
 
     def test_backward_compatibility_no_register_map(self) -> None:
@@ -619,7 +622,7 @@ class TestExtendedSensors:
 
         assert PV_SERIES_ENERGY_MAP.generator_energy_total is not None
         assert PV_SERIES_ENERGY_MAP.generator_energy_total.address == 125
-        assert PV_SERIES_ENERGY_MAP.generator_energy_total.bit_width == 32
+        assert PV_SERIES_ENERGY_MAP.generator_energy_total.bit_width == 16  # 16-bit, not 32-bit
 
     def test_lxp_eu_generator_energy(self) -> None:
         """Test LXP_EU has generator energy registers."""
@@ -755,10 +758,10 @@ class TestExtendedSensorsDataParsing:
         """Test generator energy data parsing."""
         from pylxpweb.transports.data import InverterEnergyData
 
+        # Generator energy registers are 16-bit (not 32-bit pairs)
         registers = {
-            124: 50,  # Generator energy today (×10 = 5.0 kWh)
-            125: 0,  # Generator energy total high word
-            126: 1000,  # Generator energy total low word (100.0 kWh)
+            124: 50,  # Generator energy today (÷10 = 5.0 kWh)
+            125: 1000,  # Generator energy total (÷10 = 100.0 kWh) - 16-bit register
         }
 
         result = InverterEnergyData.from_modbus_registers(registers, PV_SERIES_ENERGY_MAP)

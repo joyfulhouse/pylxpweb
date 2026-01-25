@@ -192,9 +192,10 @@ class TestInverterEnergyData:
     def test_from_modbus_registers(self) -> None:
         """Test conversion from Modbus registers.
 
-        Energy register layout based on galets/eg4-modbus-monitor:
+        Energy register layout (corrected via empirical testing):
         - Daily energy: 16-bit registers 28-37, scale 0.1 kWh
-        - Lifetime energy: 32-bit pairs at registers 40-59, scale 0.1 kWh
+        - Lifetime energy: 16-bit registers at 40, 42, ..., 58, scale 0.1 kWh
+          (not 32-bit pairs as claimed by galets/eg4-modbus-monitor)
 
         After apply_scale(raw, SCALE_10), result is directly in kWh.
         """
@@ -204,45 +205,37 @@ class TestInverterEnergyData:
             29: 80,  # PV2 today (8.0 kWh)
             30: 4,  # PV3 today (0.4 kWh)
             31: 184,  # Inverter today (18.4 kWh)
-            32: 100,  # Grid import today (10.0 kWh)
+            32: 100,  # Load today / Erec_day (10.0 kWh)
             33: 50,  # Charge today (5.0 kWh)
             34: 30,  # Discharge today (3.0 kWh)
             35: 10,  # EPS today (1.0 kWh)
             36: 150,  # Grid export today (15.0 kWh)
-            37: 200,  # Load today (20.0 kWh)
-            # Lifetime energy - 32-bit pairs, scale 0.1 kWh
-            # High word at address N, low word at address N+1
-            40: 0,  # PV1 total high
-            41: 10000,  # PV1 total low (1000.0 kWh)
-            42: 0,  # PV2 total high
-            43: 8000,  # PV2 total low (800.0 kWh)
-            44: 0,  # PV3 total high
-            45: 5000,  # PV3 total low (500.0 kWh)
-            46: 0,  # Inverter total high
-            47: 50000,  # Inverter total low (5000.0 kWh)
-            48: 0,  # Grid import total high
-            49: 15000,  # Grid import total low (1500.0 kWh)
-            50: 0,  # Charge total high
-            51: 10000,  # Charge total low (1000.0 kWh)
-            52: 0,  # Discharge total high
-            53: 8000,  # Discharge total low (800.0 kWh)
-            54: 0,  # EPS total high
-            55: 2000,  # EPS total low (200.0 kWh)
-            56: 0,  # Grid export total high
-            57: 25000,  # Grid export total low (2500.0 kWh)
-            58: 0,  # Load total high
-            59: 40000,  # Load total low (4000.0 kWh)
+            37: 200,  # Grid import today / Etouser_day (20.0 kWh) - matches HTTP todayImport
+            # Lifetime energy - 16-bit registers, scale 0.1 kWh
+            40: 10000,  # PV1 total (1000.0 kWh)
+            42: 8000,  # PV2 total (800.0 kWh)
+            44: 5000,  # PV3 total (500.0 kWh)
+            46: 50000,  # Inverter total (5000.0 kWh)
+            # Lifetime energy - 16-bit registers now (not 32-bit pairs)
+            # Note: registers 48, 50, etc. are the actual data; 49, 51, etc. unused
+            48: 15000,  # Load total / Erec_all (1500.0 kWh)
+            50: 10000,  # Charge total (1000.0 kWh)
+            52: 8000,  # Discharge total (800.0 kWh)
+            54: 2000,  # EPS total (200.0 kWh)
+            56: 25000,  # Grid export total (2500.0 kWh)
+            58: 40000,  # Grid import total / Etouser_all (4000.0 kWh) - matches HTTP totalImport
         }
 
         data = InverterEnergyData.from_modbus_registers(input_regs)
 
         # Daily values: raw / 10 = kWh
         assert data.inverter_energy_today == pytest.approx(18.4, rel=0.01)
-        assert data.grid_import_today == pytest.approx(10.0, rel=0.01)
+        # Note: grid_import/load swapped to match HTTP API naming convention
+        assert data.grid_import_today == pytest.approx(20.0, rel=0.01)  # Etouser_day (reg 37)
         assert data.charge_energy_today == pytest.approx(5.0, rel=0.01)
         assert data.discharge_energy_today == pytest.approx(3.0, rel=0.01)
         assert data.grid_export_today == pytest.approx(15.0, rel=0.01)
-        assert data.load_energy_today == pytest.approx(20.0, rel=0.01)
+        assert data.load_energy_today == pytest.approx(10.0, rel=0.01)  # Erec_day (reg 32)
 
         # Per-PV daily values
         assert data.pv1_energy_today == pytest.approx(10.0, rel=0.01)
@@ -250,13 +243,14 @@ class TestInverterEnergyData:
         assert data.pv3_energy_today == pytest.approx(0.4, rel=0.01)
         assert data.pv_energy_today == pytest.approx(18.4, rel=0.01)  # Sum
 
-        # Lifetime values: 32-bit combined, then / 10 = kWh
+        # Lifetime values: 16-bit, then / 10 = kWh
         assert data.inverter_energy_total == pytest.approx(5000.0, rel=0.01)
-        assert data.grid_import_total == pytest.approx(1500.0, rel=0.01)
+        # Note: grid_import/load swapped to match HTTP API naming convention
+        assert data.grid_import_total == pytest.approx(4000.0, rel=0.01)  # Etouser_all (reg 58)
         assert data.charge_energy_total == pytest.approx(1000.0, rel=0.01)
         assert data.discharge_energy_total == pytest.approx(800.0, rel=0.01)
         assert data.grid_export_total == pytest.approx(2500.0, rel=0.01)
-        assert data.load_energy_total == pytest.approx(4000.0, rel=0.01)
+        assert data.load_energy_total == pytest.approx(1500.0, rel=0.01)  # Erec_all (reg 48)
 
         # Per-PV lifetime values
         assert data.pv1_energy_total == pytest.approx(1000.0, rel=0.01)
