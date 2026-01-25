@@ -351,8 +351,12 @@ class DongleTransport(BaseTransport):
         crc = compute_crc16(data_frame)
 
         # Build complete packet
-        data_length = len(data_frame) + 2  # +2 for CRC
-        frame_length = 12 + data_length  # 12 = header after length field
+        # data_length = data_frame bytes + CRC (2 bytes)
+        data_length = len(data_frame) + 2
+        # frame_length = bytes after the frame_length field itself
+        # = addr(1) + tcp_func(1) + dongle(10) + data_length(2) + data_frame + crc
+        # = 14 + data_length
+        frame_length = 14 + data_length
 
         packet = PACKET_PREFIX
         packet += struct.pack("<H", PROTOCOL_VERSION)
@@ -492,22 +496,32 @@ class DongleTransport(BaseTransport):
         # Extract data frame
         data_frame = response[data_start:data_end]
 
-        # For read responses, data frame contains: addr(1) + func(1) + byte_count(1) + data
-        if len(data_frame) < 3:
+        # For read responses, data frame contains:
+        # - action (1 byte)
+        # - modbus_func (1 byte)
+        # - inverter_serial (10 bytes)
+        # - start_register (2 bytes, LE)
+        # - byte_count (1 byte)
+        # - register_data (N bytes)
+        # Total header before data: 1 + 1 + 10 + 2 + 1 = 15 bytes
+        if len(data_frame) < 15:
             raise TransportReadError(f"Data frame too short: {len(data_frame)} bytes")
 
         modbus_func = data_frame[1]
-        byte_count = data_frame[2]
 
         # Check for Modbus exception (function code with high bit set)
         if modbus_func & 0x80:
-            exception_code = data_frame[2] if len(data_frame) > 2 else 0
+            exception_code = data_frame[14] if len(data_frame) > 14 else 0
             raise TransportReadError(
                 f"Modbus exception: function=0x{modbus_func:02x}, code={exception_code}"
             )
 
+        # byte_count is at offset 14 (after action + func + serial + start_reg)
+        byte_count = data_frame[14]
+
         # Extract register values (little-endian uint16)
-        register_data = data_frame[3 : 3 + byte_count]
+        # Register data starts at offset 15
+        register_data = data_frame[15 : 15 + byte_count]
         registers: list[int] = []
 
         for i in range(0, len(register_data), 2):

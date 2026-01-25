@@ -299,14 +299,19 @@ class TestDongleResponseParsing:
 
         # Build a mock valid response
         # Header: prefix(2)+ver(2)+frame_len(2)+addr(1)+tcp_func(1)+dongle(10)+data_len(2)
-        # Data: addr(1) + modbus_func(1) + byte_count(1) + registers(N*2 LE) + crc(2)
+        # Data frame format:
+        #   action(1) + modbus_func(1) + inverter_serial(10) + start_reg(2) + byte_count(1) + data
         # Little-endian: 100 = 0x64 = [0x64, 0x00], 200 = 0xC8 = [0xC8, 0x00]
-        data_frame = bytes([0x01, 0x04, 0x04, 0x64, 0x00, 0xC8, 0x00])  # 2 registers: 100, 200
+        data_frame = bytes([0x00, 0x04])  # action=0 (success), modbus_func=4 (read input)
+        data_frame += b"CE12345678"  # inverter serial (10 bytes)
+        data_frame += struct.pack("<H", 0)  # start register
+        data_frame += bytes([0x04])  # byte_count = 4 (2 registers × 2 bytes)
+        data_frame += bytes([0x64, 0x00, 0xC8, 0x00])  # 2 registers: 100, 200 (LE)
         crc = compute_crc16(data_frame)
 
         response = PACKET_PREFIX
         response += struct.pack("<H", PROTOCOL_VERSION)
-        response += struct.pack("<H", 20)  # frame length
+        response += struct.pack("<H", 14 + len(data_frame) + 2)  # frame length
         response += bytes([0x01, TCP_FUNC_TRANSLATED])
         response += b"BA12345678"
         response += struct.pack("<H", len(data_frame) + 2)  # data length with CRC
@@ -328,12 +333,16 @@ class TestDongleResponseParsing:
         )
 
         # Build a Modbus exception response (function code with high bit set)
-        data_frame = bytes([0x01, 0x84, 0x02])  # Function 0x84 = exception for 0x04, code 2
+        # Data frame: action(1) + modbus_func(1) + inverter_serial(10) + start_reg(2) + exception_code(1)
+        data_frame = bytes([0x00, 0x84])  # action=0, func=0x84 (exception for 0x04)
+        data_frame += b"CE12345678"  # inverter serial (10 bytes)
+        data_frame += struct.pack("<H", 0)  # start register
+        data_frame += bytes([0x02])  # exception code 2
         crc = compute_crc16(data_frame)
 
         response = PACKET_PREFIX
         response += struct.pack("<H", PROTOCOL_VERSION)
-        response += struct.pack("<H", 15)
+        response += struct.pack("<H", 14 + len(data_frame) + 2)
         response += bytes([0x01, TCP_FUNC_TRANSLATED])
         response += b"BA12345678"
         response += struct.pack("<H", len(data_frame) + 2)
@@ -389,12 +398,16 @@ class TestDongleRegisterOperations:
         )
 
         # Build a mock valid write response
-        data_frame = bytes([0x01, MODBUS_WRITE_SINGLE, 0x00])
+        # Data frame: action(1) + modbus_func(1) + inverter_serial(10) + reg_addr(2) + value(2)
+        data_frame = bytes([0x00, MODBUS_WRITE_SINGLE])  # action=0, func=6
+        data_frame += b"CE12345678"  # inverter serial (10 bytes)
+        data_frame += struct.pack("<H", 105)  # register address
+        data_frame += struct.pack("<H", 50)  # value written
         crc = compute_crc16(data_frame)
 
         response = PACKET_PREFIX
         response += struct.pack("<H", PROTOCOL_VERSION)
-        response += struct.pack("<H", 15)
+        response += struct.pack("<H", 14 + len(data_frame) + 2)
         response += bytes([0x01, TCP_FUNC_TRANSLATED])
         response += b"BA12345678"
         response += struct.pack("<H", len(data_frame) + 2)
