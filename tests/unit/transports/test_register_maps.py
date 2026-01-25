@@ -217,17 +217,15 @@ class TestEnergyRegisterMap:
         assert LXP_EU_ENERGY_MAP.inverter_energy_today.bit_width == 16
         assert LXP_EU_ENERGY_MAP.inverter_energy_today.address == 31  # Same as PV_SERIES
 
-    def test_pv_series_lifetime_energy_32bit(self) -> None:
-        """Test PV_SERIES lifetime energy uses 32-bit little-endian registers.
+    def test_pv_series_lifetime_energy_16bit(self) -> None:
+        """Test PV_SERIES lifetime energy uses 16-bit registers (empirically validated).
 
-        Source: luxpower-ha-integration constants/input_registers.py confirms
-        I_EINV_ALL_L (46) / I_EINV_ALL_H (47) - 32-bit L/H word pairs.
-        This matches all other LuxPower models (LXP_EU, SNA).
+        Note: galets/eg4-modbus-monitor claims 32-bit pairs, but empirical testing
+        shows these are 16-bit registers that match HTTP API values exactly.
         """
         assert PV_SERIES_ENERGY_MAP.inverter_energy_total is not None
-        assert PV_SERIES_ENERGY_MAP.inverter_energy_total.bit_width == 32
+        assert PV_SERIES_ENERGY_MAP.inverter_energy_total.bit_width == 16
         assert PV_SERIES_ENERGY_MAP.inverter_energy_total.address == 46
-        assert PV_SERIES_ENERGY_MAP.inverter_energy_total.little_endian is True
         # Scale 0.1 = SCALE_10
         assert PV_SERIES_ENERGY_MAP.inverter_energy_total.scale_factor == ScaleFactor.SCALE_10
 

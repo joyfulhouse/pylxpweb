@@ -524,22 +524,25 @@ PV_SERIES_ENERGY_MAP = EnergyRegisterMap(
     eps_energy_today=RegisterField(35, 16, ScaleFactor.SCALE_10),  # Eeps_day
     grid_export_today=RegisterField(36, 16, ScaleFactor.SCALE_10),  # Etogrid_day
     load_energy_today=RegisterField(32, 16, ScaleFactor.SCALE_10),  # Erec_day - AC charge from grid
-    # Lifetime energy - 32-bit little-endian (L/H word pairs)
-    # Source: luxpower-ha-integration I_*_ALL_L/H registers
-    pv1_energy_total=RegisterField(40, 32, ScaleFactor.SCALE_10, little_endian=True),
-    pv2_energy_total=RegisterField(42, 32, ScaleFactor.SCALE_10, little_endian=True),
-    pv3_energy_total=RegisterField(44, 32, ScaleFactor.SCALE_10, little_endian=True),
-    inverter_energy_total=RegisterField(46, 32, ScaleFactor.SCALE_10, little_endian=True),
+    # Lifetime energy - 16-bit single registers, scale 0.1 kWh
+    # NOTE: galets/eg4-modbus-monitor claims 32-bit pairs, but empirical testing shows
+    # these are 16-bit registers. The "odd" registers (41, 43, etc.) are always 0,
+    # and the "even" registers (40, 42, etc.) match HTTP API values exactly.
+    # Max value: 65535 * 0.1 = 6553.5 kWh per register.
+    pv1_energy_total=RegisterField(40, 16, ScaleFactor.SCALE_10),  # Epv1_all
+    pv2_energy_total=RegisterField(42, 16, ScaleFactor.SCALE_10),  # Epv2_all
+    pv3_energy_total=RegisterField(44, 16, ScaleFactor.SCALE_10),  # Epv3_all
+    inverter_energy_total=RegisterField(46, 16, ScaleFactor.SCALE_10),  # Einv_all
     # Swapped to match HTTP API (see daily energy note above)
-    grid_import_total=RegisterField(58, 32, ScaleFactor.SCALE_10, little_endian=True),
-    charge_energy_total=RegisterField(50, 32, ScaleFactor.SCALE_10, little_endian=True),
-    discharge_energy_total=RegisterField(52, 32, ScaleFactor.SCALE_10, little_endian=True),
-    eps_energy_total=RegisterField(54, 32, ScaleFactor.SCALE_10, little_endian=True),
-    grid_export_total=RegisterField(56, 32, ScaleFactor.SCALE_10, little_endian=True),
-    load_energy_total=RegisterField(48, 32, ScaleFactor.SCALE_10, little_endian=True),
-    # Generator energy - 16-bit single registers
-    generator_energy_today=RegisterField(124, 16, ScaleFactor.SCALE_10),
-    generator_energy_total=RegisterField(125, 16, ScaleFactor.SCALE_10),
+    grid_import_total=RegisterField(58, 16, ScaleFactor.SCALE_10),  # Etouser_all (HTTP totalImport)
+    charge_energy_total=RegisterField(50, 16, ScaleFactor.SCALE_10),  # Echg_all
+    discharge_energy_total=RegisterField(52, 16, ScaleFactor.SCALE_10),  # Edischg_all
+    eps_energy_total=RegisterField(54, 16, ScaleFactor.SCALE_10),  # Eeps_all
+    grid_export_total=RegisterField(56, 16, ScaleFactor.SCALE_10),  # Etogrid_all
+    load_energy_total=RegisterField(48, 16, ScaleFactor.SCALE_10),  # Erec_all - AC charge from grid
+    # Generator energy
+    generator_energy_today=RegisterField(124, 16, ScaleFactor.SCALE_10),  # kWh
+    generator_energy_total=RegisterField(125, 16, ScaleFactor.SCALE_10),  # kWh
 )
 
 
