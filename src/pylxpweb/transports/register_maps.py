@@ -852,6 +852,186 @@ def _get_family_runtime_maps() -> dict[InverterFamily, RuntimeRegisterMap]:
     }
 
 
+# =============================================================================
+# MIDBOX/GRIDBOSS DEVICE TYPE
+# =============================================================================
+# Device type code for MID (Microgrid Interconnect Device) / GridBOSS
+# Read from register 19 to detect device type
+MIDBOX_DEVICE_TYPE_CODE = 50
+
+
+# =============================================================================
+# MIDBOX RUNTIME REGISTER MAP (GridBOSS)
+# =============================================================================
+# Source: eg4-modbus-monitor registers-gridboss.yaml
+# Note: MID devices use HOLDING registers (function 0x03) for runtime data,
+# unlike inverters which use INPUT registers (function 0x04).
+#
+# Key differences from inverters:
+# - No PV, battery, or DC bus registers
+# - Grid/UPS/Generator voltage, current, power (split-phase L1/L2)
+# - Smart load ports and AC coupling
+# - Energy registers for loads, UPS, grid import/export
+
+
+@dataclass(frozen=True)
+class MidboxRuntimeRegisterMap:
+    """Register map for GridBOSS/MID device runtime data.
+
+    Maps holding registers to MidboxData fields. All fields correspond to
+    the MidboxData model in pylxpweb.models for web API compatibility.
+
+    Note: MID devices read runtime data from HOLDING registers, not INPUT registers.
+    """
+
+    # -------------------------------------------------------------------------
+    # Voltage Registers (V, scale /10 for some devices)
+    # -------------------------------------------------------------------------
+    grid_voltage: RegisterField | None = None  # gridRmsVolt
+    ups_voltage: RegisterField | None = None  # upsRmsVolt
+    gen_voltage: RegisterField | None = None  # genRmsVolt
+    grid_l1_voltage: RegisterField | None = None  # gridL1RmsVolt
+    grid_l2_voltage: RegisterField | None = None  # gridL2RmsVolt
+    ups_l1_voltage: RegisterField | None = None  # upsL1RmsVolt
+    ups_l2_voltage: RegisterField | None = None  # upsL2RmsVolt
+    gen_l1_voltage: RegisterField | None = None  # genL1RmsVolt
+    gen_l2_voltage: RegisterField | None = None  # genL2RmsVolt
+
+    # -------------------------------------------------------------------------
+    # Current Registers (A, scale /100)
+    # -------------------------------------------------------------------------
+    grid_l1_current: RegisterField | None = None  # gridL1RmsCurr
+    grid_l2_current: RegisterField | None = None  # gridL2RmsCurr
+    load_l1_current: RegisterField | None = None  # loadL1RmsCurr
+    load_l2_current: RegisterField | None = None  # loadL2RmsCurr
+    gen_l1_current: RegisterField | None = None  # genL1RmsCurr
+    gen_l2_current: RegisterField | None = None  # genL2RmsCurr
+    ups_l1_current: RegisterField | None = None  # upsL1RmsCurr
+    ups_l2_current: RegisterField | None = None  # upsL2RmsCurr
+
+    # -------------------------------------------------------------------------
+    # Power Registers (W, no scaling)
+    # -------------------------------------------------------------------------
+    grid_l1_power: RegisterField | None = None  # gridL1ActivePower
+    grid_l2_power: RegisterField | None = None  # gridL2ActivePower
+    load_l1_power: RegisterField | None = None  # loadL1ActivePower
+    load_l2_power: RegisterField | None = None  # loadL2ActivePower
+    gen_l1_power: RegisterField | None = None  # genL1ActivePower
+    gen_l2_power: RegisterField | None = None  # genL2ActivePower
+    ups_l1_power: RegisterField | None = None  # upsL1ActivePower
+    ups_l2_power: RegisterField | None = None  # upsL2ActivePower
+
+    # -------------------------------------------------------------------------
+    # Frequency Registers (Hz, scale /100)
+    # -------------------------------------------------------------------------
+    phase_lock_freq: RegisterField | None = None  # phaseLockFreq
+    grid_frequency: RegisterField | None = None  # gridFreq
+    gen_frequency: RegisterField | None = None  # genFreq
+
+    # -------------------------------------------------------------------------
+    # Smart Port Status (0/1)
+    # -------------------------------------------------------------------------
+    smart_port_1_status: RegisterField | None = None  # smartPort1Status
+    smart_port_2_status: RegisterField | None = None  # smartPort2Status
+    smart_port_3_status: RegisterField | None = None  # smartPort3Status
+    smart_port_4_status: RegisterField | None = None  # smartPort4Status
+
+
+@dataclass(frozen=True)
+class MidboxEnergyRegisterMap:
+    """Register map for GridBOSS/MID device energy data.
+
+    Energy values are in kWh with scale /10.
+    """
+
+    # -------------------------------------------------------------------------
+    # Daily Energy (kWh, scale /10)
+    # -------------------------------------------------------------------------
+    load_energy_today_l1: RegisterField | None = None  # eLoadTodayL1
+    load_energy_today_l2: RegisterField | None = None  # eLoadTodayL2
+    ups_energy_today_l1: RegisterField | None = None  # eUpsTodayL1
+    ups_energy_today_l2: RegisterField | None = None  # eUpsTodayL2
+    to_grid_energy_today: RegisterField | None = None  # eToGridToday
+    to_user_energy_today: RegisterField | None = None  # eToUserToday
+    gen_energy_today: RegisterField | None = None  # eGenToday
+
+    # -------------------------------------------------------------------------
+    # Total Energy (kWh, 32-bit, scale /10)
+    # -------------------------------------------------------------------------
+    load_energy_total_l1: RegisterField | None = None  # eLoadTotalL1 (32-bit)
+    load_energy_total_l2: RegisterField | None = None  # eLoadTotalL2 (32-bit)
+    ups_energy_total_l1: RegisterField | None = None  # eUpsTotalL1 (32-bit)
+    ups_energy_total_l2: RegisterField | None = None  # eUpsTotalL2 (32-bit)
+    to_grid_energy_total_l1: RegisterField | None = None  # eToGridTotalL1 (32-bit)
+    to_grid_energy_total_l2: RegisterField | None = None  # eToGridTotalL2 (32-bit)
+    to_user_energy_total_l1: RegisterField | None = None  # eToUserTotalL1 (32-bit)
+    to_user_energy_total_l2: RegisterField | None = None  # eToUserTotalL2 (32-bit)
+    gen_energy_total_l1: RegisterField | None = None  # eGenTotalL1 (32-bit)
+    gen_energy_total_l2: RegisterField | None = None  # eGenTotalL2 (32-bit)
+
+
+# GridBOSS Runtime Register Map
+# Source: eg4-modbus-monitor registers-gridboss.yaml
+GRIDBOSS_RUNTIME_MAP = MidboxRuntimeRegisterMap(
+    # Voltage (registers 1-9, no scaling - raw value is volts)
+    grid_voltage=RegisterField(1, 16, ScaleFactor.SCALE_NONE),
+    ups_voltage=RegisterField(2, 16, ScaleFactor.SCALE_NONE),
+    gen_voltage=RegisterField(3, 16, ScaleFactor.SCALE_NONE),
+    grid_l1_voltage=RegisterField(4, 16, ScaleFactor.SCALE_NONE),
+    grid_l2_voltage=RegisterField(5, 16, ScaleFactor.SCALE_NONE),
+    ups_l1_voltage=RegisterField(6, 16, ScaleFactor.SCALE_NONE),
+    ups_l2_voltage=RegisterField(7, 16, ScaleFactor.SCALE_NONE),
+    gen_l1_voltage=RegisterField(8, 16, ScaleFactor.SCALE_NONE),
+    gen_l2_voltage=RegisterField(9, 16, ScaleFactor.SCALE_NONE),
+    # Current (registers 10-17, scale /100 for amps)
+    grid_l1_current=RegisterField(10, 16, ScaleFactor.SCALE_100),
+    grid_l2_current=RegisterField(11, 16, ScaleFactor.SCALE_100),
+    load_l1_current=RegisterField(12, 16, ScaleFactor.SCALE_100),
+    load_l2_current=RegisterField(13, 16, ScaleFactor.SCALE_100),
+    gen_l1_current=RegisterField(14, 16, ScaleFactor.SCALE_100),
+    gen_l2_current=RegisterField(15, 16, ScaleFactor.SCALE_100),
+    ups_l1_current=RegisterField(16, 16, ScaleFactor.SCALE_100),
+    ups_l2_current=RegisterField(17, 16, ScaleFactor.SCALE_100),
+    # Power (registers 26-33, no scaling - raw value is watts)
+    grid_l1_power=RegisterField(26, 16, ScaleFactor.SCALE_NONE, signed=True),
+    grid_l2_power=RegisterField(27, 16, ScaleFactor.SCALE_NONE, signed=True),
+    load_l1_power=RegisterField(28, 16, ScaleFactor.SCALE_NONE, signed=True),
+    load_l2_power=RegisterField(29, 16, ScaleFactor.SCALE_NONE, signed=True),
+    gen_l1_power=RegisterField(30, 16, ScaleFactor.SCALE_NONE, signed=True),
+    gen_l2_power=RegisterField(31, 16, ScaleFactor.SCALE_NONE, signed=True),
+    ups_l1_power=RegisterField(32, 16, ScaleFactor.SCALE_NONE, signed=True),
+    ups_l2_power=RegisterField(33, 16, ScaleFactor.SCALE_NONE, signed=True),
+    # Frequency (registers 128-130, scale /100 for Hz)
+    phase_lock_freq=RegisterField(128, 16, ScaleFactor.SCALE_100),
+    grid_frequency=RegisterField(129, 16, ScaleFactor.SCALE_100),
+    gen_frequency=RegisterField(130, 16, ScaleFactor.SCALE_100),
+)
+
+# GridBOSS Energy Register Map
+# Source: eg4-modbus-monitor registers-gridboss.yaml
+GRIDBOSS_ENERGY_MAP = MidboxEnergyRegisterMap(
+    # Daily energy (registers 42-49, scale /10 for kWh)
+    load_energy_today_l1=RegisterField(42, 16, ScaleFactor.SCALE_10),
+    load_energy_today_l2=RegisterField(43, 16, ScaleFactor.SCALE_10),
+    ups_energy_today_l1=RegisterField(44, 16, ScaleFactor.SCALE_10),
+    ups_energy_today_l2=RegisterField(45, 16, ScaleFactor.SCALE_10),
+    to_grid_energy_today=RegisterField(46, 16, ScaleFactor.SCALE_10),
+    to_user_energy_today=RegisterField(48, 16, ScaleFactor.SCALE_10),
+    gen_energy_today=RegisterField(49, 16, ScaleFactor.SCALE_10),
+    # Total energy (registers 68+, 32-bit pairs, scale /10 for kWh)
+    load_energy_total_l1=RegisterField(68, 32, ScaleFactor.SCALE_10, little_endian=True),
+    load_energy_total_l2=RegisterField(70, 32, ScaleFactor.SCALE_10, little_endian=True),
+    ups_energy_total_l1=RegisterField(72, 32, ScaleFactor.SCALE_10, little_endian=True),
+    ups_energy_total_l2=RegisterField(74, 32, ScaleFactor.SCALE_10, little_endian=True),
+    to_grid_energy_total_l1=RegisterField(76, 32, ScaleFactor.SCALE_10, little_endian=True),
+    to_grid_energy_total_l2=RegisterField(78, 32, ScaleFactor.SCALE_10, little_endian=True),
+    to_user_energy_total_l1=RegisterField(80, 32, ScaleFactor.SCALE_10, little_endian=True),
+    to_user_energy_total_l2=RegisterField(82, 32, ScaleFactor.SCALE_10, little_endian=True),
+    gen_energy_total_l1=RegisterField(84, 32, ScaleFactor.SCALE_10, little_endian=True),
+    gen_energy_total_l2=RegisterField(86, 32, ScaleFactor.SCALE_10, little_endian=True),
+)
+
+
 def _get_family_energy_maps() -> dict[InverterFamily, EnergyRegisterMap]:
     """Get mapping from InverterFamily to EnergyRegisterMap."""
     from pylxpweb.devices.inverters._features import InverterFamily
@@ -941,4 +1121,10 @@ __all__ = [
     "get_runtime_map",
     "get_energy_map",
     "get_holding_map",
+    # MID/GridBOSS
+    "MIDBOX_DEVICE_TYPE_CODE",
+    "MidboxRuntimeRegisterMap",
+    "MidboxEnergyRegisterMap",
+    "GRIDBOSS_RUNTIME_MAP",
+    "GRIDBOSS_ENERGY_MAP",
 ]

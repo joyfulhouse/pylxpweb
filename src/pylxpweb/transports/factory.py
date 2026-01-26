@@ -25,15 +25,27 @@ Example:
         serial="CE12345678",
         inverter_family=InverterFamily.LXP_EU,
     )
+
+    # Create transport from configuration object
+    from pylxpweb.transports.config import TransportConfig, TransportType
+    config = TransportConfig(
+        host="192.168.1.100",
+        port=502,
+        serial="CE12345678",
+        transport_type=TransportType.MODBUS_TCP,
+    )
+    transport = create_transport_from_config(config)
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .config import TransportConfig, TransportType
 from .dongle import DongleTransport
 from .http import HTTPTransport
 from .modbus import ModbusTransport
+from .protocol import BaseTransport
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
@@ -218,8 +230,72 @@ def create_dongle_transport(
     )
 
 
+def create_transport_from_config(config: TransportConfig) -> BaseTransport:
+    """Create transport instance from configuration object.
+
+    This factory function creates the appropriate transport instance based
+    on the configuration's transport_type. It validates the configuration
+    before creating the transport.
+
+    Args:
+        config: Transport configuration specifying connection parameters
+
+    Returns:
+        Configured transport instance (ModbusTransport or DongleTransport)
+
+    Raises:
+        ValueError: If transport_type is HTTP (requires client) or
+            if configuration validation fails
+
+    Example:
+        config = TransportConfig(
+            host="192.168.1.100",
+            port=502,
+            serial="CE12345678",
+            transport_type=TransportType.MODBUS_TCP,
+            inverter_family=InverterFamily.PV_SERIES,
+        )
+        transport = create_transport_from_config(config)
+        async with transport:
+            runtime = await transport.read_runtime()
+    """
+    # Validate configuration first
+    config.validate()
+
+    if config.transport_type == TransportType.MODBUS_TCP:
+        return ModbusTransport(
+            host=config.host,
+            port=config.port,
+            serial=config.serial,
+            unit_id=config.unit_id,
+            timeout=config.timeout,
+            inverter_family=config.inverter_family,
+        )
+    elif config.transport_type == TransportType.WIFI_DONGLE:
+        # dongle_serial is guaranteed to be set after validate() for WIFI_DONGLE
+        assert config.dongle_serial is not None
+        return DongleTransport(
+            host=config.host,
+            port=config.port,
+            dongle_serial=config.dongle_serial,
+            inverter_serial=config.serial,
+            timeout=config.timeout,
+            inverter_family=config.inverter_family,
+        )
+    elif config.transport_type == TransportType.HTTP:
+        raise ValueError(
+            "HTTP transport requires a LuxpowerClient instance. "
+            "Use create_http_transport() instead."
+        )
+    else:
+        raise ValueError(f"Unsupported transport type: {config.transport_type}")
+
+
 __all__ = [
     "create_http_transport",
     "create_modbus_transport",
     "create_dongle_transport",
+    "create_transport_from_config",
+    "TransportConfig",
+    "TransportType",
 ]

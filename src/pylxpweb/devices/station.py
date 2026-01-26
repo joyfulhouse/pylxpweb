@@ -1338,6 +1338,8 @@ class Station(BaseDevice):
                         inverter_family=config.inverter_family,
                     )
                 elif config.transport_type == TransportType.WIFI_DONGLE:
+                    # dongle_serial is guaranteed by TransportConfig validation
+                    assert config.dongle_serial is not None
                     transport = create_dongle_transport(
                         host=config.host,
                         port=config.port,
