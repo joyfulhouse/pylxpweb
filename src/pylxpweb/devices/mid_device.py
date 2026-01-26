@@ -157,14 +157,129 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         return mid_device
 
     async def refresh(self) -> None:
-        """Refresh MID device runtime data from API."""
+        """Refresh MID device runtime data from API or transport.
+
+        Uses transport if available, otherwise falls back to HTTP API.
+        """
         try:
-            runtime_data = await self._client.api.devices.get_midbox_runtime(self.serial_number)
-            self._runtime = runtime_data
-            self._last_refresh = datetime.now()
+            if self._transport is not None and hasattr(self._transport, "read_midbox_runtime"):
+                # Use transport for direct local communication
+                # read_midbox_runtime is implemented by ModbusTcpTransport and DongleTransport
+                # but not part of the generic InverterTransport protocol
+                read_midbox = self._transport.read_midbox_runtime
+                transport_data: dict[str, float | int] = await read_midbox()
+
+                # Convert transport dict to MidboxRuntime model
+                self._runtime = self._create_runtime_from_transport(transport_data)
+                self._last_refresh = datetime.now()
+                _LOGGER.debug(
+                    "Refreshed MID device %s via transport: %d data points",
+                    self.serial_number,
+                    len(transport_data),
+                )
+            elif self._client is not None:
+                # Use HTTP API
+                runtime_data = await self._client.api.devices.get_midbox_runtime(self.serial_number)
+                self._runtime = runtime_data
+                self._last_refresh = datetime.now()
+            else:
+                _LOGGER.warning(
+                    "No transport or client available for MID device %s",
+                    self.serial_number,
+                )
         except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
             # Graceful error handling - keep existing cached data
             _LOGGER.debug("Failed to fetch MID device runtime for %s: %s", self.serial_number, err)
+        except Exception as err:
+            # Catch transport errors too
+            _LOGGER.debug(
+                "Failed to fetch MID device runtime for %s via transport: %s",
+                self.serial_number,
+                err,
+            )
+
+    def _create_runtime_from_transport(
+        self, transport_data: dict[str, float | int]
+    ) -> MidboxRuntime:
+        """Create MidboxRuntime model from transport data dict.
+
+        Args:
+            transport_data: Dict with MidboxData-compatible field names from transport
+
+        Returns:
+            MidboxRuntime model with midboxData populated from transport
+        """
+        from pylxpweb.models import MidboxData, MidboxRuntime
+
+        # Build MidboxData from transport dict, providing defaults for required fields
+        # The transport may not have all fields, so we use .get() with defaults
+        midbox_data = MidboxData(
+            status=int(transport_data.get("status", 0)),
+            serverTime=str(transport_data.get("serverTime", "")),
+            deviceTime=str(transport_data.get("deviceTime", "")),
+            # Voltages
+            gridRmsVolt=int(transport_data.get("gridRmsVolt", 0)),
+            upsRmsVolt=int(transport_data.get("upsRmsVolt", 0)),
+            genRmsVolt=int(transport_data.get("genRmsVolt", 0)),
+            gridL1RmsVolt=int(transport_data.get("gridL1RmsVolt", 0)),
+            gridL2RmsVolt=int(transport_data.get("gridL2RmsVolt", 0)),
+            upsL1RmsVolt=int(transport_data.get("upsL1RmsVolt", 0)),
+            upsL2RmsVolt=int(transport_data.get("upsL2RmsVolt", 0)),
+            genL1RmsVolt=int(transport_data.get("genL1RmsVolt", 0)),
+            genL2RmsVolt=int(transport_data.get("genL2RmsVolt", 0)),
+            # Currents
+            gridL1RmsCurr=int(transport_data.get("gridL1RmsCurr", 0)),
+            gridL2RmsCurr=int(transport_data.get("gridL2RmsCurr", 0)),
+            loadL1RmsCurr=int(transport_data.get("loadL1RmsCurr", 0)),
+            loadL2RmsCurr=int(transport_data.get("loadL2RmsCurr", 0)),
+            genL1RmsCurr=int(transport_data.get("genL1RmsCurr", 0)),
+            genL2RmsCurr=int(transport_data.get("genL2RmsCurr", 0)),
+            upsL1RmsCurr=int(transport_data.get("upsL1RmsCurr", 0)),
+            upsL2RmsCurr=int(transport_data.get("upsL2RmsCurr", 0)),
+            # Power
+            gridL1ActivePower=int(transport_data.get("gridL1ActivePower", 0)),
+            gridL2ActivePower=int(transport_data.get("gridL2ActivePower", 0)),
+            loadL1ActivePower=int(transport_data.get("loadL1ActivePower", 0)),
+            loadL2ActivePower=int(transport_data.get("loadL2ActivePower", 0)),
+            genL1ActivePower=int(transport_data.get("genL1ActivePower", 0)),
+            genL2ActivePower=int(transport_data.get("genL2ActivePower", 0)),
+            upsL1ActivePower=int(transport_data.get("upsL1ActivePower", 0)),
+            upsL2ActivePower=int(transport_data.get("upsL2ActivePower", 0)),
+            hybridPower=int(transport_data.get("hybridPower", 0)),
+            # Smart port status
+            smartPort1Status=int(transport_data.get("smartPort1Status", 0)),
+            smartPort2Status=int(transport_data.get("smartPort2Status", 0)),
+            smartPort3Status=int(transport_data.get("smartPort3Status", 0)),
+            smartPort4Status=int(transport_data.get("smartPort4Status", 0)),
+            # Frequency
+            gridFreq=int(transport_data.get("gridFreq", 0)),
+            # Smart Load Power (optional)
+            smartLoad1L1ActivePower=int(transport_data.get("smartLoad1L1ActivePower", 0)),
+            smartLoad1L2ActivePower=int(transport_data.get("smartLoad1L2ActivePower", 0)),
+            smartLoad2L1ActivePower=int(transport_data.get("smartLoad2L1ActivePower", 0)),
+            smartLoad2L2ActivePower=int(transport_data.get("smartLoad2L2ActivePower", 0)),
+            smartLoad3L1ActivePower=int(transport_data.get("smartLoad3L1ActivePower", 0)),
+            smartLoad3L2ActivePower=int(transport_data.get("smartLoad3L2ActivePower", 0)),
+            smartLoad4L1ActivePower=int(transport_data.get("smartLoad4L1ActivePower", 0)),
+            smartLoad4L2ActivePower=int(transport_data.get("smartLoad4L2ActivePower", 0)),
+            # AC Couple Power (optional)
+            acCouple1L1ActivePower=int(transport_data.get("acCouple1L1ActivePower", 0)),
+            acCouple1L2ActivePower=int(transport_data.get("acCouple1L2ActivePower", 0)),
+            acCouple2L1ActivePower=int(transport_data.get("acCouple2L1ActivePower", 0)),
+            acCouple2L2ActivePower=int(transport_data.get("acCouple2L2ActivePower", 0)),
+            acCouple3L1ActivePower=int(transport_data.get("acCouple3L1ActivePower", 0)),
+            acCouple3L2ActivePower=int(transport_data.get("acCouple3L2ActivePower", 0)),
+            acCouple4L1ActivePower=int(transport_data.get("acCouple4L1ActivePower", 0)),
+            acCouple4L2ActivePower=int(transport_data.get("acCouple4L2ActivePower", 0)),
+        )
+
+        # Wrap in MidboxRuntime
+        return MidboxRuntime(
+            success=True,
+            serialNum=self.serial_number,
+            fwCode="",  # Firmware not available via transport
+            midboxData=midbox_data,
+        )
 
     # All properties are provided by MIDRuntimePropertiesMixin
 

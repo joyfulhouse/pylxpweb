@@ -287,7 +287,7 @@ class TestDongleResponseParsing:
         with pytest.raises(TransportReadError) as exc_info:
             transport._parse_response(response)
 
-        assert "Invalid response prefix" in str(exc_info.value)
+        assert "No valid packet found in response" in str(exc_info.value)
 
     def test_parse_valid_response(self) -> None:
         """Test parsing a valid response."""
