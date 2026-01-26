@@ -14,10 +14,10 @@ from pylxpweb.constants import (
     DEVICE_TYPE_CODE_SNA,
 )
 from pylxpweb.transports.discovery import (
-    DeviceDiscoveryInfo,
     HOLD_DEVICE_TYPE_CODE,
     HOLD_PARALLEL_NUMBER,
     HOLD_PARALLEL_PHASE,
+    DeviceDiscoveryInfo,
     discover_device_info,
     discover_multiple_devices,
     get_model_family_name,
