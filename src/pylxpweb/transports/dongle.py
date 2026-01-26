@@ -35,6 +35,7 @@ from .data import (
     BatteryBankData,
     InverterEnergyData,
     InverterRuntimeData,
+    MidboxRuntimeData,
 )
 from .exceptions import (
     TransportConnectionError,
@@ -874,19 +875,14 @@ class DongleTransport(BaseTransport):
         """
         return device_type_code == DEVICE_TYPE_MIDBOX
 
-    async def read_midbox_runtime(self) -> dict[str, float | int]:
+    async def read_midbox_runtime(self) -> MidboxRuntimeData:
         """Read runtime data from a MID/GridBOSS device.
 
         MID devices use HOLDING registers (function 0x03) for runtime data,
         unlike inverters which use INPUT registers (function 0x04).
 
         Returns:
-            Dictionary with MidboxData-compatible field names and values:
-            - gridRmsVolt, upsRmsVolt, genRmsVolt (V)
-            - gridL1RmsVolt, gridL2RmsVolt, etc. (V)
-            - gridL1RmsCurr, gridL2RmsCurr, etc. (A, scaled /100)
-            - gridL1ActivePower, gridL2ActivePower, etc. (W)
-            - gridFreq (Hz, scaled /100)
+            MidboxRuntimeData with all MID/GridBOSS sensor values
 
         Raises:
             TransportReadError: If read operation fails
@@ -914,73 +910,9 @@ class DongleTransport(BaseTransport):
             _LOGGER.error("Failed to read MID holding registers: %s", e)
             raise TransportReadError(f"Failed to read MID registers: {e}") from e
 
-        # Extract values using the GridBOSS register map
-        # Map field names to MidboxData-compatible names
-        reg_map = GRIDBOSS_RUNTIME_MAP
-
-        def get_value(field_name: str, default: int = 0) -> float | int:
-            """Extract and scale a register value."""
-            field = getattr(reg_map, field_name, None)
-            if field is None:
-                return default
-            raw = holding_registers.get(field.address, default)
-            # Handle signed values
-            if field.signed and raw > 32767:
-                raw = raw - 65536
-            # Apply scaling
-            from pylxpweb.constants.scaling import ScaleFactor
-
-            if field.scale_factor == ScaleFactor.SCALE_10:
-                return raw / 10.0
-            elif field.scale_factor == ScaleFactor.SCALE_100:
-                return raw / 100.0
-            return raw
-
-        # Build MidboxData-compatible dictionary
-        return {
-            # Voltages (no scaling - raw volts)
-            "gridRmsVolt": get_value("grid_voltage"),
-            "upsRmsVolt": get_value("ups_voltage"),
-            "genRmsVolt": get_value("gen_voltage"),
-            "gridL1RmsVolt": get_value("grid_l1_voltage"),
-            "gridL2RmsVolt": get_value("grid_l2_voltage"),
-            "upsL1RmsVolt": get_value("ups_l1_voltage"),
-            "upsL2RmsVolt": get_value("ups_l2_voltage"),
-            "genL1RmsVolt": get_value("gen_l1_voltage"),
-            "genL2RmsVolt": get_value("gen_l2_voltage"),
-            # Currents (scaled /100)
-            "gridL1RmsCurr": get_value("grid_l1_current"),
-            "gridL2RmsCurr": get_value("grid_l2_current"),
-            "loadL1RmsCurr": get_value("load_l1_current"),
-            "loadL2RmsCurr": get_value("load_l2_current"),
-            "genL1RmsCurr": get_value("gen_l1_current"),
-            "genL2RmsCurr": get_value("gen_l2_current"),
-            "upsL1RmsCurr": get_value("ups_l1_current"),
-            "upsL2RmsCurr": get_value("ups_l2_current"),
-            # Power (no scaling - raw watts)
-            "gridL1ActivePower": get_value("grid_l1_power"),
-            "gridL2ActivePower": get_value("grid_l2_power"),
-            "loadL1ActivePower": get_value("load_l1_power"),
-            "loadL2ActivePower": get_value("load_l2_power"),
-            "genL1ActivePower": get_value("gen_l1_power"),
-            "genL2ActivePower": get_value("gen_l2_power"),
-            "upsL1ActivePower": get_value("ups_l1_power"),
-            "upsL2ActivePower": get_value("ups_l2_power"),
-            # Smart Load Power (watts, signed)
-            # When port is in AC Couple mode, these show AC Couple power
-            "smartLoad1L1ActivePower": get_value("smart_load_1_l1_power"),
-            "smartLoad1L2ActivePower": get_value("smart_load_1_l2_power"),
-            "smartLoad2L1ActivePower": get_value("smart_load_2_l1_power"),
-            "smartLoad2L2ActivePower": get_value("smart_load_2_l2_power"),
-            "smartLoad3L1ActivePower": get_value("smart_load_3_l1_power"),
-            "smartLoad3L2ActivePower": get_value("smart_load_3_l2_power"),
-            "smartLoad4L1ActivePower": get_value("smart_load_4_l1_power"),
-            "smartLoad4L2ActivePower": get_value("smart_load_4_l2_power"),
-            # Frequencies (scaled /100)
-            "phaseLockFreq": get_value("phase_lock_freq"),
-            "gridFreq": get_value("grid_frequency"),
-            "genFreq": get_value("gen_frequency"),
-        }
+        return MidboxRuntimeData.from_modbus_registers(
+            holding_registers, GRIDBOSS_RUNTIME_MAP
+        )
 
     async def read_battery(self) -> BatteryBankData | None:
         """Read battery information via dongle.

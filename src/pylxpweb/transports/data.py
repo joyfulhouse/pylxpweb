@@ -25,9 +25,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from pylxpweb.models import EnergyInfo, InverterRuntime
+    from pylxpweb.models import EnergyInfo, InverterRuntime, MidboxData
     from pylxpweb.transports.register_maps import (
         EnergyRegisterMap,
+        MidboxRuntimeRegisterMap,
         RegisterField,
         RuntimeRegisterMap,
     )
@@ -848,3 +849,313 @@ class BatteryBankData:
             cycle_count=cycle_count,
             batteries=[],  # Individual battery data not available via Modbus
         )
+
+
+@dataclass
+class MidboxRuntimeData:
+    """Real-time GridBOSS/MID device operating data.
+
+    All values are already scaled to proper units.
+    This is the transport-agnostic representation of MID device runtime data.
+
+    Note: MID devices use HOLDING registers (function 0x03) for runtime data,
+    unlike inverters which use INPUT registers (function 0x04).
+    """
+
+    # Timestamp
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    # -------------------------------------------------------------------------
+    # Voltage (V)
+    # -------------------------------------------------------------------------
+    grid_voltage: float = 0.0  # gridRmsVolt
+    ups_voltage: float = 0.0  # upsRmsVolt
+    gen_voltage: float = 0.0  # genRmsVolt
+    grid_l1_voltage: float = 0.0  # gridL1RmsVolt
+    grid_l2_voltage: float = 0.0  # gridL2RmsVolt
+    ups_l1_voltage: float = 0.0  # upsL1RmsVolt
+    ups_l2_voltage: float = 0.0  # upsL2RmsVolt
+    gen_l1_voltage: float = 0.0  # genL1RmsVolt
+    gen_l2_voltage: float = 0.0  # genL2RmsVolt
+
+    # -------------------------------------------------------------------------
+    # Current (A)
+    # -------------------------------------------------------------------------
+    grid_l1_current: float = 0.0  # gridL1RmsCurr
+    grid_l2_current: float = 0.0  # gridL2RmsCurr
+    load_l1_current: float = 0.0  # loadL1RmsCurr
+    load_l2_current: float = 0.0  # loadL2RmsCurr
+    gen_l1_current: float = 0.0  # genL1RmsCurr
+    gen_l2_current: float = 0.0  # genL2RmsCurr
+    ups_l1_current: float = 0.0  # upsL1RmsCurr
+    ups_l2_current: float = 0.0  # upsL2RmsCurr
+
+    # -------------------------------------------------------------------------
+    # Power (W, signed)
+    # -------------------------------------------------------------------------
+    grid_l1_power: float = 0.0  # gridL1ActivePower
+    grid_l2_power: float = 0.0  # gridL2ActivePower
+    load_l1_power: float = 0.0  # loadL1ActivePower
+    load_l2_power: float = 0.0  # loadL2ActivePower
+    gen_l1_power: float = 0.0  # genL1ActivePower
+    gen_l2_power: float = 0.0  # genL2ActivePower
+    ups_l1_power: float = 0.0  # upsL1ActivePower
+    ups_l2_power: float = 0.0  # upsL2ActivePower
+    hybrid_power: float = 0.0  # hybridPower (total AC couple power flow)
+
+    # -------------------------------------------------------------------------
+    # Smart Load Power (W, signed)
+    # When port is in AC Couple mode (status=2), these show AC Couple power
+    # -------------------------------------------------------------------------
+    smart_load_1_l1_power: float = 0.0  # smartLoad1L1ActivePower
+    smart_load_1_l2_power: float = 0.0  # smartLoad1L2ActivePower
+    smart_load_2_l1_power: float = 0.0  # smartLoad2L1ActivePower
+    smart_load_2_l2_power: float = 0.0  # smartLoad2L2ActivePower
+    smart_load_3_l1_power: float = 0.0  # smartLoad3L1ActivePower
+    smart_load_3_l2_power: float = 0.0  # smartLoad3L2ActivePower
+    smart_load_4_l1_power: float = 0.0  # smartLoad4L1ActivePower
+    smart_load_4_l2_power: float = 0.0  # smartLoad4L2ActivePower
+
+    # -------------------------------------------------------------------------
+    # Smart Port Status (0=off, 1=smart load, 2=ac_couple)
+    # Note: Not available via Modbus, only via HTTP API
+    # -------------------------------------------------------------------------
+    smart_port_1_status: int = 0  # smartPort1Status
+    smart_port_2_status: int = 0  # smartPort2Status
+    smart_port_3_status: int = 0  # smartPort3Status
+    smart_port_4_status: int = 0  # smartPort4Status
+
+    # -------------------------------------------------------------------------
+    # Frequency (Hz)
+    # -------------------------------------------------------------------------
+    phase_lock_freq: float = 0.0  # phaseLockFreq
+    grid_frequency: float = 0.0  # gridFreq
+    gen_frequency: float = 0.0  # genFreq
+
+    # -------------------------------------------------------------------------
+    # Computed totals (convenience)
+    # -------------------------------------------------------------------------
+    @property
+    def grid_power(self) -> float:
+        """Total grid power (L1 + L2)."""
+        return self.grid_l1_power + self.grid_l2_power
+
+    @property
+    def load_power(self) -> float:
+        """Total load power (L1 + L2)."""
+        return self.load_l1_power + self.load_l2_power
+
+    @property
+    def gen_power(self) -> float:
+        """Total generator power (L1 + L2)."""
+        return self.gen_l1_power + self.gen_l2_power
+
+    @property
+    def ups_power(self) -> float:
+        """Total UPS power (L1 + L2)."""
+        return self.ups_l1_power + self.ups_l2_power
+
+    @classmethod
+    def from_http_response(cls, midbox_data: MidboxData) -> MidboxRuntimeData:
+        """Create from HTTP API MidboxData response.
+
+        Args:
+            midbox_data: Pydantic model from HTTP API (nested in MidboxRuntime)
+
+        Returns:
+            Transport-agnostic runtime data with scaling applied
+        """
+        return cls(
+            timestamp=datetime.now(),
+            # Voltages (raw values are volts, no scaling needed)
+            grid_voltage=float(midbox_data.gridRmsVolt),
+            ups_voltage=float(midbox_data.upsRmsVolt),
+            gen_voltage=float(midbox_data.genRmsVolt),
+            grid_l1_voltage=float(midbox_data.gridL1RmsVolt),
+            grid_l2_voltage=float(midbox_data.gridL2RmsVolt),
+            ups_l1_voltage=float(midbox_data.upsL1RmsVolt),
+            ups_l2_voltage=float(midbox_data.upsL2RmsVolt),
+            gen_l1_voltage=float(midbox_data.genL1RmsVolt),
+            gen_l2_voltage=float(midbox_data.genL2RmsVolt),
+            # Currents (API returns centiamps, divide by 100)
+            grid_l1_current=float(midbox_data.gridL1RmsCurr) / 100.0,
+            grid_l2_current=float(midbox_data.gridL2RmsCurr) / 100.0,
+            load_l1_current=float(midbox_data.loadL1RmsCurr) / 100.0,
+            load_l2_current=float(midbox_data.loadL2RmsCurr) / 100.0,
+            gen_l1_current=float(midbox_data.genL1RmsCurr) / 100.0,
+            gen_l2_current=float(midbox_data.genL2RmsCurr) / 100.0,
+            ups_l1_current=float(midbox_data.upsL1RmsCurr) / 100.0,
+            ups_l2_current=float(midbox_data.upsL2RmsCurr) / 100.0,
+            # Power (raw watts, no scaling)
+            grid_l1_power=float(midbox_data.gridL1ActivePower),
+            grid_l2_power=float(midbox_data.gridL2ActivePower),
+            load_l1_power=float(midbox_data.loadL1ActivePower),
+            load_l2_power=float(midbox_data.loadL2ActivePower),
+            gen_l1_power=float(midbox_data.genL1ActivePower),
+            gen_l2_power=float(midbox_data.genL2ActivePower),
+            ups_l1_power=float(midbox_data.upsL1ActivePower),
+            ups_l2_power=float(midbox_data.upsL2ActivePower),
+            hybrid_power=float(midbox_data.hybridPower),
+            # Smart Load Power
+            smart_load_1_l1_power=float(midbox_data.smartLoad1L1ActivePower),
+            smart_load_1_l2_power=float(midbox_data.smartLoad1L2ActivePower),
+            smart_load_2_l1_power=float(midbox_data.smartLoad2L1ActivePower),
+            smart_load_2_l2_power=float(midbox_data.smartLoad2L2ActivePower),
+            smart_load_3_l1_power=float(midbox_data.smartLoad3L1ActivePower),
+            smart_load_3_l2_power=float(midbox_data.smartLoad3L2ActivePower),
+            smart_load_4_l1_power=float(midbox_data.smartLoad4L1ActivePower),
+            smart_load_4_l2_power=float(midbox_data.smartLoad4L2ActivePower),
+            # Smart Port Status (only available via HTTP API)
+            smart_port_1_status=midbox_data.smartPort1Status,
+            smart_port_2_status=midbox_data.smartPort2Status,
+            smart_port_3_status=midbox_data.smartPort3Status,
+            smart_port_4_status=midbox_data.smartPort4Status,
+            # Frequency (API returns centihertz, divide by 100)
+            grid_frequency=float(midbox_data.gridFreq) / 100.0,
+            # Note: phaseLockFreq and genFreq not in MidboxData model
+        )
+
+    @classmethod
+    def from_modbus_registers(
+        cls,
+        holding_registers: dict[int, int],
+        register_map: MidboxRuntimeRegisterMap | None = None,
+    ) -> MidboxRuntimeData:
+        """Create from Modbus holding register values.
+
+        Note: MID devices use HOLDING registers (function 0x03) for runtime data,
+        unlike inverters which use INPUT registers (function 0x04).
+
+        Args:
+            holding_registers: Dict mapping register address to raw value
+            register_map: Optional MidboxRuntimeRegisterMap for register locations.
+                If None, defaults to GRIDBOSS_RUNTIME_MAP.
+
+        Returns:
+            Transport-agnostic runtime data with scaling applied
+        """
+        from pylxpweb.transports.register_maps import GRIDBOSS_RUNTIME_MAP
+
+        if register_map is None:
+            register_map = GRIDBOSS_RUNTIME_MAP
+
+        return cls(
+            timestamp=datetime.now(),
+            # Voltages (no scaling - raw value is volts)
+            grid_voltage=_read_and_scale_field(holding_registers, register_map.grid_voltage),
+            ups_voltage=_read_and_scale_field(holding_registers, register_map.ups_voltage),
+            gen_voltage=_read_and_scale_field(holding_registers, register_map.gen_voltage),
+            grid_l1_voltage=_read_and_scale_field(holding_registers, register_map.grid_l1_voltage),
+            grid_l2_voltage=_read_and_scale_field(holding_registers, register_map.grid_l2_voltage),
+            ups_l1_voltage=_read_and_scale_field(holding_registers, register_map.ups_l1_voltage),
+            ups_l2_voltage=_read_and_scale_field(holding_registers, register_map.ups_l2_voltage),
+            gen_l1_voltage=_read_and_scale_field(holding_registers, register_map.gen_l1_voltage),
+            gen_l2_voltage=_read_and_scale_field(holding_registers, register_map.gen_l2_voltage),
+            # Currents (scale /100 for amps)
+            grid_l1_current=_read_and_scale_field(holding_registers, register_map.grid_l1_current),
+            grid_l2_current=_read_and_scale_field(holding_registers, register_map.grid_l2_current),
+            load_l1_current=_read_and_scale_field(holding_registers, register_map.load_l1_current),
+            load_l2_current=_read_and_scale_field(holding_registers, register_map.load_l2_current),
+            gen_l1_current=_read_and_scale_field(holding_registers, register_map.gen_l1_current),
+            gen_l2_current=_read_and_scale_field(holding_registers, register_map.gen_l2_current),
+            ups_l1_current=_read_and_scale_field(holding_registers, register_map.ups_l1_current),
+            ups_l2_current=_read_and_scale_field(holding_registers, register_map.ups_l2_current),
+            # Power (no scaling - raw watts, signed)
+            grid_l1_power=_read_and_scale_field(holding_registers, register_map.grid_l1_power),
+            grid_l2_power=_read_and_scale_field(holding_registers, register_map.grid_l2_power),
+            load_l1_power=_read_and_scale_field(holding_registers, register_map.load_l1_power),
+            load_l2_power=_read_and_scale_field(holding_registers, register_map.load_l2_power),
+            gen_l1_power=_read_and_scale_field(holding_registers, register_map.gen_l1_power),
+            gen_l2_power=_read_and_scale_field(holding_registers, register_map.gen_l2_power),
+            ups_l1_power=_read_and_scale_field(holding_registers, register_map.ups_l1_power),
+            ups_l2_power=_read_and_scale_field(holding_registers, register_map.ups_l2_power),
+            hybrid_power=_read_and_scale_field(holding_registers, register_map.hybrid_power),
+            # Smart Load Power (watts, signed)
+            smart_load_1_l1_power=_read_and_scale_field(
+                holding_registers, register_map.smart_load_1_l1_power
+            ),
+            smart_load_1_l2_power=_read_and_scale_field(
+                holding_registers, register_map.smart_load_1_l2_power
+            ),
+            smart_load_2_l1_power=_read_and_scale_field(
+                holding_registers, register_map.smart_load_2_l1_power
+            ),
+            smart_load_2_l2_power=_read_and_scale_field(
+                holding_registers, register_map.smart_load_2_l2_power
+            ),
+            smart_load_3_l1_power=_read_and_scale_field(
+                holding_registers, register_map.smart_load_3_l1_power
+            ),
+            smart_load_3_l2_power=_read_and_scale_field(
+                holding_registers, register_map.smart_load_3_l2_power
+            ),
+            smart_load_4_l1_power=_read_and_scale_field(
+                holding_registers, register_map.smart_load_4_l1_power
+            ),
+            smart_load_4_l2_power=_read_and_scale_field(
+                holding_registers, register_map.smart_load_4_l2_power
+            ),
+            # Smart Port Status - not available via Modbus (defaults to 0)
+            smart_port_1_status=0,
+            smart_port_2_status=0,
+            smart_port_3_status=0,
+            smart_port_4_status=0,
+            # Frequency (scale /100 for Hz)
+            phase_lock_freq=_read_and_scale_field(holding_registers, register_map.phase_lock_freq),
+            grid_frequency=_read_and_scale_field(holding_registers, register_map.grid_frequency),
+            gen_frequency=_read_and_scale_field(holding_registers, register_map.gen_frequency),
+        )
+
+    def to_dict(self) -> dict[str, float | int]:
+        """Convert to dictionary with MidboxData-compatible field names.
+
+        This provides backward compatibility with code expecting the old
+        dict[str, float | int] return type from read_midbox_runtime().
+
+        Returns:
+            Dictionary with camelCase field names matching MidboxData model
+        """
+        return {
+            # Voltages
+            "gridRmsVolt": self.grid_voltage,
+            "upsRmsVolt": self.ups_voltage,
+            "genRmsVolt": self.gen_voltage,
+            "gridL1RmsVolt": self.grid_l1_voltage,
+            "gridL2RmsVolt": self.grid_l2_voltage,
+            "upsL1RmsVolt": self.ups_l1_voltage,
+            "upsL2RmsVolt": self.ups_l2_voltage,
+            "genL1RmsVolt": self.gen_l1_voltage,
+            "genL2RmsVolt": self.gen_l2_voltage,
+            # Currents
+            "gridL1RmsCurr": self.grid_l1_current,
+            "gridL2RmsCurr": self.grid_l2_current,
+            "loadL1RmsCurr": self.load_l1_current,
+            "loadL2RmsCurr": self.load_l2_current,
+            "genL1RmsCurr": self.gen_l1_current,
+            "genL2RmsCurr": self.gen_l2_current,
+            "upsL1RmsCurr": self.ups_l1_current,
+            "upsL2RmsCurr": self.ups_l2_current,
+            # Power
+            "gridL1ActivePower": self.grid_l1_power,
+            "gridL2ActivePower": self.grid_l2_power,
+            "loadL1ActivePower": self.load_l1_power,
+            "loadL2ActivePower": self.load_l2_power,
+            "genL1ActivePower": self.gen_l1_power,
+            "genL2ActivePower": self.gen_l2_power,
+            "upsL1ActivePower": self.ups_l1_power,
+            "upsL2ActivePower": self.ups_l2_power,
+            "hybridPower": self.hybrid_power,
+            # Smart Load Power
+            "smartLoad1L1ActivePower": self.smart_load_1_l1_power,
+            "smartLoad1L2ActivePower": self.smart_load_1_l2_power,
+            "smartLoad2L1ActivePower": self.smart_load_2_l1_power,
+            "smartLoad2L2ActivePower": self.smart_load_2_l2_power,
+            "smartLoad3L1ActivePower": self.smart_load_3_l1_power,
+            "smartLoad3L2ActivePower": self.smart_load_3_l2_power,
+            "smartLoad4L1ActivePower": self.smart_load_4_l1_power,
+            "smartLoad4L2ActivePower": self.smart_load_4_l2_power,
+            # Frequency
+            "phaseLockFreq": self.phase_lock_freq,
+            "gridFreq": self.grid_frequency,
+            "genFreq": self.gen_frequency,
+        }
