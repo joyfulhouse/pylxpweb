@@ -54,9 +54,15 @@ from .data import (
     InverterRuntimeData,
 )
 from .discovery import (
+    HOLD_DEVICE_TYPE_CODE,
+    HOLD_PARALLEL_NUMBER,
+    HOLD_PARALLEL_PHASE,
     DeviceDiscoveryInfo,
     discover_device_info,
+    discover_multiple_devices,
     get_model_family_name,
+    get_parallel_group_key,
+    group_by_parallel_config,
     is_gridboss_device,
 )
 from .dongle import DongleTransport
@@ -102,8 +108,14 @@ __all__ = [
     "AttachResult",
     # Discovery utilities
     "DeviceDiscoveryInfo",
+    "HOLD_DEVICE_TYPE_CODE",
+    "HOLD_PARALLEL_NUMBER",
+    "HOLD_PARALLEL_PHASE",
     "discover_device_info",
+    "discover_multiple_devices",
     "get_model_family_name",
+    "get_parallel_group_key",
+    "group_by_parallel_config",
     "is_gridboss_device",
     # Capabilities
     "TransportCapabilities",

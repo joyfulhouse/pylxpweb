@@ -196,10 +196,108 @@ async def discover_device_info(transport: InverterTransport) -> DeviceDiscoveryI
     return info
 
 
+def get_parallel_group_key(info: DeviceDiscoveryInfo) -> tuple[int, int] | None:
+    """Get the parallel group key for a discovered device.
+
+    Devices with the same (parallel_number, parallel_phase) tuple are in the
+    same parallel group.
+
+    Args:
+        info: Device discovery information
+
+    Returns:
+        Tuple of (parallel_number, parallel_phase) or None if not in a group
+
+    Example:
+        >>> key = get_parallel_group_key(info)
+        >>> if key:
+        ...     print(f"Device is in parallel group {key}")
+    """
+    if info.parallel_number is not None and info.parallel_phase is not None:
+        return (info.parallel_number, info.parallel_phase)
+    return None
+
+
+def group_by_parallel_config(
+    devices: list[DeviceDiscoveryInfo],
+) -> dict[tuple[int, int] | None, list[DeviceDiscoveryInfo]]:
+    """Group discovered devices by their parallel configuration.
+
+    Devices with matching (parallel_number, parallel_phase) values are
+    considered to be in the same parallel group.
+
+    Args:
+        devices: List of discovered device information
+
+    Returns:
+        Dictionary mapping parallel group keys to lists of devices.
+        Key is (parallel_number, parallel_phase) tuple, or None for
+        standalone devices without parallel configuration.
+
+    Example:
+        >>> infos = [await discover_device_info(t) for t in transports]
+        >>> groups = group_by_parallel_config(infos)
+        >>> for key, members in groups.items():
+        ...     if key:
+        ...         print(f"Parallel group {key}: {len(members)} devices")
+        ...     else:
+        ...         print(f"Standalone devices: {len(members)}")
+    """
+    groups: dict[tuple[int, int] | None, list[DeviceDiscoveryInfo]] = {}
+
+    for info in devices:
+        key = get_parallel_group_key(info)
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(info)
+
+    return groups
+
+
+async def discover_multiple_devices(
+    transports: list[InverterTransport],
+) -> list[DeviceDiscoveryInfo]:
+    """Discover information from multiple transports concurrently.
+
+    This function connects to multiple devices and discovers their
+    information in parallel for faster discovery.
+
+    Args:
+        transports: List of transports (must be connected or connectable)
+
+    Returns:
+        List of DeviceDiscoveryInfo for each successfully discovered device
+
+    Example:
+        >>> transports = [
+        ...     create_modbus_transport(host="192.168.1.100", serial="CE1"),
+        ...     create_modbus_transport(host="192.168.1.101", serial="CE2"),
+        ... ]
+        >>> for t in transports:
+        ...     await t.connect()
+        >>> infos = await discover_multiple_devices(transports)
+        >>> groups = group_by_parallel_config(infos)
+    """
+    import asyncio
+
+    async def _discover_one(transport: InverterTransport) -> DeviceDiscoveryInfo | None:
+        try:
+            return await discover_device_info(transport)
+        except Exception as err:
+            _LOGGER.error("Failed to discover device %s: %s", transport.serial, err)
+            return None
+
+    results = await asyncio.gather(*[_discover_one(t) for t in transports])
+    return [r for r in results if r is not None]
+
+
 __all__ = [
     "DeviceDiscoveryInfo",
     "discover_device_info",
+    "discover_multiple_devices",
     "get_model_family_name",
+    "get_parallel_group_key",
+    "group_by_parallel_config",
     "is_gridboss_device",
     "HOLD_DEVICE_TYPE_CODE",
     "HOLD_PARALLEL_NUMBER",
