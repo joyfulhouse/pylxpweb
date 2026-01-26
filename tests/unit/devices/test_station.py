@@ -659,11 +659,10 @@ class TestStationFromLocalDiscovery:
         )
 
         # Mock transport and discovery - patch at the transports module level
-        with patch(
-            "pylxpweb.transports.create_modbus_transport"
-        ) as mock_create, patch(
-            "pylxpweb.transports.discover_device_info"
-        ) as mock_discover:
+        with (
+            patch("pylxpweb.transports.create_modbus_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
             mock_transport = Mock()
             mock_transport.connect = AsyncMock()
             mock_create.return_value = mock_transport
@@ -714,11 +713,10 @@ class TestStationFromLocalDiscovery:
             ),
         ]
 
-        with patch(
-            "pylxpweb.transports.create_modbus_transport"
-        ) as mock_create, patch(
-            "pylxpweb.transports.discover_device_info"
-        ) as mock_discover:
+        with (
+            patch("pylxpweb.transports.create_modbus_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
             mock_transport1 = Mock()
             mock_transport1.connect = AsyncMock()
             mock_transport2 = Mock()
@@ -776,11 +774,10 @@ class TestStationFromLocalDiscovery:
             ),
         ]
 
-        with patch(
-            "pylxpweb.transports.create_modbus_transport"
-        ) as mock_create, patch(
-            "pylxpweb.transports.discover_device_info"
-        ) as mock_discover:
+        with (
+            patch("pylxpweb.transports.create_modbus_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
             mock_transport_gb = Mock()
             mock_transport_gb.connect = AsyncMock()
             mock_transport_inv = Mock()
@@ -828,9 +825,7 @@ class TestStationFromLocalDiscovery:
             transport_type=TransportType.MODBUS_TCP,
         )
 
-        with patch(
-            "pylxpweb.transports.create_modbus_transport"
-        ) as mock_create:
+        with patch("pylxpweb.transports.create_modbus_transport") as mock_create:
             mock_transport = Mock()
             mock_transport.connect = AsyncMock(side_effect=Exception("Connection failed"))
             mock_create.return_value = mock_transport
@@ -859,11 +854,10 @@ class TestStationFromLocalDiscovery:
             ),
         ]
 
-        with patch(
-            "pylxpweb.transports.create_modbus_transport"
-        ) as mock_create, patch(
-            "pylxpweb.transports.discover_device_info"
-        ) as mock_discover:
+        with (
+            patch("pylxpweb.transports.create_modbus_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
             mock_transport1 = Mock()
             mock_transport1.connect = AsyncMock()
             mock_transport2 = Mock()
@@ -900,11 +894,10 @@ class TestStationFromLocalDiscovery:
             dongle_serial="DJ12345678",
         )
 
-        with patch(
-            "pylxpweb.transports.create_dongle_transport"
-        ) as mock_create, patch(
-            "pylxpweb.transports.discover_device_info"
-        ) as mock_discover:
+        with (
+            patch("pylxpweb.transports.create_dongle_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
             mock_transport = Mock()
             mock_transport.connect = AsyncMock()
             mock_create.return_value = mock_transport
