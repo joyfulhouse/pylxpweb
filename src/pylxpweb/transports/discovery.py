@@ -247,9 +247,7 @@ def group_by_parallel_config(
 
     for info in devices:
         key = get_parallel_group_key(info)
-        if key not in groups:
-            groups[key] = []
-        groups[key].append(info)
+        groups.setdefault(key, []).append(info)
 
     return groups
 
