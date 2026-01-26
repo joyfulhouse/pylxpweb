@@ -620,3 +620,300 @@ class TestStationDaylightSavingTime:
         assert result is True
         assert station.daylight_saving_time is False
         mock_client.api.plants.set_daylight_saving_time.assert_called_once_with(12345, False)
+
+
+class TestStationFromLocalDiscovery:
+    """Test Station.from_local_discovery() factory method."""
+
+    @pytest.fixture
+    def mock_modbus_transport(self) -> Mock:
+        """Create a mock Modbus transport."""
+        transport = Mock()
+        transport.serial = "CE12345678"
+        transport.connect = AsyncMock()
+        transport.read_parameters = AsyncMock(
+            side_effect=[
+                {19: 2092},  # Device type (PV Series)
+                {107: 550, 108: 1},  # Parallel config
+            ]
+        )
+        return transport
+
+    @pytest.mark.asyncio
+    async def test_from_local_discovery_empty_configs_raises_error(self) -> None:
+        """Test that empty configs list raises ValueError."""
+        with pytest.raises(ValueError, match="At least one TransportConfig"):
+            await Station.from_local_discovery([])
+
+    @pytest.mark.asyncio
+    async def test_from_local_discovery_single_inverter(self) -> None:
+        """Test discovering a single standalone inverter."""
+        from pylxpweb.constants import DEVICE_TYPE_CODE_PV_SERIES
+        from pylxpweb.transports.config import TransportConfig, TransportType
+
+        config = TransportConfig(
+            host="192.168.1.100",
+            port=502,
+            serial="CE12345678",
+            transport_type=TransportType.MODBUS_TCP,
+        )
+
+        # Mock transport and discovery - patch at the transports module level
+        with (
+            patch("pylxpweb.transports.create_modbus_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
+            mock_transport = Mock()
+            mock_transport.connect = AsyncMock()
+            mock_create.return_value = mock_transport
+
+            # Return discovery info with no parallel config (standalone)
+            from pylxpweb.transports import DeviceDiscoveryInfo
+
+            mock_discover.return_value = DeviceDiscoveryInfo(
+                serial="CE12345678",
+                device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
+                is_gridboss=False,
+                is_inverter=True,
+                model_family="PV_SERIES",
+                parallel_number=None,
+                parallel_phase=None,
+            )
+
+            station = await Station.from_local_discovery(
+                [config],
+                station_name="Test Station",
+                plant_id=1,
+            )
+
+            assert station.name == "Test Station"
+            assert station.id == 1
+            assert len(station.standalone_inverters) == 1
+            assert len(station.parallel_groups) == 0
+            assert station.standalone_inverters[0].serial_number == "CE12345678"
+
+    @pytest.mark.asyncio
+    async def test_from_local_discovery_parallel_group(self) -> None:
+        """Test discovering inverters in a parallel group."""
+        from pylxpweb.constants import DEVICE_TYPE_CODE_PV_SERIES
+        from pylxpweb.transports.config import TransportConfig, TransportType
+
+        configs = [
+            TransportConfig(
+                host="192.168.1.100",
+                port=502,
+                serial="CE1",
+                transport_type=TransportType.MODBUS_TCP,
+            ),
+            TransportConfig(
+                host="192.168.1.101",
+                port=502,
+                serial="CE2",
+                transport_type=TransportType.MODBUS_TCP,
+            ),
+        ]
+
+        with (
+            patch("pylxpweb.transports.create_modbus_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
+            mock_transport1 = Mock()
+            mock_transport1.connect = AsyncMock()
+            mock_transport2 = Mock()
+            mock_transport2.connect = AsyncMock()
+            mock_create.side_effect = [mock_transport1, mock_transport2]
+
+            # Both devices have same parallel config
+            from pylxpweb.transports import DeviceDiscoveryInfo
+
+            mock_discover.side_effect = [
+                DeviceDiscoveryInfo(
+                    serial="CE1",
+                    device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
+                    is_gridboss=False,
+                    is_inverter=True,
+                    model_family="PV_SERIES",
+                    parallel_number=550,
+                    parallel_phase=1,
+                ),
+                DeviceDiscoveryInfo(
+                    serial="CE2",
+                    device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
+                    is_gridboss=False,
+                    is_inverter=True,
+                    model_family="PV_SERIES",
+                    parallel_number=550,
+                    parallel_phase=1,
+                ),
+            ]
+
+            station = await Station.from_local_discovery(configs)
+
+            assert len(station.parallel_groups) == 1
+            assert len(station.standalone_inverters) == 0
+            assert len(station.parallel_groups[0].inverters) == 2
+
+    @pytest.mark.asyncio
+    async def test_from_local_discovery_with_gridboss(self) -> None:
+        """Test discovering a GridBOSS with inverters."""
+        from pylxpweb.constants import DEVICE_TYPE_CODE_GRIDBOSS, DEVICE_TYPE_CODE_PV_SERIES
+        from pylxpweb.transports.config import TransportConfig, TransportType
+
+        configs = [
+            TransportConfig(
+                host="192.168.1.100",
+                port=502,
+                serial="GB1",
+                transport_type=TransportType.MODBUS_TCP,
+            ),
+            TransportConfig(
+                host="192.168.1.101",
+                port=502,
+                serial="CE1",
+                transport_type=TransportType.MODBUS_TCP,
+            ),
+        ]
+
+        with (
+            patch("pylxpweb.transports.create_modbus_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
+            mock_transport_gb = Mock()
+            mock_transport_gb.connect = AsyncMock()
+            mock_transport_inv = Mock()
+            mock_transport_inv.connect = AsyncMock()
+            mock_create.side_effect = [mock_transport_gb, mock_transport_inv]
+
+            from pylxpweb.transports import DeviceDiscoveryInfo
+
+            mock_discover.side_effect = [
+                DeviceDiscoveryInfo(
+                    serial="GB1",
+                    device_type_code=DEVICE_TYPE_CODE_GRIDBOSS,
+                    is_gridboss=True,
+                    is_inverter=False,
+                    model_family="GridBOSS",
+                    parallel_number=550,
+                    parallel_phase=0,
+                ),
+                DeviceDiscoveryInfo(
+                    serial="CE1",
+                    device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
+                    is_gridboss=False,
+                    is_inverter=True,
+                    model_family="PV_SERIES",
+                    parallel_number=550,
+                    parallel_phase=1,
+                ),
+            ]
+
+            station = await Station.from_local_discovery(configs)
+
+            # GridBOSS has different parallel_phase (0 vs 1), so they're in different groups
+            assert len(station.parallel_groups) == 2
+
+    @pytest.mark.asyncio
+    async def test_from_local_discovery_all_connections_fail(self) -> None:
+        """Test that all connection failures raises TransportConnectionError."""
+        from pylxpweb.transports.config import TransportConfig, TransportType
+        from pylxpweb.transports.exceptions import TransportConnectionError
+
+        config = TransportConfig(
+            host="192.168.1.100",
+            port=502,
+            serial="CE1",
+            transport_type=TransportType.MODBUS_TCP,
+        )
+
+        with patch("pylxpweb.transports.create_modbus_transport") as mock_create:
+            mock_transport = Mock()
+            mock_transport.connect = AsyncMock(side_effect=Exception("Connection failed"))
+            mock_create.return_value = mock_transport
+
+            with pytest.raises(TransportConnectionError, match="All transports failed"):
+                await Station.from_local_discovery([config])
+
+    @pytest.mark.asyncio
+    async def test_from_local_discovery_partial_failure(self) -> None:
+        """Test that partial connection failures still create station."""
+        from pylxpweb.constants import DEVICE_TYPE_CODE_PV_SERIES
+        from pylxpweb.transports.config import TransportConfig, TransportType
+
+        configs = [
+            TransportConfig(
+                host="192.168.1.100",
+                port=502,
+                serial="CE1",
+                transport_type=TransportType.MODBUS_TCP,
+            ),
+            TransportConfig(
+                host="192.168.1.101",
+                port=502,
+                serial="CE2",
+                transport_type=TransportType.MODBUS_TCP,
+            ),
+        ]
+
+        with (
+            patch("pylxpweb.transports.create_modbus_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
+            mock_transport1 = Mock()
+            mock_transport1.connect = AsyncMock()
+            mock_transport2 = Mock()
+            mock_transport2.connect = AsyncMock(side_effect=Exception("Connection failed"))
+            mock_create.side_effect = [mock_transport1, mock_transport2]
+
+            from pylxpweb.transports import DeviceDiscoveryInfo
+
+            mock_discover.return_value = DeviceDiscoveryInfo(
+                serial="CE1",
+                device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
+                is_gridboss=False,
+                is_inverter=True,
+                model_family="PV_SERIES",
+            )
+
+            station = await Station.from_local_discovery(configs)
+
+            # Only one device should be discovered
+            assert len(station.standalone_inverters) == 1
+            assert station.standalone_inverters[0].serial_number == "CE1"
+
+    @pytest.mark.asyncio
+    async def test_from_local_discovery_wifi_dongle_success(self) -> None:
+        """Test successful WiFi dongle discovery."""
+        from pylxpweb.constants import DEVICE_TYPE_CODE_PV_SERIES
+        from pylxpweb.transports.config import TransportConfig, TransportType
+
+        config = TransportConfig(
+            host="192.168.1.100",
+            port=8000,
+            serial="CE1",
+            transport_type=TransportType.WIFI_DONGLE,
+            dongle_serial="DJ12345678",
+        )
+
+        with (
+            patch("pylxpweb.transports.create_dongle_transport") as mock_create,
+            patch("pylxpweb.transports.discover_device_info") as mock_discover,
+        ):
+            mock_transport = Mock()
+            mock_transport.connect = AsyncMock()
+            mock_create.return_value = mock_transport
+
+            from pylxpweb.transports import DeviceDiscoveryInfo
+
+            mock_discover.return_value = DeviceDiscoveryInfo(
+                serial="CE1",
+                device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
+                is_gridboss=False,
+                is_inverter=True,
+                model_family="PV_SERIES",
+            )
+
+            station = await Station.from_local_discovery([config])
+
+            assert len(station.standalone_inverters) == 1
+            assert station.standalone_inverters[0].serial_number == "CE1"
+            mock_create.assert_called_once()

@@ -631,6 +631,316 @@ class Station(BaseDevice):
         tasks = [cls.load(client, plant.plantId) for plant in plants_response.rows]
         return await asyncio.gather(*tasks)
 
+    @classmethod
+    async def from_local_discovery(
+        cls,
+        configs: list[TransportConfig],
+        *,
+        station_name: str = "Local Station",
+        plant_id: int = 0,
+        timezone_str: str = "UTC",
+    ) -> Station:
+        """Create a Station from local transport discovery.
+
+        This factory method creates a Station hierarchy by connecting to
+        devices via local transports (Modbus TCP or WiFi Dongle) and using
+        register-based parallel group detection instead of the HTTP API.
+
+        The parallel group detection works by reading registers 107-108 from
+        each device. Devices with matching (parallel_number, parallel_phase)
+        values are grouped together.
+
+        Args:
+            configs: List of TransportConfig objects for devices to discover.
+            station_name: Name for the created station (default: "Local Station").
+            plant_id: Unique identifier for the station (default: 0).
+            timezone_str: Timezone string for the station (default: "UTC").
+
+        Returns:
+            Station instance with devices organized by parallel groups.
+
+        Raises:
+            ValueError: If no configs are provided.
+            TransportConnectionError: If all transports fail to connect.
+
+        Example:
+            ```python
+            from pylxpweb.transports import TransportConfig, TransportType
+
+            configs = [
+                TransportConfig(
+                    host="192.168.1.100",
+                    port=502,
+                    serial="CE12345678",
+                    transport_type=TransportType.MODBUS_TCP,
+                ),
+                TransportConfig(
+                    host="192.168.1.101",
+                    port=502,
+                    serial="CE87654321",
+                    transport_type=TransportType.MODBUS_TCP,
+                ),
+            ]
+
+            station = await Station.from_local_discovery(
+                configs,
+                station_name="My Solar System",
+                plant_id=1,
+            )
+
+            # Devices are grouped by parallel registers (107-108)
+            for group in station.parallel_groups:
+                print(f"Group: {len(group.inverters)} inverters")
+            ```
+        """
+        from pylxpweb.transports import (
+            TransportConnectionError,
+            group_by_parallel_config,
+        )
+
+        if not configs:
+            raise ValueError("At least one TransportConfig is required")
+
+        # Create station with minimal placeholder client (local-only mode)
+        station = cls(
+            client=None,  # type: ignore[arg-type]
+            plant_id=plant_id,
+            name=station_name,
+            location=Location(address="", country=""),
+            timezone=timezone_str,
+            created_date=datetime.now(UTC),
+        )
+
+        # Discover devices from all transports
+        discovered, failed_serials = await cls._discover_devices_from_configs(configs)
+
+        if not discovered:
+            raise TransportConnectionError("All transports failed to connect")
+
+        # Group devices by parallel config (registers 107-108)
+        infos = [info for _, info in discovered]
+        groups = group_by_parallel_config(infos)
+        transport_lookup = {info.serial: transport for transport, info in discovered}
+
+        # Process each parallel group
+        for group_key, group_infos in groups.items():
+            if group_key is None:
+                # Standalone devices (no parallel config)
+                cls._add_standalone_devices(station, group_infos, transport_lookup)
+            else:
+                # Devices with matching parallel config form a group
+                cls._add_parallel_group(station, group_key, group_infos, transport_lookup)
+
+        _LOGGER.info(
+            "Created station '%s' with %d parallel groups, %d standalone inverters, "
+            "%d standalone MID devices (%d failed)",
+            station_name,
+            len(station.parallel_groups),
+            len(station.standalone_inverters),
+            len(station.standalone_mid_devices),
+            len(failed_serials),
+        )
+
+        return station
+
+    @classmethod
+    async def _discover_devices_from_configs(
+        cls,
+        configs: list[TransportConfig],
+    ) -> tuple[list[tuple[Any, Any]], list[str]]:
+        """Connect to transports and discover device information.
+
+        Args:
+            configs: List of transport configurations.
+
+        Returns:
+            Tuple of (discovered devices, failed serials).
+        """
+        from pylxpweb.transports import discover_device_info
+
+        discovered: list[tuple[Any, Any]] = []
+        failed_serials: list[str] = []
+
+        for config in configs:
+            transport = cls._create_transport_from_config(config)
+            if transport is None:
+                failed_serials.append(config.serial)
+                continue
+
+            try:
+                await transport.connect()
+                info = await discover_device_info(transport)
+                discovered.append((transport, info))
+                _LOGGER.debug(
+                    "Discovered device %s: type=%d, family=%s, parallel=(%s, %s)",
+                    info.serial,
+                    info.device_type_code,
+                    info.model_family,
+                    info.parallel_number,
+                    info.parallel_phase,
+                )
+            except Exception as err:
+                _LOGGER.warning("Failed to connect to %s: %s", config.serial, err)
+                failed_serials.append(config.serial)
+
+        return discovered, failed_serials
+
+    @classmethod
+    def _create_transport_from_config(cls, config: TransportConfig) -> Any | None:
+        """Create a transport from configuration.
+
+        Args:
+            config: Transport configuration.
+
+        Returns:
+            Transport instance or None if creation failed.
+        """
+        from pylxpweb.transports import create_dongle_transport, create_modbus_transport
+        from pylxpweb.transports.config import TransportType
+
+        if config.transport_type == TransportType.MODBUS_TCP:
+            return create_modbus_transport(
+                host=config.host,
+                port=config.port,
+                unit_id=config.unit_id,
+                serial=config.serial,
+                inverter_family=config.inverter_family,
+                timeout=config.timeout,
+            )
+
+        if config.transport_type == TransportType.WIFI_DONGLE:
+            if not config.dongle_serial:
+                _LOGGER.warning(
+                    "Dongle serial required for WiFi dongle transport, skipping %s",
+                    config.serial,
+                )
+                return None
+            return create_dongle_transport(
+                host=config.host,
+                dongle_serial=config.dongle_serial,
+                inverter_serial=config.serial,
+                port=config.port,
+                inverter_family=config.inverter_family,
+                timeout=config.timeout,
+            )
+
+        _LOGGER.warning("Unknown transport type: %s", config.transport_type)
+        return None
+
+    @classmethod
+    def _create_device_with_transport(
+        cls,
+        info: Any,
+        transport: Any,
+    ) -> tuple[Any, bool]:
+        """Create a device (inverter or MID) with attached transport.
+
+        Args:
+            info: Device discovery info.
+            transport: Transport to attach.
+
+        Returns:
+            Tuple of (device instance, is_gridboss flag).
+        """
+        from pylxpweb.transports import is_gridboss_device
+
+        from .inverters.generic import GenericInverter
+        from .mid_device import MIDDevice
+
+        is_gridboss = is_gridboss_device(info.device_type_code)
+        device: MIDDevice | GenericInverter
+
+        if is_gridboss:
+            device = MIDDevice(
+                client=None,  # type: ignore[arg-type]
+                serial_number=info.serial,
+                model=info.model_family,
+            )
+        else:
+            device = GenericInverter(
+                client=None,  # type: ignore[arg-type]
+                serial_number=info.serial,
+                model=info.model_family,
+            )
+
+        device._transport = transport
+        return device, is_gridboss
+
+    @classmethod
+    def _add_standalone_devices(
+        cls,
+        station: Station,
+        infos: list[Any],
+        transport_lookup: dict[str, Any],
+    ) -> None:
+        """Add standalone devices to the station.
+
+        Args:
+            station: Station to add devices to.
+            infos: List of device discovery infos.
+            transport_lookup: Map of serial to transport.
+        """
+        for info in infos:
+            transport = transport_lookup[info.serial]
+            device, is_gridboss = cls._create_device_with_transport(info, transport)
+
+            if is_gridboss:
+                station.standalone_mid_devices.append(device)
+                _LOGGER.debug("Added standalone MID device: %s", info.serial)
+            else:
+                station.standalone_inverters.append(device)
+                _LOGGER.debug("Added standalone inverter: %s", info.serial)
+
+    @classmethod
+    def _add_parallel_group(
+        cls,
+        station: Station,
+        group_key: tuple[int, int],
+        infos: list[Any],
+        transport_lookup: dict[str, Any],
+    ) -> None:
+        """Create a parallel group and add devices to it.
+
+        Args:
+            station: Station to add the group to.
+            group_key: Tuple of (parallel_number, parallel_phase).
+            infos: List of device discovery infos for this group.
+            transport_lookup: Map of serial to transport.
+        """
+        from pylxpweb.transports import is_gridboss_device
+
+        from .parallel_group import ParallelGroup
+
+        parallel_number, parallel_phase = group_key
+        group_name = f"Group_{parallel_number}_{parallel_phase}"
+
+        # Find first inverter serial for the group
+        first_inverter_serial = next(
+            (info.serial for info in infos if not is_gridboss_device(info.device_type_code)),
+            infos[0].serial,
+        )
+
+        parallel_group = ParallelGroup(
+            client=None,  # type: ignore[arg-type]
+            station=station,
+            name=group_name,
+            first_device_serial=first_inverter_serial,
+        )
+
+        # Add devices to the group
+        for info in infos:
+            transport = transport_lookup[info.serial]
+            device, is_gridboss = cls._create_device_with_transport(info, transport)
+
+            if is_gridboss:
+                parallel_group.mid_device = device
+                _LOGGER.debug("Added MID device %s to group %s", info.serial, group_name)
+            else:
+                parallel_group.inverters.append(device)
+                _LOGGER.debug("Added inverter %s to group %s", info.serial, group_name)
+
+        station.parallel_groups.append(parallel_group)
+
     async def _load_devices(self) -> None:
         """Load device hierarchy from API.
 
