@@ -526,16 +526,23 @@ class ModbusTransport(BaseTransport):
 
         return InverterEnergyData.from_modbus_registers(input_registers, self.energy_register_map)
 
-    async def read_battery(self) -> BatteryBankData | None:
+    async def read_battery(
+        self,
+        include_individual: bool = True,
+    ) -> BatteryBankData | None:
         """Read battery information via Modbus.
 
-        Reads core battery data (registers 0-31) and BMS passthrough data
-        (registers 80-112) for comprehensive battery monitoring.
+        Reads core battery data (registers 0-31), BMS passthrough data
+        (registers 80-112), and optionally individual battery data from
+        extended registers (5000+) for comprehensive battery monitoring.
 
         Uses the register map for correct register addresses and scaling,
         ensuring extensibility for different inverter families.
 
-        Note: Individual battery module data is not available via Modbus.
+        Args:
+            include_individual: If True (default), also reads extended registers
+                (5000+) for individual battery module data. Set to False if you
+                only need aggregate battery bank data.
 
         Returns:
             Battery bank data with available information, None if no battery
@@ -543,6 +550,12 @@ class ModbusTransport(BaseTransport):
         Raises:
             TransportReadError: If read operation fails
         """
+        from pylxpweb.transports.register_maps import (
+            INDIVIDUAL_BATTERY_BASE_ADDRESS,
+            INDIVIDUAL_BATTERY_MAX_COUNT,
+            INDIVIDUAL_BATTERY_REGISTER_COUNT,
+        )
+
         # Read power/energy registers (0-31) and BMS registers (80-112)
         # Combine into single dict for factory method
         all_registers: dict[int, int] = {}
@@ -561,13 +574,62 @@ class ModbusTransport(BaseTransport):
             _LOGGER.warning("Failed to read BMS registers 80-112: %s", e)
             # Continue with basic battery data even if BMS read fails
 
-        # Use factory method with register map for proper extensibility
-        result = BatteryBankData.from_modbus_registers(all_registers, self.runtime_register_map)
+        # Get battery count from register 96 to optimize reads
+        battery_count = all_registers.get(96, 0)
+
+        # Read individual battery registers (5000+) if requested
+        individual_registers: dict[int, int] | None = None
+        if include_individual and battery_count > 0:
+            individual_registers = {}
+            # Calculate how many batteries to read (min of count and max supported)
+            batteries_to_read = min(battery_count, INDIVIDUAL_BATTERY_MAX_COUNT)
+            # Calculate total registers needed
+            total_registers = batteries_to_read * INDIVIDUAL_BATTERY_REGISTER_COUNT
+
+            try:
+                # Read in chunks of 40 registers (Modbus limit)
+                start_addr = INDIVIDUAL_BATTERY_BASE_ADDRESS
+                remaining = total_registers
+                current_addr = start_addr
+
+                while remaining > 0:
+                    chunk_size = min(remaining, 40)
+                    values = await self._read_input_registers(current_addr, chunk_size)
+                    for offset, value in enumerate(values):
+                        individual_registers[current_addr + offset] = value
+                    current_addr += chunk_size
+                    remaining -= chunk_size
+
+                _LOGGER.debug(
+                    "Read individual battery data for %d batteries from registers %d-%d",
+                    batteries_to_read,
+                    INDIVIDUAL_BATTERY_BASE_ADDRESS,
+                    current_addr - 1,
+                )
+            except Exception as e:
+                _LOGGER.warning(
+                    "Failed to read individual battery registers (5000+): %s. "
+                    "Individual battery data will not be available.",
+                    e,
+                )
+                individual_registers = None
+
+        # Use factory method with register map and individual battery data
+        result = BatteryBankData.from_modbus_registers(
+            all_registers,
+            self.runtime_register_map,
+            individual_registers,
+        )
 
         if result is None:
             _LOGGER.debug(
                 "Battery voltage below threshold, assuming no battery present. "
                 "If batteries are installed, check Modbus register mapping."
+            )
+        elif result.batteries:
+            _LOGGER.debug(
+                "Loaded %d individual batteries via Modbus",
+                len(result.batteries),
             )
 
         return result

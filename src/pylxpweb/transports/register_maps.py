@@ -969,9 +969,14 @@ class MidboxEnergyRegisterMap:
     load_energy_today_l2: RegisterField | None = None  # eLoadTodayL2
     ups_energy_today_l1: RegisterField | None = None  # eUpsTodayL1
     ups_energy_today_l2: RegisterField | None = None  # eUpsTodayL2
-    to_grid_energy_today: RegisterField | None = None  # eToGridToday
-    to_user_energy_today: RegisterField | None = None  # eToUserToday
-    gen_energy_today: RegisterField | None = None  # eGenToday
+    to_grid_energy_today_l1: RegisterField | None = None  # eToGridTodayL1
+    to_grid_energy_today_l2: RegisterField | None = None  # eToGridTodayL2
+    to_user_energy_today_l1: RegisterField | None = None  # eToUserTodayL1
+    to_user_energy_today_l2: RegisterField | None = None  # eToUserTodayL2
+    ac_couple_1_energy_today_l1: RegisterField | None = None  # eACcouple1TodayL1
+    ac_couple_1_energy_today_l2: RegisterField | None = None  # eACcouple1TodayL2
+    smart_load_1_energy_today_l1: RegisterField | None = None  # eSmartLoad1TodayL1
+    smart_load_1_energy_today_l2: RegisterField | None = None  # eSmartLoad1TodayL2
 
     # -------------------------------------------------------------------------
     # Total Energy (kWh, 32-bit, scale /10)
@@ -984,12 +989,15 @@ class MidboxEnergyRegisterMap:
     to_grid_energy_total_l2: RegisterField | None = None  # eToGridTotalL2 (32-bit)
     to_user_energy_total_l1: RegisterField | None = None  # eToUserTotalL1 (32-bit)
     to_user_energy_total_l2: RegisterField | None = None  # eToUserTotalL2 (32-bit)
-    gen_energy_total_l1: RegisterField | None = None  # eGenTotalL1 (32-bit)
-    gen_energy_total_l2: RegisterField | None = None  # eGenTotalL2 (32-bit)
+    ac_couple_1_energy_total_l1: RegisterField | None = None  # eACcouple1TotalL1 (32-bit)
+    ac_couple_1_energy_total_l2: RegisterField | None = None  # eACcouple1TotalL2 (32-bit)
+    smart_load_1_energy_total_l1: RegisterField | None = None  # eSmartLoad1TotalL1 (32-bit)
+    smart_load_1_energy_total_l2: RegisterField | None = None  # eSmartLoad1TotalL2 (32-bit)
 
 
 # GridBOSS Runtime Register Map
 # Source: eg4-modbus-monitor registers-gridboss.yaml
+# Smart port status discovered via register comparison with web API
 GRIDBOSS_RUNTIME_MAP = MidboxRuntimeRegisterMap(
     # Voltage (registers 1-9, no scaling - raw value is volts)
     grid_voltage=RegisterField(1, 16, ScaleFactor.SCALE_NONE),
@@ -1029,6 +1037,13 @@ GRIDBOSS_RUNTIME_MAP = MidboxRuntimeRegisterMap(
     smart_load_3_l2_power=RegisterField(39, 16, ScaleFactor.SCALE_NONE, signed=True),
     smart_load_4_l1_power=RegisterField(40, 16, ScaleFactor.SCALE_NONE, signed=True),
     smart_load_4_l2_power=RegisterField(41, 16, ScaleFactor.SCALE_NONE, signed=True),
+    # Smart Port Status (registers 105-108)
+    # Values: 0=off, 1=smart_load, 2=ac_couple
+    # Note: Registers 81-84 are part of 32-bit energy totals, actual status is at 105-108
+    smart_port_1_status=RegisterField(105, 16, ScaleFactor.SCALE_NONE),
+    smart_port_2_status=RegisterField(106, 16, ScaleFactor.SCALE_NONE),
+    smart_port_3_status=RegisterField(107, 16, ScaleFactor.SCALE_NONE),
+    smart_port_4_status=RegisterField(108, 16, ScaleFactor.SCALE_NONE),
     # Frequency (registers 128-130, scale /100 for Hz)
     phase_lock_freq=RegisterField(128, 16, ScaleFactor.SCALE_100),
     grid_frequency=RegisterField(129, 16, ScaleFactor.SCALE_100),
@@ -1037,15 +1052,23 @@ GRIDBOSS_RUNTIME_MAP = MidboxRuntimeRegisterMap(
 
 # GridBOSS Energy Register Map
 # Source: eg4-modbus-monitor registers-gridboss.yaml
+# Note: GridBOSS reads energy from INPUT registers (function 0x04)
 GRIDBOSS_ENERGY_MAP = MidboxEnergyRegisterMap(
-    # Daily energy (registers 42-49, scale /10 for kWh)
+    # Daily energy (registers 42-67, scale /10 for kWh)
     load_energy_today_l1=RegisterField(42, 16, ScaleFactor.SCALE_10),
     load_energy_today_l2=RegisterField(43, 16, ScaleFactor.SCALE_10),
     ups_energy_today_l1=RegisterField(44, 16, ScaleFactor.SCALE_10),
     ups_energy_today_l2=RegisterField(45, 16, ScaleFactor.SCALE_10),
-    to_grid_energy_today=RegisterField(46, 16, ScaleFactor.SCALE_10),
-    to_user_energy_today=RegisterField(48, 16, ScaleFactor.SCALE_10),
-    gen_energy_today=RegisterField(49, 16, ScaleFactor.SCALE_10),
+    to_grid_energy_today_l1=RegisterField(46, 16, ScaleFactor.SCALE_10),
+    to_grid_energy_today_l2=RegisterField(47, 16, ScaleFactor.SCALE_10),
+    to_user_energy_today_l1=RegisterField(48, 16, ScaleFactor.SCALE_10),
+    to_user_energy_today_l2=RegisterField(49, 16, ScaleFactor.SCALE_10),
+    # AC Couple and Smart Load energy today
+    # Verified: AC couple 1 at registers 60-61, smart load 1 at 62-63
+    ac_couple_1_energy_today_l1=RegisterField(60, 16, ScaleFactor.SCALE_10),
+    ac_couple_1_energy_today_l2=RegisterField(61, 16, ScaleFactor.SCALE_10),
+    smart_load_1_energy_today_l1=RegisterField(62, 16, ScaleFactor.SCALE_10),
+    smart_load_1_energy_today_l2=RegisterField(63, 16, ScaleFactor.SCALE_10),
     # Total energy (registers 68+, 32-bit pairs, scale /10 for kWh)
     load_energy_total_l1=RegisterField(68, 32, ScaleFactor.SCALE_10, little_endian=True),
     load_energy_total_l2=RegisterField(70, 32, ScaleFactor.SCALE_10, little_endian=True),
@@ -1055,8 +1078,12 @@ GRIDBOSS_ENERGY_MAP = MidboxEnergyRegisterMap(
     to_grid_energy_total_l2=RegisterField(78, 32, ScaleFactor.SCALE_10, little_endian=True),
     to_user_energy_total_l1=RegisterField(80, 32, ScaleFactor.SCALE_10, little_endian=True),
     to_user_energy_total_l2=RegisterField(82, 32, ScaleFactor.SCALE_10, little_endian=True),
-    gen_energy_total_l1=RegisterField(84, 32, ScaleFactor.SCALE_10, little_endian=True),
-    gen_energy_total_l2=RegisterField(86, 32, ScaleFactor.SCALE_10, little_endian=True),
+    # Note: AC Couple and Smart Load total energy registers need verification
+    # Registers 84-103+ may contain these values as 32-bit pairs
+    ac_couple_1_energy_total_l1=RegisterField(88, 32, ScaleFactor.SCALE_10, little_endian=True),
+    ac_couple_1_energy_total_l2=RegisterField(90, 32, ScaleFactor.SCALE_10, little_endian=True),
+    smart_load_1_energy_total_l1=RegisterField(104, 32, ScaleFactor.SCALE_10, little_endian=True),
+    smart_load_1_energy_total_l2=RegisterField(106, 32, ScaleFactor.SCALE_10, little_endian=True),
 )
 
 
@@ -1134,6 +1161,83 @@ def get_holding_map(family: InverterFamily | None = None) -> HoldingRegisterMap:
     return family_maps.get(family, PV_SERIES_HOLDING_MAP)
 
 
+# =============================================================================
+# INDIVIDUAL BATTERY REGISTER MAP (Extended Range 5000+)
+# =============================================================================
+# Source: Empirical testing on FlexBOSS21 via Modbus TCP
+# Verified against Web API getBatteryInfo response
+#
+# Individual battery data is stored in extended INPUT registers starting at 5002.
+# Each battery occupies 30 registers: base = 5002 + (battery_index * 30)
+# Maximum 5 battery slots supported (registers 5002-5151).
+#
+# The battery count is available at INPUT register 96 (battery_parallel_num).
+
+
+@dataclass(frozen=True)
+class IndividualBatteryRegisterMap:
+    """Register map for individual battery module data.
+
+    Maps the 30-register block per battery to BatteryData fields.
+    Base address: 5002 + (battery_index * 30)
+
+    Note: These are INPUT registers (function 0x04).
+    """
+
+    # Offset within each battery's 30-register block
+    status_header: RegisterField | None = None  # Offset 0: Status header (0xC003 = connected)
+    full_capacity_ah: RegisterField | None = None  # Offset 1: Full capacity (Ah)
+    charge_voltage_ref: RegisterField | None = None  # Offset 2: Charge voltage ref (÷10 = V)
+    charge_current_limit: RegisterField | None = None  # Offset 3: Charge limit (÷100 = A)
+    discharge_current_limit: RegisterField | None = None  # Offset 4: Discharge limit (÷100 = A)
+    # Offset 5: Unknown
+    voltage: RegisterField | None = None  # Offset 6: Battery voltage (÷100 = V)
+    current: RegisterField | None = None  # Offset 7: Current (÷100 = A, signed)
+    soc: RegisterField | None = None  # Offset 8: SOC (%) - needs verification
+    cycle_count: RegisterField | None = None  # Offset 9: Cycle count
+    max_cell_temp: RegisterField | None = None  # Offset 10: Max cell temp (÷10 = °C)
+    min_cell_temp: RegisterField | None = None  # Offset 11: Min cell temp (÷10 = °C)
+    max_cell_voltage: RegisterField | None = None  # Offset 12: Max cell voltage (mV)
+    min_cell_voltage: RegisterField | None = None  # Offset 13: Min cell voltage (mV)
+    # Offsets 14-16: Reserved/unknown
+    # Offsets 17-22: Serial number (6 registers, 12 ASCII chars)
+    serial_number_start: int = 17  # Offset where serial starts
+    serial_number_count: int = 6  # Number of registers for serial
+    soh: RegisterField | None = None  # Offset 23: SOH (%)
+    # Offsets 24-29: Reserved/unknown
+
+
+# Individual Battery Register Map for PV Series (FlexBOSS21, 18KPV)
+# Verified via Modbus TCP testing against Web API
+INDIVIDUAL_BATTERY_MAP = IndividualBatteryRegisterMap(
+    # All offsets are relative to battery base address (5002 + N*30)
+    status_header=RegisterField(0, 16, ScaleFactor.SCALE_NONE),
+    full_capacity_ah=RegisterField(1, 16, ScaleFactor.SCALE_NONE),
+    charge_voltage_ref=RegisterField(2, 16, ScaleFactor.SCALE_10),  # ÷10 = V
+    charge_current_limit=RegisterField(3, 16, ScaleFactor.SCALE_100),  # ÷100 = A
+    discharge_current_limit=RegisterField(4, 16, ScaleFactor.SCALE_100),  # ÷100 = A
+    voltage=RegisterField(6, 16, ScaleFactor.SCALE_100),  # ÷100 = V
+    current=RegisterField(7, 16, ScaleFactor.SCALE_100, signed=True),  # ÷100 = A
+    soc=RegisterField(8, 16, ScaleFactor.SCALE_NONE),  # Direct %
+    cycle_count=RegisterField(9, 16, ScaleFactor.SCALE_NONE),  # Direct count
+    max_cell_temp=RegisterField(10, 16, ScaleFactor.SCALE_10, signed=True),  # ÷10 = °C
+    min_cell_temp=RegisterField(11, 16, ScaleFactor.SCALE_10, signed=True),  # ÷10 = °C
+    max_cell_voltage=RegisterField(12, 16, ScaleFactor.SCALE_NONE),  # mV direct
+    min_cell_voltage=RegisterField(13, 16, ScaleFactor.SCALE_NONE),  # mV direct
+    serial_number_start=17,
+    serial_number_count=6,
+    soh=RegisterField(23, 16, ScaleFactor.SCALE_NONE),  # Direct %
+)
+
+
+# Base address for individual battery data
+INDIVIDUAL_BATTERY_BASE_ADDRESS = 5002
+# Number of registers per battery
+INDIVIDUAL_BATTERY_REGISTER_COUNT = 30
+# Maximum number of battery slots
+INDIVIDUAL_BATTERY_MAX_COUNT = 5
+
+
 __all__ = [
     "RegisterField",
     "HoldingRegisterField",
@@ -1155,4 +1259,10 @@ __all__ = [
     "MidboxEnergyRegisterMap",
     "GRIDBOSS_RUNTIME_MAP",
     "GRIDBOSS_ENERGY_MAP",
+    # Individual Battery
+    "IndividualBatteryRegisterMap",
+    "INDIVIDUAL_BATTERY_MAP",
+    "INDIVIDUAL_BATTERY_BASE_ADDRESS",
+    "INDIVIDUAL_BATTERY_REGISTER_COUNT",
+    "INDIVIDUAL_BATTERY_MAX_COUNT",
 ]

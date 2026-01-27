@@ -887,11 +887,16 @@ class DongleTransport(BaseTransport):
         Raises:
             TransportReadError: If read operation fails
         """
-        from pylxpweb.transports.register_maps import GRIDBOSS_RUNTIME_MAP
+        from pylxpweb.transports.register_maps import (
+            GRIDBOSS_ENERGY_MAP,
+            GRIDBOSS_RUNTIME_MAP,
+        )
 
-        # Read INPUT registers (same as inverters)
+        # Read INPUT registers for full parity with web API
         # Group 1: Registers 0-41 (voltages, currents, power, smart load power)
-        # Group 2: Registers 128-131 (frequencies)
+        # Group 2: Registers 42-67 (energy today data)
+        # Group 3: Registers 68-108 (energy total data + smart port status)
+        # Group 4: Registers 128-131 (frequencies)
         input_registers: dict[int, int] = {}
 
         try:
@@ -899,6 +904,18 @@ class DongleTransport(BaseTransport):
             values = await self._read_input_registers(0, 42)
             for offset, value in enumerate(values):
                 input_registers[offset] = value
+            await asyncio.sleep(0.2)
+
+            # Read energy today data (registers 42-67)
+            energy_today_values = await self._read_input_registers(42, 26)
+            for offset, value in enumerate(energy_today_values):
+                input_registers[42 + offset] = value
+            await asyncio.sleep(0.2)
+
+            # Read energy total data + smart port status (registers 68-108)
+            energy_total_values = await self._read_input_registers(68, 41)
+            for offset, value in enumerate(energy_total_values):
+                input_registers[68 + offset] = value
             await asyncio.sleep(0.2)
 
             # Read frequencies (registers 128-131)
@@ -911,14 +928,26 @@ class DongleTransport(BaseTransport):
             raise TransportReadError(f"Failed to read MID registers: {e}") from e
 
         return MidboxRuntimeData.from_modbus_registers(
-            input_registers, GRIDBOSS_RUNTIME_MAP
+            input_registers, GRIDBOSS_RUNTIME_MAP, GRIDBOSS_ENERGY_MAP
         )
 
-    async def read_battery(self) -> BatteryBankData | None:
+    async def read_battery(
+        self,
+        include_individual: bool = True,
+    ) -> BatteryBankData | None:
         """Read battery information via dongle.
+
+        Reads core battery data (registers 0-31), BMS passthrough data
+        (registers 80-112), and optionally individual battery data from
+        extended registers (5000+) for comprehensive battery monitoring.
 
         Uses the register map for correct register addresses and scaling,
         ensuring extensibility for different inverter families.
+
+        Args:
+            include_individual: If True (default), also reads extended registers
+                (5000+) for individual battery module data. Set to False if you
+                only need aggregate battery bank data.
 
         Returns:
             Battery bank data with available information, None if no battery
@@ -926,6 +955,12 @@ class DongleTransport(BaseTransport):
         Raises:
             TransportReadError: If read operation fails
         """
+        from pylxpweb.transports.register_maps import (
+            INDIVIDUAL_BATTERY_BASE_ADDRESS,
+            INDIVIDUAL_BATTERY_MAX_COUNT,
+            INDIVIDUAL_BATTERY_REGISTER_COUNT,
+        )
+
         # Read power/energy registers (0-31) and BMS registers (80-112)
         # Combine into single dict for factory method
         all_registers: dict[int, int] = {}
@@ -934,6 +969,7 @@ class DongleTransport(BaseTransport):
         power_regs = await self._read_input_registers(0, 32)
         for i, value in enumerate(power_regs):
             all_registers[i] = value
+        await asyncio.sleep(0.2)  # Delay to prevent dongle overload
 
         # Read BMS registers (80-112)
         try:
@@ -943,11 +979,61 @@ class DongleTransport(BaseTransport):
         except Exception as e:
             _LOGGER.warning("Failed to read BMS registers: %s", e)
 
-        # Use factory method with register map for proper extensibility
-        result = BatteryBankData.from_modbus_registers(all_registers, self.runtime_register_map)
+        # Get battery count from register 96 to optimize reads
+        battery_count = all_registers.get(96, 0)
+
+        # Read individual battery registers (5000+) if requested
+        individual_registers: dict[int, int] | None = None
+        if include_individual and battery_count > 0:
+            individual_registers = {}
+            # Calculate how many batteries to read (min of count and max supported)
+            batteries_to_read = min(battery_count, INDIVIDUAL_BATTERY_MAX_COUNT)
+            # Calculate total registers needed
+            total_registers = batteries_to_read * INDIVIDUAL_BATTERY_REGISTER_COUNT
+
+            try:
+                # Read in chunks of 40 registers (dongle limit)
+                start_addr = INDIVIDUAL_BATTERY_BASE_ADDRESS
+                remaining = total_registers
+                current_addr = start_addr
+
+                while remaining > 0:
+                    chunk_size = min(remaining, 40)
+                    await asyncio.sleep(0.2)  # Delay between reads to prevent dongle overload
+                    values = await self._read_input_registers(current_addr, chunk_size)
+                    for offset, value in enumerate(values):
+                        individual_registers[current_addr + offset] = value
+                    current_addr += chunk_size
+                    remaining -= chunk_size
+
+                _LOGGER.debug(
+                    "Read individual battery data for %d batteries from registers %d-%d",
+                    batteries_to_read,
+                    INDIVIDUAL_BATTERY_BASE_ADDRESS,
+                    current_addr - 1,
+                )
+            except Exception as e:
+                _LOGGER.warning(
+                    "Failed to read individual battery registers (5000+): %s. "
+                    "Individual battery data will not be available.",
+                    e,
+                )
+                individual_registers = None
+
+        # Use factory method with register map and individual battery data
+        result = BatteryBankData.from_modbus_registers(
+            all_registers,
+            self.runtime_register_map,
+            individual_registers,
+        )
 
         if result is None:
             _LOGGER.debug("Battery voltage below threshold, assuming no battery present.")
+        elif result.batteries:
+            _LOGGER.debug(
+                "Loaded %d individual batteries via dongle",
+                len(result.batteries),
+            )
 
         return result
 

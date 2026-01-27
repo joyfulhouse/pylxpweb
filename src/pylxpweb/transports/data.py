@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from pylxpweb.models import EnergyInfo, InverterRuntime, MidboxData
     from pylxpweb.transports.register_maps import (
         EnergyRegisterMap,
+        MidboxEnergyRegisterMap,
         MidboxRuntimeRegisterMap,
         RegisterField,
         RuntimeRegisterMap,
@@ -699,6 +700,11 @@ class BatteryData:
     min_cell_voltage: float = 0.0  # V
     max_cell_voltage: float = 0.0  # V
 
+    # BMS limits (optional, from extended Modbus registers)
+    charge_voltage_ref: float = 0.0  # V (BMS charge voltage reference)
+    charge_current_limit: float = 0.0  # A (Max charge current from BMS)
+    discharge_current_limit: float = 0.0  # A (Max discharge current from BMS)
+
     # Status
     status: int = 0
     fault_code: int = 0
@@ -708,6 +714,98 @@ class BatteryData:
         """Validate and clamp percentage values."""
         self.soc = _clamp_percentage(self.soc, "battery_soc")
         self.soh = _clamp_percentage(self.soh, "battery_soh")
+
+    @classmethod
+    def from_modbus_registers(
+        cls,
+        battery_index: int,
+        registers: dict[int, int],
+    ) -> BatteryData | None:
+        """Create BatteryData from Modbus registers for a single battery.
+
+        The registers dict should contain the 30-register block for this battery
+        with keys as absolute register addresses (e.g., 5002-5031 for battery 0).
+
+        Args:
+            battery_index: 0-based battery index
+            registers: Dict mapping register address to raw value
+
+        Returns:
+            BatteryData with all values properly scaled, or None if battery not present
+        """
+        from pylxpweb.transports.register_maps import (
+            INDIVIDUAL_BATTERY_BASE_ADDRESS,
+            INDIVIDUAL_BATTERY_MAP,
+            INDIVIDUAL_BATTERY_REGISTER_COUNT,
+        )
+
+        base = INDIVIDUAL_BATTERY_BASE_ADDRESS + (battery_index * INDIVIDUAL_BATTERY_REGISTER_COUNT)
+        battery_map = INDIVIDUAL_BATTERY_MAP
+
+        # Check if battery is present by reading status header
+        # 0xC003 indicates a connected battery
+        status_addr = base + (battery_map.status_header.address if battery_map.status_header else 0)
+        status = registers.get(status_addr, 0)
+        if status == 0:
+            return None  # Battery slot is empty
+
+        # Helper to read a field at base + offset
+        def read_field(field_def: RegisterField | None, default: float = 0.0) -> float:
+            if field_def is None:
+                return default
+            addr = base + field_def.address
+            raw_value = registers.get(addr, int(default))
+            # Handle signed values
+            if field_def.signed and raw_value > 32767:
+                raw_value = raw_value - 65536
+            # Apply scaling
+            from pylxpweb.constants.scaling import apply_scale
+
+            return apply_scale(raw_value, field_def.scale_factor)
+
+        def read_int_field(field_def: RegisterField | None, default: int = 0) -> int:
+            if field_def is None:
+                return default
+            addr = base + field_def.address
+            return registers.get(addr, default)
+
+        # Read serial number from 6 registers (12 ASCII chars)
+        serial_chars: list[str] = []
+        for i in range(battery_map.serial_number_count):
+            addr = base + battery_map.serial_number_start + i
+            value = registers.get(addr, 0)
+            low_byte = value & 0xFF
+            high_byte = (value >> 8) & 0xFF
+            if 32 <= low_byte <= 126:
+                serial_chars.append(chr(low_byte))
+            if 32 <= high_byte <= 126:
+                serial_chars.append(chr(high_byte))
+        serial_number = "".join(serial_chars).strip()
+
+        # Read cell voltage data (mV -> V conversion)
+        max_cell_voltage = read_field(battery_map.max_cell_voltage) / 1000.0
+        min_cell_voltage = read_field(battery_map.min_cell_voltage) / 1000.0
+
+        # Read temperature data
+        max_cell_temp = read_field(battery_map.max_cell_temp)
+
+        return cls(
+            battery_index=battery_index,
+            serial_number=serial_number,
+            voltage=read_field(battery_map.voltage),
+            current=read_field(battery_map.current),
+            soc=read_int_field(battery_map.soc),
+            soh=read_int_field(battery_map.soh, 100),
+            temperature=max_cell_temp,
+            max_capacity=read_field(battery_map.full_capacity_ah),
+            cycle_count=read_int_field(battery_map.cycle_count),
+            min_cell_voltage=min_cell_voltage,
+            max_cell_voltage=max_cell_voltage,
+            charge_voltage_ref=read_field(battery_map.charge_voltage_ref),
+            charge_current_limit=read_field(battery_map.charge_current_limit),
+            discharge_current_limit=read_field(battery_map.discharge_current_limit),
+            status=status,
+        )
 
 
 @dataclass
@@ -769,6 +867,7 @@ class BatteryBankData:
         cls,
         input_registers: dict[int, int],
         register_map: RuntimeRegisterMap | None = None,
+        individual_battery_registers: dict[int, int] | None = None,
     ) -> BatteryBankData | None:
         """Create from Modbus input register values.
 
@@ -776,9 +875,12 @@ class BatteryBankData:
         for each inverter family. This ensures extensibility for future models.
 
         Args:
-            input_registers: Dict mapping register address to raw value
+            input_registers: Dict mapping register address to raw value (0-127)
             register_map: RuntimeRegisterMap for model-specific register locations.
                 If None, defaults to PV_SERIES_RUNTIME_MAP.
+            individual_battery_registers: Optional dict with extended register
+                range (5000+) containing individual battery data. If provided,
+                individual batteries will be populated in the batteries list.
 
         Returns:
             BatteryBankData with all values properly scaled, or None if no battery
@@ -830,6 +932,24 @@ class BatteryBankData:
         # Cycle count from register map
         cycle_count = _read_register_field(input_registers, register_map.bms_cycle_count)
 
+        # Parse individual battery data if extended registers provided
+        batteries: list[BatteryData] = []
+        if individual_battery_registers:
+            from pylxpweb.transports.register_maps import INDIVIDUAL_BATTERY_MAX_COUNT
+
+            # Try to read each battery slot (up to max count or battery_count)
+            max_to_check = min(
+                battery_count if battery_count > 0 else INDIVIDUAL_BATTERY_MAX_COUNT,
+                INDIVIDUAL_BATTERY_MAX_COUNT,
+            )
+            for idx in range(max_to_check):
+                battery_data = BatteryData.from_modbus_registers(
+                    battery_index=idx,
+                    registers=individual_battery_registers,
+                )
+                if battery_data is not None:
+                    batteries.append(battery_data)
+
         return cls(
             timestamp=datetime.now(),
             voltage=battery_voltage,
@@ -847,7 +967,7 @@ class BatteryBankData:
             max_cell_temperature=max_cell_temp,
             min_cell_temperature=min_cell_temp,
             cycle_count=cycle_count,
-            batteries=[],  # Individual battery data not available via Modbus
+            batteries=batteries,
         )
 
 
@@ -933,6 +1053,38 @@ class MidboxRuntimeData:
     gen_frequency: float = 0.0  # genFreq
 
     # -------------------------------------------------------------------------
+    # Energy Today (kWh) - Daily accumulated energy
+    # -------------------------------------------------------------------------
+    load_energy_today_l1: float = 0.0  # eLoadTodayL1
+    load_energy_today_l2: float = 0.0  # eLoadTodayL2
+    ups_energy_today_l1: float = 0.0  # eUpsTodayL1
+    ups_energy_today_l2: float = 0.0  # eUpsTodayL2
+    to_grid_energy_today_l1: float = 0.0  # eToGridTodayL1
+    to_grid_energy_today_l2: float = 0.0  # eToGridTodayL2
+    to_user_energy_today_l1: float = 0.0  # eToUserTodayL1
+    to_user_energy_today_l2: float = 0.0  # eToUserTodayL2
+    ac_couple_1_energy_today_l1: float = 0.0  # eACcouple1TodayL1
+    ac_couple_1_energy_today_l2: float = 0.0  # eACcouple1TodayL2
+    smart_load_1_energy_today_l1: float = 0.0  # eSmartLoad1TodayL1
+    smart_load_1_energy_today_l2: float = 0.0  # eSmartLoad1TodayL2
+
+    # -------------------------------------------------------------------------
+    # Energy Total (kWh) - Lifetime accumulated energy
+    # -------------------------------------------------------------------------
+    load_energy_total_l1: float = 0.0  # eLoadTotalL1
+    load_energy_total_l2: float = 0.0  # eLoadTotalL2
+    ups_energy_total_l1: float = 0.0  # eUpsTotalL1
+    ups_energy_total_l2: float = 0.0  # eUpsTotalL2
+    to_grid_energy_total_l1: float = 0.0  # eToGridTotalL1
+    to_grid_energy_total_l2: float = 0.0  # eToGridTotalL2
+    to_user_energy_total_l1: float = 0.0  # eToUserTotalL1
+    to_user_energy_total_l2: float = 0.0  # eToUserTotalL2
+    ac_couple_1_energy_total_l1: float = 0.0  # eACcouple1TotalL1
+    ac_couple_1_energy_total_l2: float = 0.0  # eACcouple1TotalL2
+    smart_load_1_energy_total_l1: float = 0.0  # eSmartLoad1TotalL1
+    smart_load_1_energy_total_l2: float = 0.0  # eSmartLoad1TotalL2
+
+    # -------------------------------------------------------------------------
     # Computed totals (convenience)
     # -------------------------------------------------------------------------
     @property
@@ -954,6 +1106,35 @@ class MidboxRuntimeData:
     def ups_power(self) -> float:
         """Total UPS power (L1 + L2)."""
         return self.ups_l1_power + self.ups_l2_power
+
+    @property
+    def smart_load_total_power(self) -> float:
+        """Total smart load power across all ports (L1 + L2 for ports 1-4)."""
+        return (
+            self.smart_load_1_l1_power
+            + self.smart_load_1_l2_power
+            + self.smart_load_2_l1_power
+            + self.smart_load_2_l2_power
+            + self.smart_load_3_l1_power
+            + self.smart_load_3_l2_power
+            + self.smart_load_4_l1_power
+            + self.smart_load_4_l2_power
+        )
+
+    @property
+    def computed_hybrid_power(self) -> float:
+        """Computed hybrid power when not available from registers.
+
+        For Modbus reads, hybrid_power is not available in registers.
+        This approximation calculates it as: load_power - smart_load_total_power
+
+        When smart ports are in AC couple mode (status=2), smart_load_power
+        represents AC-coupled solar/generator feeding into the system.
+        Subtracting it from load gives the power flowing through the hybrid inverters.
+        """
+        if self.hybrid_power != 0.0:
+            return self.hybrid_power
+        return self.load_power - self.smart_load_total_power
 
     @classmethod
     def from_http_response(cls, midbox_data: MidboxData) -> MidboxRuntimeData:
@@ -1013,97 +1194,312 @@ class MidboxRuntimeData:
             # Frequency (API returns centihertz, divide by 100)
             grid_frequency=float(midbox_data.gridFreq) / 100.0,
             # Note: phaseLockFreq and genFreq not in MidboxData model
+            # Energy Today (API returns 0.1 kWh units, scale to kWh)
+            load_energy_today_l1=(
+                float(midbox_data.eLoadTodayL1) / 10.0
+                if midbox_data.eLoadTodayL1 is not None
+                else 0.0
+            ),
+            load_energy_today_l2=(
+                float(midbox_data.eLoadTodayL2) / 10.0
+                if midbox_data.eLoadTodayL2 is not None
+                else 0.0
+            ),
+            ups_energy_today_l1=(
+                float(midbox_data.eUpsTodayL1) / 10.0
+                if midbox_data.eUpsTodayL1 is not None
+                else 0.0
+            ),
+            ups_energy_today_l2=(
+                float(midbox_data.eUpsTodayL2) / 10.0
+                if midbox_data.eUpsTodayL2 is not None
+                else 0.0
+            ),
+            to_grid_energy_today_l1=(
+                float(midbox_data.eToGridTodayL1) / 10.0
+                if midbox_data.eToGridTodayL1 is not None
+                else 0.0
+            ),
+            to_grid_energy_today_l2=(
+                float(midbox_data.eToGridTodayL2) / 10.0
+                if midbox_data.eToGridTodayL2 is not None
+                else 0.0
+            ),
+            to_user_energy_today_l1=(
+                float(midbox_data.eToUserTodayL1) / 10.0
+                if midbox_data.eToUserTodayL1 is not None
+                else 0.0
+            ),
+            to_user_energy_today_l2=(
+                float(midbox_data.eToUserTodayL2) / 10.0
+                if midbox_data.eToUserTodayL2 is not None
+                else 0.0
+            ),
+            ac_couple_1_energy_today_l1=(
+                float(midbox_data.eACcouple1TodayL1) / 10.0
+                if midbox_data.eACcouple1TodayL1 is not None
+                else 0.0
+            ),
+            ac_couple_1_energy_today_l2=(
+                float(midbox_data.eACcouple1TodayL2) / 10.0
+                if midbox_data.eACcouple1TodayL2 is not None
+                else 0.0
+            ),
+            smart_load_1_energy_today_l1=(
+                float(midbox_data.eSmartLoad1TodayL1) / 10.0
+                if midbox_data.eSmartLoad1TodayL1 is not None
+                else 0.0
+            ),
+            smart_load_1_energy_today_l2=(
+                float(midbox_data.eSmartLoad1TodayL2) / 10.0
+                if midbox_data.eSmartLoad1TodayL2 is not None
+                else 0.0
+            ),
+            # Energy Total (API returns 0.1 kWh units, scale to kWh)
+            load_energy_total_l1=(
+                float(midbox_data.eLoadTotalL1) / 10.0
+                if midbox_data.eLoadTotalL1 is not None
+                else 0.0
+            ),
+            load_energy_total_l2=(
+                float(midbox_data.eLoadTotalL2) / 10.0
+                if midbox_data.eLoadTotalL2 is not None
+                else 0.0
+            ),
+            ups_energy_total_l1=(
+                float(midbox_data.eUpsTotalL1) / 10.0
+                if midbox_data.eUpsTotalL1 is not None
+                else 0.0
+            ),
+            ups_energy_total_l2=(
+                float(midbox_data.eUpsTotalL2) / 10.0
+                if midbox_data.eUpsTotalL2 is not None
+                else 0.0
+            ),
+            to_grid_energy_total_l1=(
+                float(midbox_data.eToGridTotalL1) / 10.0
+                if midbox_data.eToGridTotalL1 is not None
+                else 0.0
+            ),
+            to_grid_energy_total_l2=(
+                float(midbox_data.eToGridTotalL2) / 10.0
+                if midbox_data.eToGridTotalL2 is not None
+                else 0.0
+            ),
+            to_user_energy_total_l1=(
+                float(midbox_data.eToUserTotalL1) / 10.0
+                if midbox_data.eToUserTotalL1 is not None
+                else 0.0
+            ),
+            to_user_energy_total_l2=(
+                float(midbox_data.eToUserTotalL2) / 10.0
+                if midbox_data.eToUserTotalL2 is not None
+                else 0.0
+            ),
+            ac_couple_1_energy_total_l1=(
+                float(midbox_data.eACcouple1TotalL1) / 10.0
+                if midbox_data.eACcouple1TotalL1 is not None
+                else 0.0
+            ),
+            ac_couple_1_energy_total_l2=(
+                float(midbox_data.eACcouple1TotalL2) / 10.0
+                if midbox_data.eACcouple1TotalL2 is not None
+                else 0.0
+            ),
+            smart_load_1_energy_total_l1=(
+                float(midbox_data.eSmartLoad1TotalL1) / 10.0
+                if midbox_data.eSmartLoad1TotalL1 is not None
+                else 0.0
+            ),
+            smart_load_1_energy_total_l2=(
+                float(midbox_data.eSmartLoad1TotalL2) / 10.0
+                if midbox_data.eSmartLoad1TotalL2 is not None
+                else 0.0
+            ),
         )
 
     @classmethod
     def from_modbus_registers(
         cls,
-        holding_registers: dict[int, int],
+        input_registers: dict[int, int],
         register_map: MidboxRuntimeRegisterMap | None = None,
+        energy_map: MidboxEnergyRegisterMap | None = None,
     ) -> MidboxRuntimeData:
-        """Create from Modbus holding register values.
+        """Create from Modbus input register values.
 
-        Note: MID devices use HOLDING registers (function 0x03) for runtime data,
-        unlike inverters which use INPUT registers (function 0x04).
+        Note: GridBOSS/MID devices use INPUT registers (function 0x04) for runtime data.
 
         Args:
-            holding_registers: Dict mapping register address to raw value
+            input_registers: Dict mapping register address to raw value
             register_map: Optional MidboxRuntimeRegisterMap for register locations.
                 If None, defaults to GRIDBOSS_RUNTIME_MAP.
+            energy_map: Optional MidboxEnergyRegisterMap for energy register locations.
+                If None, defaults to GRIDBOSS_ENERGY_MAP. Pass None explicitly to skip
+                energy field reading.
 
         Returns:
             Transport-agnostic runtime data with scaling applied
         """
-        from pylxpweb.transports.register_maps import GRIDBOSS_RUNTIME_MAP
+        from pylxpweb.transports.register_maps import (
+            GRIDBOSS_ENERGY_MAP,
+            GRIDBOSS_RUNTIME_MAP,
+        )
 
         if register_map is None:
             register_map = GRIDBOSS_RUNTIME_MAP
 
+        if energy_map is None:
+            energy_map = GRIDBOSS_ENERGY_MAP
+
         return cls(
             timestamp=datetime.now(),
             # Voltages (no scaling - raw value is volts)
-            grid_voltage=_read_and_scale_field(holding_registers, register_map.grid_voltage),
-            ups_voltage=_read_and_scale_field(holding_registers, register_map.ups_voltage),
-            gen_voltage=_read_and_scale_field(holding_registers, register_map.gen_voltage),
-            grid_l1_voltage=_read_and_scale_field(holding_registers, register_map.grid_l1_voltage),
-            grid_l2_voltage=_read_and_scale_field(holding_registers, register_map.grid_l2_voltage),
-            ups_l1_voltage=_read_and_scale_field(holding_registers, register_map.ups_l1_voltage),
-            ups_l2_voltage=_read_and_scale_field(holding_registers, register_map.ups_l2_voltage),
-            gen_l1_voltage=_read_and_scale_field(holding_registers, register_map.gen_l1_voltage),
-            gen_l2_voltage=_read_and_scale_field(holding_registers, register_map.gen_l2_voltage),
+            grid_voltage=_read_and_scale_field(input_registers, register_map.grid_voltage),
+            ups_voltage=_read_and_scale_field(input_registers, register_map.ups_voltage),
+            gen_voltage=_read_and_scale_field(input_registers, register_map.gen_voltage),
+            grid_l1_voltage=_read_and_scale_field(input_registers, register_map.grid_l1_voltage),
+            grid_l2_voltage=_read_and_scale_field(input_registers, register_map.grid_l2_voltage),
+            ups_l1_voltage=_read_and_scale_field(input_registers, register_map.ups_l1_voltage),
+            ups_l2_voltage=_read_and_scale_field(input_registers, register_map.ups_l2_voltage),
+            gen_l1_voltage=_read_and_scale_field(input_registers, register_map.gen_l1_voltage),
+            gen_l2_voltage=_read_and_scale_field(input_registers, register_map.gen_l2_voltage),
             # Currents (scale /100 for amps)
-            grid_l1_current=_read_and_scale_field(holding_registers, register_map.grid_l1_current),
-            grid_l2_current=_read_and_scale_field(holding_registers, register_map.grid_l2_current),
-            load_l1_current=_read_and_scale_field(holding_registers, register_map.load_l1_current),
-            load_l2_current=_read_and_scale_field(holding_registers, register_map.load_l2_current),
-            gen_l1_current=_read_and_scale_field(holding_registers, register_map.gen_l1_current),
-            gen_l2_current=_read_and_scale_field(holding_registers, register_map.gen_l2_current),
-            ups_l1_current=_read_and_scale_field(holding_registers, register_map.ups_l1_current),
-            ups_l2_current=_read_and_scale_field(holding_registers, register_map.ups_l2_current),
+            grid_l1_current=_read_and_scale_field(input_registers, register_map.grid_l1_current),
+            grid_l2_current=_read_and_scale_field(input_registers, register_map.grid_l2_current),
+            load_l1_current=_read_and_scale_field(input_registers, register_map.load_l1_current),
+            load_l2_current=_read_and_scale_field(input_registers, register_map.load_l2_current),
+            gen_l1_current=_read_and_scale_field(input_registers, register_map.gen_l1_current),
+            gen_l2_current=_read_and_scale_field(input_registers, register_map.gen_l2_current),
+            ups_l1_current=_read_and_scale_field(input_registers, register_map.ups_l1_current),
+            ups_l2_current=_read_and_scale_field(input_registers, register_map.ups_l2_current),
             # Power (no scaling - raw watts, signed)
-            grid_l1_power=_read_and_scale_field(holding_registers, register_map.grid_l1_power),
-            grid_l2_power=_read_and_scale_field(holding_registers, register_map.grid_l2_power),
-            load_l1_power=_read_and_scale_field(holding_registers, register_map.load_l1_power),
-            load_l2_power=_read_and_scale_field(holding_registers, register_map.load_l2_power),
-            gen_l1_power=_read_and_scale_field(holding_registers, register_map.gen_l1_power),
-            gen_l2_power=_read_and_scale_field(holding_registers, register_map.gen_l2_power),
-            ups_l1_power=_read_and_scale_field(holding_registers, register_map.ups_l1_power),
-            ups_l2_power=_read_and_scale_field(holding_registers, register_map.ups_l2_power),
-            hybrid_power=_read_and_scale_field(holding_registers, register_map.hybrid_power),
+            grid_l1_power=_read_and_scale_field(input_registers, register_map.grid_l1_power),
+            grid_l2_power=_read_and_scale_field(input_registers, register_map.grid_l2_power),
+            load_l1_power=_read_and_scale_field(input_registers, register_map.load_l1_power),
+            load_l2_power=_read_and_scale_field(input_registers, register_map.load_l2_power),
+            gen_l1_power=_read_and_scale_field(input_registers, register_map.gen_l1_power),
+            gen_l2_power=_read_and_scale_field(input_registers, register_map.gen_l2_power),
+            ups_l1_power=_read_and_scale_field(input_registers, register_map.ups_l1_power),
+            ups_l2_power=_read_and_scale_field(input_registers, register_map.ups_l2_power),
+            hybrid_power=_read_and_scale_field(input_registers, register_map.hybrid_power),
             # Smart Load Power (watts, signed)
             smart_load_1_l1_power=_read_and_scale_field(
-                holding_registers, register_map.smart_load_1_l1_power
+                input_registers, register_map.smart_load_1_l1_power
             ),
             smart_load_1_l2_power=_read_and_scale_field(
-                holding_registers, register_map.smart_load_1_l2_power
+                input_registers, register_map.smart_load_1_l2_power
             ),
             smart_load_2_l1_power=_read_and_scale_field(
-                holding_registers, register_map.smart_load_2_l1_power
+                input_registers, register_map.smart_load_2_l1_power
             ),
             smart_load_2_l2_power=_read_and_scale_field(
-                holding_registers, register_map.smart_load_2_l2_power
+                input_registers, register_map.smart_load_2_l2_power
             ),
             smart_load_3_l1_power=_read_and_scale_field(
-                holding_registers, register_map.smart_load_3_l1_power
+                input_registers, register_map.smart_load_3_l1_power
             ),
             smart_load_3_l2_power=_read_and_scale_field(
-                holding_registers, register_map.smart_load_3_l2_power
+                input_registers, register_map.smart_load_3_l2_power
             ),
             smart_load_4_l1_power=_read_and_scale_field(
-                holding_registers, register_map.smart_load_4_l1_power
+                input_registers, register_map.smart_load_4_l1_power
             ),
             smart_load_4_l2_power=_read_and_scale_field(
-                holding_registers, register_map.smart_load_4_l2_power
+                input_registers, register_map.smart_load_4_l2_power
             ),
-            # Smart Port Status - not available via Modbus (defaults to 0)
-            smart_port_1_status=0,
-            smart_port_2_status=0,
-            smart_port_3_status=0,
-            smart_port_4_status=0,
+            # Smart Port Status (0=off, 1=smart_load, 2=ac_couple)
+            # Note: Smart port status registers conflict with energy totals.
+            # These are only available via HTTP API, will be 0 when reading from Modbus.
+            smart_port_1_status=_read_register_field(
+                input_registers, register_map.smart_port_1_status
+            ),
+            smart_port_2_status=_read_register_field(
+                input_registers, register_map.smart_port_2_status
+            ),
+            smart_port_3_status=_read_register_field(
+                input_registers, register_map.smart_port_3_status
+            ),
+            smart_port_4_status=_read_register_field(
+                input_registers, register_map.smart_port_4_status
+            ),
             # Frequency (scale /100 for Hz)
-            phase_lock_freq=_read_and_scale_field(holding_registers, register_map.phase_lock_freq),
-            grid_frequency=_read_and_scale_field(holding_registers, register_map.grid_frequency),
-            gen_frequency=_read_and_scale_field(holding_registers, register_map.gen_frequency),
+            phase_lock_freq=_read_and_scale_field(input_registers, register_map.phase_lock_freq),
+            grid_frequency=_read_and_scale_field(input_registers, register_map.grid_frequency),
+            gen_frequency=_read_and_scale_field(input_registers, register_map.gen_frequency),
+            # Energy Today (kWh, scale /10)
+            load_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.load_energy_today_l1
+            ),
+            load_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.load_energy_today_l2
+            ),
+            ups_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.ups_energy_today_l1
+            ),
+            ups_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.ups_energy_today_l2
+            ),
+            to_grid_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.to_grid_energy_today_l1
+            ),
+            to_grid_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.to_grid_energy_today_l2
+            ),
+            to_user_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.to_user_energy_today_l1
+            ),
+            to_user_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.to_user_energy_today_l2
+            ),
+            ac_couple_1_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_1_energy_today_l1
+            ),
+            ac_couple_1_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_1_energy_today_l2
+            ),
+            smart_load_1_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.smart_load_1_energy_today_l1
+            ),
+            smart_load_1_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.smart_load_1_energy_today_l2
+            ),
+            # Energy Total (kWh, 32-bit, scale /10)
+            load_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.load_energy_total_l1
+            ),
+            load_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.load_energy_total_l2
+            ),
+            ups_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.ups_energy_total_l1
+            ),
+            ups_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.ups_energy_total_l2
+            ),
+            to_grid_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.to_grid_energy_total_l1
+            ),
+            to_grid_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.to_grid_energy_total_l2
+            ),
+            to_user_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.to_user_energy_total_l1
+            ),
+            to_user_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.to_user_energy_total_l2
+            ),
+            ac_couple_1_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_1_energy_total_l1
+            ),
+            ac_couple_1_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_1_energy_total_l2
+            ),
+            smart_load_1_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.smart_load_1_energy_total_l1
+            ),
+            smart_load_1_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.smart_load_1_energy_total_l2
+            ),
         )
 
     def to_dict(self) -> dict[str, float | int]:
@@ -1144,7 +1540,7 @@ class MidboxRuntimeData:
             "genL2ActivePower": self.gen_l2_power,
             "upsL1ActivePower": self.ups_l1_power,
             "upsL2ActivePower": self.ups_l2_power,
-            "hybridPower": self.hybrid_power,
+            "hybridPower": self.computed_hybrid_power,
             # Smart Load Power
             "smartLoad1L1ActivePower": self.smart_load_1_l1_power,
             "smartLoad1L2ActivePower": self.smart_load_1_l2_power,
@@ -1154,8 +1550,39 @@ class MidboxRuntimeData:
             "smartLoad3L2ActivePower": self.smart_load_3_l2_power,
             "smartLoad4L1ActivePower": self.smart_load_4_l1_power,
             "smartLoad4L2ActivePower": self.smart_load_4_l2_power,
+            # Smart Port Status
+            "smartPort1Status": self.smart_port_1_status,
+            "smartPort2Status": self.smart_port_2_status,
+            "smartPort3Status": self.smart_port_3_status,
+            "smartPort4Status": self.smart_port_4_status,
             # Frequency
             "phaseLockFreq": self.phase_lock_freq,
             "gridFreq": self.grid_frequency,
             "genFreq": self.gen_frequency,
+            # Energy Today (kWh)
+            "eLoadTodayL1": self.load_energy_today_l1,
+            "eLoadTodayL2": self.load_energy_today_l2,
+            "eUpsTodayL1": self.ups_energy_today_l1,
+            "eUpsTodayL2": self.ups_energy_today_l2,
+            "eToGridTodayL1": self.to_grid_energy_today_l1,
+            "eToGridTodayL2": self.to_grid_energy_today_l2,
+            "eToUserTodayL1": self.to_user_energy_today_l1,
+            "eToUserTodayL2": self.to_user_energy_today_l2,
+            "eACcouple1TodayL1": self.ac_couple_1_energy_today_l1,
+            "eACcouple1TodayL2": self.ac_couple_1_energy_today_l2,
+            "eSmartLoad1TodayL1": self.smart_load_1_energy_today_l1,
+            "eSmartLoad1TodayL2": self.smart_load_1_energy_today_l2,
+            # Energy Total (kWh)
+            "eLoadTotalL1": self.load_energy_total_l1,
+            "eLoadTotalL2": self.load_energy_total_l2,
+            "eUpsTotalL1": self.ups_energy_total_l1,
+            "eUpsTotalL2": self.ups_energy_total_l2,
+            "eToGridTotalL1": self.to_grid_energy_total_l1,
+            "eToGridTotalL2": self.to_grid_energy_total_l2,
+            "eToUserTotalL1": self.to_user_energy_total_l1,
+            "eToUserTotalL2": self.to_user_energy_total_l2,
+            "eACcouple1TotalL1": self.ac_couple_1_energy_total_l1,
+            "eACcouple1TotalL2": self.ac_couple_1_energy_total_l2,
+            "eSmartLoad1TotalL1": self.smart_load_1_energy_total_l1,
+            "eSmartLoad1TotalL2": self.smart_load_1_energy_total_l2,
         }
