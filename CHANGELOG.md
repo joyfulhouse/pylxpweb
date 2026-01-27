@@ -5,6 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.40] - 2026-01-26
+
+### Added
+
+- **Parallel Group Detection via Register 113** - Device discovery now uses input register 113 for accurate parallel group detection:
+  - Packed format: bits 0-1 = master/slave role, bits 2-3 = phase, bits 8-15 = group number
+  - New `read_parallel_config()` method in `ModbusTransport` and `DongleTransport`
+  - `DeviceDiscoveryInfo` now includes `parallel_master_slave` field (0=standalone, 1=master, 2=slave, 3=3-phase master)
+  - New properties: `parallel_role_name`, `parallel_phase_name`, `is_master`
+  - Holding registers 107-108 used as fallback (less reliable on some firmware)
+
+### Changed
+
+- `discover_device_info()` now prefers input register 113 over holding registers 107-108 for parallel detection
+- `is_standalone` property now checks both `parallel_number` and `parallel_master_slave` fields
+
+## [0.5.39] - 2026-01-26
+
+### Added
+
+- **Individual Battery Data Parity** - Full support for individual battery modules via local Modbus (#83):
+  - Read all 3 batteries from extended registers (5002+, 30 registers per battery)
+  - All operational data matches web API: voltage, current, SOC, SOH, temperatures, cell voltages
+  - New `BatteryData` fields: `min_cell_temperature`, `max_cell_temperature`
+  - Properly scaled charge/discharge current limits (deciamps)
+
+### Fixed
+
+- **BMS Cell Voltage Scaling** - Fixed aggregate BMS cell voltages in runtime data (#83):
+  - Changed `bms_max_cell_voltage` and `bms_min_cell_voltage` from `SCALE_NONE` to `SCALE_1000`
+  - Registers 101-102 contain millivolts, now correctly converted to volts
+  - Applies to both PV_SERIES and LXP_EU register maps
+
+- **Individual Battery Scaling Issues** - Fixed multiple scaling problems in individual battery data:
+  - Cell voltage: Removed redundant `/1000.0` division (scaling now handled in register map)
+  - Current: Changed from `SCALE_100` to `SCALE_10` (value is in deciamps, not centiamps)
+  - Charge/discharge current limits: Changed from `SCALE_100` to `SCALE_10`
+
+## [0.5.38] - 2026-01-26
+
+### Added
+
+- **GridBOSS Full Parity with Web API** - Complete data support for MID/GridBOSS devices via local Modbus:
+  - Energy today registers: load, UPS, to-grid, to-user, AC couple, smart load (L1/L2)
+  - Energy total registers: lifetime accumulated values for all energy categories
+  - Smart port status registers (105-108): port mode detection (off/smart_load/ac_couple)
+  - Extended `read_midbox_runtime()` to read registers 0-108 and 128-131
+  - New computed properties: `smart_load_total_power`, `computed_hybrid_power`
+
+### Fixed
+
+- **Smart Port Status Registers** - Found correct location at registers 105-108 (not 81-84 which are energy totals)
+- **AC Couple Energy Register** - Fixed register address for `ac_couple_1_energy_today_l1` (60, not 50)
+- **Smart Load Energy Registers** - Fixed register addresses for `smart_load_1_energy_today_l1/l2` (62-63)
+- **Hybrid Power Calculation** - Added `computed_hybrid_power` property that calculates from `load_power - smart_load_total_power` when direct register value is unavailable
+
+### Documentation
+
+- Added note that `hybrid_power` is a calculated value on the web API, approximated locally from load and smart load power
+
 ## [0.5.12] - 2026-01-23
 
 ### Added

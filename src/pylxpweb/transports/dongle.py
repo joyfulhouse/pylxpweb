@@ -875,6 +875,34 @@ class DongleTransport(BaseTransport):
         """
         return device_type_code == DEVICE_TYPE_MIDBOX
 
+    async def read_parallel_config(self) -> int:
+        """Read parallel configuration from input register 113.
+
+        The parallel config register contains packed information:
+        - Bits 0-1: Master/slave role (0=standalone, 1=master, 2=slave, 3=3-phase master)
+        - Bits 2-3: Phase assignment (0=R, 1=S, 2=T)
+        - Bits 8-15: Parallel group number (0=standalone, 1-255=group number)
+
+        Example: Value 0x0205 (517 decimal) means:
+        - Master/slave = 1 (master)
+        - Phase = 1 (S)
+        - Parallel number = 2 (group B)
+
+        Returns:
+            Raw 16-bit value with packed parallel config, or 0 if read fails.
+
+        Raises:
+            TransportReadError: If read operation fails
+        """
+        try:
+            values = await self._read_input_registers(113, 1)
+            if values:
+                return values[0]
+        except Exception as e:
+            _LOGGER.debug("Failed to read parallel config register 113: %s", e)
+            raise TransportReadError(f"Failed to read parallel config: {e}") from e
+        return 0
+
     async def read_midbox_runtime(self) -> MidboxRuntimeData:
         """Read runtime data from a MID/GridBOSS device.
 

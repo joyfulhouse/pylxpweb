@@ -416,8 +416,9 @@ class TestDongleRegisterOperations:
 
         mock_reader = AsyncMock()
         # First call returns empty (during connect's _discard_initial_data)
-        # Subsequent calls return the response
-        mock_reader.read = AsyncMock(side_effect=[b"", response])
+        # Second call is for _drain_buffer (returns empty to stop draining)
+        # Third call returns the actual response
+        mock_reader.read = AsyncMock(side_effect=[b"", b"", response])
 
         mock_writer = MagicMock()
         mock_writer.write = MagicMock()

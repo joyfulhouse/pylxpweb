@@ -231,10 +231,10 @@ async def validate_flexboss21_http_vs_modbus(
     if not serial or not modbus_ip:
         raise ValueError("MODBUS_SERIAL and MODBUS_IP must be set in .env")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Validating FlexBOSS21 ({serial})")
     print(f"HTTP API vs Modbus TCP ({modbus_ip}:{modbus_port})")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Create transports
     http_transport = create_http_transport(client, serial=serial)
@@ -267,6 +267,7 @@ async def validate_flexboss21_http_vs_modbus(
     except Exception as err:
         print(f"Error during validation: {err}")
         import traceback
+
         traceback.print_exc()
         result.metrics.append(
             ValidationMetric(
@@ -288,14 +289,12 @@ async def validate_18kpv_http_vs_dongle(
     dongle_ip = os.environ.get("DONGLE_IP", "")
 
     if not inverter_serial or not dongle_serial or not dongle_ip:
-        raise ValueError(
-            "DONGLE_INVERTER_SERIAL, DONGLE_SERIAL, and DONGLE_IP must be set"
-        )
+        raise ValueError("DONGLE_INVERTER_SERIAL, DONGLE_SERIAL, and DONGLE_IP must be set")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Validating 18kPV ({inverter_serial})")
     print(f"HTTP API vs WiFi Dongle ({dongle_ip})")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Create transports
     http_transport = create_http_transport(client, serial=inverter_serial)
@@ -328,6 +327,7 @@ async def validate_18kpv_http_vs_dongle(
     except Exception as err:
         print(f"Error during validation: {err}")
         import traceback
+
         traceback.print_exc()
         result.metrics.append(
             ValidationMetric(
@@ -341,7 +341,7 @@ async def validate_18kpv_http_vs_dongle(
 
 
 async def validate_gridboss_http_vs_dongle(
-    client: LuxpowerClient,
+    _client: LuxpowerClient,
 ) -> ValidationResult:
     """Validate GridBOSS data: HTTP API vs WiFi Dongle transport.
 
@@ -358,16 +358,15 @@ async def validate_gridboss_http_vs_dongle(
 
     if not inverter_serial or not dongle_serial or not dongle_ip:
         raise ValueError(
-            "GRIDBOSS_INVERTER_SERIAL, GRIDBOSS_DONGLE_SERIAL, and "
-            "GRIDBOSS_DONGLE_IP must be set"
+            "GRIDBOSS_INVERTER_SERIAL, GRIDBOSS_DONGLE_SERIAL, and GRIDBOSS_DONGLE_IP must be set"
         )
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Validating GridBOSS ({inverter_serial})")
     print(f"WiFi Dongle Connectivity Test ({dongle_ip})")
-    print(f"NOTE: GridBOSS HTTP API uses different endpoints (getMidboxRuntime)")
-    print(f"      Full HTTP vs Dongle comparison requires MID-specific validation")
-    print(f"{'='*60}")
+    print("NOTE: GridBOSS HTTP API uses different endpoints (getMidboxRuntime)")
+    print("      Full HTTP vs Dongle comparison requires MID-specific validation")
+    print(f"{'=' * 60}")
 
     # Create dongle transport only - HTTP uses different API for MID
     dongle_transport = create_dongle_transport(
@@ -423,6 +422,7 @@ async def validate_gridboss_http_vs_dongle(
     except Exception as err:
         print(f"Error during validation: {err}")
         import traceback
+
         traceback.print_exc()
         result.metrics.append(
             ValidationMetric(
@@ -437,11 +437,11 @@ async def validate_gridboss_http_vs_dongle(
 
 def print_result(result: ValidationResult) -> None:
     """Print validation result in a formatted table."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"VALIDATION RESULT: {result.device_name}")
     print(f"{result.transport_a} vs {result.transport_b}")
     print(f"Timestamp: {result.timestamp}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Print metrics table
     print(f"\n{'Metric':<25} {'HTTP':>12} {'Local':>12} {'Diff':>12} {'Status':>10}")
@@ -464,24 +464,22 @@ def print_result(result: ValidationResult) -> None:
         else:
             status = "- SKIP"
 
-        print(
-            f"{m.name:<25} {http_str:>12} {local_str:>12} {diff_str:>12} {status:>10}"
-        )
+        print(f"{m.name:<25} {http_str:>12} {local_str:>12} {diff_str:>12} {status:>10}")
 
     # Print summary
-    print(f"\n{'='*60}")
-    print(f"SUMMARY: {result.passed_count} passed, {result.failed_count} failed, "
-          f"{result.skipped_count} skipped")
+    print(f"\n{'=' * 60}")
+    print(
+        f"SUMMARY: {result.passed_count} passed, {result.failed_count} failed, "
+        f"{result.skipped_count} skipped"
+    )
     status = "✓ PASSED" if result.passed else "✗ FAILED"
     print(f"Overall: {status}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 async def main() -> int:
     """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Validate sensor values across transport modes"
-    )
+    parser = argparse.ArgumentParser(description="Validate sensor values across transport modes")
     parser.add_argument(
         "--device",
         choices=["flexboss21", "18kpv", "gridboss"],
@@ -541,14 +539,15 @@ async def main() -> int:
         except Exception as err:
             print(f"Error: {err}")
             import traceback
+
             traceback.print_exc()
             return 1
 
     # Final summary
     if len(results) > 1:
-        print(f"\n{'#'*60}")
+        print(f"\n{'#' * 60}")
         print("FINAL SUMMARY")
-        print(f"{'#'*60}")
+        print(f"{'#' * 60}")
         for r in results:
             status = "✓ PASSED" if r.passed else "✗ FAILED"
             print(f"{r.device_name}: {status}")

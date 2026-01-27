@@ -485,8 +485,8 @@ PV_SERIES_RUNTIME_MAP = RuntimeRegisterMap(
     bms_discharge_current_limit=RegisterField(82, 16, ScaleFactor.SCALE_100),  # 0.01A
     bms_charge_voltage_ref=RegisterField(83, 16, ScaleFactor.SCALE_10),  # 0.1V
     bms_discharge_cutoff=RegisterField(84, 16, ScaleFactor.SCALE_10),  # 0.1V
-    bms_max_cell_voltage=RegisterField(101, 16, ScaleFactor.SCALE_NONE),  # mV (0.001V)
-    bms_min_cell_voltage=RegisterField(102, 16, ScaleFactor.SCALE_NONE),  # mV (0.001V)
+    bms_max_cell_voltage=RegisterField(101, 16, ScaleFactor.SCALE_1000),  # mV → V
+    bms_min_cell_voltage=RegisterField(102, 16, ScaleFactor.SCALE_1000),  # mV → V
     bms_max_cell_temperature=RegisterField(103, 16, ScaleFactor.SCALE_10, signed=True),  # 0.1°C
     bms_min_cell_temperature=RegisterField(104, 16, ScaleFactor.SCALE_10, signed=True),  # 0.1°C
     bms_cycle_count=RegisterField(106, 16, ScaleFactor.SCALE_NONE),  # count
@@ -609,8 +609,8 @@ LXP_EU_RUNTIME_MAP = RuntimeRegisterMap(
     bms_discharge_current_limit=RegisterField(82, 16, ScaleFactor.SCALE_100),  # 0.01A
     bms_charge_voltage_ref=RegisterField(83, 16, ScaleFactor.SCALE_10),  # 0.1V
     bms_discharge_cutoff=RegisterField(84, 16, ScaleFactor.SCALE_10),  # 0.1V
-    bms_max_cell_voltage=RegisterField(101, 16, ScaleFactor.SCALE_NONE),  # mV
-    bms_min_cell_voltage=RegisterField(102, 16, ScaleFactor.SCALE_NONE),  # mV
+    bms_max_cell_voltage=RegisterField(101, 16, ScaleFactor.SCALE_1000),  # mV → V
+    bms_min_cell_voltage=RegisterField(102, 16, ScaleFactor.SCALE_1000),  # mV → V
     bms_max_cell_temperature=RegisterField(103, 16, ScaleFactor.SCALE_10, signed=True),  # 0.1°C
     bms_min_cell_temperature=RegisterField(104, 16, ScaleFactor.SCALE_10, signed=True),  # 0.1°C
     bms_cycle_count=RegisterField(106, 16, ScaleFactor.SCALE_NONE),
@@ -1182,6 +1182,12 @@ class IndividualBatteryRegisterMap:
     Base address: 5002 + (battery_index * 30)
 
     Note: These are INPUT registers (function 0x04).
+
+    IMPORTANT: Battery model string (e.g., "WP-16/280-1AWLL") is NOT available
+    via Modbus registers. The model is sent from the BMS via CAN bus to the
+    WiFi dongle, which forwards it to the cloud API, but does not expose it
+    via the Modbus interface. Model info is only available via Web API
+    (batBmsModelText field in BatteryModule).
     """
 
     # Offset within each battery's 30-register block
@@ -1192,18 +1198,21 @@ class IndividualBatteryRegisterMap:
     discharge_current_limit: RegisterField | None = None  # Offset 4: Discharge limit (÷100 = A)
     # Offset 5: Unknown
     voltage: RegisterField | None = None  # Offset 6: Battery voltage (÷100 = V)
-    current: RegisterField | None = None  # Offset 7: Current (÷100 = A, signed)
-    soc: RegisterField | None = None  # Offset 8: SOC (%) - needs verification
+    current: RegisterField | None = None  # Offset 7: Current (÷10 = A, signed)
+    soc_soh_packed: RegisterField | None = None  # Offset 8: SOC (low byte) / SOH (high byte)
     cycle_count: RegisterField | None = None  # Offset 9: Cycle count
     max_cell_temp: RegisterField | None = None  # Offset 10: Max cell temp (÷10 = °C)
     min_cell_temp: RegisterField | None = None  # Offset 11: Min cell temp (÷10 = °C)
     max_cell_voltage: RegisterField | None = None  # Offset 12: Max cell voltage (mV)
     min_cell_voltage: RegisterField | None = None  # Offset 13: Min cell voltage (mV)
-    # Offsets 14-16: Reserved/unknown
-    # Offsets 17-22: Serial number (6 registers, 12 ASCII chars)
+    # Offset 14: Cell number with max/min voltage (low=max, high=min)
+    cell_num_voltage_packed: RegisterField | None = None
+    # Offset 15: Cell number with max/min temp (low=max, high=min)
+    cell_num_temp_packed: RegisterField | None = None
+    firmware_version: RegisterField | None = None  # Offset 16: FW ver (high=major, low=minor)
+    # Offsets 17-23: Serial number (7 registers, up to 14 ASCII chars)
     serial_number_start: int = 17  # Offset where serial starts
-    serial_number_count: int = 6  # Number of registers for serial
-    soh: RegisterField | None = None  # Offset 23: SOH (%)
+    serial_number_count: int = 7  # Number of registers for serial (extended to include offset 23)
     # Offsets 24-29: Reserved/unknown
 
 
@@ -1217,16 +1226,18 @@ INDIVIDUAL_BATTERY_MAP = IndividualBatteryRegisterMap(
     charge_current_limit=RegisterField(3, 16, ScaleFactor.SCALE_100),  # ÷100 = A
     discharge_current_limit=RegisterField(4, 16, ScaleFactor.SCALE_100),  # ÷100 = A
     voltage=RegisterField(6, 16, ScaleFactor.SCALE_100),  # ÷100 = V
-    current=RegisterField(7, 16, ScaleFactor.SCALE_100, signed=True),  # ÷100 = A
-    soc=RegisterField(8, 16, ScaleFactor.SCALE_NONE),  # Direct %
+    current=RegisterField(7, 16, ScaleFactor.SCALE_10, signed=True),  # ÷10 = A
+    soc_soh_packed=RegisterField(8, 16, ScaleFactor.SCALE_NONE),  # Packed: low=SOC, high=SOH
     cycle_count=RegisterField(9, 16, ScaleFactor.SCALE_NONE),  # Direct count
     max_cell_temp=RegisterField(10, 16, ScaleFactor.SCALE_10, signed=True),  # ÷10 = °C
     min_cell_temp=RegisterField(11, 16, ScaleFactor.SCALE_10, signed=True),  # ÷10 = °C
-    max_cell_voltage=RegisterField(12, 16, ScaleFactor.SCALE_NONE),  # mV direct
-    min_cell_voltage=RegisterField(13, 16, ScaleFactor.SCALE_NONE),  # mV direct
+    max_cell_voltage=RegisterField(12, 16, ScaleFactor.SCALE_1000),  # mV → V
+    min_cell_voltage=RegisterField(13, 16, ScaleFactor.SCALE_1000),  # mV → V
+    cell_num_voltage_packed=RegisterField(14, 16, ScaleFactor.SCALE_NONE),  # low=max, high=min
+    cell_num_temp_packed=RegisterField(15, 16, ScaleFactor.SCALE_NONE),  # low=max, high=min
+    firmware_version=RegisterField(16, 16, ScaleFactor.SCALE_NONE),  # Packed: high=major, low=minor
     serial_number_start=17,
-    serial_number_count=6,
-    soh=RegisterField(23, 16, ScaleFactor.SCALE_NONE),  # Direct %
+    serial_number_count=7,  # Extended to offset 23 for 13+ char serials
 )
 
 

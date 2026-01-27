@@ -452,15 +452,13 @@ class InverterRuntimeData:
             bms_discharge_cutoff=_read_and_scale_field(
                 input_registers, register_map.bms_discharge_cutoff
             ),
-            # BMS cell voltages - convert from mV to V
+            # BMS cell voltages - register map has SCALE_1000 for mV → V conversion
             bms_max_cell_voltage=_read_and_scale_field(
                 input_registers, register_map.bms_max_cell_voltage
-            )
-            / 1000.0,
+            ),
             bms_min_cell_voltage=_read_and_scale_field(
                 input_registers, register_map.bms_min_cell_voltage
-            )
-            / 1000.0,
+            ),
             bms_max_cell_temperature=_read_and_scale_field(
                 input_registers, register_map.bms_max_cell_temperature
             ),
@@ -699,11 +697,25 @@ class BatteryData:
     cell_temperatures: list[float] = field(default_factory=list)  # °C per cell
     min_cell_voltage: float = 0.0  # V
     max_cell_voltage: float = 0.0  # V
+    min_cell_temperature: float = 0.0  # °C
+    max_cell_temperature: float = 0.0  # °C
+    # Cell numbers (1-indexed, which cell has the max/min value)
+    max_cell_num_voltage: int = 0  # Cell number with max voltage
+    min_cell_num_voltage: int = 0  # Cell number with min voltage
+    max_cell_num_temp: int = 0  # Cell number with max temperature
+    min_cell_num_temp: int = 0  # Cell number with min temperature
 
     # BMS limits (optional, from extended Modbus registers)
     charge_voltage_ref: float = 0.0  # V (BMS charge voltage reference)
     charge_current_limit: float = 0.0  # A (Max charge current from BMS)
     discharge_current_limit: float = 0.0  # A (Max discharge current from BMS)
+
+    # Model/firmware info
+    # Note: Model is only available via Web API (batBmsModelText field).
+    # Not accessible via direct Modbus - the BMS sends model info via CAN bus
+    # which the dongle forwards to the cloud, but doesn't expose via Modbus.
+    model: str = ""  # Battery model (e.g., "WP-16/280-1AWLL") - Web API only
+    firmware_version: str = ""  # Firmware version string (e.g., "2.17") - Modbus available
 
     # Status
     status: int = 0
@@ -714,6 +726,17 @@ class BatteryData:
         """Validate and clamp percentage values."""
         self.soc = _clamp_percentage(self.soc, "battery_soc")
         self.soh = _clamp_percentage(self.soh, "battery_soh")
+
+    @property
+    def remaining_capacity(self) -> float:
+        """Calculate remaining capacity in Ah from max_capacity and SOC.
+
+        Returns:
+            Remaining capacity in Ah (max_capacity * soc / 100)
+        """
+        if self.max_capacity > 0 and self.soc > 0:
+            return self.max_capacity * self.soc / 100
+        return 0.0
 
     @classmethod
     def from_modbus_registers(
@@ -769,7 +792,7 @@ class BatteryData:
             addr = base + field_def.address
             return registers.get(addr, default)
 
-        # Read serial number from 6 registers (12 ASCII chars)
+        # Read serial number from 7 registers (up to 14 ASCII chars)
         serial_chars: list[str] = []
         for i in range(battery_map.serial_number_count):
             addr = base + battery_map.serial_number_start + i
@@ -782,28 +805,56 @@ class BatteryData:
                 serial_chars.append(chr(high_byte))
         serial_number = "".join(serial_chars).strip()
 
-        # Read cell voltage data (mV -> V conversion)
-        max_cell_voltage = read_field(battery_map.max_cell_voltage) / 1000.0
-        min_cell_voltage = read_field(battery_map.min_cell_voltage) / 1000.0
+        # Read cell voltage data (scaling handled in register map - SCALE_1000)
+        max_cell_voltage = read_field(battery_map.max_cell_voltage)
+        min_cell_voltage = read_field(battery_map.min_cell_voltage)
 
         # Read temperature data
         max_cell_temp = read_field(battery_map.max_cell_temp)
+        min_cell_temp = read_field(battery_map.min_cell_temp)
+
+        # Parse cell number packed registers (low byte = max cell#, high byte = min cell#)
+        cell_num_voltage_packed = read_int_field(battery_map.cell_num_voltage_packed)
+        max_cell_num_voltage = cell_num_voltage_packed & 0xFF
+        min_cell_num_voltage = (cell_num_voltage_packed >> 8) & 0xFF
+
+        cell_num_temp_packed = read_int_field(battery_map.cell_num_temp_packed)
+        max_cell_num_temp = cell_num_temp_packed & 0xFF
+        min_cell_num_temp = (cell_num_temp_packed >> 8) & 0xFF
+
+        # Parse SOC/SOH from packed register (low byte = SOC, high byte = SOH)
+        soc_soh_packed = read_int_field(battery_map.soc_soh_packed)
+        soc = soc_soh_packed & 0xFF  # Low byte = SOC%
+        soh = (soc_soh_packed >> 8) & 0xFF  # High byte = SOH%
+
+        # Parse firmware version from packed register (high byte = major, low byte = minor)
+        fw_raw = read_int_field(battery_map.firmware_version)
+        fw_major = (fw_raw >> 8) & 0xFF
+        fw_minor = fw_raw & 0xFF
+        firmware_version = f"{fw_major}.{fw_minor}" if fw_raw else ""
 
         return cls(
             battery_index=battery_index,
             serial_number=serial_number,
             voltage=read_field(battery_map.voltage),
             current=read_field(battery_map.current),
-            soc=read_int_field(battery_map.soc),
-            soh=read_int_field(battery_map.soh, 100),
+            soc=soc,
+            soh=soh if soh > 0 else 100,
             temperature=max_cell_temp,
             max_capacity=read_field(battery_map.full_capacity_ah),
             cycle_count=read_int_field(battery_map.cycle_count),
             min_cell_voltage=min_cell_voltage,
             max_cell_voltage=max_cell_voltage,
+            min_cell_temperature=min_cell_temp,
+            max_cell_temperature=max_cell_temp,
+            max_cell_num_voltage=max_cell_num_voltage,
+            min_cell_num_voltage=min_cell_num_voltage,
+            max_cell_num_temp=max_cell_num_temp,
+            min_cell_num_temp=min_cell_num_temp,
             charge_voltage_ref=read_field(battery_map.charge_voltage_ref),
             charge_current_limit=read_field(battery_map.charge_current_limit),
             discharge_current_limit=read_field(battery_map.discharge_current_limit),
+            firmware_version=firmware_version,
             status=status,
         )
 
