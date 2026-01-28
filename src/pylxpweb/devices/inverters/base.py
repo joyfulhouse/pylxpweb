@@ -181,6 +181,75 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     # ============================================================================
 
     @classmethod
+    async def from_transport(
+        cls,
+        transport_or_type: InverterTransport | str,
+        *,
+        model: str | None = None,
+        **config: Any,
+    ) -> BaseInverter:
+        """Create an inverter from a transport or transport configuration.
+
+        This is the unified factory method for creating transport-backed inverters.
+        It accepts either an existing transport object or a connection type string
+        with configuration parameters.
+
+        Args:
+            transport_or_type: Either an InverterTransport instance, or a connection
+                type string ("modbus", "dongle", or "hybrid")
+            model: Optional model name override. If not provided, will be
+                determined from device type code.
+            **config: Configuration parameters when transport_or_type is a string.
+                See create_transport() for available options per connection type.
+
+        Returns:
+            Configured BaseInverter with transport-backed data
+
+        Raises:
+            TransportConnectionError: If transport fails to connect
+            TransportReadError: If device type code cannot be read
+            ValueError: If connection_type is invalid or required config is missing
+
+        Examples:
+            Using an existing transport:
+                >>> transport = create_transport("modbus", host="192.168.1.100", ...)
+                >>> inverter = await BaseInverter.from_transport(transport)
+
+            Creating transport inline (recommended):
+                >>> inverter = await BaseInverter.from_transport(
+                ...     "modbus",
+                ...     host="192.168.1.100",
+                ...     serial="CE12345678",
+                ...     port=502,
+                ... )
+
+            WiFi dongle:
+                >>> inverter = await BaseInverter.from_transport(
+                ...     "dongle",
+                ...     host="192.168.1.100",
+                ...     dongle_serial="BA12345678",
+                ...     inverter_serial="CE12345678",
+                ... )
+        """
+        # Import here to avoid circular dependency
+        from pylxpweb.transports import create_transport
+
+        # If given a string, create the transport from config
+        if isinstance(transport_or_type, str):
+            connection_type = transport_or_type
+            if connection_type not in ("modbus", "dongle", "hybrid"):
+                raise ValueError(
+                    f"Invalid connection type '{connection_type}'. "
+                    "Use 'modbus', 'dongle', or 'hybrid'."
+                )
+            transport = create_transport(connection_type, **config)  # type: ignore[arg-type]
+        else:
+            transport = transport_or_type
+
+        # Delegate to from_modbus_transport which handles the actual creation
+        return await cls.from_modbus_transport(transport, model=model)
+
+    @classmethod
     async def from_modbus_transport(
         cls,
         transport: InverterTransport,
@@ -299,9 +368,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             transport=transport,
         )
 
-        # Set detected features
-        inverter._features.model_family = model_family
-        inverter._features.device_type_code = device_type_code
+        # Set detected features using from_device_type_code() which applies
+        # all family defaults (split_phase, three_phase_capable, etc.)
+        inverter._features = InverterFeatures.from_device_type_code(device_type_code)
         inverter._features_detected = True
 
         _LOGGER.info(
