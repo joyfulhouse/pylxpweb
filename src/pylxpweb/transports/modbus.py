@@ -18,6 +18,7 @@ Disable other Modbus integrations before using this transport.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -134,6 +135,8 @@ class ModbusTransport(BaseTransport):
         self._inverter_family = inverter_family
         self._client: AsyncModbusTcpClient | None = None
         self._lock = asyncio.Lock()
+        self._consecutive_errors: int = 0
+        self._max_consecutive_errors: int = 3
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -251,16 +254,45 @@ class ModbusTransport(BaseTransport):
         self._connected = False
         _LOGGER.debug("Modbus transport disconnected for %s", self._serial)
 
-    async def _read_input_registers(
+    async def _reconnect(self) -> None:
+        """Reconnect Modbus client to reset transaction ID state.
+
+        Called when consecutive read errors exceed the threshold, which
+        typically indicates transaction ID desynchronization (pymodbus
+        responses arriving for stale requests).
+
+        Uses lock with double-check to prevent concurrent reconnection
+        from multiple callers.
+        """
+        async with self._lock:
+            # Double-check after acquiring lock - another caller may have
+            # already reconnected while we were waiting
+            if self._consecutive_errors < self._max_consecutive_errors:
+                return
+
+            _LOGGER.warning(
+                "Reconnecting Modbus client for %s after %d consecutive errors "
+                "(likely transaction ID desync)",
+                self._serial,
+                self._consecutive_errors,
+            )
+            await self.disconnect()
+            await self.connect()
+            self._consecutive_errors = 0
+
+    async def _read_registers(
         self,
         address: int,
         count: int,
+        *,
+        input_registers: bool,
     ) -> list[int]:
-        """Read input registers (read-only runtime data).
+        """Read Modbus registers with error tracking and reconnect support.
 
         Args:
             address: Starting register address
             count: Number of registers to read (max 40)
+            input_registers: True for input registers (FC4), False for holding (FC3)
 
         Returns:
             List of register values
@@ -279,11 +311,16 @@ class ModbusTransport(BaseTransport):
         if self._client is None:
             raise TransportConnectionError("Modbus client not initialized")
 
+        reg_type = "input" if input_registers else "holding"
+
         async with self._lock:
             try:
-                # Let pymodbus handle timeout internally (set at client init)
-                # Do NOT wrap with asyncio.wait_for() - causes transaction ID issues
-                result = await self._client.read_input_registers(
+                read_fn = (
+                    self._client.read_input_registers
+                    if input_registers
+                    else self._client.read_holding_registers
+                )
+                result = await read_fn(
                     address=address,
                     count=min(count, 40),
                     device_id=self._unit_id,
@@ -291,7 +328,8 @@ class ModbusTransport(BaseTransport):
 
                 if result.isError():
                     _LOGGER.error(
-                        "Modbus error reading input registers at %d: %s",
+                        "Modbus error reading %s registers at %d: %s",
+                        reg_type,
                         address,
                         result,
                     )
@@ -306,103 +344,48 @@ class ModbusTransport(BaseTransport):
                         f"Invalid Modbus response at address {address}: no registers in response"
                     )
 
+                self._consecutive_errors = 0
                 return list(result.registers)
 
             except ModbusIOException as err:
-                # pymodbus raises ModbusIOException for timeouts and connection issues
-                error_msg = str(err)
-                if "timeout" in error_msg.lower():
-                    _LOGGER.error("Timeout reading input registers at %d", address)
+                self._consecutive_errors += 1
+                if "timeout" in str(err).lower():
+                    _LOGGER.error("Timeout reading %s registers at %d", reg_type, address)
                     raise TransportTimeoutError(
-                        f"Timeout reading input registers at {address}"
+                        f"Timeout reading {reg_type} registers at {address}"
                     ) from err
-                _LOGGER.error("Failed to read input registers at %d: %s", address, err)
+                _LOGGER.error("Failed to read %s registers at %d: %s", reg_type, address, err)
                 raise TransportReadError(
-                    f"Failed to read input registers at {address}: {err}"
+                    f"Failed to read {reg_type} registers at {address}: {err}"
                 ) from err
             except TimeoutError as err:
-                _LOGGER.error("Timeout reading input registers at %d", address)
+                self._consecutive_errors += 1
+                _LOGGER.error("Timeout reading %s registers at %d", reg_type, address)
                 raise TransportTimeoutError(
-                    f"Timeout reading input registers at {address}"
+                    f"Timeout reading {reg_type} registers at {address}"
                 ) from err
             except OSError as err:
-                _LOGGER.error("Failed to read input registers at %d: %s", address, err)
+                self._consecutive_errors += 1
+                _LOGGER.error("Failed to read %s registers at %d: %s", reg_type, address, err)
                 raise TransportReadError(
-                    f"Failed to read input registers at {address}: {err}"
+                    f"Failed to read {reg_type} registers at {address}: {err}"
                 ) from err
+
+    async def _read_input_registers(
+        self,
+        address: int,
+        count: int,
+    ) -> list[int]:
+        """Read input registers (read-only runtime data)."""
+        return await self._read_registers(address, count, input_registers=True)
 
     async def _read_holding_registers(
         self,
         address: int,
         count: int,
     ) -> list[int]:
-        """Read holding registers (configuration parameters).
-
-        Args:
-            address: Starting register address
-            count: Number of registers to read (max 40)
-
-        Returns:
-            List of register values
-
-        Raises:
-            TransportReadError: If read fails
-            TransportTimeoutError: If operation times out
-        """
-        self._ensure_connected()
-
-        if self._client is None:
-            raise TransportConnectionError("Modbus client not initialized")
-
-        async with self._lock:
-            try:
-                # Let pymodbus handle timeout internally
-                result = await self._client.read_holding_registers(
-                    address=address,
-                    count=min(count, 40),
-                    device_id=self._unit_id,
-                )
-
-                if result.isError():
-                    _LOGGER.error(
-                        "Modbus error reading holding registers at %d: %s",
-                        address,
-                        result,
-                    )
-                    raise TransportReadError(f"Modbus read error at address {address}: {result}")
-
-                if not hasattr(result, "registers") or result.registers is None:
-                    _LOGGER.error(
-                        "Invalid Modbus response at address %d: no registers",
-                        address,
-                    )
-                    raise TransportReadError(
-                        f"Invalid Modbus response at address {address}: no registers in response"
-                    )
-
-                return list(result.registers)
-
-            except ModbusIOException as err:
-                error_msg = str(err)
-                if "timeout" in error_msg.lower():
-                    _LOGGER.error("Timeout reading holding registers at %d", address)
-                    raise TransportTimeoutError(
-                        f"Timeout reading holding registers at {address}"
-                    ) from err
-                _LOGGER.error("Failed to read holding registers at %d: %s", address, err)
-                raise TransportReadError(
-                    f"Failed to read holding registers at {address}: {err}"
-                ) from err
-            except TimeoutError as err:
-                _LOGGER.error("Timeout reading holding registers at %d", address)
-                raise TransportTimeoutError(
-                    f"Timeout reading holding registers at {address}"
-                ) from err
-            except OSError as err:
-                _LOGGER.error("Failed to read holding registers at %d: %s", address, err)
-                raise TransportReadError(
-                    f"Failed to read holding registers at {address}: {err}"
-                ) from err
+        """Read holding registers (configuration parameters)."""
+        return await self._read_registers(address, count, input_registers=False)
 
     async def _write_holding_registers(
         self,
@@ -468,6 +451,61 @@ class ModbusTransport(BaseTransport):
                 _LOGGER.error("Failed to write registers at %d: %s", address, err)
                 raise TransportWriteError(f"Failed to write registers at {address}: {err}") from err
 
+    async def _read_register_groups(
+        self,
+        group_names: list[str] | None = None,
+    ) -> dict[int, int]:
+        """Read multiple register groups sequentially with inter-group delays.
+
+        Groups are read one at a time with a 50ms delay between each to prevent
+        RS485 gateway overload and transaction ID desynchronization.
+
+        Args:
+            group_names: Specific group names to read from INPUT_REGISTER_GROUPS.
+                If None, reads all groups.
+
+        Returns:
+            Dict mapping register address to value
+
+        Raises:
+            TransportReadError: If any group read fails
+        """
+        if group_names is None:
+            groups = list(INPUT_REGISTER_GROUPS.items())
+        else:
+            groups = [
+                (name, INPUT_REGISTER_GROUPS[name])
+                for name in group_names
+                if name in INPUT_REGISTER_GROUPS
+            ]
+
+        # Reconnect if too many consecutive errors (transaction ID desync recovery)
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            await self._reconnect()
+
+        registers: dict[int, int] = {}
+
+        for i, (group_name, (start, count)) in enumerate(groups):
+            try:
+                values = await self._read_input_registers(start, count)
+                for offset, value in enumerate(values):
+                    registers[start + offset] = value
+            except Exception as e:
+                _LOGGER.error(
+                    "Failed to read register group '%s': %s",
+                    group_name,
+                    e,
+                )
+                raise TransportReadError(
+                    f"Failed to read register group '{group_name}': {e}"
+                ) from e
+
+            # Brief delay between groups to prevent RS485 gateway overload
+            if i < len(groups) - 1:
+                await asyncio.sleep(0.05)
+
+        return registers
+
     async def read_runtime(self) -> InverterRuntimeData:
         """Read runtime data via Modbus input registers.
 
@@ -486,25 +524,7 @@ class ModbusTransport(BaseTransport):
         Raises:
             TransportReadError: If read operation fails
         """
-        # Read register groups sequentially to avoid transaction ID issues
-        # See: https://github.com/joyfulhouse/pylxpweb/issues/95
-        input_registers: dict[int, int] = {}
-
-        for group_name, (start, count) in INPUT_REGISTER_GROUPS.items():
-            try:
-                values = await self._read_input_registers(start, count)
-                for offset, value in enumerate(values):
-                    input_registers[start + offset] = value
-            except Exception as e:
-                _LOGGER.error(
-                    "Failed to read register group '%s': %s",
-                    group_name,
-                    e,
-                )
-                raise TransportReadError(
-                    f"Failed to read register group '{group_name}': {e}"
-                ) from e
-
+        input_registers = await self._read_register_groups()
         return InverterRuntimeData.from_modbus_registers(input_registers, self.runtime_register_map)
 
     async def read_energy(self) -> InverterEnergyData:
@@ -522,30 +542,11 @@ class ModbusTransport(BaseTransport):
         Raises:
             TransportReadError: If read operation fails
         """
-        # Read energy-related register groups sequentially
         # power_energy (0-31) contains PV daily energy at registers 28-30
         # status_energy (32-63) contains daily/lifetime energy counters
-        groups_needed = ["power_energy", "status_energy", "bms_data"]
-        input_registers: dict[int, int] = {}
-
-        for group_name, (start, count) in INPUT_REGISTER_GROUPS.items():
-            if group_name not in groups_needed:
-                continue
-
-            try:
-                values = await self._read_input_registers(start, count)
-                for offset, value in enumerate(values):
-                    input_registers[start + offset] = value
-            except Exception as e:
-                _LOGGER.error(
-                    "Failed to read energy register group '%s': %s",
-                    group_name,
-                    e,
-                )
-                raise TransportReadError(
-                    f"Failed to read energy register group '{group_name}': {e}"
-                ) from e
-
+        input_registers = await self._read_register_groups(
+            ["power_energy", "status_energy", "bms_data"]
+        )
         return InverterEnergyData.from_modbus_registers(input_registers, self.energy_register_map)
 
     async def read_battery(
@@ -577,6 +578,10 @@ class ModbusTransport(BaseTransport):
             INDIVIDUAL_BATTERY_MAX_COUNT,
             INDIVIDUAL_BATTERY_REGISTER_COUNT,
         )
+
+        # Reconnect if too many consecutive errors (transaction ID desync recovery)
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            await self._reconnect()
 
         # Read power/energy registers (0-31) and BMS registers (80-112)
         # Combine into single dict for factory method
