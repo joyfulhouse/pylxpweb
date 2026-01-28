@@ -90,11 +90,13 @@ FAMILY_DEFAULT_FEATURES: dict[InverterFamily, dict[str, bool]] = {
         "drms_support": False,
     },
     InverterFamily.PV_SERIES: {
-        "split_phase": False,
+        # PV_SERIES in US markets uses split-phase L1/L2 registers (127-128, 140-141)
+        # R/S/T registers (17-19, 20-22) contain garbage on US split-phase installations
+        "split_phase": True,
         "off_grid_capable": True,
         "discharge_recovery_hysteresis": False,
         "quick_charge_minute": False,
-        "three_phase_capable": True,
+        "three_phase_capable": False,
         "parallel_support": True,
         "volt_watt_curve": True,
         "grid_peak_shaving": True,
@@ -345,10 +347,11 @@ class InverterFeatures:
                 setattr(features, key, value)
 
         # Set grid type based on family
-        if family == InverterFamily.SNA:
+        if family in (InverterFamily.SNA, InverterFamily.PV_SERIES):
+            # SNA and PV_SERIES in US markets use split-phase (120V/240V)
             features.grid_type = GridType.SPLIT_PHASE
-        elif family in (InverterFamily.PV_SERIES, InverterFamily.LXP_EU):
-            features.grid_type = GridType.SINGLE_PHASE  # Can be three-phase too
+        elif family == InverterFamily.LXP_EU:
+            features.grid_type = GridType.SINGLE_PHASE  # EU can also be three-phase
 
         return features
 

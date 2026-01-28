@@ -24,7 +24,7 @@ FUNC_EN_BIT_FORCED_DISCHG_EN = 10  # Forced discharge enable
 FUNC_EN_BIT_FORCED_CHG_EN = 11  # Force charge enable
 
 # AC Charge Parameters
-HOLD_AC_CHARGE_POWER_CMD = 66  # AC charge power (0.0-15.0 kW)
+HOLD_AC_CHARGE_POWER_CMD = 66  # AC charge power in 100W units (0-150 = 0.0-15.0 kW)
 HOLD_AC_CHARGE_SOC_LIMIT = 67  # AC charge SOC limit (0-100%)
 HOLD_AC_CHARGE_START_HOUR_1 = 68  # Time period 1 start hour (0-23)
 HOLD_AC_CHARGE_START_MIN_1 = 69  # Time period 1 start minute (0-59)
@@ -317,12 +317,19 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     ],
     27: ["HOLD_GRID_FREQ_CONN_LOW"],
     28: ["HOLD_GRID_FREQ_CONN_HIGH"],
+    # Charge/Discharge power percent registers
+    64: ["HOLD_CHG_POWER_PERCENT_CMD"],  # PV/Battery charge power (0-100%)
+    65: ["HOLD_DISCHG_POWER_PERCENT_CMD"],  # Discharge power (0-100%)
     # AC Charge registers
-    66: ["HOLD_AC_CHARGE_POWER_CMD"],
+    66: ["HOLD_AC_CHARGE_POWER_CMD"],  # AC charge power in 100W units (0-150 = 0.0-15.0 kW)
     67: ["HOLD_AC_CHARGE_SOC_LIMIT"],
     70: ["HOLD_AC_CHARGE_START_HOUR_1", "HOLD_AC_CHARGE_START_MINUTE_1"],
     # Battery protection
     100: ["HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT"],
+    101: ["HOLD_LEAD_ACID_CHARGE_RATE"],  # Battery charge current limit (A)
+    102: ["HOLD_LEAD_ACID_DISCHARGE_RATE"],  # Battery discharge current limit (A)
+    # SOC limits
+    105: ["HOLD_DISCHG_CUT_OFF_SOC_EOD"],  # On-grid discharge cutoff SOC (10-90%)
     # System functions (Register 110: 14 bit fields, verified)
     110: [
         "FUNC_PV_GRID_OFF_EN",  # Bit 0
@@ -356,6 +363,8 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     190: ["HOLD_P2"],
     # System charge limit (verified via live testing 2026-01-27)
     227: ["HOLD_SYSTEM_CHARGE_SOC_LIMIT"],
+    # Grid peak shaving power (2 registers, 32-bit value in kW)
+    231: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER"],
 }
 
 # Reverse mapping: API Parameter Key → Register (for 18KPV)

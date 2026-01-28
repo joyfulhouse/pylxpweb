@@ -195,14 +195,19 @@ class TestInverterFeatures:
         assert features.drms_support is False
 
     def test_from_device_type_code_pv_series(self) -> None:
-        """Test creating features from PV Series device type code (2092)."""
+        """Test creating features from PV Series device type code (2092).
+
+        PV_SERIES inverters (18kPV, FlexBOSS) in US markets use split-phase
+        L1/L2 registers (127-128, 140-141). The R/S/T registers (17-19, 20-22)
+        contain garbage data on US split-phase installations.
+        """
         features = InverterFeatures.from_device_type_code(2092)
 
         assert features.device_type_code == 2092
         assert features.model_family == InverterFamily.PV_SERIES
-        assert features.grid_type == GridType.SINGLE_PHASE
-        assert features.split_phase is False
-        assert features.three_phase_capable is True
+        assert features.grid_type == GridType.SPLIT_PHASE  # US split-phase
+        assert features.split_phase is True  # Uses L1/L2 registers
+        assert features.three_phase_capable is False  # R/S/T invalid in US
         assert features.parallel_support is True
         assert features.volt_watt_curve is True
         assert features.grid_peak_shaving is True
