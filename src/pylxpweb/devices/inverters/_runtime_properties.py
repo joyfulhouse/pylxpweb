@@ -301,14 +301,17 @@ class InverterRuntimePropertiesMixin:
         return self._runtime.pinv
 
     @property
-    def rectifier_power(self) -> int:
-        """Get rectifier power in watts.
+    def rectifier_power(self) -> int | None:
+        """Get rectifier power (AC→DC from grid) in watts.
 
         Returns:
-            Rectifier power in watts, or 0 if no data.
+            Rectifier power in watts, or None if no data.
         """
+        if self._transport_runtime is not None:
+            val = self._transport_runtime.grid_power
+            return int(val) if val is not None else None
         if self._runtime is None:
-            return 0
+            return None
         return self._runtime.prec
 
     # ===========================================
@@ -526,14 +529,25 @@ class InverterRuntimePropertiesMixin:
     # ===========================================
 
     @property
-    def consumption_power(self) -> int:
+    def consumption_power(self) -> int | None:
         """Get consumption power in watts.
 
+        For HTTP data, uses the server-computed consumptionPower field.
+        For local transport data (Modbus/Dongle), computes as:
+            consumption = load_power - grid_power
+        where load_power is pToUser and grid_power is prec (rectifier).
+
         Returns:
-            Consumption power in watts, or 0 if no data.
+            Consumption power in watts, or None if no data.
         """
+        if self._transport_runtime is not None:
+            load = self._transport_runtime.load_power
+            rectifier = self._transport_runtime.grid_power
+            if load is None or rectifier is None:
+                return None
+            return max(0, int(load) - int(rectifier))
         if self._runtime is None:
-            return 0
+            return None
         return self._runtime.consumptionPower
 
     # ===========================================
