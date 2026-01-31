@@ -895,11 +895,16 @@ class ModbusTransport(BaseTransport):
         Raises:
             TransportReadError: If read operation fails
         """
-        from pylxpweb.transports.register_maps import GRIDBOSS_RUNTIME_MAP
+        from pylxpweb.transports.register_maps import (
+            GRIDBOSS_ENERGY_MAP,
+            GRIDBOSS_RUNTIME_MAP,
+        )
 
-        # Read INPUT registers (same as inverters)
+        # Read INPUT registers for full parity with web API
         # Group 1: Registers 0-41 (voltages, currents, power, smart load power)
-        # Group 2: Registers 128-131 (frequencies)
+        # Group 2: Registers 42-67 (energy today data)
+        # Group 3: Registers 68-119 (energy total data)
+        # Group 4: Registers 128-131 (frequencies)
         input_registers: dict[int, int] = {}
 
         try:
@@ -907,6 +912,16 @@ class ModbusTransport(BaseTransport):
             values = await self._read_input_registers(0, 42)
             for offset, value in enumerate(values):
                 input_registers[offset] = value
+
+            # Read energy today data (registers 42-67)
+            energy_today_values = await self._read_input_registers(42, 26)
+            for offset, value in enumerate(energy_today_values):
+                input_registers[42 + offset] = value
+
+            # Read energy total data (registers 68-119)
+            energy_total_values = await self._read_input_registers(68, 52)
+            for offset, value in enumerate(energy_total_values):
+                input_registers[68 + offset] = value
 
             # Read frequencies (registers 128-131)
             freq_values = await self._read_input_registers(128, 4)
@@ -917,4 +932,6 @@ class ModbusTransport(BaseTransport):
             _LOGGER.error("Failed to read MID input registers: %s", e)
             raise TransportReadError(f"Failed to read MID registers: {e}") from e
 
-        return MidboxRuntimeData.from_modbus_registers(input_registers, GRIDBOSS_RUNTIME_MAP)
+        return MidboxRuntimeData.from_modbus_registers(
+            input_registers, GRIDBOSS_RUNTIME_MAP, GRIDBOSS_ENERGY_MAP
+        )

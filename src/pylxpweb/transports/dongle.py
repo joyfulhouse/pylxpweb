@@ -934,8 +934,10 @@ class DongleTransport(BaseTransport):
                 input_registers[42 + offset] = value
             await asyncio.sleep(0.2)
 
-            # Read energy total data + smart port status (registers 68-108)
-            energy_total_values = await self._read_input_registers(68, 41)
+            # Read energy total data (registers 68-119)
+            # Includes load/ups/grid/user totals (68-83), smart load totals (84-99),
+            # and AC couple totals (104-119). Registers 100-103 are unknown/unused.
+            energy_total_values = await self._read_input_registers(68, 52)
             for offset, value in enumerate(energy_total_values):
                 input_registers[68 + offset] = value
             await asyncio.sleep(0.2)

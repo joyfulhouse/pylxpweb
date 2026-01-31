@@ -1151,9 +1151,7 @@ class BatteryBankData:
         cycle_count = _read_register_field(input_registers, register_map.bms_cycle_count)
 
         # Battery capacity from register map (Ah, no scaling)
-        max_capacity = _read_and_scale_field(
-            input_registers, register_map.battery_capacity_ah
-        )
+        max_capacity = _read_and_scale_field(input_registers, register_map.battery_capacity_ah)
 
         # Compute current capacity from max_capacity and SOC
         current_capacity: float | None = None
@@ -1316,8 +1314,20 @@ class MidboxRuntimeData:
     to_user_energy_today_l2: float | None = None  # eToUserTodayL2
     ac_couple_1_energy_today_l1: float | None = None  # eACcouple1TodayL1
     ac_couple_1_energy_today_l2: float | None = None  # eACcouple1TodayL2
+    ac_couple_2_energy_today_l1: float | None = None  # eACcouple2TodayL1
+    ac_couple_2_energy_today_l2: float | None = None  # eACcouple2TodayL2
+    ac_couple_3_energy_today_l1: float | None = None  # eACcouple3TodayL1
+    ac_couple_3_energy_today_l2: float | None = None  # eACcouple3TodayL2
+    ac_couple_4_energy_today_l1: float | None = None  # eACcouple4TodayL1
+    ac_couple_4_energy_today_l2: float | None = None  # eACcouple4TodayL2
     smart_load_1_energy_today_l1: float | None = None  # eSmartLoad1TodayL1
     smart_load_1_energy_today_l2: float | None = None  # eSmartLoad1TodayL2
+    smart_load_2_energy_today_l1: float | None = None  # eSmartLoad2TodayL1
+    smart_load_2_energy_today_l2: float | None = None  # eSmartLoad2TodayL2
+    smart_load_3_energy_today_l1: float | None = None  # eSmartLoad3TodayL1
+    smart_load_3_energy_today_l2: float | None = None  # eSmartLoad3TodayL2
+    smart_load_4_energy_today_l1: float | None = None  # eSmartLoad4TodayL1
+    smart_load_4_energy_today_l2: float | None = None  # eSmartLoad4TodayL2
 
     # -------------------------------------------------------------------------
     # Energy Total (kWh) - Lifetime accumulated energy
@@ -1332,8 +1342,20 @@ class MidboxRuntimeData:
     to_user_energy_total_l2: float | None = None  # eToUserTotalL2
     ac_couple_1_energy_total_l1: float | None = None  # eACcouple1TotalL1
     ac_couple_1_energy_total_l2: float | None = None  # eACcouple1TotalL2
+    ac_couple_2_energy_total_l1: float | None = None  # eACcouple2TotalL1
+    ac_couple_2_energy_total_l2: float | None = None  # eACcouple2TotalL2
+    ac_couple_3_energy_total_l1: float | None = None  # eACcouple3TotalL1
+    ac_couple_3_energy_total_l2: float | None = None  # eACcouple3TotalL2
+    ac_couple_4_energy_total_l1: float | None = None  # eACcouple4TotalL1
+    ac_couple_4_energy_total_l2: float | None = None  # eACcouple4TotalL2
     smart_load_1_energy_total_l1: float | None = None  # eSmartLoad1TotalL1
     smart_load_1_energy_total_l2: float | None = None  # eSmartLoad1TotalL2
+    smart_load_2_energy_total_l1: float | None = None  # eSmartLoad2TotalL1
+    smart_load_2_energy_total_l2: float | None = None  # eSmartLoad2TotalL2
+    smart_load_3_energy_total_l1: float | None = None  # eSmartLoad3TotalL1
+    smart_load_3_energy_total_l2: float | None = None  # eSmartLoad3TotalL2
+    smart_load_4_energy_total_l1: float | None = None  # eSmartLoad4TotalL1
+    smart_load_4_energy_total_l2: float | None = None  # eSmartLoad4TotalL2
 
     # -------------------------------------------------------------------------
     # Computed totals (convenience) - returns None if any component is None
@@ -1515,6 +1537,36 @@ class MidboxRuntimeData:
                 if midbox_data.eACcouple1TodayL2 is not None
                 else 0.0
             ),
+            ac_couple_2_energy_today_l1=(
+                float(midbox_data.eACcouple2TodayL1) / 10.0
+                if midbox_data.eACcouple2TodayL1 is not None
+                else 0.0
+            ),
+            ac_couple_2_energy_today_l2=(
+                float(midbox_data.eACcouple2TodayL2) / 10.0
+                if midbox_data.eACcouple2TodayL2 is not None
+                else 0.0
+            ),
+            ac_couple_3_energy_today_l1=(
+                float(midbox_data.eACcouple3TodayL1) / 10.0
+                if midbox_data.eACcouple3TodayL1 is not None
+                else 0.0
+            ),
+            ac_couple_3_energy_today_l2=(
+                float(midbox_data.eACcouple3TodayL2) / 10.0
+                if midbox_data.eACcouple3TodayL2 is not None
+                else 0.0
+            ),
+            ac_couple_4_energy_today_l1=(
+                float(midbox_data.eACcouple4TodayL1) / 10.0
+                if midbox_data.eACcouple4TodayL1 is not None
+                else 0.0
+            ),
+            ac_couple_4_energy_today_l2=(
+                float(midbox_data.eACcouple4TodayL2) / 10.0
+                if midbox_data.eACcouple4TodayL2 is not None
+                else 0.0
+            ),
             smart_load_1_energy_today_l1=(
                 float(midbox_data.eSmartLoad1TodayL1) / 10.0
                 if midbox_data.eSmartLoad1TodayL1 is not None
@@ -1523,6 +1575,36 @@ class MidboxRuntimeData:
             smart_load_1_energy_today_l2=(
                 float(midbox_data.eSmartLoad1TodayL2) / 10.0
                 if midbox_data.eSmartLoad1TodayL2 is not None
+                else 0.0
+            ),
+            smart_load_2_energy_today_l1=(
+                float(midbox_data.eSmartLoad2TodayL1) / 10.0
+                if midbox_data.eSmartLoad2TodayL1 is not None
+                else 0.0
+            ),
+            smart_load_2_energy_today_l2=(
+                float(midbox_data.eSmartLoad2TodayL2) / 10.0
+                if midbox_data.eSmartLoad2TodayL2 is not None
+                else 0.0
+            ),
+            smart_load_3_energy_today_l1=(
+                float(midbox_data.eSmartLoad3TodayL1) / 10.0
+                if midbox_data.eSmartLoad3TodayL1 is not None
+                else 0.0
+            ),
+            smart_load_3_energy_today_l2=(
+                float(midbox_data.eSmartLoad3TodayL2) / 10.0
+                if midbox_data.eSmartLoad3TodayL2 is not None
+                else 0.0
+            ),
+            smart_load_4_energy_today_l1=(
+                float(midbox_data.eSmartLoad4TodayL1) / 10.0
+                if midbox_data.eSmartLoad4TodayL1 is not None
+                else 0.0
+            ),
+            smart_load_4_energy_today_l2=(
+                float(midbox_data.eSmartLoad4TodayL2) / 10.0
+                if midbox_data.eSmartLoad4TodayL2 is not None
                 else 0.0
             ),
             # Energy Total (API returns 0.1 kWh units, scale to kWh)
@@ -1576,6 +1658,36 @@ class MidboxRuntimeData:
                 if midbox_data.eACcouple1TotalL2 is not None
                 else 0.0
             ),
+            ac_couple_2_energy_total_l1=(
+                float(midbox_data.eACcouple2TotalL1) / 10.0
+                if midbox_data.eACcouple2TotalL1 is not None
+                else 0.0
+            ),
+            ac_couple_2_energy_total_l2=(
+                float(midbox_data.eACcouple2TotalL2) / 10.0
+                if midbox_data.eACcouple2TotalL2 is not None
+                else 0.0
+            ),
+            ac_couple_3_energy_total_l1=(
+                float(midbox_data.eACcouple3TotalL1) / 10.0
+                if midbox_data.eACcouple3TotalL1 is not None
+                else 0.0
+            ),
+            ac_couple_3_energy_total_l2=(
+                float(midbox_data.eACcouple3TotalL2) / 10.0
+                if midbox_data.eACcouple3TotalL2 is not None
+                else 0.0
+            ),
+            ac_couple_4_energy_total_l1=(
+                float(midbox_data.eACcouple4TotalL1) / 10.0
+                if midbox_data.eACcouple4TotalL1 is not None
+                else 0.0
+            ),
+            ac_couple_4_energy_total_l2=(
+                float(midbox_data.eACcouple4TotalL2) / 10.0
+                if midbox_data.eACcouple4TotalL2 is not None
+                else 0.0
+            ),
             smart_load_1_energy_total_l1=(
                 float(midbox_data.eSmartLoad1TotalL1) / 10.0
                 if midbox_data.eSmartLoad1TotalL1 is not None
@@ -1584,6 +1696,36 @@ class MidboxRuntimeData:
             smart_load_1_energy_total_l2=(
                 float(midbox_data.eSmartLoad1TotalL2) / 10.0
                 if midbox_data.eSmartLoad1TotalL2 is not None
+                else 0.0
+            ),
+            smart_load_2_energy_total_l1=(
+                float(midbox_data.eSmartLoad2TotalL1) / 10.0
+                if midbox_data.eSmartLoad2TotalL1 is not None
+                else 0.0
+            ),
+            smart_load_2_energy_total_l2=(
+                float(midbox_data.eSmartLoad2TotalL2) / 10.0
+                if midbox_data.eSmartLoad2TotalL2 is not None
+                else 0.0
+            ),
+            smart_load_3_energy_total_l1=(
+                float(midbox_data.eSmartLoad3TotalL1) / 10.0
+                if midbox_data.eSmartLoad3TotalL1 is not None
+                else 0.0
+            ),
+            smart_load_3_energy_total_l2=(
+                float(midbox_data.eSmartLoad3TotalL2) / 10.0
+                if midbox_data.eSmartLoad3TotalL2 is not None
+                else 0.0
+            ),
+            smart_load_4_energy_total_l1=(
+                float(midbox_data.eSmartLoad4TotalL1) / 10.0
+                if midbox_data.eSmartLoad4TotalL1 is not None
+                else 0.0
+            ),
+            smart_load_4_energy_total_l2=(
+                float(midbox_data.eSmartLoad4TotalL2) / 10.0
+                if midbox_data.eSmartLoad4TotalL2 is not None
                 else 0.0
             ),
         )
@@ -1727,11 +1869,47 @@ class MidboxRuntimeData:
             ac_couple_1_energy_today_l2=_read_and_scale_field(
                 input_registers, energy_map.ac_couple_1_energy_today_l2
             ),
+            ac_couple_2_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_2_energy_today_l1
+            ),
+            ac_couple_2_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_2_energy_today_l2
+            ),
+            ac_couple_3_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_3_energy_today_l1
+            ),
+            ac_couple_3_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_3_energy_today_l2
+            ),
+            ac_couple_4_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_4_energy_today_l1
+            ),
+            ac_couple_4_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_4_energy_today_l2
+            ),
             smart_load_1_energy_today_l1=_read_and_scale_field(
                 input_registers, energy_map.smart_load_1_energy_today_l1
             ),
             smart_load_1_energy_today_l2=_read_and_scale_field(
                 input_registers, energy_map.smart_load_1_energy_today_l2
+            ),
+            smart_load_2_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.smart_load_2_energy_today_l1
+            ),
+            smart_load_2_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.smart_load_2_energy_today_l2
+            ),
+            smart_load_3_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.smart_load_3_energy_today_l1
+            ),
+            smart_load_3_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.smart_load_3_energy_today_l2
+            ),
+            smart_load_4_energy_today_l1=_read_and_scale_field(
+                input_registers, energy_map.smart_load_4_energy_today_l1
+            ),
+            smart_load_4_energy_today_l2=_read_and_scale_field(
+                input_registers, energy_map.smart_load_4_energy_today_l2
             ),
             # Energy Total (kWh, 32-bit, scale /10)
             load_energy_total_l1=_read_and_scale_field(
@@ -1764,11 +1942,47 @@ class MidboxRuntimeData:
             ac_couple_1_energy_total_l2=_read_and_scale_field(
                 input_registers, energy_map.ac_couple_1_energy_total_l2
             ),
+            ac_couple_2_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_2_energy_total_l1
+            ),
+            ac_couple_2_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_2_energy_total_l2
+            ),
+            ac_couple_3_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_3_energy_total_l1
+            ),
+            ac_couple_3_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_3_energy_total_l2
+            ),
+            ac_couple_4_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_4_energy_total_l1
+            ),
+            ac_couple_4_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.ac_couple_4_energy_total_l2
+            ),
             smart_load_1_energy_total_l1=_read_and_scale_field(
                 input_registers, energy_map.smart_load_1_energy_total_l1
             ),
             smart_load_1_energy_total_l2=_read_and_scale_field(
                 input_registers, energy_map.smart_load_1_energy_total_l2
+            ),
+            smart_load_2_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.smart_load_2_energy_total_l1
+            ),
+            smart_load_2_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.smart_load_2_energy_total_l2
+            ),
+            smart_load_3_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.smart_load_3_energy_total_l1
+            ),
+            smart_load_3_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.smart_load_3_energy_total_l2
+            ),
+            smart_load_4_energy_total_l1=_read_and_scale_field(
+                input_registers, energy_map.smart_load_4_energy_total_l1
+            ),
+            smart_load_4_energy_total_l2=_read_and_scale_field(
+                input_registers, energy_map.smart_load_4_energy_total_l2
             ),
         )
 
@@ -1845,8 +2059,20 @@ class MidboxRuntimeData:
             "eToUserTodayL2": self.to_user_energy_today_l2,
             "eACcouple1TodayL1": self.ac_couple_1_energy_today_l1,
             "eACcouple1TodayL2": self.ac_couple_1_energy_today_l2,
+            "eACcouple2TodayL1": self.ac_couple_2_energy_today_l1,
+            "eACcouple2TodayL2": self.ac_couple_2_energy_today_l2,
+            "eACcouple3TodayL1": self.ac_couple_3_energy_today_l1,
+            "eACcouple3TodayL2": self.ac_couple_3_energy_today_l2,
+            "eACcouple4TodayL1": self.ac_couple_4_energy_today_l1,
+            "eACcouple4TodayL2": self.ac_couple_4_energy_today_l2,
             "eSmartLoad1TodayL1": self.smart_load_1_energy_today_l1,
             "eSmartLoad1TodayL2": self.smart_load_1_energy_today_l2,
+            "eSmartLoad2TodayL1": self.smart_load_2_energy_today_l1,
+            "eSmartLoad2TodayL2": self.smart_load_2_energy_today_l2,
+            "eSmartLoad3TodayL1": self.smart_load_3_energy_today_l1,
+            "eSmartLoad3TodayL2": self.smart_load_3_energy_today_l2,
+            "eSmartLoad4TodayL1": self.smart_load_4_energy_today_l1,
+            "eSmartLoad4TodayL2": self.smart_load_4_energy_today_l2,
             # Energy Total (kWh)
             "eLoadTotalL1": self.load_energy_total_l1,
             "eLoadTotalL2": self.load_energy_total_l2,
@@ -1858,6 +2084,18 @@ class MidboxRuntimeData:
             "eToUserTotalL2": self.to_user_energy_total_l2,
             "eACcouple1TotalL1": self.ac_couple_1_energy_total_l1,
             "eACcouple1TotalL2": self.ac_couple_1_energy_total_l2,
+            "eACcouple2TotalL1": self.ac_couple_2_energy_total_l1,
+            "eACcouple2TotalL2": self.ac_couple_2_energy_total_l2,
+            "eACcouple3TotalL1": self.ac_couple_3_energy_total_l1,
+            "eACcouple3TotalL2": self.ac_couple_3_energy_total_l2,
+            "eACcouple4TotalL1": self.ac_couple_4_energy_total_l1,
+            "eACcouple4TotalL2": self.ac_couple_4_energy_total_l2,
             "eSmartLoad1TotalL1": self.smart_load_1_energy_total_l1,
             "eSmartLoad1TotalL2": self.smart_load_1_energy_total_l2,
+            "eSmartLoad2TotalL1": self.smart_load_2_energy_total_l1,
+            "eSmartLoad2TotalL2": self.smart_load_2_energy_total_l2,
+            "eSmartLoad3TotalL1": self.smart_load_3_energy_total_l1,
+            "eSmartLoad3TotalL2": self.smart_load_3_energy_total_l2,
+            "eSmartLoad4TotalL1": self.smart_load_4_energy_total_l1,
+            "eSmartLoad4TotalL2": self.smart_load_4_energy_total_l2,
         }

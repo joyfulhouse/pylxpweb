@@ -219,6 +219,11 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
             val = transport_data.get(key)
             return int(val) if val is not None else 0
 
+        def _int_or_none(key: str) -> int | None:
+            """Get int value from transport data, preserving None."""
+            val = transport_data.get(key)
+            return int(val) if val is not None else None
+
         def _str(key: str) -> str:
             """Get str value from transport data, treating None as empty."""
             val = transport_data.get(key)
@@ -284,6 +289,56 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
             acCouple3L2ActivePower=_int("acCouple3L2ActivePower"),
             acCouple4L1ActivePower=_int("acCouple4L1ActivePower"),
             acCouple4L2ActivePower=_int("acCouple4L2ActivePower"),
+            # Energy Today (0.1 kWh units, None = unavailable)
+            eLoadTodayL1=_int_or_none("eLoadTodayL1"),
+            eLoadTodayL2=_int_or_none("eLoadTodayL2"),
+            eUpsTodayL1=_int_or_none("eUpsTodayL1"),
+            eUpsTodayL2=_int_or_none("eUpsTodayL2"),
+            eToGridTodayL1=_int_or_none("eToGridTodayL1"),
+            eToGridTodayL2=_int_or_none("eToGridTodayL2"),
+            eToUserTodayL1=_int_or_none("eToUserTodayL1"),
+            eToUserTodayL2=_int_or_none("eToUserTodayL2"),
+            eACcouple1TodayL1=_int_or_none("eACcouple1TodayL1"),
+            eACcouple1TodayL2=_int_or_none("eACcouple1TodayL2"),
+            eACcouple2TodayL1=_int_or_none("eACcouple2TodayL1"),
+            eACcouple2TodayL2=_int_or_none("eACcouple2TodayL2"),
+            eACcouple3TodayL1=_int_or_none("eACcouple3TodayL1"),
+            eACcouple3TodayL2=_int_or_none("eACcouple3TodayL2"),
+            eACcouple4TodayL1=_int_or_none("eACcouple4TodayL1"),
+            eACcouple4TodayL2=_int_or_none("eACcouple4TodayL2"),
+            eSmartLoad1TodayL1=_int_or_none("eSmartLoad1TodayL1"),
+            eSmartLoad1TodayL2=_int_or_none("eSmartLoad1TodayL2"),
+            eSmartLoad2TodayL1=_int_or_none("eSmartLoad2TodayL1"),
+            eSmartLoad2TodayL2=_int_or_none("eSmartLoad2TodayL2"),
+            eSmartLoad3TodayL1=_int_or_none("eSmartLoad3TodayL1"),
+            eSmartLoad3TodayL2=_int_or_none("eSmartLoad3TodayL2"),
+            eSmartLoad4TodayL1=_int_or_none("eSmartLoad4TodayL1"),
+            eSmartLoad4TodayL2=_int_or_none("eSmartLoad4TodayL2"),
+            # Energy Total (0.1 kWh units, 32-bit, None = unavailable)
+            eLoadTotalL1=_int_or_none("eLoadTotalL1"),
+            eLoadTotalL2=_int_or_none("eLoadTotalL2"),
+            eUpsTotalL1=_int_or_none("eUpsTotalL1"),
+            eUpsTotalL2=_int_or_none("eUpsTotalL2"),
+            eToGridTotalL1=_int_or_none("eToGridTotalL1"),
+            eToGridTotalL2=_int_or_none("eToGridTotalL2"),
+            eToUserTotalL1=_int_or_none("eToUserTotalL1"),
+            eToUserTotalL2=_int_or_none("eToUserTotalL2"),
+            eACcouple1TotalL1=_int_or_none("eACcouple1TotalL1"),
+            eACcouple1TotalL2=_int_or_none("eACcouple1TotalL2"),
+            eACcouple2TotalL1=_int_or_none("eACcouple2TotalL1"),
+            eACcouple2TotalL2=_int_or_none("eACcouple2TotalL2"),
+            eACcouple3TotalL1=_int_or_none("eACcouple3TotalL1"),
+            eACcouple3TotalL2=_int_or_none("eACcouple3TotalL2"),
+            eACcouple4TotalL1=_int_or_none("eACcouple4TotalL1"),
+            eACcouple4TotalL2=_int_or_none("eACcouple4TotalL2"),
+            eSmartLoad1TotalL1=_int_or_none("eSmartLoad1TotalL1"),
+            eSmartLoad1TotalL2=_int_or_none("eSmartLoad1TotalL2"),
+            eSmartLoad2TotalL1=_int_or_none("eSmartLoad2TotalL1"),
+            eSmartLoad2TotalL2=_int_or_none("eSmartLoad2TotalL2"),
+            eSmartLoad3TotalL1=_int_or_none("eSmartLoad3TotalL1"),
+            eSmartLoad3TotalL2=_int_or_none("eSmartLoad3TotalL2"),
+            eSmartLoad4TotalL1=_int_or_none("eSmartLoad4TotalL1"),
+            eSmartLoad4TotalL2=_int_or_none("eSmartLoad4TotalL2"),
         )
 
         # Wrap in MidboxRuntime
