@@ -123,7 +123,7 @@ class TestMIDDeviceFromTransport:
         with pytest.raises(LuxpowerDeviceError) as exc_info:
             await MIDDevice.from_transport(mock_transport)
 
-        assert "is not a MID device" in str(exc_info.value)
+        assert "is not a GridBOSS/MIDbox" in str(exc_info.value)
         assert "BaseInverter.from_modbus_transport()" in str(exc_info.value)
 
     @pytest.mark.asyncio

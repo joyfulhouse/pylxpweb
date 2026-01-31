@@ -1484,8 +1484,9 @@ class MidboxRuntimeData:
             smart_port_3_status=midbox_data.smartPort3Status,
             smart_port_4_status=midbox_data.smartPort4Status,
             # Frequency (API returns centihertz, divide by 100)
+            phase_lock_freq=float(midbox_data.phaseLockFreq) / 100.0,
             grid_frequency=float(midbox_data.gridFreq) / 100.0,
-            # Note: phaseLockFreq and genFreq not in MidboxData model
+            gen_frequency=float(midbox_data.genFreq) / 100.0,
             # Energy Today (API returns 0.1 kWh units, scale to kWh)
             load_energy_today_l1=(
                 float(midbox_data.eLoadTodayL1) / 10.0

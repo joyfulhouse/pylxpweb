@@ -270,7 +270,9 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
             smartPort3Status=_int("smartPort3Status"),
             smartPort4Status=_int("smartPort4Status"),
             # Frequency
+            phaseLockFreq=_int("phaseLockFreq"),
             gridFreq=_int("gridFreq"),
+            genFreq=_int("genFreq"),
             # Smart Load Power (optional)
             smartLoad1L1ActivePower=_int("smartLoad1L1ActivePower"),
             smartLoad1L2ActivePower=_int("smartLoad1L2ActivePower"),

@@ -812,8 +812,10 @@ class MidboxData(BaseModel):
     smartPort2Status: int
     smartPort3Status: int
     smartPort4Status: int
-    # Grid frequency (÷100 for Hz)
-    gridFreq: int
+    # Frequency (÷100 for Hz)
+    phaseLockFreq: int = 0
+    gridFreq: int = 0
+    genFreq: int = 0
 
     # ===========================================
     # Smart Load Power Fields (watts, no scaling)

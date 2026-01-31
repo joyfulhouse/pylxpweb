@@ -474,6 +474,17 @@ class MIDRuntimePropertiesMixin:
     # ===========================================
 
     @property
+    def phase_lock_frequency(self) -> float:
+        """Get PLL (phase-lock loop) frequency in Hz.
+
+        Returns:
+            Phase lock frequency (÷100), or 0.0 if no data.
+        """
+        if self._runtime is None:
+            return 0.0
+        return scale_mid_frequency(self._runtime.midboxData.phaseLockFreq)
+
+    @property
     def grid_frequency(self) -> float:
         """Get grid frequency in Hz.
 
@@ -482,8 +493,18 @@ class MIDRuntimePropertiesMixin:
         """
         if self._runtime is None:
             return 0.0
-
         return scale_mid_frequency(self._runtime.midboxData.gridFreq)
+
+    @property
+    def generator_frequency(self) -> float:
+        """Get generator frequency in Hz.
+
+        Returns:
+            Generator frequency (÷100), or 0.0 if no data.
+        """
+        if self._runtime is None:
+            return 0.0
+        return scale_mid_frequency(self._runtime.midboxData.genFreq)
 
     # ===========================================
     # Smart Port Status

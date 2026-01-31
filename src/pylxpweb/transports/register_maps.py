@@ -1036,25 +1036,27 @@ class MidboxEnergyRegisterMap:
 # Source: eg4-modbus-monitor registers-gridboss.yaml
 # Smart port status discovered via register comparison with web API
 GRIDBOSS_RUNTIME_MAP = MidboxRuntimeRegisterMap(
-    # Voltage (registers 1-9, scale /10 - raw value is volts × 10)
-    grid_voltage=RegisterField(1, 16, ScaleFactor.SCALE_10),
-    ups_voltage=RegisterField(2, 16, ScaleFactor.SCALE_10),
-    gen_voltage=RegisterField(3, 16, ScaleFactor.SCALE_10),
-    grid_l1_voltage=RegisterField(4, 16, ScaleFactor.SCALE_10),
-    grid_l2_voltage=RegisterField(5, 16, ScaleFactor.SCALE_10),
-    ups_l1_voltage=RegisterField(6, 16, ScaleFactor.SCALE_10),
-    ups_l2_voltage=RegisterField(7, 16, ScaleFactor.SCALE_10),
-    gen_l1_voltage=RegisterField(8, 16, ScaleFactor.SCALE_10),
-    gen_l2_voltage=RegisterField(9, 16, ScaleFactor.SCALE_10),
-    # Current (registers 10-17, scale /100 for amps)
-    grid_l1_current=RegisterField(10, 16, ScaleFactor.SCALE_100),
-    grid_l2_current=RegisterField(11, 16, ScaleFactor.SCALE_100),
-    load_l1_current=RegisterField(12, 16, ScaleFactor.SCALE_100),
-    load_l2_current=RegisterField(13, 16, ScaleFactor.SCALE_100),
-    gen_l1_current=RegisterField(14, 16, ScaleFactor.SCALE_100),
-    gen_l2_current=RegisterField(15, 16, ScaleFactor.SCALE_100),
-    ups_l1_current=RegisterField(16, 16, ScaleFactor.SCALE_100),
-    ups_l2_current=RegisterField(17, 16, ScaleFactor.SCALE_100),
+    # Voltage (registers 1-9, NO scaling - MidboxData stores raw values,
+    # properties apply ÷10 via scale_mid_voltage)
+    grid_voltage=RegisterField(1, 16, ScaleFactor.SCALE_NONE),
+    ups_voltage=RegisterField(2, 16, ScaleFactor.SCALE_NONE),
+    gen_voltage=RegisterField(3, 16, ScaleFactor.SCALE_NONE),
+    grid_l1_voltage=RegisterField(4, 16, ScaleFactor.SCALE_NONE),
+    grid_l2_voltage=RegisterField(5, 16, ScaleFactor.SCALE_NONE),
+    ups_l1_voltage=RegisterField(6, 16, ScaleFactor.SCALE_NONE),
+    ups_l2_voltage=RegisterField(7, 16, ScaleFactor.SCALE_NONE),
+    gen_l1_voltage=RegisterField(8, 16, ScaleFactor.SCALE_NONE),
+    gen_l2_voltage=RegisterField(9, 16, ScaleFactor.SCALE_NONE),
+    # Current (registers 10-17, NO scaling - MidboxData stores raw values,
+    # properties apply ÷100 directly)
+    grid_l1_current=RegisterField(10, 16, ScaleFactor.SCALE_NONE),
+    grid_l2_current=RegisterField(11, 16, ScaleFactor.SCALE_NONE),
+    load_l1_current=RegisterField(12, 16, ScaleFactor.SCALE_NONE),
+    load_l2_current=RegisterField(13, 16, ScaleFactor.SCALE_NONE),
+    gen_l1_current=RegisterField(14, 16, ScaleFactor.SCALE_NONE),
+    gen_l2_current=RegisterField(15, 16, ScaleFactor.SCALE_NONE),
+    ups_l1_current=RegisterField(16, 16, ScaleFactor.SCALE_NONE),
+    ups_l2_current=RegisterField(17, 16, ScaleFactor.SCALE_NONE),
     # Power (registers 26-33, no scaling - raw value is watts)
     grid_l1_power=RegisterField(26, 16, ScaleFactor.SCALE_NONE, signed=True),
     grid_l2_power=RegisterField(27, 16, ScaleFactor.SCALE_NONE, signed=True),
@@ -1081,10 +1083,11 @@ GRIDBOSS_RUNTIME_MAP = MidboxRuntimeRegisterMap(
     smart_port_2_status=RegisterField(106, 16, ScaleFactor.SCALE_NONE),
     smart_port_3_status=RegisterField(107, 16, ScaleFactor.SCALE_NONE),
     smart_port_4_status=RegisterField(108, 16, ScaleFactor.SCALE_NONE),
-    # Frequency (registers 128-130, scale /100 for Hz)
-    phase_lock_freq=RegisterField(128, 16, ScaleFactor.SCALE_100),
-    grid_frequency=RegisterField(129, 16, ScaleFactor.SCALE_100),
-    gen_frequency=RegisterField(130, 16, ScaleFactor.SCALE_100),
+    # Frequency (registers 128-130, NO scaling - MidboxData stores raw values,
+    # properties apply ÷100 via scale_mid_frequency)
+    phase_lock_freq=RegisterField(128, 16, ScaleFactor.SCALE_NONE),
+    grid_frequency=RegisterField(129, 16, ScaleFactor.SCALE_NONE),
+    gen_frequency=RegisterField(130, 16, ScaleFactor.SCALE_NONE),
 )
 
 # GridBOSS Energy Register Map
