@@ -214,66 +214,76 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         """
         from pylxpweb.models import MidboxData, MidboxRuntime
 
-        # Build MidboxData from transport dict, providing defaults for required fields
-        # The transport may not have all fields, so we use .get() with defaults
+        def _int(key: str) -> int:
+            """Get int value from transport data, treating None as 0."""
+            val = transport_data.get(key)
+            return int(val) if val is not None else 0
+
+        def _str(key: str) -> str:
+            """Get str value from transport data, treating None as empty."""
+            val = transport_data.get(key)
+            return str(val) if val is not None else ""
+
+        # Build MidboxData from transport dict — transport may contain None
+        # for unmapped energy registers, so _int/_str handle that safely.
         midbox_data = MidboxData(
-            status=int(transport_data.get("status", 0)),
-            serverTime=str(transport_data.get("serverTime", "")),
-            deviceTime=str(transport_data.get("deviceTime", "")),
+            status=_int("status"),
+            serverTime=_str("serverTime"),
+            deviceTime=_str("deviceTime"),
             # Voltages
-            gridRmsVolt=int(transport_data.get("gridRmsVolt", 0)),
-            upsRmsVolt=int(transport_data.get("upsRmsVolt", 0)),
-            genRmsVolt=int(transport_data.get("genRmsVolt", 0)),
-            gridL1RmsVolt=int(transport_data.get("gridL1RmsVolt", 0)),
-            gridL2RmsVolt=int(transport_data.get("gridL2RmsVolt", 0)),
-            upsL1RmsVolt=int(transport_data.get("upsL1RmsVolt", 0)),
-            upsL2RmsVolt=int(transport_data.get("upsL2RmsVolt", 0)),
-            genL1RmsVolt=int(transport_data.get("genL1RmsVolt", 0)),
-            genL2RmsVolt=int(transport_data.get("genL2RmsVolt", 0)),
+            gridRmsVolt=_int("gridRmsVolt"),
+            upsRmsVolt=_int("upsRmsVolt"),
+            genRmsVolt=_int("genRmsVolt"),
+            gridL1RmsVolt=_int("gridL1RmsVolt"),
+            gridL2RmsVolt=_int("gridL2RmsVolt"),
+            upsL1RmsVolt=_int("upsL1RmsVolt"),
+            upsL2RmsVolt=_int("upsL2RmsVolt"),
+            genL1RmsVolt=_int("genL1RmsVolt"),
+            genL2RmsVolt=_int("genL2RmsVolt"),
             # Currents
-            gridL1RmsCurr=int(transport_data.get("gridL1RmsCurr", 0)),
-            gridL2RmsCurr=int(transport_data.get("gridL2RmsCurr", 0)),
-            loadL1RmsCurr=int(transport_data.get("loadL1RmsCurr", 0)),
-            loadL2RmsCurr=int(transport_data.get("loadL2RmsCurr", 0)),
-            genL1RmsCurr=int(transport_data.get("genL1RmsCurr", 0)),
-            genL2RmsCurr=int(transport_data.get("genL2RmsCurr", 0)),
-            upsL1RmsCurr=int(transport_data.get("upsL1RmsCurr", 0)),
-            upsL2RmsCurr=int(transport_data.get("upsL2RmsCurr", 0)),
+            gridL1RmsCurr=_int("gridL1RmsCurr"),
+            gridL2RmsCurr=_int("gridL2RmsCurr"),
+            loadL1RmsCurr=_int("loadL1RmsCurr"),
+            loadL2RmsCurr=_int("loadL2RmsCurr"),
+            genL1RmsCurr=_int("genL1RmsCurr"),
+            genL2RmsCurr=_int("genL2RmsCurr"),
+            upsL1RmsCurr=_int("upsL1RmsCurr"),
+            upsL2RmsCurr=_int("upsL2RmsCurr"),
             # Power
-            gridL1ActivePower=int(transport_data.get("gridL1ActivePower", 0)),
-            gridL2ActivePower=int(transport_data.get("gridL2ActivePower", 0)),
-            loadL1ActivePower=int(transport_data.get("loadL1ActivePower", 0)),
-            loadL2ActivePower=int(transport_data.get("loadL2ActivePower", 0)),
-            genL1ActivePower=int(transport_data.get("genL1ActivePower", 0)),
-            genL2ActivePower=int(transport_data.get("genL2ActivePower", 0)),
-            upsL1ActivePower=int(transport_data.get("upsL1ActivePower", 0)),
-            upsL2ActivePower=int(transport_data.get("upsL2ActivePower", 0)),
-            hybridPower=int(transport_data.get("hybridPower", 0)),
+            gridL1ActivePower=_int("gridL1ActivePower"),
+            gridL2ActivePower=_int("gridL2ActivePower"),
+            loadL1ActivePower=_int("loadL1ActivePower"),
+            loadL2ActivePower=_int("loadL2ActivePower"),
+            genL1ActivePower=_int("genL1ActivePower"),
+            genL2ActivePower=_int("genL2ActivePower"),
+            upsL1ActivePower=_int("upsL1ActivePower"),
+            upsL2ActivePower=_int("upsL2ActivePower"),
+            hybridPower=_int("hybridPower"),
             # Smart port status
-            smartPort1Status=int(transport_data.get("smartPort1Status", 0)),
-            smartPort2Status=int(transport_data.get("smartPort2Status", 0)),
-            smartPort3Status=int(transport_data.get("smartPort3Status", 0)),
-            smartPort4Status=int(transport_data.get("smartPort4Status", 0)),
+            smartPort1Status=_int("smartPort1Status"),
+            smartPort2Status=_int("smartPort2Status"),
+            smartPort3Status=_int("smartPort3Status"),
+            smartPort4Status=_int("smartPort4Status"),
             # Frequency
-            gridFreq=int(transport_data.get("gridFreq", 0)),
+            gridFreq=_int("gridFreq"),
             # Smart Load Power (optional)
-            smartLoad1L1ActivePower=int(transport_data.get("smartLoad1L1ActivePower", 0)),
-            smartLoad1L2ActivePower=int(transport_data.get("smartLoad1L2ActivePower", 0)),
-            smartLoad2L1ActivePower=int(transport_data.get("smartLoad2L1ActivePower", 0)),
-            smartLoad2L2ActivePower=int(transport_data.get("smartLoad2L2ActivePower", 0)),
-            smartLoad3L1ActivePower=int(transport_data.get("smartLoad3L1ActivePower", 0)),
-            smartLoad3L2ActivePower=int(transport_data.get("smartLoad3L2ActivePower", 0)),
-            smartLoad4L1ActivePower=int(transport_data.get("smartLoad4L1ActivePower", 0)),
-            smartLoad4L2ActivePower=int(transport_data.get("smartLoad4L2ActivePower", 0)),
+            smartLoad1L1ActivePower=_int("smartLoad1L1ActivePower"),
+            smartLoad1L2ActivePower=_int("smartLoad1L2ActivePower"),
+            smartLoad2L1ActivePower=_int("smartLoad2L1ActivePower"),
+            smartLoad2L2ActivePower=_int("smartLoad2L2ActivePower"),
+            smartLoad3L1ActivePower=_int("smartLoad3L1ActivePower"),
+            smartLoad3L2ActivePower=_int("smartLoad3L2ActivePower"),
+            smartLoad4L1ActivePower=_int("smartLoad4L1ActivePower"),
+            smartLoad4L2ActivePower=_int("smartLoad4L2ActivePower"),
             # AC Couple Power (optional)
-            acCouple1L1ActivePower=int(transport_data.get("acCouple1L1ActivePower", 0)),
-            acCouple1L2ActivePower=int(transport_data.get("acCouple1L2ActivePower", 0)),
-            acCouple2L1ActivePower=int(transport_data.get("acCouple2L1ActivePower", 0)),
-            acCouple2L2ActivePower=int(transport_data.get("acCouple2L2ActivePower", 0)),
-            acCouple3L1ActivePower=int(transport_data.get("acCouple3L1ActivePower", 0)),
-            acCouple3L2ActivePower=int(transport_data.get("acCouple3L2ActivePower", 0)),
-            acCouple4L1ActivePower=int(transport_data.get("acCouple4L1ActivePower", 0)),
-            acCouple4L2ActivePower=int(transport_data.get("acCouple4L2ActivePower", 0)),
+            acCouple1L1ActivePower=_int("acCouple1L1ActivePower"),
+            acCouple1L2ActivePower=_int("acCouple1L2ActivePower"),
+            acCouple2L1ActivePower=_int("acCouple2L1ActivePower"),
+            acCouple2L2ActivePower=_int("acCouple2L2ActivePower"),
+            acCouple3L1ActivePower=_int("acCouple3L1ActivePower"),
+            acCouple3L2ActivePower=_int("acCouple3L2ActivePower"),
+            acCouple4L1ActivePower=_int("acCouple4L1ActivePower"),
+            acCouple4L2ActivePower=_int("acCouple4L2ActivePower"),
         )
 
         # Wrap in MidboxRuntime
