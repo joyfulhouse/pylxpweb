@@ -121,9 +121,7 @@ class TestWriteNamedParametersModbus:
         # Current value is 0, set FUNC_EPS_EN (bit 0) to True
         mock_modbus_transport.read_parameters = AsyncMock(return_value={21: 0})
 
-        result = await mock_modbus_transport.write_named_parameters(
-            {"FUNC_EPS_EN": True}
-        )
+        result = await mock_modbus_transport.write_named_parameters({"FUNC_EPS_EN": True})
 
         assert result is True
         # Should read register 21 first, then write with bit 0 set
@@ -139,9 +137,7 @@ class TestWriteNamedParametersModbus:
         mock_modbus_transport.read_parameters = AsyncMock(return_value={21: 0x80})
 
         # Set bit 0 (FUNC_EPS_EN) while preserving bit 7
-        result = await mock_modbus_transport.write_named_parameters(
-            {"FUNC_EPS_EN": True}
-        )
+        result = await mock_modbus_transport.write_named_parameters({"FUNC_EPS_EN": True})
 
         assert result is True
         # Should have both bit 0 and bit 7 set: 0x81
@@ -155,9 +151,7 @@ class TestWriteNamedParametersModbus:
         # Current value has bit 0 set
         mock_modbus_transport.read_parameters = AsyncMock(return_value={21: 0x01})
 
-        result = await mock_modbus_transport.write_named_parameters(
-            {"FUNC_EPS_EN": False}
-        )
+        result = await mock_modbus_transport.write_named_parameters({"FUNC_EPS_EN": False})
 
         assert result is True
         # Should clear bit 0: 0x00
@@ -169,9 +163,7 @@ class TestWriteNamedParametersModbus:
     ) -> None:
         """Test writing unknown parameter raises ValueError."""
         with pytest.raises(ValueError, match="Unknown parameter name"):
-            await mock_modbus_transport.write_named_parameters(
-                {"UNKNOWN_PARAM": 123}
-            )
+            await mock_modbus_transport.write_named_parameters({"UNKNOWN_PARAM": 123})
 
 
 class TestReadNamedParametersHTTP:
@@ -258,9 +250,7 @@ class TestNamedParametersHybrid:
         """Test HybridTransport falls back to HTTP on local failure."""
         from pylxpweb.transports.exceptions import TransportReadError
 
-        mock_local_transport.read_named_parameters.side_effect = TransportReadError(
-            "Local failed"
-        )
+        mock_local_transport.read_named_parameters.side_effect = TransportReadError("Local failed")
         transport = HybridTransport(mock_local_transport, mock_http_transport)
         transport._connected = True
 
@@ -280,9 +270,7 @@ class TestNamedParametersHybrid:
         result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
 
         assert result is True
-        mock_local_transport.write_named_parameters.assert_called_once_with(
-            {"FUNC_EPS_EN": True}
-        )
+        mock_local_transport.write_named_parameters.assert_called_once_with({"FUNC_EPS_EN": True})
         mock_http_transport.write_named_parameters.assert_not_called()
 
     @pytest.mark.asyncio
@@ -301,9 +289,7 @@ class TestNamedParametersHybrid:
         result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
 
         assert result is True
-        mock_http_transport.write_named_parameters.assert_called_once_with(
-            {"FUNC_EPS_EN": True}
-        )
+        mock_http_transport.write_named_parameters.assert_called_once_with({"FUNC_EPS_EN": True})
 
 
 class TestInverterFamilySupport:
@@ -389,9 +375,7 @@ class TestInverterFamilySupport:
         modbus_transport_pv_series.read_parameters = AsyncMock(return_value={21: 0})
         modbus_transport_pv_series.write_parameters = AsyncMock(return_value=True)
 
-        result = await modbus_transport_pv_series.write_named_parameters(
-            {"FUNC_EPS_EN": True}
-        )
+        result = await modbus_transport_pv_series.write_named_parameters({"FUNC_EPS_EN": True})
 
         assert result is True
         # FUNC_EPS_EN is bit 0 of register 21

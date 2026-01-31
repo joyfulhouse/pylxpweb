@@ -200,6 +200,11 @@ class ModbusTransport(BaseTransport):
     async def connect(self) -> None:
         """Establish Modbus TCP connection.
 
+        After connecting, performs a synchronization read to drain any stale
+        responses from the gateway's TCP buffer. This prevents transaction ID
+        desynchronization that occurs after integration reload/reconfigure,
+        where the gateway still has buffered responses from the old connection.
+
         Raises:
             TransportConnectionError: If connection fails
         """
@@ -220,6 +225,7 @@ class ModbusTransport(BaseTransport):
                 )
 
             self._connected = True
+            self._consecutive_errors = 0
             _LOGGER.info(
                 "Modbus transport connected to %s:%s (unit %s) for %s",
                 self._host,
@@ -227,6 +233,11 @@ class ModbusTransport(BaseTransport):
                 self._unit_id,
                 self._serial,
             )
+
+            # Drain stale gateway responses to synchronize transaction IDs.
+            # After reconfigure/reload, the gateway may have buffered responses
+            # from the old connection that cause TID mismatches.
+            await self._sync_transaction_ids()
 
         except ImportError as err:
             raise TransportConnectionError(
@@ -244,6 +255,44 @@ class ModbusTransport(BaseTransport):
                 "Verify: (1) IP address is correct, (2) port 502 is not blocked, "
                 "(3) Modbus TCP is enabled on the inverter/datalogger."
             ) from err
+
+    async def _sync_transaction_ids(self) -> None:
+        """Drain stale responses and synchronize pymodbus transaction IDs.
+
+        After a reconnect or reconfigure, the Modbus gateway may still have
+        buffered responses from the old session queued in its TCP send buffer.
+        These arrive with old transaction IDs that pymodbus rejects, causing
+        cascading "request ask for transaction_id=X but got id=Y" errors.
+
+        This method:
+        1. Waits briefly for the gateway to flush stale data
+        2. Performs a probe read (register 0, single register) to establish
+           the correct TID baseline
+        3. Ignores any errors — the goal is just to drain the buffer
+        """
+        await asyncio.sleep(0.5)
+
+        if self._client is None:
+            return
+
+        try:
+            result = await self._client.read_input_registers(
+                address=0, count=1, device_id=self._unit_id
+            )
+            if not result.isError():
+                _LOGGER.debug("Transaction ID sync successful for %s", self._serial)
+            else:
+                _LOGGER.debug(
+                    "Transaction ID sync probe returned error for %s (expected "
+                    "after reconfigure, stale data drained)",
+                    self._serial,
+                )
+        except Exception:
+            _LOGGER.debug(
+                "Transaction ID sync probe failed for %s (expected after "
+                "reconfigure, stale data drained)",
+                self._serial,
+            )
 
     async def disconnect(self) -> None:
         """Close Modbus TCP connection."""
@@ -544,9 +593,19 @@ class ModbusTransport(BaseTransport):
         """
         # power_energy (0-31) contains PV daily energy at registers 28-30
         # status_energy (32-63) contains daily/lifetime energy counters
-        input_registers = await self._read_register_groups(
-            ["power_energy", "status_energy", "bms_data"]
-        )
+        input_registers = await self._read_register_groups(["power_energy", "status_energy"])
+
+        # bms_data (80-112) is supplementary — don't fail the entire energy read
+        # if these registers time out (e.g., on some firmware versions)
+        try:
+            bms_registers = await self._read_register_groups(["bms_data"])
+            input_registers.update(bms_registers)
+        except (TransportReadError, TransportTimeoutError):
+            _LOGGER.debug(
+                "bms_data registers (80-112) unavailable for %s, continuing without them",
+                self._serial,
+            )
+
         return InverterEnergyData.from_modbus_registers(input_registers, self.energy_register_map)
 
     async def read_battery(

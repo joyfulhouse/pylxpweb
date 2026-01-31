@@ -1012,16 +1012,16 @@ class MidboxEnergyRegisterMap:
 # Source: eg4-modbus-monitor registers-gridboss.yaml
 # Smart port status discovered via register comparison with web API
 GRIDBOSS_RUNTIME_MAP = MidboxRuntimeRegisterMap(
-    # Voltage (registers 1-9, no scaling - raw value is volts)
-    grid_voltage=RegisterField(1, 16, ScaleFactor.SCALE_NONE),
-    ups_voltage=RegisterField(2, 16, ScaleFactor.SCALE_NONE),
-    gen_voltage=RegisterField(3, 16, ScaleFactor.SCALE_NONE),
-    grid_l1_voltage=RegisterField(4, 16, ScaleFactor.SCALE_NONE),
-    grid_l2_voltage=RegisterField(5, 16, ScaleFactor.SCALE_NONE),
-    ups_l1_voltage=RegisterField(6, 16, ScaleFactor.SCALE_NONE),
-    ups_l2_voltage=RegisterField(7, 16, ScaleFactor.SCALE_NONE),
-    gen_l1_voltage=RegisterField(8, 16, ScaleFactor.SCALE_NONE),
-    gen_l2_voltage=RegisterField(9, 16, ScaleFactor.SCALE_NONE),
+    # Voltage (registers 1-9, scale /10 - raw value is volts × 10)
+    grid_voltage=RegisterField(1, 16, ScaleFactor.SCALE_10),
+    ups_voltage=RegisterField(2, 16, ScaleFactor.SCALE_10),
+    gen_voltage=RegisterField(3, 16, ScaleFactor.SCALE_10),
+    grid_l1_voltage=RegisterField(4, 16, ScaleFactor.SCALE_10),
+    grid_l2_voltage=RegisterField(5, 16, ScaleFactor.SCALE_10),
+    ups_l1_voltage=RegisterField(6, 16, ScaleFactor.SCALE_10),
+    ups_l2_voltage=RegisterField(7, 16, ScaleFactor.SCALE_10),
+    gen_l1_voltage=RegisterField(8, 16, ScaleFactor.SCALE_10),
+    gen_l2_voltage=RegisterField(9, 16, ScaleFactor.SCALE_10),
     # Current (registers 10-17, scale /100 for amps)
     grid_l1_current=RegisterField(10, 16, ScaleFactor.SCALE_100),
     grid_l2_current=RegisterField(11, 16, ScaleFactor.SCALE_100),

@@ -225,9 +225,7 @@ class TestCreateTransportHybrid:
                 serial="CE12345678",
             )
 
-    def test_create_hybrid_dongle_missing_serial(
-        self, mock_client: MagicMock
-    ) -> None:
+    def test_create_hybrid_dongle_missing_serial(self, mock_client: MagicMock) -> None:
         """Test error when dongle_serial missing for dongle local type."""
         with pytest.raises(ValueError, match="dongle_serial is required"):
             create_transport(
@@ -270,9 +268,7 @@ class TestCreateTransportTypeHints:
 
     def test_modbus_return_type(self) -> None:
         """Verify Modbus transport returns ModbusTransport."""
-        transport = create_transport(
-            "modbus", host="192.168.1.100", serial="CE12345678"
-        )
+        transport = create_transport("modbus", host="192.168.1.100", serial="CE12345678")
         # Type checker should recognize this as ModbusTransport
         assert transport._host == "192.168.1.100"
 

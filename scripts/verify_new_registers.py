@@ -28,7 +28,7 @@ async def main():
     host = os.getenv("MODBUS_IP", "172.16.40.98")
     port = int(os.getenv("MODBUS_PORT", "502"))
 
-    print(f"Verifying new split-phase register mappings")
+    print("Verifying new split-phase register mappings")
     print(f"Target: {host}:{port}")
     print("=" * 60)
 

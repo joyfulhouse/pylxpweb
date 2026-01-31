@@ -309,9 +309,7 @@ class BaseTransport:
         Returns:
             True if this is a bit field register
         """
-        return len(param_keys) > 1 and all(
-            k.startswith(("FUNC_", "BIT_")) for k in param_keys
-        )
+        return len(param_keys) > 1 and all(k.startswith(("FUNC_", "BIT_")) for k in param_keys)
 
     async def read_named_parameters(
         self,

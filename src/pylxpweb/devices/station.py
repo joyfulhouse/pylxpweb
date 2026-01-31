@@ -1305,19 +1305,25 @@ class Station(BaseDevice):
         )
         from pylxpweb.transports.config import AttachResult, TransportType
 
+        from .mid_device import MIDDevice
+
         result = AttachResult()
 
-        # Build inverter lookup for O(1) matching
-        inverter_lookup = {inv.serial_number: inv for inv in self.all_inverters}
+        # Build device lookup for O(1) matching (inverters + MID devices)
+        device_lookup: dict[str, BaseInverter | MIDDevice] = {
+            inv.serial_number: inv for inv in self.all_inverters
+        }
+        for mid in self.all_mid_devices:
+            device_lookup[mid.serial_number] = mid
 
         for config in configs:
             serial = config.serial
 
-            # Check if inverter exists in station
-            inverter = inverter_lookup.get(serial)
-            if inverter is None:
+            # Check if device (inverter or MID/GridBOSS) exists in station
+            device = device_lookup.get(serial)
+            if device is None:
                 _LOGGER.warning(
-                    "No inverter found with serial %s in station %s",
+                    "No device found with serial %s in station %s",
                     serial,
                     self.id,
                 )
@@ -1357,12 +1363,14 @@ class Station(BaseDevice):
                 # Connect the transport
                 await transport.connect()
 
-                # Attach to inverter (use _transport attribute from BaseInverter)
-                inverter._transport = transport
+                # Attach to device (inverter or MID device)
+                device._transport = transport
                 result.matched += 1
+                device_type = "MID device" if isinstance(device, MIDDevice) else "inverter"
                 _LOGGER.info(
-                    "Attached %s transport to inverter %s (%s:%d)",
+                    "Attached %s transport to %s %s (%s:%d)",
                     config.transport_type.value,
+                    device_type,
                     serial,
                     config.host,
                     config.port,
@@ -1370,7 +1378,7 @@ class Station(BaseDevice):
 
             except Exception as err:
                 _LOGGER.error(
-                    "Failed to attach transport to inverter %s: %s",
+                    "Failed to attach transport to device %s: %s",
                     serial,
                     err,
                 )

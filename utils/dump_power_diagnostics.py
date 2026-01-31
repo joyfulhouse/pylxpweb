@@ -297,7 +297,7 @@ async def collect_raw_registers(
 
     try:
         if transport_type == "dongle":
-            from pylxpweb.transports.dongle import DongleTransport, INPUT_REGISTER_GROUPS
+            from pylxpweb.transports.dongle import INPUT_REGISTER_GROUPS, DongleTransport
 
             transport = DongleTransport(
                 host=host,
@@ -308,7 +308,7 @@ async def collect_raw_registers(
             result["dongle_serial"] = dongle_serial
             result["inverter_serial"] = inverter_serial
         elif transport_type == "modbus":
-            from pylxpweb.transports.modbus import ModbusTransport, INPUT_REGISTER_GROUPS
+            from pylxpweb.transports.modbus import INPUT_REGISTER_GROUPS, ModbusTransport
 
             transport = ModbusTransport(
                 host=host,

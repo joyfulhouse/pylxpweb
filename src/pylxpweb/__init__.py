@@ -65,7 +65,7 @@ from .models import (
     OperatingMode,
 )
 
-__version__ = "0.5.42"
+__version__ = "0.6.5"
 __all__ = [
     "LuxpowerClient",
     "LuxpowerError",

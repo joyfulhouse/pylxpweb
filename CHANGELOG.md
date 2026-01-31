@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-01-30
+
+### Fixed
+
+- **GridBOSS voltage scaling**: All 9 voltage registers in `GRIDBOSS_RUNTIME_MAP` corrected from `SCALE_NONE` to `SCALE_10` — raw values are volts × 10, not direct volts (validated against web API)
+- **GridBOSS hybrid power formula**: `computed_hybrid_power` changed from `load_power - smart_load_total_power` to `ups_power - grid_power` to match web API computation (validated: exact match)
+- **Battery bank capacity**: `max_capacity` and `current_capacity` now populated from Modbus register 97 (`battery_capacity_ah`) in `BatteryBankData.from_modbus_registers()` — works across all inverter families (PV_SERIES, LXP_EU, SNA)
+- **Modbus TID desync recovery**: Added `_sync_transaction_ids()` on connect to drain stale gateway responses after reconnect/reconfigure, preventing cascading transaction ID mismatch errors
+- **Modbus energy read resilience**: BMS registers (80-112) now read separately with graceful fallback if unavailable, preventing entire energy read from failing on some firmware versions
+
 ## [0.6.3] - 2026-01-27
 
 ### Fixed

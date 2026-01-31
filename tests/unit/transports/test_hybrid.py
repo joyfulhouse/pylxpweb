@@ -29,12 +29,8 @@ def mock_local_transport() -> MagicMock:
     transport.capabilities = MagicMock()
     transport.connect = AsyncMock()
     transport.disconnect = AsyncMock()
-    transport.read_runtime = AsyncMock(
-        return_value=InverterRuntimeData(pv_total_power=1000.0)
-    )
-    transport.read_energy = AsyncMock(
-        return_value=InverterEnergyData(pv_energy_today=5.0)
-    )
+    transport.read_runtime = AsyncMock(return_value=InverterRuntimeData(pv_total_power=1000.0))
+    transport.read_energy = AsyncMock(return_value=InverterEnergyData(pv_energy_today=5.0))
     transport.read_battery = AsyncMock(return_value=None)
     transport.read_parameters = AsyncMock(return_value={0: 100, 1: 200})
     transport.write_parameters = AsyncMock(return_value=True)
@@ -53,9 +49,7 @@ def mock_http_transport() -> MagicMock:
     transport.read_runtime = AsyncMock(
         return_value=InverterRuntimeData(pv_total_power=950.0)  # Slightly different
     )
-    transport.read_energy = AsyncMock(
-        return_value=InverterEnergyData(pv_energy_today=4.9)
-    )
+    transport.read_energy = AsyncMock(return_value=InverterEnergyData(pv_energy_today=4.9))
     transport.read_battery = AsyncMock(return_value=None)
     transport.read_parameters = AsyncMock(return_value={0: 100, 1: 200})
     transport.write_parameters = AsyncMock(return_value=True)
@@ -117,9 +111,7 @@ class TestHybridTransportProperties:
         self, mock_local_transport: MagicMock, mock_http_transport: MagicMock
     ) -> None:
         """Test is_using_local respects prefer_local setting."""
-        transport = HybridTransport(
-            mock_local_transport, mock_http_transport, prefer_local=False
-        )
+        transport = HybridTransport(mock_local_transport, mock_http_transport, prefer_local=False)
         assert transport.is_using_local is False
 
     def test_is_using_local_recovers_after_interval(
@@ -379,9 +371,7 @@ class TestHybridTransportWriteParameters:
         """Test write_parameters falls back on failure."""
         from pylxpweb.transports.exceptions import TransportWriteError
 
-        mock_local_transport.write_parameters.side_effect = TransportWriteError(
-            "Failed"
-        )
+        mock_local_transport.write_parameters.side_effect = TransportWriteError("Failed")
         transport = HybridTransport(mock_local_transport, mock_http_transport)
         transport._connected = True
 

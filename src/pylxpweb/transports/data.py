@@ -1150,6 +1150,16 @@ class BatteryBankData:
         # Cycle count from register map
         cycle_count = _read_register_field(input_registers, register_map.bms_cycle_count)
 
+        # Battery capacity from register map (Ah, no scaling)
+        max_capacity = _read_and_scale_field(
+            input_registers, register_map.battery_capacity_ah
+        )
+
+        # Compute current capacity from max_capacity and SOC
+        current_capacity: float | None = None
+        if max_capacity is not None and battery_soc is not None:
+            current_capacity = round(max_capacity * battery_soc / 100)
+
         # Parse individual battery data if extended registers provided
         batteries: list[BatteryData] = []
         if individual_battery_registers:
@@ -1192,6 +1202,8 @@ class BatteryBankData:
             temperature=battery_temp,
             charge_power=charge_power,
             discharge_power=discharge_power,
+            max_capacity=max_capacity,
+            current_capacity=current_capacity,
             fault_code=bms_fault_code,
             warning_code=bms_warning_code,
             battery_count=actual_battery_count,
@@ -1375,20 +1387,24 @@ class MidboxRuntimeData:
     def computed_hybrid_power(self) -> float | None:
         """Computed hybrid power when not available from registers.
 
-        For Modbus reads, hybrid_power is not available in registers.
-        This approximation calculates it as: load_power - smart_load_total_power
+        For Modbus/dongle reads, hybrid_power is not available in registers.
+        The web API computes it as: ups_power - grid_power
 
-        When smart ports are in AC couple mode (status=2), smart_load_power
-        represents AC-coupled solar/generator feeding into the system.
-        Subtracting it from load gives the power flowing through the hybrid inverters.
+        This represents the total AC power flowing through the hybrid
+        inverter system. When exporting (grid_power negative), hybrid_power
+        equals UPS power plus export power.
 
-        Returns None if any required value is unavailable.
+        Falls back to ups_power alone if grid_power is unavailable (grid
+        power registers are often zero via Modbus/dongle).
+
+        Returns None if UPS power is unavailable.
         """
         if self.hybrid_power is not None and self.hybrid_power != 0.0:
             return self.hybrid_power
-        if self.load_power is None or self.smart_load_total_power is None:
+        if self.ups_power is None:
             return None
-        return self.load_power - self.smart_load_total_power
+        grid = self.grid_power if self.grid_power is not None else 0.0
+        return self.ups_power - grid
 
     @classmethod
     def from_http_response(cls, midbox_data: MidboxData) -> MidboxRuntimeData:
@@ -1607,7 +1623,7 @@ class MidboxRuntimeData:
 
         return cls(
             timestamp=datetime.now(),
-            # Voltages (no scaling - raw value is volts)
+            # Voltages (scale /10 - raw register value is volts × 10)
             grid_voltage=_read_and_scale_field(input_registers, register_map.grid_voltage),
             ups_voltage=_read_and_scale_field(input_registers, register_map.ups_voltage),
             gen_voltage=_read_and_scale_field(input_registers, register_map.gen_voltage),
