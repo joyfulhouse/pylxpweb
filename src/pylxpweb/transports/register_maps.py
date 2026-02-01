@@ -911,7 +911,7 @@ class MidboxRuntimeRegisterMap:
     gen_l2_voltage: RegisterField | None = None  # genL2RmsVolt
 
     # -------------------------------------------------------------------------
-    # Current Registers (A, scale /100)
+    # Current Registers (A, scale /10)
     # -------------------------------------------------------------------------
     grid_l1_current: RegisterField | None = None  # gridL1RmsCurr
     grid_l2_current: RegisterField | None = None  # gridL2RmsCurr
@@ -1048,7 +1048,7 @@ GRIDBOSS_RUNTIME_MAP = MidboxRuntimeRegisterMap(
     gen_l1_voltage=RegisterField(8, 16, ScaleFactor.SCALE_NONE),
     gen_l2_voltage=RegisterField(9, 16, ScaleFactor.SCALE_NONE),
     # Current (registers 10-17, NO scaling - MidboxData stores raw values,
-    # properties apply ÷100 directly)
+    # properties apply ÷10 via scale_mid_current)
     grid_l1_current=RegisterField(10, 16, ScaleFactor.SCALE_NONE),
     grid_l2_current=RegisterField(11, 16, ScaleFactor.SCALE_NONE),
     load_l1_current=RegisterField(12, 16, ScaleFactor.SCALE_NONE),

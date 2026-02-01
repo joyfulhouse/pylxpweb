@@ -43,15 +43,15 @@ def mid_device_with_runtime() -> MIDDevice:
         # Generator Per-Phase Voltages (÷10)
         genL1RmsVolt=2388,  # Should be 238.8V
         genL2RmsVolt=2392,  # Should be 239.2V
-        # Currents (÷100)
-        gridL1RmsCurr=1500,  # Should be 15.00A
-        gridL2RmsCurr=1600,  # Should be 16.00A
-        loadL1RmsCurr=800,  # Should be 8.00A
-        loadL2RmsCurr=900,  # Should be 9.00A
-        genL1RmsCurr=0,  # Should be 0.00A
-        genL2RmsCurr=0,  # Should be 0.00A
-        upsL1RmsCurr=700,  # Should be 7.00A
-        upsL2RmsCurr=750,  # Should be 7.50A
+        # Currents (÷10)
+        gridL1RmsCurr=150,  # Should be 15.0A
+        gridL2RmsCurr=160,  # Should be 16.0A
+        loadL1RmsCurr=80,  # Should be 8.0A
+        loadL2RmsCurr=90,  # Should be 9.0A
+        genL1RmsCurr=0,  # Should be 0.0A
+        genL2RmsCurr=0,  # Should be 0.0A
+        upsL1RmsCurr=70,  # Should be 7.0A
+        upsL2RmsCurr=75,  # Should be 7.5A
         # Powers (no scaling)
         gridL1ActivePower=3600,  # Should be 3600W
         gridL2ActivePower=3800,  # Should be 3800W
@@ -147,22 +147,22 @@ class TestCurrentProperties:
     """Test current properties."""
 
     def test_grid_currents_scaled_correctly(self, mid_device_with_runtime):
-        """Verify grid currents use ÷100 scaling."""
+        """Verify grid currents use ÷10 scaling."""
         assert mid_device_with_runtime.grid_l1_current == 15.0
         assert mid_device_with_runtime.grid_l2_current == 16.0
 
     def test_load_currents_scaled_correctly(self, mid_device_with_runtime):
-        """Verify load currents use ÷100 scaling."""
+        """Verify load currents use ÷10 scaling."""
         assert mid_device_with_runtime.load_l1_current == 8.0
         assert mid_device_with_runtime.load_l2_current == 9.0
 
     def test_generator_currents_scaled_correctly(self, mid_device_with_runtime):
-        """Verify generator currents use ÷100 scaling."""
+        """Verify generator currents use ÷10 scaling."""
         assert mid_device_with_runtime.generator_l1_current == 0.0
         assert mid_device_with_runtime.generator_l2_current == 0.0
 
     def test_ups_currents_scaled_correctly(self, mid_device_with_runtime):
-        """Verify UPS currents use ÷100 scaling."""
+        """Verify UPS currents use ÷10 scaling."""
         assert mid_device_with_runtime.ups_l1_current == 7.0
         assert mid_device_with_runtime.ups_l2_current == 7.5
 

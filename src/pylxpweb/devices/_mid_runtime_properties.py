@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pylxpweb.constants import scale_mid_frequency, scale_mid_voltage
+from pylxpweb.constants import scale_mid_current, scale_mid_frequency, scale_mid_voltage
 
 if TYPE_CHECKING:
     from pylxpweb.models import MidboxRuntime
@@ -207,22 +207,22 @@ class MIDRuntimePropertiesMixin:
         """Get grid L1 current in amps.
 
         Returns:
-            Grid L1 RMS current (÷100), or 0.0 if no data.
+            Grid L1 RMS current (÷10), or 0.0 if no data.
         """
         if self._runtime is None:
             return 0.0
-        return self._runtime.midboxData.gridL1RmsCurr / 100.0
+        return scale_mid_current(self._runtime.midboxData.gridL1RmsCurr)
 
     @property
     def grid_l2_current(self) -> float:
         """Get grid L2 current in amps.
 
         Returns:
-            Grid L2 RMS current (÷100), or 0.0 if no data.
+            Grid L2 RMS current (÷10), or 0.0 if no data.
         """
         if self._runtime is None:
             return 0.0
-        return self._runtime.midboxData.gridL2RmsCurr / 100.0
+        return scale_mid_current(self._runtime.midboxData.gridL2RmsCurr)
 
     # ===========================================
     # Current Properties - Load
@@ -233,22 +233,22 @@ class MIDRuntimePropertiesMixin:
         """Get load L1 current in amps.
 
         Returns:
-            Load L1 RMS current (÷100), or 0.0 if no data.
+            Load L1 RMS current (÷10), or 0.0 if no data.
         """
         if self._runtime is None:
             return 0.0
-        return self._runtime.midboxData.loadL1RmsCurr / 100.0
+        return scale_mid_current(self._runtime.midboxData.loadL1RmsCurr)
 
     @property
     def load_l2_current(self) -> float:
         """Get load L2 current in amps.
 
         Returns:
-            Load L2 RMS current (÷100), or 0.0 if no data.
+            Load L2 RMS current (÷10), or 0.0 if no data.
         """
         if self._runtime is None:
             return 0.0
-        return self._runtime.midboxData.loadL2RmsCurr / 100.0
+        return scale_mid_current(self._runtime.midboxData.loadL2RmsCurr)
 
     # ===========================================
     # Current Properties - Generator
@@ -259,22 +259,22 @@ class MIDRuntimePropertiesMixin:
         """Get generator L1 current in amps.
 
         Returns:
-            Generator L1 RMS current (÷100), or 0.0 if no data.
+            Generator L1 RMS current (÷10), or 0.0 if no data.
         """
         if self._runtime is None:
             return 0.0
-        return self._runtime.midboxData.genL1RmsCurr / 100.0
+        return scale_mid_current(self._runtime.midboxData.genL1RmsCurr)
 
     @property
     def generator_l2_current(self) -> float:
         """Get generator L2 current in amps.
 
         Returns:
-            Generator L2 RMS current (÷100), or 0.0 if no data.
+            Generator L2 RMS current (÷10), or 0.0 if no data.
         """
         if self._runtime is None:
             return 0.0
-        return self._runtime.midboxData.genL2RmsCurr / 100.0
+        return scale_mid_current(self._runtime.midboxData.genL2RmsCurr)
 
     # ===========================================
     # Current Properties - UPS
@@ -285,22 +285,22 @@ class MIDRuntimePropertiesMixin:
         """Get UPS L1 current in amps.
 
         Returns:
-            UPS L1 RMS current (÷100), or 0.0 if no data.
+            UPS L1 RMS current (÷10), or 0.0 if no data.
         """
         if self._runtime is None:
             return 0.0
-        return self._runtime.midboxData.upsL1RmsCurr / 100.0
+        return scale_mid_current(self._runtime.midboxData.upsL1RmsCurr)
 
     @property
     def ups_l2_current(self) -> float:
         """Get UPS L2 current in amps.
 
         Returns:
-            UPS L2 RMS current (÷100), or 0.0 if no data.
+            UPS L2 RMS current (÷10), or 0.0 if no data.
         """
         if self._runtime is None:
             return 0.0
-        return self._runtime.midboxData.upsL2RmsCurr / 100.0
+        return scale_mid_current(self._runtime.midboxData.upsL2RmsCurr)
 
     # ===========================================
     # Power Properties - Grid

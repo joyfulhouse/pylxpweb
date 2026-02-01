@@ -56,6 +56,7 @@ from .devices import (
     TIMEZONE_HHMM_HOURS_FACTOR,
     TIMEZONE_HHMM_MINUTES_FACTOR,
     parse_hhmm_timezone,
+    scale_mid_current,
     scale_mid_frequency,
     scale_mid_voltage,
 )
@@ -478,8 +479,10 @@ __all__ = [
     "TIMEZONE_HHMM_MINUTES_FACTOR",
     "parse_hhmm_timezone",
     "SCALE_MID_VOLTAGE",
+    "SCALE_MID_CURRENT",
     "SCALE_MID_FREQUENCY",
     "scale_mid_voltage",
+    "scale_mid_current",
     "scale_mid_frequency",
     "SOC_MIN_PERCENT",
     "SOC_MAX_PERCENT",

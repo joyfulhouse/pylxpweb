@@ -20,6 +20,7 @@ TIMEZONE_HHMM_MINUTES_FACTOR = 100
 # Scaling factors for MID device (GridBOSS) values
 # Note: These differ from standard inverter scaling factors
 SCALE_MID_VOLTAGE = 10  # MID device voltages are scaled by 10
+SCALE_MID_CURRENT = 10  # MID device currents are scaled by 10
 SCALE_MID_FREQUENCY = 100  # Frequency values are scaled by 100
 
 # ==============================================================================
@@ -80,6 +81,22 @@ def scale_mid_voltage(raw_value: int | float) -> float:
         240.0
     """
     return float(raw_value) / SCALE_MID_VOLTAGE
+
+
+def scale_mid_current(raw_value: int | float) -> float:
+    """Scale MID device current value from API format to amps.
+
+    Args:
+        raw_value: Raw current value from MID device API (scaled by 10)
+
+    Returns:
+        Current in amps (A)
+
+    Example:
+        >>> scale_mid_current(141)
+        14.1
+    """
+    return float(raw_value) / SCALE_MID_CURRENT
 
 
 def scale_mid_frequency(raw_value: int | float) -> float:
