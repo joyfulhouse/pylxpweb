@@ -1067,7 +1067,14 @@ class Station(BaseDevice):
         # Create ParallelGroup objects
         groups_lookup = {}
         for group_name, devices in groups_by_name.items():
-            first_serial = devices[0].serialNum if devices else ""
+            # Use the master device's serial for consistent parallel group identity.
+            # roleText from the API indicates "Master"/"Slave" — use it to find the
+            # master so cloud and local modes derive the same first_device_serial.
+            master = next(
+                (d for d in devices if "master" in d.roleText.lower()),
+                devices[0] if devices else None,
+            )
+            first_serial = master.serialNum if master else ""
             group = ParallelGroup(
                 client=self._client,
                 station=self,

@@ -226,6 +226,13 @@ class ModbusTransport(BaseTransport):
 
             self._connected = True
             self._consecutive_errors = 0
+
+            # Waveshare "Modbus TCP to RTU" gateways use MBAP framing on
+            # the TCP side but don't echo the request's transaction ID —
+            # they substitute their own counter. Patch pymodbus to skip
+            # TID validation and suppress stale response log spam.
+            self._patch_tid_validation()
+
             _LOGGER.info(
                 "Modbus transport connected to %s:%s (unit %s) for %s",
                 self._host,
@@ -233,11 +240,6 @@ class ModbusTransport(BaseTransport):
                 self._unit_id,
                 self._serial,
             )
-
-            # Drain stale gateway responses to synchronize transaction IDs.
-            # After reconfigure/reload, the gateway may have buffered responses
-            # from the old connection that cause TID mismatches.
-            await self._sync_transaction_ids()
 
         except ImportError as err:
             raise TransportConnectionError(
@@ -256,43 +258,50 @@ class ModbusTransport(BaseTransport):
                 "(3) Modbus TCP is enabled on the inverter/datalogger."
             ) from err
 
-    async def _sync_transaction_ids(self) -> None:
-        """Drain stale responses and synchronize pymodbus transaction IDs.
+    def _patch_tid_validation(self) -> None:
+        """Disable MBAP transaction ID validation in pymodbus.
 
-        After a reconnect or reconfigure, the Modbus gateway may still have
-        buffered responses from the old session queued in its TCP send buffer.
-        These arrive with old transaction IDs that pymodbus rejects, causing
-        cascading "request ask for transaction_id=X but got id=Y" errors.
+        Waveshare RS485-to-Ethernet gateways use MBAP framing on the TCP
+        side but don't echo the request's transaction ID in responses —
+        they use their own incrementing counter. This causes pymodbus to
+        reject every response at two validation points:
 
-        This method:
-        1. Waits briefly for the gateway to flush stale data
-        2. Performs a probe read (register 0, single register) to establish
-           the correct TID baseline
-        3. Ignores any errors — the goal is just to drain the buffer
+        1. ``framer.handleFrame``: ``if exp_tid and tid != exp_tid``
+        2. ``execute``: ``if response.transaction_id != request.transaction_id``
+
+        We patch ``handleFrame`` to pass ``exp_tid=0`` (disabling check 1)
+        and set the decoded PDU's TID to the expected value (fixing check 2).
+        Stale responses arriving after a future is resolved are also
+        silently dropped to prevent log spam.
         """
-        await asyncio.sleep(0.5)
-
         if self._client is None:
             return
 
-        try:
-            result = await self._client.read_input_registers(
-                address=0, count=1, device_id=self._unit_id
-            )
-            if not result.isError():
-                _LOGGER.debug("Transaction ID sync successful for %s", self._serial)
-            else:
-                _LOGGER.debug(
-                    "Transaction ID sync probe returned error for %s (expected "
-                    "after reconfigure, stale data drained)",
-                    self._serial,
-                )
-        except Exception:
-            _LOGGER.debug(
-                "Transaction ID sync probe failed for %s (expected after "
-                "reconfigure, stale data drained)",
-                self._serial,
-            )
+        ctx = getattr(self._client, "ctx", None)
+        if ctx is None or not hasattr(ctx, "framer"):
+            return
+
+        framer = ctx.framer
+        original_handle_frame = framer.handleFrame
+
+        def _patched_handle_frame(data: bytes, exp_devid: int, exp_tid: int) -> tuple[int, object | None]:
+            used_len, pdu = original_handle_frame(data, exp_devid, 0)
+            if pdu is not None:
+                # Drop stale responses whose future is already resolved.
+                future = getattr(ctx, "response_future", None)
+                if future is not None and future.done():
+                    return used_len, None
+                if exp_tid:
+                    pdu.transaction_id = exp_tid
+            return used_len, pdu
+
+        framer.handleFrame = _patched_handle_frame
+        _LOGGER.debug(
+            "Patched TID validation for Modbus gateway %s:%s (%s)",
+            self._host,
+            self._port,
+            self._serial,
+        )
 
     async def disconnect(self) -> None:
         """Close Modbus TCP connection."""
