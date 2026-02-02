@@ -295,9 +295,14 @@ class InverterRuntimePropertiesMixin:
     def eps_power_l1(self) -> int:
         """Get EPS L1 power in watts.
 
+        When using local transport, computes L1 share from total EPS power
+        proportional to L1/L2 voltages. Falls back to cloud data.
+
         Returns:
             EPS L1 power in watts, or 0 if no data.
         """
+        if self._transport_runtime is not None:
+            return self._compute_eps_leg_power("l1")
         if self._runtime is None:
             return 0
         return self._runtime.pEpsL1N
@@ -306,12 +311,46 @@ class InverterRuntimePropertiesMixin:
     def eps_power_l2(self) -> int:
         """Get EPS L2 power in watts.
 
+        When using local transport, computes L2 share from total EPS power
+        proportional to L1/L2 voltages. Falls back to cloud data.
+
         Returns:
             EPS L2 power in watts, or 0 if no data.
         """
+        if self._transport_runtime is not None:
+            return self._compute_eps_leg_power("l2")
         if self._runtime is None:
             return 0
         return self._runtime.pEpsL2N
+
+    def _compute_eps_leg_power(self, leg: str) -> int:
+        """Compute per-leg EPS power from local transport data.
+
+        Splits total eps_power proportionally by L1/L2 voltage. When both
+        voltages are available, power is distributed by voltage ratio. When
+        only one voltage is present, all power is attributed to that leg.
+
+        Args:
+            leg: "l1" or "l2"
+
+        Returns:
+            Estimated power for the requested leg in watts.
+        """
+        rt = self._transport_runtime
+        if rt is None or rt.eps_power is None:
+            return 0
+        total = rt.eps_power
+        v_l1 = rt.eps_l1_voltage
+        v_l2 = rt.eps_l2_voltage
+        if v_l1 and v_l2:
+            v_sum = v_l1 + v_l2
+            if v_sum > 0:
+                ratio = v_l1 / v_sum if leg == "l1" else v_l2 / v_sum
+                return int(total * ratio)
+        # Single-leg or no voltage data: assume equal split
+        if leg == "l1":
+            return int(total / 2) if v_l2 else int(total)
+        return int(total / 2) if v_l1 else int(total)
 
     # ===========================================
     # Power Flow Properties
@@ -564,9 +603,16 @@ class InverterRuntimePropertiesMixin:
     def ac_couple_power(self) -> int:
         """Get AC coupled power in watts.
 
+        Uses generator_power register (123) from local transport as the
+        closest proxy — the generator port carries AC couple flow when no
+        physical generator is connected. Falls back to cloud acCouplePower.
+
         Returns:
             AC couple power in watts, or 0 if no data.
         """
+        if self._transport_runtime is not None:
+            val = self._transport_runtime.generator_power
+            return int(val) if val is not None else 0
         if self._runtime is None:
             return 0
         return self._runtime.acCouplePower

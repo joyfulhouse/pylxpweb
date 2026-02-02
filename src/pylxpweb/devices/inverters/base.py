@@ -483,7 +483,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # Prepare tasks to fetch only expired/missing data
         tasks = []
 
-        # Runtime data (30s TTL)
+        # Runtime data (30s TTL for cloud, 5s for Modbus, 30s for Dongle)
         if self._is_cache_expired(self._runtime_cache_time, self._runtime_cache_ttl, force):
             tasks.append(self._fetch_runtime())
 
