@@ -69,6 +69,8 @@ class ModbusSerialTransport(BaseModbusTransport):
         uv add pymodbus pyserial
     """
 
+    transport_type: str = "modbus_serial"
+
     def __init__(
         self,
         port: str,

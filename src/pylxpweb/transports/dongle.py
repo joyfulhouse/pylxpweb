@@ -139,6 +139,8 @@ class DongleTransport(BaseTransport):
         The protocol is implemented using pure asyncio sockets.
     """
 
+    transport_type: str = "wifi_dongle"
+
     def __init__(
         self,
         host: str,

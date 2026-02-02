@@ -69,6 +69,8 @@ class ModbusTransport(BaseModbusTransport):
         uv add pymodbus
     """
 
+    transport_type: str = "modbus_tcp"
+
     def __init__(
         self,
         host: str,
