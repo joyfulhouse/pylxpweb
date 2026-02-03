@@ -787,7 +787,7 @@ class BatteryData:
 
     # Capacity
     max_capacity: float = 0.0  # Ah
-    current_capacity: float = 0.0  # Ah
+    current_capacity: float | None = None  # Ah (computed from max_capacity * soc / 100)
     cycle_count: int = 0
 
     # Cell data (optional, if available)
@@ -837,15 +837,15 @@ class BatteryData:
             self.soh = clamped_soh
 
     @property
-    def remaining_capacity(self) -> float:
+    def remaining_capacity(self) -> float | None:
         """Calculate remaining capacity in Ah from max_capacity and SOC.
 
         Returns:
-            Remaining capacity in Ah (max_capacity * soc / 100)
+            Remaining capacity in Ah (max_capacity * soc / 100), or None if unavailable
         """
         if self.max_capacity > 0 and self.soc > 0:
             return self.max_capacity * self.soc / 100
-        return 0.0
+        return None
 
     @property
     def power(self) -> float:
@@ -866,9 +866,9 @@ class BatteryData:
         capacity relative to its rated full capacity.
 
         Returns:
-            Capacity percentage (0-100), or 0 if full capacity is 0.
+            Capacity percentage (0-100), or SOC if current_capacity unavailable.
         """
-        if self.max_capacity > 0 and self.current_capacity > 0:
+        if self.max_capacity > 0 and self.current_capacity is not None and self.current_capacity > 0:
             return round((self.current_capacity / self.max_capacity) * 100)
         # Fall back to SOC if current_capacity not available
         return self.soc
@@ -992,6 +992,12 @@ class BatteryData:
         fw_minor = fw_raw & 0xFF
         firmware_version = f"{fw_major}.{fw_minor}" if fw_raw else ""
 
+        # Read max_capacity and compute current_capacity (no register exists for it)
+        max_capacity = read_field(battery_map.full_capacity_ah)
+        current_capacity = (
+            max_capacity * soc / 100 if max_capacity and soc else None
+        )
+
         return cls(
             battery_index=battery_index,
             serial_number=serial_number,
@@ -1000,7 +1006,8 @@ class BatteryData:
             soc=soc,
             soh=soh if soh > 0 else 100,
             temperature=max_cell_temp,
-            max_capacity=read_field(battery_map.full_capacity_ah),
+            max_capacity=max_capacity,
+            current_capacity=current_capacity,
             cycle_count=read_int_field(battery_map.cycle_count),
             min_cell_voltage=min_cell_voltage,
             max_cell_voltage=max_cell_voltage,
