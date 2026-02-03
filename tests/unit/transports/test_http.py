@@ -225,6 +225,114 @@ class TestHTTPTransport:
         assert battery.charge_power == 500.0
 
     @pytest.mark.asyncio
+    async def test_read_battery_uses_cached_bat_parallel_num(self) -> None:
+        """Test battery count uses cached batParallelNum from runtime.
+
+        For LXP-EU devices, getBatteryInfo.totalNumber can return 0 when
+        CAN bus communication with battery BMS isn't established.
+        The batParallelNum from runtime is always correct.
+        """
+        client = MagicMock()
+        client.login = AsyncMock()
+
+        # Mock runtime with batParallelNum=3
+        mock_runtime = MagicMock()
+        mock_runtime.batParallelNum = "3"  # String from API
+        # Add required fields for InverterRuntimeData.from_http_response
+        mock_runtime.vpv1 = 0
+        mock_runtime.vpv2 = 0
+        mock_runtime.vpv3 = None
+        mock_runtime.vpv4 = None
+        mock_runtime.ppv1 = 0
+        mock_runtime.ppv2 = 0
+        mock_runtime.ppv3 = None
+        mock_runtime.ppv4 = None
+        mock_runtime.ppv = 0
+        mock_runtime.vBat = 0
+        mock_runtime.soc = 50
+        mock_runtime.pCharge = 0
+        mock_runtime.pDisCharge = 0
+        mock_runtime.vacr = 0
+        mock_runtime.vacs = 0
+        mock_runtime.vact = 0
+        mock_runtime.fac = 0
+        mock_runtime.vepsr = 0
+        mock_runtime.vepss = 0
+        mock_runtime.vepst = 0
+        mock_runtime.feps = 0
+        mock_runtime.seps = 0
+        mock_runtime.pToGrid = 0
+        mock_runtime.pToUser = 0
+        mock_runtime.peps = 0
+        mock_runtime.tinner = 25
+        mock_runtime.tradiator1 = 25
+        mock_runtime.tradiator2 = 25
+        mock_runtime.vBus1 = 0
+        mock_runtime.vBus2 = 0
+        mock_runtime.status = 0
+        mock_runtime.faultCode = 0
+        mock_runtime.warningCode = 0
+        mock_runtime.workMode = 0
+        mock_runtime.masterOrSlave = 0
+        mock_runtime.invBatV = 0
+        mock_runtime.maxChgCurr = 0
+        mock_runtime.maxDischgCurr = 0
+        mock_runtime.acChargeEnergy = 0
+        mock_runtime.chargePrior = 0
+        client.api.devices.get_inverter_runtime = AsyncMock(return_value=mock_runtime)
+
+        # Mock battery info with totalNumber=0 (simulating CAN bus issue)
+        mock_battery = MagicMock()
+        mock_battery.vBat = 530
+        mock_battery.soc = 85
+        mock_battery.pCharge = 0
+        mock_battery.pDisCharge = 0
+        mock_battery.maxBatteryCharge = 100
+        mock_battery.currentBatteryCharge = 85.0
+        mock_battery.totalNumber = 0  # BMS communication failed
+        mock_battery.batteryArray = []
+        client.api.devices.get_battery_info = AsyncMock(return_value=mock_battery)
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        # First read runtime to cache batParallelNum
+        await transport.read_runtime()
+
+        # Now read battery - should use cached value instead of totalNumber
+        battery = await transport.read_battery()
+
+        assert battery is not None
+        assert battery.battery_count == 3  # From cached batParallelNum, not totalNumber
+
+    @pytest.mark.asyncio
+    async def test_read_battery_fallback_to_total_number(self) -> None:
+        """Test battery count falls back to totalNumber when no cached value."""
+        client = MagicMock()
+        client.login = AsyncMock()
+
+        # Mock battery info with totalNumber=2
+        mock_battery = MagicMock()
+        mock_battery.vBat = 530
+        mock_battery.soc = 85
+        mock_battery.pCharge = 0
+        mock_battery.pDisCharge = 0
+        mock_battery.maxBatteryCharge = 100
+        mock_battery.currentBatteryCharge = 85.0
+        mock_battery.totalNumber = 2
+        mock_battery.batteryArray = []
+        client.api.devices.get_battery_info = AsyncMock(return_value=mock_battery)
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        # Read battery without first reading runtime (no cached batParallelNum)
+        battery = await transport.read_battery()
+
+        assert battery is not None
+        assert battery.battery_count == 2  # From totalNumber
+
+    @pytest.mark.asyncio
     async def test_manual_connect_disconnect(self) -> None:
         """Test manual connect and disconnect."""
         client = MagicMock()

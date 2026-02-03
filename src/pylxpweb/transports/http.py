@@ -6,6 +6,7 @@ LuxpowerClient for cloud API communication.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -56,6 +57,10 @@ class HTTPTransport(BaseTransport):
         """
         super().__init__(serial)
         self._client = client
+        # Cache batParallelNum from runtime for accurate battery count
+        # getBatteryInfo.totalNumber returns 0 when CAN bus BMS communication fails
+        # but batParallelNum from runtime is always correct
+        self._cached_bat_parallel_num: int | None = None
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -107,6 +112,12 @@ class HTTPTransport(BaseTransport):
 
         try:
             runtime = await self._client.api.devices.get_inverter_runtime(self._serial)
+            # Cache batParallelNum for use in read_battery()
+            # This is more reliable than getBatteryInfo.totalNumber which can be 0
+            # when CAN bus communication with battery BMS isn't established
+            if runtime.batParallelNum is not None:
+                with contextlib.suppress(ValueError, TypeError):
+                    self._cached_bat_parallel_num = int(runtime.batParallelNum)
             return InverterRuntimeData.from_http_response(runtime)
         except TimeoutError as err:
             _LOGGER.error("Timeout reading runtime data for %s", self._serial)
@@ -194,6 +205,19 @@ class HTTPTransport(BaseTransport):
 
             # Build aggregate bank data from BatteryInfo header
             # BatteryInfo fields: vBat (/10), soc, pCharge, pDisCharge, etc.
+            #
+            # Battery count priority:
+            # 1. _cached_bat_parallel_num from runtime (most reliable for LXP-EU devices)
+            # 2. battery_info.totalNumber (can be 0 if CAN bus BMS communication fails)
+            # 3. len(batteries) as fallback
+            battery_count: int | None = None
+            if self._cached_bat_parallel_num is not None and self._cached_bat_parallel_num > 0:
+                battery_count = self._cached_bat_parallel_num
+            elif battery_info.totalNumber is not None and battery_info.totalNumber > 0:
+                battery_count = battery_info.totalNumber
+            elif batteries:
+                battery_count = len(batteries)
+
             return BatteryBankData(
                 voltage=apply_scale(battery_info.vBat, ScaleFactor.SCALE_10),
                 soc=battery_info.soc or 0,
@@ -201,7 +225,7 @@ class HTTPTransport(BaseTransport):
                 discharge_power=float(battery_info.pDisCharge or 0),
                 max_capacity=float(battery_info.maxBatteryCharge or 0),
                 current_capacity=float(battery_info.currentBatteryCharge or 0),
-                battery_count=battery_info.totalNumber or len(batteries),
+                battery_count=battery_count,
                 batteries=batteries,
                 # Note: BatteryInfo doesn't have soh, temperature, current, status codes
             )
