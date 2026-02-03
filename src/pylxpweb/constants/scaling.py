@@ -59,9 +59,9 @@ INVERTER_RUNTIME_SCALING: dict[str, ScaleFactor] = {
     "vepst": ScaleFactor.SCALE_10,
     # Battery Voltage in Runtime (÷10: 530 → 53.0V)
     "vBat": ScaleFactor.SCALE_10,
-    # Bus Voltages (÷100: 3703 → 37.03V)
-    "vBus1": ScaleFactor.SCALE_100,
-    "vBus2": ScaleFactor.SCALE_100,
+    # Bus Voltages (÷10: 134 → 13.4V, 3707 → 370.7V)
+    "vBus1": ScaleFactor.SCALE_10,
+    "vBus2": ScaleFactor.SCALE_10,
     # AC Frequency (÷100: 5998 → 59.98Hz)
     "fac": ScaleFactor.SCALE_100,
     "feps": ScaleFactor.SCALE_100,
@@ -69,7 +69,7 @@ INVERTER_RUNTIME_SCALING: dict[str, ScaleFactor] = {
     "genFreq": ScaleFactor.SCALE_100,
     # Generator Voltage (÷10)
     "genVolt": ScaleFactor.SCALE_10,
-    # Currents (÷100: 1500 → 15.00A)
+    # Currents (÷100: 20000 → 200.0A)
     "maxChgCurr": ScaleFactor.SCALE_100,
     "maxDischgCurr": ScaleFactor.SCALE_100,
     "maxChgCurrValue": ScaleFactor.SCALE_100,

@@ -493,9 +493,10 @@ PV_SERIES_RUNTIME_MAP = RuntimeRegisterMap(
     generator_frequency=RegisterField(122, 16, ScaleFactor.SCALE_100),  # Hz
     generator_power=RegisterField(123, 16, ScaleFactor.SCALE_NONE),  # W
     # BMS limits and cell data (regs 81-106)
-    # Per Yippy's LuxPower docs: 81-82 use 0.01A scale, 103-104 use 0.1°C scale (signed)
-    bms_charge_current_limit=RegisterField(81, 16, ScaleFactor.SCALE_100),  # 0.01A
-    bms_discharge_current_limit=RegisterField(82, 16, ScaleFactor.SCALE_100),  # 0.01A
+    # Note: Yippy's LuxPower docs say 0.01A but empirical testing shows 0.1A (SCALE_10)
+    # Raw value ~2000 → 200A (not 20A as SCALE_100 would give)
+    bms_charge_current_limit=RegisterField(81, 16, ScaleFactor.SCALE_10),  # 0.1A empirical
+    bms_discharge_current_limit=RegisterField(82, 16, ScaleFactor.SCALE_10),  # 0.1A empirical
     bms_charge_voltage_ref=RegisterField(83, 16, ScaleFactor.SCALE_10),  # 0.1V
     bms_discharge_cutoff=RegisterField(84, 16, ScaleFactor.SCALE_10),  # 0.1V
     bms_max_cell_voltage=RegisterField(101, 16, ScaleFactor.SCALE_1000),  # mV → V
@@ -618,8 +619,8 @@ LXP_EU_RUNTIME_MAP = RuntimeRegisterMap(
     generator_voltage=RegisterField(121, 16, ScaleFactor.SCALE_10),
     generator_frequency=RegisterField(122, 16, ScaleFactor.SCALE_100),
     generator_power=RegisterField(123, 16, ScaleFactor.SCALE_NONE),
-    bms_charge_current_limit=RegisterField(81, 16, ScaleFactor.SCALE_100),  # 0.01A
-    bms_discharge_current_limit=RegisterField(82, 16, ScaleFactor.SCALE_100),  # 0.01A
+    bms_charge_current_limit=RegisterField(81, 16, ScaleFactor.SCALE_10),  # 0.1A empirical
+    bms_discharge_current_limit=RegisterField(82, 16, ScaleFactor.SCALE_10),  # 0.1A empirical
     bms_charge_voltage_ref=RegisterField(83, 16, ScaleFactor.SCALE_10),  # 0.1V
     bms_discharge_cutoff=RegisterField(84, 16, ScaleFactor.SCALE_10),  # 0.1V
     bms_max_cell_voltage=RegisterField(101, 16, ScaleFactor.SCALE_1000),  # mV → V
