@@ -811,10 +811,13 @@ class BatteryData:
     discharge_voltage_cutoff: float = 0.0  # V (BMS discharge cutoff voltage)
 
     # Model/firmware info
-    # Note: Model is only available via Web API (batBmsModelText field).
-    # Not accessible via direct Modbus - the BMS sends model info via CAN bus
+    # Note: Model and battery type are only available via Web API.
+    # Not accessible via direct Modbus - the BMS sends this info via CAN bus
     # which the dongle forwards to the cloud, but doesn't expose via Modbus.
+    # In hybrid mode, these are supplemented from cloud API with hourly TTL.
     model: str = ""  # Battery model (e.g., "WP-16/280-1AWLL") - Web API only
+    battery_type: str = ""  # Battery type code (e.g., "LITHIUM") - Web API only
+    battery_type_text: str = ""  # Battery type display (e.g., "Lithium") - Web API only
     firmware_version: str = ""  # Firmware version string (e.g., "2.17") - Modbus available
 
     # Status

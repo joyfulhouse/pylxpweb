@@ -1379,13 +1379,10 @@ class ControlEndpoints(BaseEndpoint):
             raise ValueError(f"Smart port must be 1-4, got {port}")
         if mode not in (0, 1, 2):
             raise ValueError(
-                f"Smart port mode must be 0 (Off), 1 (Smart Load), "
-                f"or 2 (AC Couple), got {mode}"
+                f"Smart port mode must be 0 (Off), 1 (Smart Load), or 2 (AC Couple), got {mode}"
             )
 
-        return await self.control_bit_param(
-            midbox_sn, f"BIT_MIDBOX_SP_MODE_{port}", mode
-        )
+        return await self.control_bit_param(midbox_sn, f"BIT_MIDBOX_SP_MODE_{port}", mode)
 
     async def set_ac_couple_start_soc(
         self,
@@ -1453,9 +1450,7 @@ class ControlEndpoints(BaseEndpoint):
         if not (0 <= percent <= 100):
             raise ValueError(f"SOC percent must be 0-100, got {percent}")
 
-        return await self.write_parameter(
-            midbox_sn, f"MIDBOX_HOLD_AC_END_SOC_{port}", str(percent)
-        )
+        return await self.write_parameter(midbox_sn, f"MIDBOX_HOLD_AC_END_SOC_{port}", str(percent))
 
     async def set_smart_load_start_soc(
         self,
@@ -1523,9 +1518,7 @@ class ControlEndpoints(BaseEndpoint):
         if not (0 <= percent <= 100):
             raise ValueError(f"SOC percent must be 0-100, got {percent}")
 
-        return await self.write_parameter(
-            midbox_sn, f"MIDBOX_HOLD_SL_END_SOC_{port}", str(percent)
-        )
+        return await self.write_parameter(midbox_sn, f"MIDBOX_HOLD_SL_END_SOC_{port}", str(percent))
 
     async def enable_smart_load(
         self,
@@ -1553,9 +1546,7 @@ class ControlEndpoints(BaseEndpoint):
         """
         if port not in (1, 2, 3, 4):
             raise ValueError(f"Smart port must be 1-4, got {port}")
-        return await self.control_function(
-            midbox_sn, f"FUNC_SMART_LOAD_EN_{port}", True
-        )
+        return await self.control_function(midbox_sn, f"FUNC_SMART_LOAD_EN_{port}", True)
 
     async def disable_smart_load(
         self,
@@ -1579,9 +1570,7 @@ class ControlEndpoints(BaseEndpoint):
         """
         if port not in (1, 2, 3, 4):
             raise ValueError(f"Smart port must be 1-4, got {port}")
-        return await self.control_function(
-            midbox_sn, f"FUNC_SMART_LOAD_EN_{port}", False
-        )
+        return await self.control_function(midbox_sn, f"FUNC_SMART_LOAD_EN_{port}", False)
 
     async def enable_ac_couple(
         self,
@@ -1609,9 +1598,7 @@ class ControlEndpoints(BaseEndpoint):
         """
         if port not in (1, 2, 3, 4):
             raise ValueError(f"Smart port must be 1-4, got {port}")
-        return await self.control_function(
-            midbox_sn, f"FUNC_AC_COUPLE_EN_{port}", True
-        )
+        return await self.control_function(midbox_sn, f"FUNC_AC_COUPLE_EN_{port}", True)
 
     async def disable_ac_couple(
         self,
@@ -1635,9 +1622,7 @@ class ControlEndpoints(BaseEndpoint):
         """
         if port not in (1, 2, 3, 4):
             raise ValueError(f"Smart port must be 1-4, got {port}")
-        return await self.control_function(
-            midbox_sn, f"FUNC_AC_COUPLE_EN_{port}", False
-        )
+        return await self.control_function(midbox_sn, f"FUNC_AC_COUPLE_EN_{port}", False)
 
     async def set_smart_load_grid_on(
         self,
@@ -1663,6 +1648,4 @@ class ControlEndpoints(BaseEndpoint):
         """
         if port not in (1, 2, 3, 4):
             raise ValueError(f"Smart port must be 1-4, got {port}")
-        return await self.control_function(
-            midbox_sn, f"FUNC_SMART_LOAD_GRID_ON_{port}", enable
-        )
+        return await self.control_function(midbox_sn, f"FUNC_SMART_LOAD_GRID_ON_{port}", enable)

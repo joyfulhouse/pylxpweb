@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import abstractmethod
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -73,6 +74,18 @@ if TYPE_CHECKING:
     from pylxpweb.transports.protocol import InverterTransport
 
 
+@dataclass
+class _BatteryMetadata:
+    """Cached battery metadata from cloud API.
+
+    Stores fields only available via cloud (not Modbus).
+    """
+
+    battery_type: str = ""
+    battery_type_text: str = ""
+    model: str = ""
+
+
 class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevice):
     """Abstract base class for all inverter types.
 
@@ -123,6 +136,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         # Parameters (configuration registers, refreshed hourly)
         self.parameters: dict[str, Any] | None = None
+
+        # Battery metadata cache (cloud-supplemented for hybrid mode)
+        # Stores battery_type, battery_type_text, model keyed by battery serial
+        self._battery_metadata: dict[str, _BatteryMetadata] = {}
+        self._battery_metadata_time: datetime | None = None
+        self._battery_metadata_ttl = timedelta(hours=1)
 
         # ===== Cache Management =====
         # Parameters cache time tracking
@@ -583,6 +602,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     transport_battery = await self._transport.read_battery()
                     if transport_battery is not None:
                         self._transport_battery = transport_battery
+                        # Supplement with cloud metadata (battery type, model)
+                        await self._fetch_battery_metadata()
+                        self._apply_battery_metadata()
                     self._battery_cache_time = datetime.now()
                 else:
                     # Use HTTP API for full battery details
@@ -610,6 +632,59 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     err,
                     type(err).__name__,
                 )
+
+    async def _fetch_battery_metadata(self) -> None:
+        """Fetch battery metadata from cloud API if stale or missing.
+
+        In hybrid mode, Modbus provides runtime battery data but lacks metadata
+        like battery_type, battery_type_text, and BMS model. This fetches that
+        metadata from the cloud API and caches it with 1-hour TTL.
+
+        No-op when client is None (local-only mode).
+        """
+        if self._client is None:
+            return
+
+        now = datetime.now()
+        if (
+            self._battery_metadata_time is not None
+            and (now - self._battery_metadata_time) < self._battery_metadata_ttl
+        ):
+            return  # Cache still valid
+
+        try:
+            battery_info = await self._client.api.devices.get_battery_info(self.serial_number)
+            for module in battery_info.batteryArray:
+                self._battery_metadata[module.batterySn] = _BatteryMetadata(
+                    battery_type=module.batteryType or "",
+                    battery_type_text=module.batteryTypeText or "",
+                    model=module.batBmsModelText or "",
+                )
+            self._battery_metadata_time = now
+            _LOGGER.debug(
+                "Refreshed battery metadata for %s: %d batteries",
+                self.serial_number,
+                len(battery_info.batteryArray),
+            )
+        except Exception as err:
+            _LOGGER.debug(
+                "Failed to fetch battery metadata for %s: %s",
+                self.serial_number,
+                err,
+            )
+
+    def _apply_battery_metadata(self) -> None:
+        """Merge cached cloud metadata into transport BatteryData objects."""
+        if not self._battery_metadata or self._transport_battery is None:
+            return
+
+        for batt in self._transport_battery.batteries:
+            meta = self._battery_metadata.get(batt.serial_number)
+            if meta is not None:
+                batt.battery_type = meta.battery_type
+                batt.battery_type_text = meta.battery_type_text
+                if meta.model and not batt.model:
+                    batt.model = meta.model
 
     async def _fetch_parameters(self) -> None:
         """Fetch all parameters with caching.
