@@ -1077,6 +1077,102 @@ class BatteryBankData:
         if self.soh is not None:
             self.soh = _clamp_percentage(self.soh, "battery_bank_soh")
 
+    @property
+    def battery_power(self) -> float | None:
+        """Calculate net battery power in watts (V * I).
+
+        Positive = charging, Negative = discharging.
+
+        Returns:
+            Battery power in watts, or None if voltage/current unavailable.
+        """
+        if self.voltage is not None and self.current is not None:
+            return round(self.voltage * self.current, 1)
+        return None
+
+    @property
+    def full_capacity(self) -> float | None:
+        """Alias for max_capacity, matching BatteryBank API property name."""
+        return self.max_capacity
+
+    @property
+    def remain_capacity(self) -> float | None:
+        """Alias for current_capacity, matching BatteryBank API property name."""
+        return self.current_capacity
+
+    @property
+    def capacity_percent(self) -> float | None:
+        """Calculate capacity percentage (current / max * 100).
+
+        Returns:
+            Capacity percentage (0-100), or None if data unavailable.
+        """
+        if self.max_capacity and self.current_capacity is not None:
+            return round(self.current_capacity / self.max_capacity * 100, 1)
+        return None
+
+    # ── Cross-battery diagnostics (mirrors BatteryBank OOP properties) ──
+
+    @property
+    def min_soh(self) -> int | None:
+        """Minimum SOH across all batteries."""
+        vals = [b.soh for b in self.batteries if b.soh is not None]
+        return min(vals) if vals else None
+
+    @property
+    def soc_delta(self) -> int | None:
+        """SOC spread across batteries (max - min)."""
+        vals = [b.soc for b in self.batteries if b.soc is not None]
+        return max(vals) - min(vals) if len(vals) >= 2 else None
+
+    @property
+    def soh_delta(self) -> int | None:
+        """SOH spread across batteries (max - min)."""
+        vals = [b.soh for b in self.batteries if b.soh is not None]
+        return max(vals) - min(vals) if len(vals) >= 2 else None
+
+    @property
+    def voltage_delta(self) -> float | None:
+        """Voltage spread across batteries (max - min)."""
+        vals = [b.voltage for b in self.batteries if b.voltage is not None]
+        return round(max(vals) - min(vals), 2) if len(vals) >= 2 else None
+
+    @property
+    def cell_voltage_delta_max(self) -> float | None:
+        """Worst-case cell imbalance across all batteries."""
+        deltas = []
+        for b in self.batteries:
+            if b.max_cell_voltage and b.min_cell_voltage:
+                deltas.append(round(b.max_cell_voltage - b.min_cell_voltage, 3))
+        return max(deltas) if deltas else None
+
+    @property
+    def cycle_count_delta(self) -> int | None:
+        """Cycle count spread across batteries (max - min)."""
+        vals = [b.cycle_count for b in self.batteries if b.cycle_count is not None]
+        return max(vals) - min(vals) if len(vals) >= 2 else None
+
+    @property
+    def max_cell_temp(self) -> float | None:
+        """Highest cell temperature across all batteries."""
+        vals = [
+            b.max_cell_temperature for b in self.batteries if b.max_cell_temperature is not None
+        ]
+        return max(vals) if vals else None
+
+    @property
+    def temp_delta(self) -> float | None:
+        """Temperature spread across all batteries (max_cell - min_cell)."""
+        max_temps = [
+            b.max_cell_temperature for b in self.batteries if b.max_cell_temperature is not None
+        ]
+        min_temps = [
+            b.min_cell_temperature for b in self.batteries if b.min_cell_temperature is not None
+        ]
+        if max_temps and min_temps:
+            return round(max(max_temps) - min(min_temps), 1)
+        return None
+
     @classmethod
     def from_modbus_registers(
         cls,
