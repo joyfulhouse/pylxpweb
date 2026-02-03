@@ -686,21 +686,42 @@ class InverterRuntimePropertiesMixin:
 
         For HTTP data, uses the server-computed consumptionPower field.
         For local transport data (Modbus/Dongle), computes as:
-            consumption = load_power - grid_power
-        where load_power is pToUser and grid_power is prec (rectifier).
+            consumption = load_power + eps_power
+        where load_power is pToUser and eps_power is peps.
+
+        This matches the HTTP API formula: consumptionPower = pToUser + peps
 
         Returns:
             Consumption power in watts, or None if no data.
         """
         if self._transport_runtime is not None:
             load = self._transport_runtime.load_power
-            rectifier = self._transport_runtime.grid_power
-            if load is None or rectifier is None:
+            eps = self._transport_runtime.eps_power
+            if load is None and eps is None:
                 return None
-            return max(0, int(load) - int(rectifier))
+            # Sum available values, treating None as 0
+            return int(load or 0) + int(eps or 0)
         if self._runtime is None:
             return None
         return self._runtime.consumptionPower
+
+    @property
+    def total_load_power(self) -> int | None:
+        """Get total load power in watts.
+
+        Computes: eps_power + consumption_power
+
+        This represents the total power being consumed by all loads
+        (both EPS-connected and non-EPS loads).
+
+        Returns:
+            Total load power in watts, or None if no data.
+        """
+        eps = self.eps_power
+        consumption = self.consumption_power
+        if eps is None and consumption is None:
+            return None
+        return (eps or 0) + (consumption or 0)
 
     # ===========================================
     # Status & Info Properties
