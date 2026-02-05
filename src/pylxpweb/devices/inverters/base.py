@@ -2651,7 +2651,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """Get the inverter model family.
 
         Returns:
-            InverterFamily enum value (SNA, PV_SERIES, LXP_EU, etc.)
+            InverterFamily enum value (EG4_OFFGRID, EG4_HYBRID, LXP, etc.)
 
         Example:
             >>> await inverter.detect_features()

@@ -303,24 +303,24 @@ async def configure_inverter(inverter):
 
 ## Feature Availability Matrix
 
-| Feature | SNA | PV Series | FlexBOSS | LXP-EU | LXP-LV | GridBOSS |
-|---------|-----|-----------|----------|--------|--------|----------|
-| Split-Phase Grid | Yes | No | Yes | No | No | N/A |
-| Three-Phase Capable* | No | Yes | Yes | Yes | No | N/A |
-| Off-Grid/EPS | Yes | Yes | Yes | Yes | Yes | N/A |
-| Parallel Operation | No | Yes | Yes | Yes | Yes | Controller |
-| Discharge Recovery Hysteresis | Yes | No | No | No | No | N/A |
-| Quick Charge Minute | Yes | No | No | No | No | N/A |
-| Volt-Watt Curve | No | Yes | Yes | Yes | No | N/A |
-| Grid Peak Shaving | Yes | Yes | Yes | Yes | Yes | N/A |
-| DRMS Support | No | Yes | Yes | Yes | No | N/A |
-| EU Grid Compliance | No | No | No | Yes | No | N/A |
-| Green Mode | Yes | Yes | Yes | Yes | Yes | N/A |
-| Smart Load Ports | No | No | No | No | No | Yes (4) |
-| AC Coupling Ports | No | No | No | No | No | Yes (4) |
-| Load Shedding | No | No | No | No | No | Yes (4) |
+| Feature | EG4 Off-Grid | EG4 Hybrid | Luxpower (LXP) | GridBOSS |
+|---------|--------------|------------|----------------|----------|
+| Split-Phase Grid | Yes | Yes | No | N/A |
+| Three-Phase Capable* | No | No | Yes | N/A |
+| Off-Grid/EPS | Yes | Yes | Yes | N/A |
+| Parallel Operation | No | Yes | Yes | Controller |
+| Discharge Recovery Hysteresis | Yes | No | No | N/A |
+| Quick Charge Minute | Yes | No | No | N/A |
+| Volt-Watt Curve | No | Yes | Yes | N/A |
+| Grid Peak Shaving | Yes | Yes | Yes | N/A |
+| DRMS Support | No | Yes | Yes | N/A |
+| EU Grid Compliance | No | No | Yes | N/A |
+| Green Mode | Yes | Yes | Yes | N/A |
+| Smart Load Ports | No | No | No | Yes (4) |
+| AC Coupling Ports | No | No | No | Yes (4) |
+| Load Shedding | No | No | No | Yes (4) |
 
-> **Note**: *"Three-Phase Capable" indicates hardware capability. PV Series, FlexBOSS, and LXP-EU default to single-phase but can support three-phase configurations depending on installation. GridBOSS is a MID controller that manages parallel groups rather than generating power directly.
+> **Note**: *"Three-Phase Capable" indicates hardware capability. EG4 Hybrid models (18kPV, 12kPV, FlexBOSS) in US markets use split-phase. Luxpower models (LXP-EU, LXP-BR, LXP-LV) can support three-phase configurations. GridBOSS is a MID controller that manages parallel groups rather than generating power directly.
 
 ## Adding New Device Types
 
@@ -348,7 +348,7 @@ When a new inverter model is discovered:
 
 ### Classes
 
-- `InverterFamily` - Enum of model families (SNA, PV_SERIES, LXP_EU, LXP_LV, UNKNOWN)
+- `InverterFamily` - Enum of model families (EG4_OFFGRID, EG4_HYBRID, LXP, UNKNOWN)
 - `GridType` - Enum of grid types (SPLIT_PHASE, SINGLE_PHASE, THREE_PHASE)
 - `InverterModelInfo` - Decoded HOLD_MODEL register data
 - `InverterFeatures` - Detected feature capabilities

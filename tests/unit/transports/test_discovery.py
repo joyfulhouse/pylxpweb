@@ -65,19 +65,19 @@ class TestGetModelFamilyName:
 
     def test_sna_family(self) -> None:
         """Test SNA family name."""
-        assert get_model_family_name(DEVICE_TYPE_CODE_SNA) == "SNA"
+        assert get_model_family_name(DEVICE_TYPE_CODE_SNA) == "EG4_OFFGRID"
 
     def test_pv_series_family(self) -> None:
         """Test PV Series family name."""
-        assert get_model_family_name(DEVICE_TYPE_CODE_PV_SERIES) == "PV_SERIES"
+        assert get_model_family_name(DEVICE_TYPE_CODE_PV_SERIES) == "EG4_HYBRID"
 
     def test_flexboss_is_pv_series(self) -> None:
         """Test FlexBOSS is part of PV Series family."""
-        assert get_model_family_name(DEVICE_TYPE_CODE_FLEXBOSS) == "PV_SERIES"
+        assert get_model_family_name(DEVICE_TYPE_CODE_FLEXBOSS) == "EG4_HYBRID"
 
     def test_lxp_eu_family(self) -> None:
         """Test LXP-EU family name."""
-        assert get_model_family_name(DEVICE_TYPE_CODE_LXP_EU) == "LXP_EU"
+        assert get_model_family_name(DEVICE_TYPE_CODE_LXP_EU) == "LXP"
 
     def test_unknown_family(self) -> None:
         """Test unknown device type returns UNKNOWN."""
@@ -95,7 +95,7 @@ class TestDeviceDiscoveryInfo:
             device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
             is_gridboss=False,
             is_inverter=True,
-            model_family="PV_SERIES",
+            model_family="EG4_HYBRID",
         )
         assert info.serial == "CE12345678"
         assert info.device_type_code == DEVICE_TYPE_CODE_PV_SERIES
@@ -145,7 +145,7 @@ class TestDiscoverDeviceInfo:
         assert info.device_type_code == DEVICE_TYPE_CODE_PV_SERIES
         assert info.is_gridboss is False
         assert info.is_inverter is True
-        assert info.model_family == "PV_SERIES"
+        assert info.model_family == "EG4_HYBRID"
 
     @pytest.mark.asyncio
     async def test_discover_gridboss(self, mock_transport: MagicMock) -> None:
@@ -212,7 +212,7 @@ class TestDiscoverDeviceInfo:
         assert info.device_type_code == DEVICE_TYPE_CODE_FLEXBOSS
         assert info.is_gridboss is False
         assert info.is_inverter is True
-        assert info.model_family == "PV_SERIES"  # FlexBOSS is PV Series family
+        assert info.model_family == "EG4_HYBRID"  # FlexBOSS is PV Series family
 
 
 class TestRegisterConstants:
@@ -235,7 +235,7 @@ class TestGetParallelGroupKey:
             device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
             is_gridboss=False,
             is_inverter=True,
-            model_family="PV_SERIES",
+            model_family="EG4_HYBRID",
             parallel_number=550,
             parallel_phase=1,
         )
@@ -249,7 +249,7 @@ class TestGetParallelGroupKey:
             device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
             is_gridboss=False,
             is_inverter=True,
-            model_family="PV_SERIES",
+            model_family="EG4_HYBRID",
             parallel_number=None,
             parallel_phase=1,
         )
@@ -263,7 +263,7 @@ class TestGetParallelGroupKey:
             device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
             is_gridboss=False,
             is_inverter=True,
-            model_family="PV_SERIES",
+            model_family="EG4_HYBRID",
             parallel_number=550,
             parallel_phase=None,
         )
@@ -277,7 +277,7 @@ class TestGetParallelGroupKey:
             device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
             is_gridboss=False,
             is_inverter=True,
-            model_family="PV_SERIES",
+            model_family="EG4_HYBRID",
         )
         key = get_parallel_group_key(info)
         assert key is None
@@ -289,7 +289,7 @@ class TestGetParallelGroupKey:
             device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
             is_gridboss=False,
             is_inverter=True,
-            model_family="PV_SERIES",
+            model_family="EG4_HYBRID",
             parallel_number=0,
             parallel_phase=0,
         )
@@ -308,7 +308,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="PV_SERIES",
+                model_family="EG4_HYBRID",
                 parallel_number=550,
                 parallel_phase=1,
             ),
@@ -317,7 +317,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="PV_SERIES",
+                model_family="EG4_HYBRID",
                 parallel_number=550,
                 parallel_phase=1,
             ),
@@ -335,7 +335,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="PV_SERIES",
+                model_family="EG4_HYBRID",
                 parallel_number=550,
                 parallel_phase=1,
             ),
@@ -344,7 +344,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="PV_SERIES",
+                model_family="EG4_HYBRID",
                 parallel_number=551,
                 parallel_phase=2,
             ),
@@ -362,7 +362,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="PV_SERIES",
+                model_family="EG4_HYBRID",
                 parallel_number=None,
                 parallel_phase=None,
             ),
@@ -371,7 +371,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_SNA,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="SNA",
+                model_family="EG4_OFFGRID",
             ),
         ]
         groups = group_by_parallel_config(devices)
@@ -387,7 +387,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="PV_SERIES",
+                model_family="EG4_HYBRID",
                 parallel_number=550,
                 parallel_phase=1,
             ),
@@ -396,7 +396,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="PV_SERIES",
+                model_family="EG4_HYBRID",
                 parallel_number=550,
                 parallel_phase=1,
             ),
@@ -405,7 +405,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_SNA,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="SNA",
+                model_family="EG4_OFFGRID",
             ),
         ]
         groups = group_by_parallel_config(devices)
@@ -438,7 +438,7 @@ class TestGroupByParallelConfig:
                 device_type_code=DEVICE_TYPE_CODE_PV_SERIES,
                 is_gridboss=False,
                 is_inverter=True,
-                model_family="PV_SERIES",
+                model_family="EG4_HYBRID",
                 parallel_number=550,
                 parallel_phase=1,
             ),

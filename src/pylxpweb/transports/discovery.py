@@ -87,14 +87,14 @@ def get_model_family_name(device_type_code: int) -> str:
         >>> get_model_family_name(50)
         'GridBOSS'
         >>> get_model_family_name(2092)
-        'PV_SERIES'
+        'EG4_HYBRID'
     """
     family_map = {
         DEVICE_TYPE_CODE_GRIDBOSS: "GridBOSS",
-        DEVICE_TYPE_CODE_SNA: "SNA",
-        DEVICE_TYPE_CODE_PV_SERIES: "PV_SERIES",
-        DEVICE_TYPE_CODE_FLEXBOSS: "PV_SERIES",  # FlexBOSS is part of PV Series family
-        DEVICE_TYPE_CODE_LXP_EU: "LXP_EU",
+        DEVICE_TYPE_CODE_SNA: "EG4_OFFGRID",
+        DEVICE_TYPE_CODE_PV_SERIES: "EG4_HYBRID",
+        DEVICE_TYPE_CODE_FLEXBOSS: "EG4_HYBRID",  # FlexBOSS is part of EG4 Hybrid family
+        DEVICE_TYPE_CODE_LXP_EU: "LXP",
     }
     return family_map.get(device_type_code, "UNKNOWN")
 

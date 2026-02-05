@@ -26,7 +26,7 @@ class CollectionResult:
         timestamp: When the collection was performed
         serial_number: Inverter serial number (10 characters)
         firmware_version: Firmware version string (e.g., "FAAB-2525")
-        inverter_family: Detected inverter family (PV_SERIES, LXP_EU, etc.)
+        inverter_family: Detected inverter family (EG4_HYBRID, EG4_OFFGRID, LXP, etc.)
         input_registers: Dict mapping input register address to raw value
         holding_registers: Dict mapping holding register address to raw value
         connection_params: Transport-specific connection parameters
