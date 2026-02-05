@@ -290,22 +290,22 @@ class TestGetRegisterMap:
 
     def test_get_runtime_map_pv_series(self) -> None:
         """Test get_runtime_map returns correct map for PV_SERIES."""
-        result = get_runtime_map(InverterFamily.PV_SERIES)
+        result = get_runtime_map(InverterFamily.EG4_HYBRID)
         assert result is PV_SERIES_RUNTIME_MAP
 
     def test_get_runtime_map_lxp_eu(self) -> None:
         """Test get_runtime_map returns correct map for LXP_EU."""
-        result = get_runtime_map(InverterFamily.LXP_EU)
+        result = get_runtime_map(InverterFamily.LXP)
         assert result is LXP_EU_RUNTIME_MAP
 
     def test_get_runtime_map_sna_uses_pv_series(self) -> None:
         """Test SNA family uses PV_SERIES map (US market same layout)."""
-        result = get_runtime_map(InverterFamily.SNA)
+        result = get_runtime_map(InverterFamily.EG4_OFFGRID)
         assert result is PV_SERIES_RUNTIME_MAP
 
-    def test_get_runtime_map_lxp_lv_uses_lxp_eu(self) -> None:
-        """Test LXP_LV family uses LXP_EU map (similar architecture)."""
-        result = get_runtime_map(InverterFamily.LXP_LV)
+    def test_get_runtime_map_lxp(self) -> None:
+        """Test LXP family uses LXP_EU map."""
+        result = get_runtime_map(InverterFamily.LXP)
         assert result is LXP_EU_RUNTIME_MAP
 
     def test_get_runtime_map_unknown_defaults_pv_series(self) -> None:
@@ -320,12 +320,12 @@ class TestGetRegisterMap:
 
     def test_get_energy_map_pv_series(self) -> None:
         """Test get_energy_map returns correct map for PV_SERIES."""
-        result = get_energy_map(InverterFamily.PV_SERIES)
+        result = get_energy_map(InverterFamily.EG4_HYBRID)
         assert result is PV_SERIES_ENERGY_MAP
 
     def test_get_energy_map_lxp_eu(self) -> None:
         """Test get_energy_map returns correct map for LXP_EU."""
-        result = get_energy_map(InverterFamily.LXP_EU)
+        result = get_energy_map(InverterFamily.LXP)
         assert result is LXP_EU_ENERGY_MAP
 
     def test_get_energy_map_none_defaults_pv_series(self) -> None:
@@ -906,10 +906,10 @@ class TestHoldingRegisterMap:
         assert get_holding_map(None) is PV_SERIES_HOLDING_MAP
 
         # PV_SERIES family
-        assert get_holding_map(InverterFamily.PV_SERIES) is PV_SERIES_HOLDING_MAP
+        assert get_holding_map(InverterFamily.EG4_HYBRID) is PV_SERIES_HOLDING_MAP
 
         # SNA uses same as PV_SERIES
-        assert get_holding_map(InverterFamily.SNA) is PV_SERIES_HOLDING_MAP
+        assert get_holding_map(InverterFamily.EG4_OFFGRID) is PV_SERIES_HOLDING_MAP
 
     def test_lxp_eu_uses_same_holding_map(self) -> None:
         """Test that LXP_EU uses same holding map as PV_SERIES."""

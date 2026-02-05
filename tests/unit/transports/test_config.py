@@ -85,9 +85,9 @@ class TestTransportConfig:
             port=502,
             serial="CE12345678",
             transport_type=TransportType.MODBUS_TCP,
-            inverter_family=InverterFamily.LXP_EU,
+            inverter_family=InverterFamily.LXP,
         )
-        assert config.inverter_family == InverterFamily.LXP_EU
+        assert config.inverter_family == InverterFamily.LXP
 
     def test_dongle_config_basic(self) -> None:
         """Test creating basic WiFi dongle config."""
@@ -122,9 +122,9 @@ class TestTransportConfig:
             port=502,
             serial="CE12345678",
             transport_type=TransportType.MODBUS_TCP,
-            inverter_family=InverterFamily.PV_SERIES,
+            inverter_family=InverterFamily.EG4_HYBRID,
         )
-        assert config.inverter_family == InverterFamily.PV_SERIES
+        assert config.inverter_family == InverterFamily.EG4_HYBRID
 
     def test_config_requires_host(self) -> None:
         """Test that config requires non-empty host."""
@@ -186,7 +186,7 @@ class TestTransportConfigSerialization:
             port=502,
             serial="CE12345678",
             transport_type=TransportType.MODBUS_TCP,
-            inverter_family=InverterFamily.PV_SERIES,
+            inverter_family=InverterFamily.EG4_HYBRID,
             timeout=15.0,
             unit_id=2,
         )
@@ -197,7 +197,7 @@ class TestTransportConfigSerialization:
         assert result["port"] == 502
         assert result["serial"] == "CE12345678"
         assert result["transport_type"] == "modbus_tcp"
-        assert result["inverter_family"] == "PV_SERIES"
+        assert result["inverter_family"] == "EG4_HYBRID"
         assert result["timeout"] == 15.0
         assert result["unit_id"] == 2
         assert result["dongle_serial"] is None
@@ -235,7 +235,7 @@ class TestTransportConfigSerialization:
         assert config.port == 502
         assert config.serial == "CE12345678"
         assert config.transport_type == TransportType.MODBUS_TCP
-        assert config.inverter_family == InverterFamily.PV_SERIES
+        assert config.inverter_family == InverterFamily.EG4_HYBRID
         assert config.timeout == 15.0
         assert config.unit_id == 2
 
@@ -275,7 +275,7 @@ class TestTransportConfigSerialization:
             port=502,
             serial="CE12345678",
             transport_type=TransportType.MODBUS_TCP,
-            inverter_family=InverterFamily.LXP_EU,
+            inverter_family=InverterFamily.LXP,
             timeout=20.0,
             unit_id=3,
         )

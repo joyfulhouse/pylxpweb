@@ -183,7 +183,7 @@ class TestInverterFeatures:
         features = InverterFeatures.from_device_type_code(54)
 
         assert features.device_type_code == 54
-        assert features.model_family == InverterFamily.SNA
+        assert features.model_family == InverterFamily.EG4_OFFGRID
         assert features.grid_type == GridType.SPLIT_PHASE
         assert features.split_phase is True
         assert features.off_grid_capable is True
@@ -204,7 +204,7 @@ class TestInverterFeatures:
         features = InverterFeatures.from_device_type_code(2092)
 
         assert features.device_type_code == 2092
-        assert features.model_family == InverterFamily.PV_SERIES
+        assert features.model_family == InverterFamily.EG4_HYBRID
         assert features.grid_type == GridType.SPLIT_PHASE  # US split-phase
         assert features.split_phase is True  # Uses L1/L2 registers
         assert features.three_phase_capable is False  # R/S/T invalid in US
@@ -218,7 +218,7 @@ class TestInverterFeatures:
         features = InverterFeatures.from_device_type_code(12)
 
         assert features.device_type_code == 12
-        assert features.model_family == InverterFamily.LXP_EU
+        assert features.model_family == InverterFamily.LXP
         assert features.grid_type == GridType.SINGLE_PHASE
         assert features.split_phase is False
         assert features.three_phase_capable is True
@@ -250,17 +250,17 @@ class TestHelperFunctions:
     def test_get_inverter_family_sna(self) -> None:
         """Test getting SNA family from device type code."""
         family = get_inverter_family(54)
-        assert family == InverterFamily.SNA
+        assert family == InverterFamily.EG4_OFFGRID
 
     def test_get_inverter_family_pv_series(self) -> None:
         """Test getting PV Series family from device type code."""
         family = get_inverter_family(2092)
-        assert family == InverterFamily.PV_SERIES
+        assert family == InverterFamily.EG4_HYBRID
 
     def test_get_inverter_family_lxp_eu(self) -> None:
         """Test getting LXP-EU family from device type code."""
         family = get_inverter_family(12)
-        assert family == InverterFamily.LXP_EU
+        assert family == InverterFamily.LXP
 
     def test_get_inverter_family_unknown(self) -> None:
         """Test getting UNKNOWN family from unknown device type code."""
@@ -269,7 +269,7 @@ class TestHelperFunctions:
 
     def test_get_family_features_sna(self) -> None:
         """Test getting default features for SNA family."""
-        features = get_family_features(InverterFamily.SNA)
+        features = get_family_features(InverterFamily.EG4_OFFGRID)
 
         assert features["split_phase"] is True
         assert features["discharge_recovery_hysteresis"] is True
@@ -285,16 +285,18 @@ class TestHelperFunctions:
         assert features["parallel_support"] is False
         assert features["off_grid_capable"] is True
 
-    def test_get_family_features_lxp_lv(self) -> None:
-        """Test getting default features for LXP_LV family."""
-        features = get_family_features(InverterFamily.LXP_LV)
+    def test_get_family_features_lxp(self) -> None:
+        """Test getting default features for LXP family (merged LXP-EU, LXP-LV, LXP-BR)."""
+        features = get_family_features(InverterFamily.LXP)
 
-        # LXP-LV is low-voltage DC, single-phase with parallel support
+        # LXP family has parallel support and various capabilities
+        # Feature availability varies by specific model but defaults are capabilities
         assert features["split_phase"] is False
-        assert features["three_phase_capable"] is False
+        assert features["three_phase_capable"] is True  # Some LXP models support 3-phase
         assert features["parallel_support"] is True
         assert features["off_grid_capable"] is True
-        assert features["volt_watt_curve"] is False
+        assert features["volt_watt_curve"] is True  # Some LXP models support volt-watt
+        assert features["eu_grid_compliance"] is True
 
     def test_device_type_code_mapping_completeness(self) -> None:
         """Test that all known device type codes are mapped."""
@@ -374,7 +376,7 @@ class TestBaseInverterFeatureDetection:
         features = await sna_inverter.detect_features()
 
         assert features.device_type_code == 54
-        assert features.model_family == InverterFamily.SNA
+        assert features.model_family == InverterFamily.EG4_OFFGRID
         assert features.model_info.raw_value == 0x90AC1
         assert features.model_info.power_rating == 6
         assert features.model_info.power_rating_kw == 12
@@ -390,7 +392,7 @@ class TestBaseInverterFeatureDetection:
         features = await pv_series_inverter.detect_features()
 
         assert features.device_type_code == 2092
-        assert features.model_family == InverterFamily.PV_SERIES
+        assert features.model_family == InverterFamily.EG4_HYBRID
         assert features.has_pv_series_registers is True
         assert features.grid_peak_shaving is True
         assert features.volt_watt_curve is True
@@ -434,7 +436,7 @@ class TestBaseInverterFeatureDetection:
         """Test feature properties after detection."""
         await sna_inverter.detect_features()
 
-        assert sna_inverter.model_family == InverterFamily.SNA
+        assert sna_inverter.model_family == InverterFamily.EG4_OFFGRID
         assert sna_inverter.device_type_code == 54
         assert sna_inverter.grid_type == GridType.SPLIT_PHASE
         assert sna_inverter.power_rating_kw == 12

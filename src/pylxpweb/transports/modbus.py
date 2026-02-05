@@ -93,8 +93,8 @@ class ModbusTransport(BaseModbusTransport):
             serial: Inverter serial number (for identification)
             timeout: Connection and operation timeout in seconds
             inverter_family: Inverter model family for correct register mapping.
-                If None, defaults to PV_SERIES (EG4-18KPV) for backward
-                compatibility. Use InverterFamily.LXP_EU for LXP-EU models.
+                If None, defaults to EG4_HYBRID (18kPV, FlexBOSS) for backward
+                compatibility. Use InverterFamily.LXP for Luxpower models.
             retries: Application-level retries per register read (default 2)
             retry_delay: Initial delay between retries in seconds, doubles each
                 attempt (default 0.5)

@@ -374,15 +374,15 @@ def create_modbus_transport(
         unit_id: Modbus unit/slave ID (default: 1)
         timeout: Operation timeout in seconds (default: 10.0)
         inverter_family: Inverter model family for correct register mapping.
-            If None, defaults to PV_SERIES (EG4-18KPV) for backward
-            compatibility. Use InverterFamily.LXP_EU for LXP-EU 12K and
-            similar European models which have different register layouts.
+            If None, defaults to EG4_HYBRID (18kPV, FlexBOSS) for backward
+            compatibility. Use InverterFamily.LXP for Luxpower models
+            (LXP-EU, LXP-LB-BR, LXP-LV) which have different register layouts.
 
     Returns:
         ModbusTransport instance ready for use
 
     Example:
-        # Default usage (PV_SERIES/EG4-18KPV register map)
+        # Default usage (EG4_HYBRID register map)
         transport = create_modbus_transport(
             host="192.168.1.100",
             serial="CE12345678",
@@ -392,13 +392,13 @@ def create_modbus_transport(
             runtime = await transport.read_runtime()
             print(f"PV Power: {runtime.pv_total_power}W")
 
-        # LXP-EU 12K with explicit family
+        # Luxpower with explicit family
         from pylxpweb.devices.inverters._features import InverterFamily
 
         transport = create_modbus_transport(
             host="192.168.1.100",
             serial="CE12345678",
-            inverter_family=InverterFamily.LXP_EU,
+            inverter_family=InverterFamily.LXP,
         )
 
     Note:
@@ -584,7 +584,7 @@ def create_transport_from_config(config: TransportConfig) -> BaseTransport:
             port=502,
             serial="CE12345678",
             transport_type=TransportType.MODBUS_TCP,
-            inverter_family=InverterFamily.PV_SERIES,
+            inverter_family=InverterFamily.EG4_HYBRID,
         )
         transport = create_transport_from_config(config)
         async with transport:

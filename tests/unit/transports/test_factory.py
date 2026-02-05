@@ -195,13 +195,13 @@ class TestCreateTransportFromConfig:
             port=502,
             serial="CE12345678",
             transport_type=TransportType.MODBUS_TCP,
-            inverter_family=InverterFamily.LXP_EU,
+            inverter_family=InverterFamily.LXP,
         )
 
         transport = create_transport_from_config(config)
 
         assert isinstance(transport, ModbusTransport)
-        assert transport._inverter_family == InverterFamily.LXP_EU
+        assert transport._inverter_family == InverterFamily.LXP
 
     def test_creates_dongle_transport_from_config(self) -> None:
         """Test factory creates DongleTransport from config."""

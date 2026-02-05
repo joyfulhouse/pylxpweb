@@ -376,12 +376,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
                 # Set model name from family if not provided
                 if detected_model is None:
-                    if model_family == InverterFamily.PV_SERIES:
-                        detected_model = "18KPV"  # Default for PV series
-                    elif model_family == InverterFamily.SNA:
-                        detected_model = "12000XP"  # Default for SNA series
-                    elif model_family == InverterFamily.LXP_EU:
-                        detected_model = "LXP-EU"  # Default for EU series
+                    if model_family == InverterFamily.EG4_HYBRID:
+                        detected_model = "18KPV"  # Default for EG4 Hybrid series
+                    elif model_family == InverterFamily.EG4_OFFGRID:
+                        detected_model = "12000XP"  # Default for EG4 Off-Grid series
+                    elif model_family == InverterFamily.LXP:
+                        detected_model = "LXP"  # Default for Luxpower series
                     else:
                         detected_model = "Unknown"
         except LuxpowerDeviceError:
@@ -2548,7 +2548,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Example:
             >>> features = await inverter.detect_features()
             >>> features.model_family
-            <InverterFamily.SNA: 'SNA'>
+            <InverterFamily.EG4_OFFGRID: 'EG4_OFFGRID'>
             >>> features.split_phase
             True
             >>> features.supports_volt_watt_curve
@@ -2656,7 +2656,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Example:
             >>> await inverter.detect_features()
             >>> inverter.model_family
-            <InverterFamily.SNA: 'SNA'>
+            <InverterFamily.EG4_OFFGRID: 'EG4_OFFGRID'>
         """
         return self._features.model_family
 

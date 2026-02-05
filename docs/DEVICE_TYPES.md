@@ -23,25 +23,28 @@ This is the firmware-level model identifier stored in register 19. It identifies
 
 | Code | Model Family | Example Models |
 |------|--------------|----------------|
-| **54** | SNA Series | SNA12K-US |
-| **2092** | PV Series | 18KPV |
-| **10284** | FlexBOSS Series | FlexBOSS21, FlexBOSS18 |
-| **12** | LXP-EU Series | LXP-EU 12K |
+| **54** | EG4 Off-Grid | 12000XP, 6000XP |
+| **2092** | EG4 Hybrid | 18kPV, 12kPV |
+| **10284** | EG4 Hybrid | FlexBOSS21, FlexBOSS18 |
+| **12** | Luxpower | LXP-EU 12K |
+| **44** | Luxpower | LXP-LB-BR 10K |
 | **50** | GridBOSS (MID) | GridBOSS |
 
 ## Model Families
 
-### SNA Series (Split-Phase, North America)
+### EG4 Off-Grid Series (EG4_OFFGRID)
 
 **Device Type Code:** 54
 
-**Target Market:** US residential (split-phase 120V/240V)
+**Target Market:** US residential off-grid (split-phase 120V/240V)
 
 **Key Features:**
 - Split-phase grid support (L1/L2/N)
+- Off-grid capable (no grid sellback)
 - Discharge recovery hysteresis (SOC and voltage lag)
 - Quick charge minute setting
-- Off-grid capable
+
+**Models:** 12000XP, 6000XP
 
 **Unique Parameters:**
 - `HOLD_DISCHG_RECOVERY_LAG_SOC` - SOC hysteresis percentage
@@ -51,20 +54,23 @@ This is the firmware-level model identifier stored in register 19. It identifies
 - `OFF_GRID_HOLD_EPS_FREQ_SET` - EPS output frequency
 
 **Sample Models:**
-- SNA12K-US: 12kW, device type code 54, HOLD_MODEL 0x90AC1
+- 12000XP: 12kW, device type code 54, HOLD_MODEL 0x90AC1
 
-### PV Series (High-Voltage DC, US)
+### EG4 Hybrid Series (EG4_HYBRID)
 
-**Device Type Code:** 2092
+**Device Type Codes:** 2092, 10284
 
-**Target Market:** US commercial/residential with high DC voltage
+**Target Market:** US residential/commercial grid-tied hybrid
 
 **Key Features:**
-- Three-phase grid capable
+- Grid sellback capable
+- Split-phase grid support (L1/L2)
 - Parallel operation support
 - Volt-Watt curve control
 - Grid peak shaving
 - DRMS (Demand Response Management) support
+
+**Models:** 18kPV, 12kPV, FlexBOSS21, FlexBOSS18
 
 **Unique Parameters:**
 - `HOLD_VW_V1` through `HOLD_VW_V4` - Volt-Watt curve voltage points
@@ -74,96 +80,41 @@ This is the firmware-level model identifier stored in register 19. It identifies
 
 **Sample Models:**
 - 18KPV: 18kW, device type code 2092, HOLD_MODEL 0x986C0
+- FlexBOSS21: 21kW, device type code 10284
 
-### LXP-EU Series (European)
+### Luxpower Series (LXP)
 
-**Device Type Code:** 12
+**Device Type Codes:** 12, 44, and others
 
-**Target Market:** European market (230V/400V, 50Hz)
+**Target Markets:** Europe (LXP-EU), Brazil (LXP-LB-BR), Low-voltage DC (LXP-LV)
+
+All Luxpower-branded inverters share the same register layout and are grouped into a single `LXP` family.
 
 **Key Features:**
-- EU grid compliance
-- Three-phase capable
+- EU grid compliance (some models)
+- Three-phase capable (some models)
 - Parallel operation support
-- Volt-Watt curve control
-- DRMS support
+- Volt-Watt curve control (some models)
+- DRMS support (some models)
+- Off-grid capable
 
 **Unique Parameters:**
 - `HOLD_EU_GRID_CODE` - EU grid compliance code
 - `HOLD_EU_COUNTRY_CODE` - Country-specific settings
 
+**Models:**
+
+| Model | Device Type Code | Target Market | Notes |
+|-------|------------------|---------------|-------|
+| LXP-EU 12K | 12 | Europe | 230V/400V, 50Hz |
+| LXP-LB-BR 10K | 44 | Brazil | 48V battery bus, firmware `EAAB-*` |
+| LXP-LV 6048 | TBD | Global | Low-voltage DC (48V nominal) |
+
 **Sample Models:**
 - LXP-EU 12K: 12kW, device type code 12, HOLD_MODEL 0x19AC0
-
-### LXP-BR Series (Luxpower Brazil)
-
-**Device Type Code:** 44
-
-**Target Market:** Brazil (Luxpower-branded, not EG4)
-
-**Key Features:**
-- Single-phase hybrid inverter (8-10kW)
-- 48V nominal battery bus
-- Shares register layout with LXP-EU (lithiumType=6)
-- Off-grid capable
-
-**Firmware Prefix:** `EAAB-` (e.g., EAAB-2626)
-
-**Base URL:** `https://na.luxpowertek.com` (North America Luxpower portal)
-
-**Sample Models:**
 - LXP-LB-BR 10kW: 10kW, device type code 44, HOLD_MODEL 0x99A85
 
-### LXP-LV Series (Low-Voltage DC)
-
-**Device Type Code:** Varies (no single known code mapped yet)
-
-**Target Market:** Low-voltage DC battery systems (48V nominal)
-
-**Key Features:**
-- Low-voltage DC bus (48V nominal)
-- Single-phase grid
-- Parallel operation support
-- Off-grid capable
-
-**Unique Parameters:**
-- Similar to SNA series but with low-voltage DC configuration
-
-**Sample Models:**
-- LXP-LV 6048: 6kW, 48V DC
-
-> **Note**: The LXP-LV family exists in the implementation but no specific device type code has been mapped yet. Devices will show as `UNKNOWN` family until a code mapping is added.
-
-### FlexBOSS Series (High-Power Hybrid)
-
-**Device Type Code:** 10284
-
-**Target Market:** US residential/commercial high-power installations
-
-**Key Features:**
-- High-power hybrid inverter (18kW/21kW)
-- Split-phase grid support (L1/L2/N)
-- Parallel operation support
-- Volt-Watt curve control
-- Grid peak shaving
-- Green Mode (off-grid mode toggle)
-- DRMS support
-
-**Unique Parameters:**
-- `_12K_HOLD_*` registers for 12K/18K/21K series configuration
-- `HOLD_VOLT_WATT_V1/V2` - Volt-Watt curve voltage points
-- `HOLD_VOLT_WATT_DELAY_TIME` - Volt-Watt response delay
-- `FUNC_GREEN_EN` - Green Mode (off-grid mode) in register 110
-- `FUNC_MIDBOX_EN` - GridBOSS/MID controller integration
-- `FUNC_PARALLEL_DATA_SYNC_EN` - Parallel data synchronization
-- `FUNC_LSP_BAT_FIRST_*_EN` - Battery-first scheduling (48 time slots)
-- `FUNC_LSP_BYPASS_*_EN` - Bypass mode scheduling (48 time slots)
-
-**Firmware Prefix:** `FAAB-` (e.g., FAAB-2525)
-
-**Sample Models:**
-- FlexBOSS21: 21kW, device type code 10284, HOLD_MODEL 0x1098200
-- FlexBOSS18: 18kW, device type code 10284
+> **Note**: The LXP-LV 6048 and similar low-voltage models have not had their device type code discovered yet. When connected, they will use `LXP` family register maps but may show as `UNKNOWN` family until mapped.
 
 ### GridBOSS (MID Controller)
 

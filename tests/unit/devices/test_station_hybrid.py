@@ -317,7 +317,7 @@ class TestAttachLocalTransports:
             port=502,
             serial="CE12345678",
             transport_type=TransportType.MODBUS_TCP,
-            inverter_family=InverterFamily.PV_SERIES,
+            inverter_family=InverterFamily.EG4_HYBRID,
         )
 
         with patch(
@@ -329,4 +329,4 @@ class TestAttachLocalTransports:
         assert result.matched == 1
         # Verify inverter_family was passed to create_modbus_transport
         call_kwargs = mock_create.call_args.kwargs
-        assert call_kwargs.get("inverter_family") == InverterFamily.PV_SERIES
+        assert call_kwargs.get("inverter_family") == InverterFamily.EG4_HYBRID

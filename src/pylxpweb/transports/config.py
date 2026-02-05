@@ -12,7 +12,7 @@ Example:
         port=502,
         serial="CE12345678",
         transport_type=TransportType.MODBUS_TCP,
-        inverter_family=InverterFamily.PV_SERIES,
+        inverter_family=InverterFamily.EG4_HYBRID,
     )
     config.validate()
 
@@ -229,9 +229,20 @@ class TransportConfig:
         transport_type_str = data.get("transport_type", "modbus_tcp")
         transport_type = TransportType(transport_type_str)
 
-        # Parse inverter family if present
+        # Parse inverter family if present, with legacy name migration
         family_str = data.get("inverter_family")
-        inverter_family = InverterFamily(family_str) if family_str else None
+        if family_str:
+            # Map legacy family names to new names
+            legacy_family_map = {
+                "PV_SERIES": "EG4_HYBRID",
+                "SNA": "EG4_OFFGRID",
+                "LXP_EU": "LXP",
+                "LXP_LV": "LXP",
+            }
+            family_str = legacy_family_map.get(family_str, family_str)
+            inverter_family = InverterFamily(family_str)
+        else:
+            inverter_family = None
 
         # Create instance without validation (we'll validate after)
         instance = object.__new__(cls)

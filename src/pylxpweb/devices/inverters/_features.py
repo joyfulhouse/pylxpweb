@@ -21,26 +21,36 @@ class InverterFamily(str, Enum):
 
     Each family has distinct hardware capabilities and parameter sets.
     The family is determined by the HOLD_DEVICE_TYPE_CODE register value.
+
+    Family naming convention:
+    - EG4_* families: EG4 Electronics branded inverters (US market)
+    - LXP: Luxpower branded inverters (EU, Brazil, low-voltage - all use same registers)
     """
 
-    # SNA Series - Split-phase, North America (US market)
+    # EG4 Off-Grid Series - Off-grid capable, no grid sellback
+    # Models: 12000XP, 6000XP
     # Device type code: 54
-    SNA = "SNA"
+    EG4_OFFGRID = "EG4_OFFGRID"
 
-    # PV Series - High-voltage DC, US market (18KPV, etc.)
-    # Device type code: 2092
-    PV_SERIES = "PV_SERIES"
+    # EG4 Hybrid Series - Grid-tied hybrid with sellback capability
+    # Models: 18kPV, 12kPV, FlexBOSS21, FlexBOSS18
+    # Device type codes: 2092, 10284
+    EG4_HYBRID = "EG4_HYBRID"
 
-    # LXP-EU Series - European market (LXP-EU 12K, etc.)
-    # Device type code: 12
-    LXP_EU = "LXP_EU"
-
-    # LXP-LV Series - Low-voltage DC (LXP-LV 6048, etc.)
-    # Device type code: varies
-    LXP_LV = "LXP_LV"
+    # Luxpower Series - All Luxpower branded inverters (same register maps)
+    # Models: LXP-EU 12K, LXP-LB-BR 10K, LXP-LV 6048
+    # Device type codes: 12, 44, and others
+    LXP = "LXP"
 
     # Unknown model family
     UNKNOWN = "UNKNOWN"
+
+    # Legacy aliases for backwards compatibility
+    # These allow existing config entries using old names to still work
+    SNA = "EG4_OFFGRID"  # Deprecated: use EG4_OFFGRID
+    PV_SERIES = "EG4_HYBRID"  # Deprecated: use EG4_HYBRID
+    LXP_EU = "LXP"  # Deprecated: use LXP
+    LXP_LV = "LXP"  # Deprecated: use LXP (same register maps)
 
 
 class GridType(str, Enum):
@@ -62,15 +72,14 @@ class GridType(str, Enum):
 # Device type code to family mapping
 # These values come from HOLD_DEVICE_TYPE_CODE (register 19)
 DEVICE_TYPE_CODE_TO_FAMILY: dict[int, InverterFamily] = {
-    # SNA Series (Split-phase, North America)
-    54: InverterFamily.SNA,
-    # PV Series (High-voltage DC, US) - includes FlexBOSS models
-    2092: InverterFamily.PV_SERIES,  # 18KPV
-    10284: InverterFamily.PV_SERIES,  # FlexBOSS21, FlexBOSS18 (21kW/18kW hybrid)
-    # LXP-EU Series (European)
-    12: InverterFamily.LXP_EU,
-    # LXP-BR Series (Luxpower Brazil - LXP-LB-BR, etc.)
-    44: InverterFamily.LXP_EU,  # Shares register layout with LXP-EU (lithiumType=6)
+    # EG4 Off-Grid Series (12000XP, 6000XP)
+    54: InverterFamily.EG4_OFFGRID,
+    # EG4 Hybrid Series (18kPV, 12kPV, FlexBOSS21, FlexBOSS18)
+    2092: InverterFamily.EG4_HYBRID,  # 18KPV, 12kPV
+    10284: InverterFamily.EG4_HYBRID,  # FlexBOSS21, FlexBOSS18
+    # Luxpower Series (LXP-EU, LXP-LB-BR, LXP-LV - all use same register maps)
+    12: InverterFamily.LXP,  # LXP-EU 12K
+    44: InverterFamily.LXP,  # LXP-LB-BR 10K (Brazil)
     # Add more mappings as devices are discovered
     # Note: GridBOSS (device type code 50) uses API deviceType=9 and is handled
     # separately as a MID (Main Interconnect Device) controller, not as an inverter
@@ -80,7 +89,8 @@ DEVICE_TYPE_CODE_TO_FAMILY: dict[int, InverterFamily] = {
 # Known feature sets by model family
 # These represent the default capabilities for each family
 FAMILY_DEFAULT_FEATURES: dict[InverterFamily, dict[str, bool]] = {
-    InverterFamily.SNA: {
+    InverterFamily.EG4_OFFGRID: {
+        # EG4 Off-Grid Series (12000XP, 6000XP) - no grid sellback
         "split_phase": True,
         "off_grid_capable": True,
         "discharge_recovery_hysteresis": True,  # HOLD_DISCHG_RECOVERY_LAG_SOC/VOLT
@@ -91,8 +101,9 @@ FAMILY_DEFAULT_FEATURES: dict[InverterFamily, dict[str, bool]] = {
         "grid_peak_shaving": True,
         "drms_support": False,
     },
-    InverterFamily.PV_SERIES: {
-        # PV_SERIES in US markets uses split-phase L1/L2 registers (127-128, 140-141)
+    InverterFamily.EG4_HYBRID: {
+        # EG4 Hybrid Series (18kPV, 12kPV, FlexBOSS) - grid-tied with sellback
+        # US markets use split-phase L1/L2 registers (127-128, 140-141)
         # R/S/T registers (17-19, 20-22) contain garbage on US split-phase installations
         "split_phase": True,
         "off_grid_capable": True,
@@ -104,28 +115,19 @@ FAMILY_DEFAULT_FEATURES: dict[InverterFamily, dict[str, bool]] = {
         "grid_peak_shaving": True,
         "drms_support": True,
     },
-    InverterFamily.LXP_EU: {
+    InverterFamily.LXP: {
+        # Luxpower Series (LXP-EU, LXP-LB-BR, LXP-LV) - all use same register maps
+        # Feature availability varies by model but register layout is identical
         "split_phase": False,
         "off_grid_capable": True,
         "discharge_recovery_hysteresis": False,
         "quick_charge_minute": False,
-        "three_phase_capable": True,
+        "three_phase_capable": True,  # Some models support 3-phase
         "parallel_support": True,
-        "volt_watt_curve": True,
+        "volt_watt_curve": True,  # Some models support volt-watt
         "grid_peak_shaving": True,
-        "drms_support": True,
+        "drms_support": True,  # Some models support DRMS
         "eu_grid_compliance": True,
-    },
-    InverterFamily.LXP_LV: {
-        "split_phase": False,
-        "off_grid_capable": True,
-        "discharge_recovery_hysteresis": False,
-        "quick_charge_minute": False,
-        "three_phase_capable": False,
-        "parallel_support": True,
-        "volt_watt_curve": False,
-        "grid_peak_shaving": True,
-        "drms_support": False,
     },
     InverterFamily.UNKNOWN: {
         # Conservative defaults for unknown models
@@ -349,11 +351,11 @@ class InverterFeatures:
                 setattr(features, key, value)
 
         # Set grid type based on family
-        if family in (InverterFamily.SNA, InverterFamily.PV_SERIES):
-            # SNA and PV_SERIES in US markets use split-phase (120V/240V)
+        if family in (InverterFamily.EG4_OFFGRID, InverterFamily.EG4_HYBRID):
+            # EG4 inverters in US markets use split-phase (120V/240V)
             features.grid_type = GridType.SPLIT_PHASE
-        elif family == InverterFamily.LXP_EU:
-            features.grid_type = GridType.SINGLE_PHASE  # EU can also be three-phase
+        elif family == InverterFamily.LXP:
+            features.grid_type = GridType.SINGLE_PHASE  # Can also be three-phase
 
         return features
 

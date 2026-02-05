@@ -53,7 +53,7 @@ class TestFromModbusTransport:
 
         inverter = await BaseInverter.from_modbus_transport(transport)
 
-        assert inverter._features.model_family == InverterFamily.PV_SERIES
+        assert inverter._features.model_family == InverterFamily.EG4_HYBRID
         assert inverter._features.device_type_code == 2092
         assert inverter.model == "18KPV"  # Default for PV series
 
@@ -67,7 +67,7 @@ class TestFromModbusTransport:
 
         inverter = await BaseInverter.from_modbus_transport(transport)
 
-        assert inverter._features.model_family == InverterFamily.SNA
+        assert inverter._features.model_family == InverterFamily.EG4_OFFGRID
         assert inverter._features.device_type_code == 54
         assert inverter.model == "12000XP"
 

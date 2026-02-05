@@ -72,14 +72,14 @@ class TestDongleTransport:
             inverter_serial="CE87654321",
             port=9000,
             timeout=15.0,
-            inverter_family=InverterFamily.LXP_EU,
+            inverter_family=InverterFamily.LXP,
         )
 
         assert transport.host == "192.168.1.200"
         assert transport.port == 9000
         assert transport.dongle_serial == "BA87654321"
         assert transport.serial == "CE87654321"
-        assert transport.inverter_family == InverterFamily.LXP_EU
+        assert transport.inverter_family == InverterFamily.LXP
 
     def test_capabilities(self) -> None:
         """Test that dongle transport has correct capabilities."""
@@ -480,7 +480,7 @@ class TestCreateDongleTransportFactory:
             inverter_serial="CE87654321",
             port=9000,
             timeout=15.0,
-            inverter_family=InverterFamily.LXP_EU,
+            inverter_family=InverterFamily.LXP,
         )
 
         assert isinstance(transport, DongleTransport)
@@ -488,4 +488,4 @@ class TestCreateDongleTransportFactory:
         assert transport.port == 9000
         assert transport.dongle_serial == "BA87654321"
         assert transport.serial == "CE87654321"
-        assert transport.inverter_family == InverterFamily.LXP_EU
+        assert transport.inverter_family == InverterFamily.LXP

@@ -76,8 +76,8 @@ class TestModbusSerialTransportInit:
         )
 
         assert transport.inverter_family is None
-        transport.inverter_family = InverterFamily.PV_SERIES
-        assert transport.inverter_family == InverterFamily.PV_SERIES
+        transport.inverter_family = InverterFamily.EG4_HYBRID
+        assert transport.inverter_family == InverterFamily.EG4_HYBRID
 
 
 class TestModbusSerialConnection:

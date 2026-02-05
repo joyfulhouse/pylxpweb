@@ -856,13 +856,10 @@ def _get_family_runtime_maps() -> dict[InverterFamily, RuntimeRegisterMap]:
     from pylxpweb.devices.inverters._features import InverterFamily
 
     return {
-        InverterFamily.PV_SERIES: PV_SERIES_RUNTIME_MAP,
-        InverterFamily.LXP_EU: LXP_EU_RUNTIME_MAP,
-        # SNA uses same layout as PV_SERIES (US market)
-        InverterFamily.SNA: PV_SERIES_RUNTIME_MAP,
-        # LXP_LV uses same layout as LXP_EU (similar architecture)
-        InverterFamily.LXP_LV: LXP_EU_RUNTIME_MAP,
-        # Unknown defaults to PV_SERIES (backward compatible)
+        InverterFamily.EG4_HYBRID: PV_SERIES_RUNTIME_MAP,
+        InverterFamily.EG4_OFFGRID: PV_SERIES_RUNTIME_MAP,
+        InverterFamily.LXP: LXP_EU_RUNTIME_MAP,
+        # Unknown defaults to EG4_HYBRID (backward compatible)
         InverterFamily.UNKNOWN: PV_SERIES_RUNTIME_MAP,
     }
 
@@ -1180,10 +1177,9 @@ def _get_family_energy_maps() -> dict[InverterFamily, EnergyRegisterMap]:
     from pylxpweb.devices.inverters._features import InverterFamily
 
     return {
-        InverterFamily.PV_SERIES: PV_SERIES_ENERGY_MAP,
-        InverterFamily.LXP_EU: LXP_EU_ENERGY_MAP,
-        InverterFamily.SNA: PV_SERIES_ENERGY_MAP,
-        InverterFamily.LXP_LV: LXP_EU_ENERGY_MAP,
+        InverterFamily.EG4_HYBRID: PV_SERIES_ENERGY_MAP,
+        InverterFamily.EG4_OFFGRID: PV_SERIES_ENERGY_MAP,
+        InverterFamily.LXP: LXP_EU_ENERGY_MAP,
         InverterFamily.UNKNOWN: PV_SERIES_ENERGY_MAP,
     }
 
@@ -1225,10 +1221,9 @@ def _get_family_holding_maps() -> dict[InverterFamily, HoldingRegisterMap]:
     from pylxpweb.devices.inverters._features import InverterFamily
 
     return {
-        InverterFamily.PV_SERIES: PV_SERIES_HOLDING_MAP,
-        InverterFamily.LXP_EU: LXP_EU_HOLDING_MAP,
-        InverterFamily.SNA: PV_SERIES_HOLDING_MAP,
-        InverterFamily.LXP_LV: LXP_EU_HOLDING_MAP,
+        InverterFamily.EG4_HYBRID: PV_SERIES_HOLDING_MAP,
+        InverterFamily.EG4_OFFGRID: PV_SERIES_HOLDING_MAP,
+        InverterFamily.LXP: LXP_EU_HOLDING_MAP,
         InverterFamily.UNKNOWN: PV_SERIES_HOLDING_MAP,
     }
 

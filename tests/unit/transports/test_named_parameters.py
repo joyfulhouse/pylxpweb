@@ -297,22 +297,22 @@ class TestInverterFamilySupport:
 
     @pytest.fixture
     def modbus_transport_pv_series(self) -> ModbusTransport:
-        """Create ModbusTransport with PV_SERIES family."""
+        """Create ModbusTransport with EG4_HYBRID family."""
         transport = ModbusTransport(
             host="192.168.1.100",
             serial="CE12345678",
-            inverter_family=InverterFamily.PV_SERIES,
+            inverter_family=InverterFamily.EG4_HYBRID,
         )
         transport._connected = True
         return transport
 
     @pytest.fixture
     def modbus_transport_sna(self) -> ModbusTransport:
-        """Create ModbusTransport with SNA family."""
+        """Create ModbusTransport with EG4_OFFGRID family."""
         transport = ModbusTransport(
             host="192.168.1.100",
             serial="CE12345678",
-            inverter_family=InverterFamily.SNA,
+            inverter_family=InverterFamily.EG4_OFFGRID,
         )
         transport._connected = True
         return transport
@@ -331,8 +331,8 @@ class TestInverterFamilySupport:
     async def test_read_named_parameters_with_pv_series_family(
         self, modbus_transport_pv_series: ModbusTransport
     ) -> None:
-        """Test reading named parameters with PV_SERIES family uses correct mapping."""
-        # Register 66 = HOLD_AC_CHARGE_POWER_CMD in PV_SERIES
+        """Test reading named parameters with EG4_HYBRID family uses correct mapping."""
+        # Register 66 = HOLD_AC_CHARGE_POWER_CMD in EG4_HYBRID
         modbus_transport_pv_series.read_parameters = AsyncMock(return_value={66: 75})
 
         result = await modbus_transport_pv_series.read_named_parameters(66, 1)
@@ -344,8 +344,8 @@ class TestInverterFamilySupport:
     async def test_read_named_parameters_with_sna_family(
         self, modbus_transport_sna: ModbusTransport
     ) -> None:
-        """Test reading named parameters with SNA family uses correct mapping."""
-        # Currently SNA uses same mapping as PV_SERIES (fallback)
+        """Test reading named parameters with EG4_OFFGRID family uses correct mapping."""
+        # Currently EG4_OFFGRID uses same mapping as EG4_HYBRID (fallback)
         # This test ensures family is passed through correctly
         modbus_transport_sna.read_parameters = AsyncMock(return_value={66: 50})
 
@@ -386,7 +386,7 @@ class TestInverterFamilySupport:
     ) -> None:
         """Test _get_inverter_family returns string value from enum."""
         family = modbus_transport_pv_series._get_inverter_family()
-        assert family == "PV_SERIES"
+        assert family == "EG4_HYBRID"
 
     def test_get_inverter_family_returns_none_when_not_set(
         self, modbus_transport_no_family: ModbusTransport
@@ -412,12 +412,12 @@ class TestRegisterMappingFunctions:
         from pylxpweb.constants.registers import get_register_to_param_mapping
 
         # All families currently use the same mapping
-        mapping_pv = get_register_to_param_mapping("PV_SERIES")
-        mapping_sna = get_register_to_param_mapping("SNA")
+        mapping_eg4_hybrid = get_register_to_param_mapping("EG4_HYBRID")
+        mapping_eg4_offgrid = get_register_to_param_mapping("EG4_OFFGRID")
         mapping_none = get_register_to_param_mapping(None)
 
         # All should return the same mapping currently
-        assert mapping_pv == mapping_sna == mapping_none
+        assert mapping_eg4_hybrid == mapping_eg4_offgrid == mapping_none
 
     def test_get_param_to_register_mapping_returns_dict(self) -> None:
         """Test get_param_to_register_mapping returns reverse mapping."""
@@ -434,6 +434,6 @@ class TestRegisterMappingFunctions:
         """Test get_param_to_register_mapping accepts family parameter."""
         from pylxpweb.constants.registers import get_param_to_register_mapping
 
-        mapping = get_param_to_register_mapping("PV_SERIES")
+        mapping = get_param_to_register_mapping("EG4_HYBRID")
         assert "HOLD_AC_CHARGE_POWER_CMD" in mapping
         assert "FUNC_EPS_EN" in mapping
