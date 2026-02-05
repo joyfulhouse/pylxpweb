@@ -11,9 +11,13 @@ A Python client library for Luxpower/EG4 solar inverters and energy storage syst
 ## Supported API Endpoints
 
 This library supports multiple regional API endpoints:
+- **US (EG4 Electronics)**: `https://monitor.eg4electronics.com` (default)
 - **US (Luxpower)**: `https://us.luxpowertek.com`
-- **EU (Luxpower)**: `https://eu.luxpowertek.com`
-- **US (EG4 Electronics)**: `https://monitor.eg4electronics.com`
+- **Americas (Luxpower)**: `https://na.luxpowertek.com` (Brazil, Latin America)
+- **Europe (Luxpower)**: `https://eu.luxpowertek.com`
+- **Asia Pacific (Luxpower)**: `https://sea.luxpowertek.com`
+- **Middle East & Africa (Luxpower)**: `https://af.luxpowertek.com`
+- **China (Luxpower)**: `https://server.luxpowertek.com`
 
 The base URL is fully configurable to support regional variations and future endpoints.
 
@@ -425,7 +429,6 @@ If you discover additional regional endpoints, please contribute by:
 1. Opening an issue with the endpoint URL
 2. Confirming it uses the same `/WManage/api/` structure
 3. Noting which region/brand it serves
-4. Running `scripts/test_endpoints.py` to verify connectivity
 
 Known endpoints are documented in [API Reference](docs/api/LUXPOWER_API.md#choosing-the-right-endpoint).
 

@@ -36,7 +36,11 @@ Station (Plant)
 |--------|----------|---------|
 | US (EG4) | `https://monitor.eg4electronics.com` | EG4-branded devices (default) |
 | US (Luxpower) | `https://us.luxpowertek.com` | Luxpower-branded devices (US) |
+| Americas (Luxpower) | `https://na.luxpowertek.com` | Brazil, Latin America |
 | EU (Luxpower) | `https://eu.luxpowertek.com` | Luxpower-branded devices (EU) |
+| Asia Pacific (Luxpower) | `https://sea.luxpowertek.com` | Southeast Asia, Australia |
+| Middle East & Africa (Luxpower) | `https://af.luxpowertek.com` | Middle East, Africa |
+| China (Luxpower) | `https://server.luxpowertek.com` | China mainland |
 
 ### Data Scaling (CRITICAL)
 | Type | Scaling | Example |

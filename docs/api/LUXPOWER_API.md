@@ -2,12 +2,15 @@
 
 **API Base URLs**: Multiple regional endpoints available
 
+- **US (EG4 Electronics)**: `https://monitor.eg4electronics.com` (default for EG4 devices)
 - **US (Luxpower)**: `https://us.luxpowertek.com`
-- **EU (Luxpower)**: `https://eu.luxpowertek.com`
-- **US (EG4 Electronics)**: `https://monitor.eg4electronics.com`
-- **Note**: Additional regional endpoints may exist
+- **Americas (Luxpower)**: `https://na.luxpowertek.com` (Brazil, Latin America)
+- **Europe (Luxpower)**: `https://eu.luxpowertek.com`
+- **Asia Pacific (Luxpower)**: `https://sea.luxpowertek.com`
+- **Middle East & Africa (Luxpower)**: `https://af.luxpowertek.com`
+- **China (Luxpower)**: `https://server.luxpowertek.com`
 
-**Default Recommendation**: Use `https://monitor.eg4electronics.com` for EG4-branded devices in North America.
+**Default Recommendation**: Use `https://monitor.eg4electronics.com` for EG4-branded devices in North America. For Luxpower-branded devices, use the regional endpoint where your account was registered.
 
 **Last Updated**: 2025-11-18
 
@@ -36,15 +39,19 @@
 
 | Endpoint | Region | Brand | Description |
 |----------|--------|-------|-------------|
+| `https://monitor.eg4electronics.com` | North America | EG4 | EG4-branded devices (default) |
 | `https://us.luxpowertek.com` | North America | Luxpower | Luxpower-branded devices in US/Canada |
+| `https://na.luxpowertek.com` | Americas | Luxpower | Brazil, Latin America, other Americas |
 | `https://eu.luxpowertek.com` | Europe | Luxpower | Luxpower-branded devices in Europe |
-| `https://monitor.eg4electronics.com` | North America | EG4 | EG4-branded devices (rebrand of Luxpower) |
+| `https://sea.luxpowertek.com` | Asia Pacific | Luxpower | Southeast Asia, Australia, etc. |
+| `https://af.luxpowertek.com` | Middle East & Africa | Luxpower | Middle East and Africa region |
+| `https://server.luxpowertek.com` | China | Luxpower | China mainland |
 
 ### Selection Guide
 
 **1. By Device Brand**:
 - If you have **EG4-branded devices** (FlexBOSS, 18KPV, 12KPV, GridBOSS): Use `https://monitor.eg4electronics.com`
-- If you have **Luxpower-branded devices**: Use regional Luxpower endpoint (`us.luxpowertek.com` or `eu.luxpowertek.com`)
+- If you have **Luxpower-branded devices**: Use the regional Luxpower endpoint where your account was registered
 
 **2. By Account Registration**:
 - Use the endpoint where your monitoring account was originally created
@@ -52,31 +59,17 @@
 - If you can log in to the web portal or mobile app, use that same endpoint
 
 **3. By Geographic Location**:
-- **Europe**: `https://eu.luxpowertek.com`
-- **North America** (Luxpower): `https://us.luxpowertek.com`
 - **North America** (EG4): `https://monitor.eg4electronics.com`
+- **North America** (Luxpower): `https://us.luxpowertek.com`
+- **Americas** (Brazil, Latin America): `https://na.luxpowertek.com`
+- **Europe**: `https://eu.luxpowertek.com`
+- **Asia Pacific**: `https://sea.luxpowertek.com`
+- **Middle East & Africa**: `https://af.luxpowertek.com`
+- **China**: `https://server.luxpowertek.com`
 
 ### Testing Endpoint Connectivity
 
-**Method 1: Automated Discovery Script**
-
-Use the provided endpoint discovery script:
-
-```bash
-# Install dependencies
-pip install aiohttp python-dotenv
-
-# Configure credentials in .env (see .env.example)
-cp .env.example .env
-# Edit .env with your credentials
-
-# Run discovery script
-python research/test_endpoints.py
-```
-
-The script will test all known endpoints and show which ones work with your credentials.
-
-**Method 2: Manual Testing**
+**Method 1: Manual Testing**
 
 1. Try logging into the web portals:
    - https://us.luxpowertek.com
@@ -1497,9 +1490,13 @@ async def make_request_with_retry(self, endpoint, data, max_retries=3):
 ## Notes and Limitations
 
 1. **Regional Endpoints**: Choose the correct base URL for your region and device brand
-   - US (Luxpower): `https://us.luxpowertek.com`
-   - EU (Luxpower): `https://eu.luxpowertek.com`
    - US (EG4): `https://monitor.eg4electronics.com`
+   - US (Luxpower): `https://us.luxpowertek.com`
+   - Americas (Luxpower): `https://na.luxpowertek.com`
+   - EU (Luxpower): `https://eu.luxpowertek.com`
+   - Asia Pacific (Luxpower): `https://sea.luxpowertek.com`
+   - Middle East & Africa (Luxpower): `https://af.luxpowertek.com`
+   - China (Luxpower): `https://server.luxpowertek.com`
 2. **Serial Numbers**: 10-digit numeric strings (e.g., "1234567890")
 3. **Model Codes**: Hexadecimal model identifiers (e.g., 0x986C0)
 4. **Timezone Handling**: All timestamps in server time, convert as needed
