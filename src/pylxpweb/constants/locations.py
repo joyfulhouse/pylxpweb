@@ -51,6 +51,7 @@ TIMEZONE_REVERSE_MAP: dict[str, str] = {v: k for k, v in TIMEZONE_MAP.items()}
 # NOTE: This list is incomplete - only shows North American countries
 # Additional countries would appear based on selected continent/region
 COUNTRY_MAP: dict[str, str] = {
+    "Brazil": "BRAZIL",
     "Canada": "CANADA",
     "United States of America": "UNITED_STATES_OF_AMERICA",
     "Mexico": "MEXICO",
