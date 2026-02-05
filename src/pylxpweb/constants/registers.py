@@ -1027,8 +1027,9 @@ LXP_EU_PARAMETERS = [
 # Device Type Code Constants (HOLD_DEVICE_TYPE_CODE register 19)
 # These identify the specific inverter model/variant
 DEVICE_TYPE_CODE_SNA = 54  # SNA Series (e.g., SNA12K-US, 12000XP, 6000XP)
-DEVICE_TYPE_CODE_PV_SERIES = 2092  # PV Series (e.g., 18KPV)
+DEVICE_TYPE_CODE_PV_SERIES = 2092  # PV Series (e.g., 12KPV, 18KPV)
 DEVICE_TYPE_CODE_LXP_EU = 12  # LXP-EU Series (e.g., LXP-EU 12K)
+DEVICE_TYPE_CODE_LXP_LB = 44  # LXP-LB Series - Low-voltage Battery (e.g., LXP-US 8-10K, LXP-LB-BR 10K)
 DEVICE_TYPE_CODE_FLEXBOSS = 10284  # FlexBOSS Series (e.g., FlexBOSS21, FlexBOSS18)
 DEVICE_TYPE_CODE_GRIDBOSS = 50  # GridBOSS/MIDbox (parallel group controller)
 

@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from pylxpweb import LuxpowerClient
+from pylxpweb.constants import (
+    DEVICE_TYPE_CODE_LXP_LB,
+)
 from pylxpweb.devices.inverters._features import (
     DEVICE_TYPE_CODE_TO_FAMILY,
     FAMILY_DEFAULT_FEATURES,
@@ -215,6 +218,50 @@ class TestInverterModelInfo:
         """Test model name detection for GridBOSS."""
         model = InverterModelInfo(power_rating=0)
         assert model.get_model_name(50) == "GridBOSS"
+
+    def test_get_model_name_luxpower_eu(self) -> None:
+        """Test model name detection for Luxpower EU Series (device type 12)."""
+        model = InverterModelInfo(power_rating=6)
+        assert model.get_model_name(12) == "LXP-EU-12K"
+
+    def test_get_model_name_luxpower_lb(self) -> None:
+        """Test model name detection for LXP-LB Series (device type 44)."""
+        # Non-US version (us_version=False by default)
+        model = InverterModelInfo(power_rating=4)
+        # powerRating=4 maps to 6kW in legacy mapping
+        assert model.get_model_name(DEVICE_TYPE_CODE_LXP_LB) == "LXP-LB-6K"
+
+        # US version
+        model_us = InverterModelInfo(power_rating=4, us_version=True)
+        assert model_us.get_model_name(DEVICE_TYPE_CODE_LXP_LB) == "LXP-LB-US-6K"
+
+    def test_get_power_rating_kw_unknown_code_returns_zero(self) -> None:
+        """Test that unknown power rating codes return 0."""
+        model = InverterModelInfo(power_rating=99)
+
+        # Unknown code in PV Series should return 0
+        assert model.get_power_rating_kw(2092) == 0
+
+        # Unknown code in FlexBOSS Series should return 0
+        assert model.get_power_rating_kw(10284) == 0
+
+    def test_get_model_name_fallback_unknown_power_rating(self) -> None:
+        """Test model name fallback for unknown power ratings."""
+        model = InverterModelInfo(power_rating=99)
+
+        # PV Series with unknown power rating
+        assert model.get_model_name(2092) == "PV-Unknown"
+
+        # FlexBOSS with unknown power rating
+        assert model.get_model_name(10284) == "FlexBOSS-Unknown"
+
+        # Off-Grid with unknown power rating (0 kW from legacy mapping)
+        assert model.get_model_name(54) == "EG4-XP"
+
+    def test_get_model_name_unknown_device_type(self) -> None:
+        """Test model name for completely unknown device type codes."""
+        model = InverterModelInfo(power_rating=6)
+        assert model.get_model_name(9999) == "Unknown-9999"
 
 
 # =============================================================================

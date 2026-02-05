@@ -16,6 +16,15 @@ import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 
+from pylxpweb.constants import (
+    DEVICE_TYPE_CODE_FLEXBOSS,
+    DEVICE_TYPE_CODE_GRIDBOSS,
+    DEVICE_TYPE_CODE_LXP_EU,
+    DEVICE_TYPE_CODE_LXP_LB,
+    DEVICE_TYPE_CODE_PV_SERIES,
+    DEVICE_TYPE_CODE_SNA,
+)
+
 # Mapping of deprecated family names to their replacements
 _DEPRECATED_FAMILY_NAMES: dict[str, str] = {
     "SNA": "EG4_OFFGRID",
@@ -131,16 +140,16 @@ def resolve_family(name: str | InverterFamily) -> InverterFamily:
 # These values come from HOLD_DEVICE_TYPE_CODE (register 19)
 DEVICE_TYPE_CODE_TO_FAMILY: dict[int, InverterFamily] = {
     # EG4 Off-Grid Series (12000XP, 6000XP)
-    54: InverterFamily.EG4_OFFGRID,
+    DEVICE_TYPE_CODE_SNA: InverterFamily.EG4_OFFGRID,
     # EG4 Hybrid Series (18kPV, 12kPV, FlexBOSS21, FlexBOSS18)
-    2092: InverterFamily.EG4_HYBRID,  # 18KPV, 12kPV
-    10284: InverterFamily.EG4_HYBRID,  # FlexBOSS21, FlexBOSS18
+    DEVICE_TYPE_CODE_PV_SERIES: InverterFamily.EG4_HYBRID,  # 18KPV, 12kPV
+    DEVICE_TYPE_CODE_FLEXBOSS: InverterFamily.EG4_HYBRID,  # FlexBOSS21, FlexBOSS18
     # Luxpower Series (LXP-EU, LXP-LB-BR, LXP-LV - all use same register maps)
-    12: InverterFamily.LXP,  # LXP-EU 12K
-    44: InverterFamily.LXP,  # LXP-LB-BR 10K (Brazil)
+    DEVICE_TYPE_CODE_LXP_EU: InverterFamily.LXP,  # LXP-EU 12K
+    DEVICE_TYPE_CODE_LXP_LB: InverterFamily.LXP,  # LXP-LB Series (US, Brazil)
     # Add more mappings as devices are discovered
-    # Note: GridBOSS (device type code 50) uses API deviceType=9 and is handled
-    # separately as a MID (Main Interconnect Device) controller, not as an inverter
+    # Note: GridBOSS (DEVICE_TYPE_CODE_GRIDBOSS=50) uses API deviceType=9 and is
+    # handled separately as a MID (Main Interconnect Device) controller
 }
 
 
@@ -340,17 +349,17 @@ class InverterModelInfo:
 
         Note:
             Power rating codes are interpreted differently by device family:
-            - EG4 Off-Grid (54): 6=12kW, 8=18kW
-            - PV Series (2092): 2=12kW, 6=18kW
-            - FlexBOSS (10284): 6=18kW, 8=21kW
+            - EG4 Off-Grid (DEVICE_TYPE_CODE_SNA=54): 6=12kW, 8=18kW
+            - PV Series (DEVICE_TYPE_CODE_PV_SERIES=2092): 2=12kW, 6=18kW
+            - FlexBOSS (DEVICE_TYPE_CODE_FLEXBOSS=10284): 6=18kW, 8=21kW
         """
         # EG4 PV Series (12KPV, 18KPV)
-        if device_type_code == 2092:
+        if device_type_code == DEVICE_TYPE_CODE_PV_SERIES:
             pv_rating_map = {2: 12, 6: 18}
             return pv_rating_map.get(self.power_rating, 0)
 
         # EG4 FlexBOSS Series
-        if device_type_code == 10284:
+        if device_type_code == DEVICE_TYPE_CODE_FLEXBOSS:
             flexboss_rating_map = {6: 18, 8: 21}
             return flexboss_rating_map.get(self.power_rating, 0)
 
@@ -388,30 +397,33 @@ class InverterModelInfo:
         """
         kw = self.get_power_rating_kw(device_type_code)
 
-        # EG4 PV Series (device type code 2092)
-        if device_type_code == 2092:
+        # EG4 PV Series
+        if device_type_code == DEVICE_TYPE_CODE_PV_SERIES:
             pv_models = {2: "12KPV", 6: "18KPV"}
             return pv_models.get(self.power_rating, f"PV-{kw}K" if kw else "PV-Unknown")
 
-        # EG4 FlexBOSS Series (device type code 10284)
-        if device_type_code == 10284:
+        # EG4 FlexBOSS Series
+        if device_type_code == DEVICE_TYPE_CODE_FLEXBOSS:
             flexboss_models = {6: "FlexBOSS18", 8: "FlexBOSS21"}
             return flexboss_models.get(
                 self.power_rating, f"FlexBOSS{kw}" if kw else "FlexBOSS-Unknown"
             )
 
-        # EG4 Off-Grid Series (device type code 54)
-        if device_type_code == 54:
+        # EG4 Off-Grid Series
+        if device_type_code == DEVICE_TYPE_CODE_SNA:
             return f"EG4-{kw}KXP" if kw else "EG4-XP"
 
-        # Luxpower Series (device type codes 12, 44, etc.)
-        if device_type_code == 12:
+        # Luxpower EU Series
+        if device_type_code == DEVICE_TYPE_CODE_LXP_EU:
             return f"LXP-EU-{kw}K" if kw else "LXP-EU"
-        if device_type_code == 44:
-            return f"LXP-{kw}K" if kw else "LXP"
 
-        # GridBOSS (device type code 50)
-        if device_type_code == 50:
+        # Luxpower LB Series (Low-voltage Battery) - US or non-US variants
+        if device_type_code == DEVICE_TYPE_CODE_LXP_LB:
+            region = "-US" if self.us_version else ""
+            return f"LXP-LB{region}-{kw}K" if kw else f"LXP-LB{region}"
+
+        # GridBOSS
+        if device_type_code == DEVICE_TYPE_CODE_GRIDBOSS:
             return "GridBOSS"
 
         return f"Unknown-{device_type_code}"
