@@ -95,6 +95,25 @@ This is the firmware-level model identifier stored in register 19. It identifies
 **Sample Models:**
 - LXP-EU 12K: 12kW, device type code 12, HOLD_MODEL 0x19AC0
 
+### LXP-BR Series (Luxpower Brazil)
+
+**Device Type Code:** 44
+
+**Target Market:** Brazil (Luxpower-branded, not EG4)
+
+**Key Features:**
+- Single-phase hybrid inverter (8-10kW)
+- 48V nominal battery bus
+- Shares register layout with LXP-EU (lithiumType=6)
+- Off-grid capable
+
+**Firmware Prefix:** `EAAB-` (e.g., EAAB-2626)
+
+**Base URL:** `https://na.luxpowertek.com` (North America Luxpower portal)
+
+**Sample Models:**
+- LXP-LB-BR 10kW: 10kW, device type code 44, HOLD_MODEL 0x99A85
+
 ### LXP-LV Series (Low-Voltage DC)
 
 **Device Type Code:** Varies (no single known code mapped yet)

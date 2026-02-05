@@ -69,6 +69,8 @@ DEVICE_TYPE_CODE_TO_FAMILY: dict[int, InverterFamily] = {
     10284: InverterFamily.PV_SERIES,  # FlexBOSS21, FlexBOSS18 (21kW/18kW hybrid)
     # LXP-EU Series (European)
     12: InverterFamily.LXP_EU,
+    # LXP-BR Series (Luxpower Brazil - LXP-LB-BR, etc.)
+    44: InverterFamily.LXP_EU,  # Shares register layout with LXP-EU (lithiumType=6)
     # Add more mappings as devices are discovered
     # Note: GridBOSS (device type code 50) uses API deviceType=9 and is handled
     # separately as a MID (Main Interconnect Device) controller, not as an inverter

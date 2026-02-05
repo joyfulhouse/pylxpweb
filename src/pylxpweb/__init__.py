@@ -39,6 +39,8 @@ Usage:
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .client import LuxpowerClient
 from .endpoints import (
     AnalyticsEndpoints,
@@ -65,7 +67,10 @@ from .models import (
     OperatingMode,
 )
 
-__version__ = "0.7.5"
+try:
+    __version__ = version("pylxpweb")
+except PackageNotFoundError:
+    __version__ = "0.0.0-dev"
 __all__ = [
     "LuxpowerClient",
     "LuxpowerError",
