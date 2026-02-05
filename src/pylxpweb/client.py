@@ -114,6 +114,7 @@ class LuxpowerClient:
         self._session_id: str | None = None
         self._session_expires: datetime | None = None
         self._user_id: int | None = None
+        self._user_role: str | None = None  # VIEWER, INSTALLER, I_ASSISTANT, ADMIN
         # Account level: "guest", "viewer", "operator", "owner", "installer"
         self._account_level: str | None = None
 
@@ -685,7 +686,12 @@ class LuxpowerClient:
             # Store session info (session cookie is automatically handled by aiohttp)
             self._session_expires = datetime.now() + timedelta(hours=2)
             self._user_id = login_data.userId
-            _LOGGER.debug("Login successful, session expires at %s", self._session_expires)
+            self._user_role = login_data.role.value if login_data.role else None
+            _LOGGER.debug(
+                "Login successful (role=%s), session expires at %s",
+                self._user_role,
+                self._session_expires,
+            )
 
             # Detect account level from endUser field
             await self._detect_account_level()
@@ -729,6 +735,18 @@ class LuxpowerClient:
             _LOGGER.debug("Session expired or missing, re-authenticating")
             await self.login()
 
+    @property
+    def is_installer_role(self) -> bool:
+        """Check if the logged-in user has an installer role.
+
+        Installer roles (INSTALLER, I_ASSISTANT) use different API endpoints
+        for plant listing than viewer/admin roles.
+
+        Returns:
+            True if user has an installer role, False otherwise.
+        """
+        return self._user_role in ("INSTALLER", "I_ASSISTANT")
+
     async def _detect_account_level(self) -> None:
         """Detect account permission level from device list endUser field.
 
@@ -761,11 +779,12 @@ class LuxpowerClient:
                 _LOGGER.warning("No devices found, cannot detect account level")
                 return
 
-            # Check endUser field from first device
+            # Check endUser field from first device and user role
             end_user = devices_response.rows[0].endUser
             if end_user == "guest":
                 self._account_level = "guest"
-            elif end_user and ("installer" in end_user.lower()):
+            elif self.is_installer_role or (end_user and "installer" in end_user.lower()):
+                # User role or endUser indicates installer
                 self._account_level = "installer"
             elif end_user and end_user != "":
                 # Has endUser value but not guest or installer - likely viewer/operator
@@ -774,7 +793,12 @@ class LuxpowerClient:
                 # No endUser field or empty - assume owner (backward compatibility)
                 self._account_level = "owner"
 
-            _LOGGER.debug("Detected account level: %s (endUser=%s)", self._account_level, end_user)
+            _LOGGER.debug(
+                "Detected account level: %s (endUser=%s, role=%s)",
+                self._account_level,
+                end_user,
+                self._user_role,
+            )
 
         except Exception as err:
             _LOGGER.warning("Failed to detect account level: %s", err)

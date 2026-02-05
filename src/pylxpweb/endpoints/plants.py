@@ -25,6 +25,10 @@ _LOGGER = logging.getLogger(__name__)
 class PlantEndpoints(BaseEndpoint):
     """Plant/Station endpoints for discovery, configuration, and overview."""
 
+    # Installer roles use a different endpoint for plant listing
+    _PLANT_LIST_INSTALLER = "/WManage/web/config/plant/list"
+    _PLANT_LIST_VIEWER = "/WManage/web/config/plant/list/viewer"
+
     def __init__(self, client: LuxpowerClient) -> None:
         """Initialize plant endpoints.
 
@@ -32,6 +36,20 @@ class PlantEndpoints(BaseEndpoint):
             client: The parent LuxpowerClient instance
         """
         super().__init__(client)
+
+    @property
+    def _plant_list_endpoint(self) -> str:
+        """Get the appropriate plant list endpoint based on user role.
+
+        Installer roles (INSTALLER, I_ASSISTANT) use /plant/list while
+        viewer/admin roles use /plant/list/viewer.
+
+        Returns:
+            The appropriate endpoint path.
+        """
+        if self.client.is_installer_role:
+            return self._PLANT_LIST_INSTALLER
+        return self._PLANT_LIST_VIEWER
 
     async def get_plants(
         self,
@@ -69,9 +87,7 @@ class PlantEndpoints(BaseEndpoint):
             "rows": rows,
         }
 
-        response = await self.client._request(
-            "POST", "/WManage/web/config/plant/list/viewer", data=data
-        )
+        response = await self.client._request("POST", self._plant_list_endpoint, data=data)
         return PlantListResponse.model_validate(response)
 
     async def get_plant_details(self, plant_id: int | str) -> dict[str, Any]:
@@ -114,9 +130,7 @@ class PlantEndpoints(BaseEndpoint):
             "order": "desc",
         }
 
-        response = await self.client._request(
-            "POST", "/WManage/web/config/plant/list/viewer", data=data
-        )
+        response = await self.client._request("POST", self._plant_list_endpoint, data=data)
 
         if isinstance(response, dict) and response.get("rows"):
             from logging import getLogger
