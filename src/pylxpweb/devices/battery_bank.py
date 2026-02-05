@@ -410,9 +410,9 @@ class BatteryBank(BaseDevice):
         """Get maximum battery bank capacity in amp-hours.
 
         Returns:
-            Maximum capacity in Ah.
+            Maximum capacity in Ah, or 0 if no battery installed.
         """
-        return self.data.maxBatteryCharge
+        return self.data.maxBatteryCharge or 0
 
     @property
     def current_capacity(self) -> float:
@@ -423,14 +423,20 @@ class BatteryBank(BaseDevice):
         API data.
 
         Returns:
-            Current capacity in Ah, rounded to 1 decimal place.
+            Current capacity in Ah, rounded to 1 decimal place, or 0.0 if no battery.
         """
+        max_cap = self.data.maxBatteryCharge
+        if max_cap is None or max_cap == 0:
+            return 0.0
+
         soc_val = self._get_transport_value("battery_soc")
         if soc_val is not None:
             # Calculate current capacity from real-time SOC and max capacity
-            max_cap = self.data.maxBatteryCharge
             return round((float(soc_val) / 100.0) * max_cap, 1)
-        return round(self.data.currentBatteryCharge, 1)
+
+        if self.data.currentBatteryCharge is not None:
+            return round(self.data.currentBatteryCharge, 1)
+        return 0.0
 
     @property
     def remain_capacity(self) -> int | None:

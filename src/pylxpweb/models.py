@@ -682,9 +682,9 @@ class BatteryInfo(BaseModel):
     prec: int | None = None  # Grid power
     peps: int | None = None  # EPS/backup power
 
-    # Capacity (Ah)
-    maxBatteryCharge: int
-    currentBatteryCharge: float
+    # Capacity (Ah) - optional for inverters without batteries
+    maxBatteryCharge: int | None = None
+    currentBatteryCharge: float | None = None
     remainCapacity: int | None = None
     fullCapacity: int | None = None
     capacityPercent: int | None = None
