@@ -683,8 +683,8 @@ class BatteryInfo(BaseModel):
     peps: int | None = None  # EPS/backup power
 
     # Capacity (Ah)
-    maxBatteryCharge: int
-    currentBatteryCharge: float
+    maxBatteryCharge: int | None = None
+    currentBatteryCharge: float | None = None
     remainCapacity: int | None = None
     fullCapacity: int | None = None
     capacityPercent: int | None = None
