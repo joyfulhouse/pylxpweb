@@ -70,7 +70,7 @@ class PlantEndpoints(BaseEndpoint):
         }
 
         response = await self.client._request(
-            "POST", "/WManage/web/config/plant/list/viewer", data=data
+            "POST", "/WManage/web/config/plant/list" + ("" if self.client._user_role != "VIEWER" else "/viewer"), data=data
         )
         return PlantListResponse.model_validate(response)
 
@@ -115,7 +115,7 @@ class PlantEndpoints(BaseEndpoint):
         }
 
         response = await self.client._request(
-            "POST", "/WManage/web/config/plant/list/viewer", data=data
+            "POST", "/WManage/web/config/plant/list" + ("" if self.client._user_role != "VIEWER" else "/viewer"), data=data
         )
 
         if isinstance(response, dict) and response.get("rows"):
