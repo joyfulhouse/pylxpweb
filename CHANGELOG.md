@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2026-02-05
+
+### Fixed
+
+- **FlexBOSS18 model detection**: Corrected powerRating mapping - FB18 uses powerRating=9, not 6. This fixes misidentification of FlexBOSS18 as FlexBOSS21 in local mode. (joyfulhouse/eg4_web_monitor#133)
+
+### Added
+
+- Sample data: FlexBOSS18, GridBoss G1
+
 ## [0.8.3] - 2026-02-05
 
 ### Added
