@@ -97,6 +97,20 @@ class BatteryBank(BaseDevice):
             return getattr(self._inverter, "_transport_runtime", None)
         return None
 
+    def _get_transport_value(self, attr: str) -> float | int | None:
+        """Get a value from transport runtime data if available.
+
+        Args:
+            attr: Attribute name to retrieve from transport runtime data
+
+        Returns:
+            Attribute value if transport data is available, None otherwise.
+        """
+        transport = self._get_transport_runtime()
+        if transport is not None:
+            return getattr(transport, attr, None)
+        return None
+
     # ========== Status Properties ==========
 
     @property
@@ -147,11 +161,9 @@ class BatteryBank(BaseDevice):
         Returns:
             State of charge percentage (0-100).
         """
-        transport = self._get_transport_runtime()
-        if transport is not None:
-            val = getattr(transport, "battery_soc", None)
-            if val is not None:
-                return int(val)
+        val = self._get_transport_value("battery_soc")
+        if val is not None:
+            return int(val)
         return self.data.soc
 
     @property
@@ -293,11 +305,9 @@ class BatteryBank(BaseDevice):
         Returns:
             Battery voltage (scaled from vBat ÷10).
         """
-        transport = self._get_transport_runtime()
-        if transport is not None:
-            val = getattr(transport, "battery_voltage", None)
-            if val is not None:
-                return float(val)
+        val = self._get_transport_value("battery_voltage")
+        if val is not None:
+            return float(val)
         return apply_scale(self.data.vBat, ScaleFactor.SCALE_10)
 
     @property
@@ -321,11 +331,9 @@ class BatteryBank(BaseDevice):
         Returns:
             Charging power in watts.
         """
-        transport = self._get_transport_runtime()
-        if transport is not None:
-            val = getattr(transport, "battery_charge_power", None)
-            if val is not None:
-                return int(val)
+        val = self._get_transport_value("battery_charge_power")
+        if val is not None:
+            return int(val)
         return self.data.pCharge
 
     @property
@@ -338,11 +346,9 @@ class BatteryBank(BaseDevice):
         Returns:
             Discharging power in watts.
         """
-        transport = self._get_transport_runtime()
-        if transport is not None:
-            val = getattr(transport, "battery_discharge_power", None)
-            if val is not None:
-                return int(val)
+        val = self._get_transport_value("battery_discharge_power")
+        if val is not None:
+            return int(val)
         return self.data.pDisCharge
 
     @property
@@ -355,12 +361,10 @@ class BatteryBank(BaseDevice):
         Returns:
             Net battery power in watts, or None if not available.
         """
-        transport = self._get_transport_runtime()
-        if transport is not None:
-            charge = getattr(transport, "battery_charge_power", None)
-            discharge = getattr(transport, "battery_discharge_power", None)
-            if charge is not None and discharge is not None:
-                return int(charge) - int(discharge)
+        charge = self._get_transport_value("battery_charge_power")
+        discharge = self._get_transport_value("battery_discharge_power")
+        if charge is not None and discharge is not None:
+            return int(charge) - int(discharge)
         return self.data.batPower
 
     @property
@@ -421,13 +425,11 @@ class BatteryBank(BaseDevice):
         Returns:
             Current capacity in Ah, rounded to 1 decimal place.
         """
-        transport = self._get_transport_runtime()
-        if transport is not None:
-            soc_val = getattr(transport, "battery_soc", None)
-            if soc_val is not None:
-                # Calculate current capacity from real-time SOC and max capacity
-                max_cap = self.data.maxBatteryCharge
-                return round((float(soc_val) / 100.0) * max_cap, 1)
+        soc_val = self._get_transport_value("battery_soc")
+        if soc_val is not None:
+            # Calculate current capacity from real-time SOC and max capacity
+            max_cap = self.data.maxBatteryCharge
+            return round((float(soc_val) / 100.0) * max_cap, 1)
         return round(self.data.currentBatteryCharge, 1)
 
     @property

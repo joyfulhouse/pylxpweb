@@ -50,6 +50,19 @@ class Battery(BaseDevice):
     _transport_data: BatteryData | None
     _is_transport_data: bool
 
+    def _get_transport_attr(self, attr: str) -> float | int | None:
+        """Get attribute from transport data if available.
+
+        Args:
+            attr: Attribute name to retrieve from transport data
+
+        Returns:
+            Attribute value if transport data is available, None otherwise.
+        """
+        if self._transport_data is not None:
+            return getattr(self._transport_data, attr, None)
+        return None
+
     def __init__(self, client: LuxpowerClient, battery_data: BatteryModule) -> None:
         """Initialize battery module from HTTP API data.
 
@@ -105,8 +118,8 @@ class Battery(BaseDevice):
             current=int(battery_data.current * 10),  # Convert back to raw
             soc=battery_data.soc,
             soh=battery_data.soh,
-            currentRemainCapacity=int(battery_data.remaining_capacity),
-            currentFullCapacity=int(battery_data.max_capacity),
+            currentRemainCapacity=int(battery_data.remaining_capacity or 0),
+            currentFullCapacity=int(battery_data.max_capacity or 0),
             batMaxCellTemp=int(battery_data.max_cell_temperature * 10),
             batMinCellTemp=int(battery_data.min_cell_temperature * 10),
             batMaxCellVoltage=int(battery_data.max_cell_voltage * 1000),
@@ -220,8 +233,9 @@ class Battery(BaseDevice):
         Returns:
             Battery voltage (scaled from totalVoltage ÷100).
         """
-        if self._transport_data is not None:
-            return self._transport_data.voltage
+        val = self._get_transport_attr("voltage")
+        if val is not None:
+            return float(val)
         return scale_battery_value("totalVoltage", self._data.totalVoltage)
 
     @property
@@ -231,8 +245,9 @@ class Battery(BaseDevice):
         Returns:
             Battery current (scaled from current ÷10). **CRITICAL: Not ÷100**
         """
-        if self._transport_data is not None:
-            return self._transport_data.current
+        val = self._get_transport_attr("current")
+        if val is not None:
+            return float(val)
         return scale_battery_value("current", self._data.current)
 
     @property
@@ -242,8 +257,9 @@ class Battery(BaseDevice):
         Returns:
             Battery power in watts, rounded to voltage precision.
         """
-        if self._transport_data is not None:
-            return self._transport_data.power
+        val = self._get_transport_attr("power")
+        if val is not None:
+            return float(val)
         # Use voltage precision (2 decimals) as it's higher than current (1 decimal)
         precision = get_battery_field_precision("totalVoltage")
         return round(self.voltage * self.current, precision)
@@ -257,8 +273,9 @@ class Battery(BaseDevice):
         Returns:
             State of charge percentage (0-100).
         """
-        if self._transport_data is not None:
-            return self._transport_data.soc
+        val = self._get_transport_attr("soc")
+        if val is not None:
+            return int(val)
         return self._data.soc
 
     @property
@@ -268,8 +285,9 @@ class Battery(BaseDevice):
         Returns:
             State of health percentage (0-100).
         """
-        if self._transport_data is not None:
-            return self._transport_data.soh
+        val = self._get_transport_attr("soh")
+        if val is not None:
+            return int(val)
         return self._data.soh
 
     # ========== Capacity Properties ==========
@@ -281,8 +299,9 @@ class Battery(BaseDevice):
         Returns:
             Current remaining capacity in Ah.
         """
-        if self._transport_data is not None:
-            return int(self._transport_data.remaining_capacity)
+        val = self._get_transport_attr("remaining_capacity")
+        if val is not None:
+            return int(val)
         return self._data.currentRemainCapacity
 
     @property
@@ -292,8 +311,9 @@ class Battery(BaseDevice):
         Returns:
             Current full capacity in Ah.
         """
-        if self._transport_data is not None:
-            return int(self._transport_data.max_capacity)
+        val = self._get_transport_attr("max_capacity")
+        if val is not None:
+            return int(val)
         return self._data.currentFullCapacity
 
     @property
@@ -305,8 +325,9 @@ class Battery(BaseDevice):
             from currentRemainCapacity / currentFullCapacity and rounds to
             nearest integer.
         """
-        if self._transport_data is not None:
-            return self._transport_data.capacity_percent
+        val = self._get_transport_attr("capacity_percent")
+        if val is not None:
+            return int(val)
 
         # Use API value if available
         if self._data.currentCapacityPercent is not None:
@@ -328,8 +349,9 @@ class Battery(BaseDevice):
         Returns:
             Maximum cell temperature (scaled from batMaxCellTemp ÷10).
         """
-        if self._transport_data is not None:
-            return self._transport_data.max_cell_temperature
+        val = self._get_transport_attr("max_cell_temperature")
+        if val is not None:
+            return float(val)
         return scale_battery_value("batMaxCellTemp", self._data.batMaxCellTemp)
 
     @property
@@ -339,8 +361,9 @@ class Battery(BaseDevice):
         Returns:
             Minimum cell temperature (scaled from batMinCellTemp ÷10).
         """
-        if self._transport_data is not None:
-            return self._transport_data.min_cell_temperature
+        val = self._get_transport_attr("min_cell_temperature")
+        if val is not None:
+            return float(val)
         return scale_battery_value("batMinCellTemp", self._data.batMinCellTemp)
 
     @property
@@ -350,9 +373,9 @@ class Battery(BaseDevice):
         Returns:
             Cell number (0-indexed), or None if not available.
         """
-        if self._transport_data is not None:
-            val = self._transport_data.max_cell_num_temp
-            return val if val > 0 else None
+        val = self._get_transport_attr("max_cell_num_temp")
+        if val is not None:
+            return int(val) if val > 0 else None
         return self._data.batMaxCellNumTemp
 
     @property
@@ -362,9 +385,9 @@ class Battery(BaseDevice):
         Returns:
             Cell number (0-indexed), or None if not available.
         """
-        if self._transport_data is not None:
-            val = self._transport_data.min_cell_num_temp
-            return val if val > 0 else None
+        val = self._get_transport_attr("min_cell_num_temp")
+        if val is not None:
+            return int(val) if val > 0 else None
         return self._data.batMinCellNumTemp
 
     @property
@@ -375,8 +398,9 @@ class Battery(BaseDevice):
             Temperature difference between hottest and coolest cell in Celsius,
             rounded to source data precision.
         """
-        if self._transport_data is not None:
-            return self._transport_data.cell_temp_delta
+        val = self._get_transport_attr("cell_temp_delta")
+        if val is not None:
+            return float(val)
         precision = get_battery_field_precision("batMaxCellTemp")
         return round(self.max_cell_temp - self.min_cell_temp, precision)
 
@@ -389,8 +413,9 @@ class Battery(BaseDevice):
         Returns:
             Maximum cell voltage (scaled from batMaxCellVoltage ÷1000).
         """
-        if self._transport_data is not None:
-            return self._transport_data.max_cell_voltage
+        val = self._get_transport_attr("max_cell_voltage")
+        if val is not None:
+            return float(val)
         return scale_battery_value("batMaxCellVoltage", self._data.batMaxCellVoltage)
 
     @property
@@ -400,8 +425,9 @@ class Battery(BaseDevice):
         Returns:
             Minimum cell voltage (scaled from batMinCellVoltage ÷1000).
         """
-        if self._transport_data is not None:
-            return self._transport_data.min_cell_voltage
+        val = self._get_transport_attr("min_cell_voltage")
+        if val is not None:
+            return float(val)
         return scale_battery_value("batMinCellVoltage", self._data.batMinCellVoltage)
 
     @property
@@ -411,9 +437,9 @@ class Battery(BaseDevice):
         Returns:
             Cell number (0-indexed), or None if not available.
         """
-        if self._transport_data is not None:
-            val = self._transport_data.max_cell_num_voltage
-            return val if val > 0 else None
+        val = self._get_transport_attr("max_cell_num_voltage")
+        if val is not None:
+            return int(val) if val > 0 else None
         return self._data.batMaxCellNumVolt
 
     @property
@@ -423,9 +449,9 @@ class Battery(BaseDevice):
         Returns:
             Cell number (0-indexed), or None if not available.
         """
-        if self._transport_data is not None:
-            val = self._transport_data.min_cell_num_voltage
-            return val if val > 0 else None
+        val = self._get_transport_attr("min_cell_num_voltage")
+        if val is not None:
+            return int(val) if val > 0 else None
         return self._data.batMinCellNumVolt
 
     @property
@@ -436,8 +462,9 @@ class Battery(BaseDevice):
             Voltage difference between highest and lowest cell in volts,
             rounded to source data precision.
         """
-        if self._transport_data is not None:
-            return self._transport_data.cell_voltage_delta
+        val = self._get_transport_attr("cell_voltage_delta")
+        if val is not None:
+            return float(val)
         precision = get_battery_field_precision("batMaxCellVoltage")
         return round(self.max_cell_voltage - self.min_cell_voltage, precision)
 
@@ -450,9 +477,9 @@ class Battery(BaseDevice):
         Returns:
             Maximum charge current (÷100 for amps), or None if not available.
         """
-        if self._transport_data is not None:
-            val = self._transport_data.charge_current_limit
-            return val if val > 0 else None
+        val = self._get_transport_attr("charge_current_limit")
+        if val is not None:
+            return float(val) if val > 0 else None
         if self._data.batChargeMaxCur is None:
             return None
         return scale_battery_value("batChargeMaxCur", self._data.batChargeMaxCur)
@@ -464,9 +491,9 @@ class Battery(BaseDevice):
         Returns:
             Charge voltage reference (÷10 for volts), or None if not available.
         """
-        if self._transport_data is not None:
-            val = self._transport_data.charge_voltage_ref
-            return val if val > 0 else None
+        val = self._get_transport_attr("charge_voltage_ref")
+        if val is not None:
+            return float(val) if val > 0 else None
         if self._data.batChargeVoltRef is None:
             return None
         return scale_battery_value("batChargeVoltRef", self._data.batChargeVoltRef)
@@ -480,8 +507,9 @@ class Battery(BaseDevice):
         Returns:
             Number of charge/discharge cycles.
         """
-        if self._transport_data is not None:
-            return self._transport_data.cycle_count
+        val = self._get_transport_attr("cycle_count")
+        if val is not None:
+            return int(val)
         return self._data.cycleCnt
 
     @property
