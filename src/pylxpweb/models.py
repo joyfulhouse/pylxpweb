@@ -67,6 +67,7 @@ class UserRole(str, Enum):
 
     VIEWER = "VIEWER"
     INSTALLER = "INSTALLER"
+    I_ASSISTANT = "I_ASSISTANT"  # Installer Assistant
     ADMIN = "ADMIN"
 
 
