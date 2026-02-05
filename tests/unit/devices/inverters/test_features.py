@@ -169,6 +169,53 @@ class TestInverterModelInfo:
             model = InverterModelInfo(lithium_type=code)
             assert model.lithium_protocol_name == expected_name
 
+    def test_get_power_rating_kw_pv_series(self) -> None:
+        """Test family-aware power rating for PV Series (2092)."""
+        # 12KPV: powerRating=2 -> 12kW
+        model = InverterModelInfo(power_rating=2)
+        assert model.get_power_rating_kw(2092) == 12
+
+        # 18KPV: powerRating=6 -> 18kW
+        model = InverterModelInfo(power_rating=6)
+        assert model.get_power_rating_kw(2092) == 18
+
+    def test_get_power_rating_kw_flexboss_series(self) -> None:
+        """Test family-aware power rating for FlexBOSS Series (10284)."""
+        # FlexBOSS18: powerRating=6 -> 18kW
+        model = InverterModelInfo(power_rating=6)
+        assert model.get_power_rating_kw(10284) == 18
+
+        # FlexBOSS21: powerRating=8 -> 21kW
+        model = InverterModelInfo(power_rating=8)
+        assert model.get_power_rating_kw(10284) == 21
+
+    def test_get_power_rating_kw_offgrid_series(self) -> None:
+        """Test family-aware power rating for Off-Grid Series (54)."""
+        # SNA12K: powerRating=6 -> 12kW (uses legacy mapping)
+        model = InverterModelInfo(power_rating=6)
+        assert model.get_power_rating_kw(54) == 12
+
+    def test_get_model_name_pv_series(self) -> None:
+        """Test model name detection for PV Series."""
+        model = InverterModelInfo(power_rating=2)
+        assert model.get_model_name(2092) == "12KPV"
+
+        model = InverterModelInfo(power_rating=6)
+        assert model.get_model_name(2092) == "18KPV"
+
+    def test_get_model_name_flexboss_series(self) -> None:
+        """Test model name detection for FlexBOSS Series."""
+        model = InverterModelInfo(power_rating=6)
+        assert model.get_model_name(10284) == "FlexBOSS18"
+
+        model = InverterModelInfo(power_rating=8)
+        assert model.get_model_name(10284) == "FlexBOSS21"
+
+    def test_get_model_name_gridboss(self) -> None:
+        """Test model name detection for GridBOSS."""
+        model = InverterModelInfo(power_rating=0)
+        assert model.get_model_name(50) == "GridBOSS"
+
 
 # =============================================================================
 # InverterFeatures Tests

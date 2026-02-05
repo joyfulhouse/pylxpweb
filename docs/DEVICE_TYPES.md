@@ -24,11 +24,34 @@ This is the firmware-level model identifier stored in register 19. It identifies
 | Code | Model Family | Example Models |
 |------|--------------|----------------|
 | **54** | EG4 Off-Grid | 12000XP, 6000XP |
-| **2092** | EG4 Hybrid | 18kPV, 12kPV |
-| **10284** | EG4 Hybrid | FlexBOSS21, FlexBOSS18 |
+| **2092** | EG4 Hybrid (PV Series) | 18kPV, 12kPV |
+| **10284** | EG4 Hybrid (FlexBOSS Series) | FlexBOSS21, FlexBOSS18 |
 | **12** | Luxpower | LXP-EU 12K |
 | **44** | Luxpower | LXP-LB-BR 10K |
 | **50** | GridBOSS (MID) | GridBOSS |
+
+### 3. `HOLD_MODEL_powerRating` (from HOLD_MODEL register)
+
+Within each device type code family, the `powerRating` field differentiates specific models:
+
+| Device Type Code | powerRating | Model |
+|------------------|-------------|-------|
+| 2092 | 2 | 12KPV |
+| 2092 | 6 | 18KPV |
+| 10284 | 6 | FlexBOSS18 |
+| 10284 | 8 | FlexBOSS21 |
+
+### 4. Other Register Fields
+
+| Field | Description |
+|-------|-------------|
+| `BIT_DEVICE_TYPE_ODM` | OEM/ODM branding (4 = EG4 branded) |
+| `BIT_MACHINE_TYPE` | Unknown purpose (0 on PV Series, 1 on FlexBOSS) |
+| `FUNC_MIDBOX_EN` | User config: GridBOSS enabled in parallel settings |
+| `HOLD_SET_COMPOSED_PHASE` | User config: System type (1-phase, 3-phase, 2x208, slave) |
+
+> **Note**: `BIT_MACHINE_TYPE` and `FUNC_MIDBOX_EN` are NOT reliable model differentiators.
+> Phase configuration is a user setting, not a hardware limitation.
 
 ## Model Families
 
@@ -58,29 +81,46 @@ This is the firmware-level model identifier stored in register 19. It identifies
 
 ### EG4 Hybrid Series (EG4_HYBRID)
 
-**Device Type Codes:** 2092, 10284
+**Device Type Codes:** 2092 (PV Series), 10284 (FlexBOSS Series)
 
 **Target Market:** US residential/commercial grid-tied hybrid
 
 **Key Features:**
 - Grid sellback capable
-- Split-phase grid support (L1/L2)
-- Parallel operation support
+- Split-phase grid support (L1/L2) - default configuration
+- Configurable system types: 1 Phase Master, 3 Phase Master, 2x208 Master, Slave
+- Parallel operation support (with optional GridBOSS)
 - Volt-Watt curve control
 - Grid peak shaving
 - DRMS (Demand Response Management) support
 
-**Models:** 18kPV, 12kPV, FlexBOSS21, FlexBOSS18
+#### PV Series (Device Type Code: 2092)
+
+| powerRating | Model | Power | Firmware Prefix |
+|-------------|-------|-------|-----------------|
+| 2 | 12KPV | 12kW | EAAB-* |
+| 6 | 18KPV | 18kW | EAAB-* |
+
+#### FlexBOSS Series (Device Type Code: 10284)
+
+| powerRating | Model | Power | Firmware Prefix |
+|-------------|-------|-------|-----------------|
+| 6 | FlexBOSS18 | 18kW | FAAB-* |
+| 8 | FlexBOSS21 | 21kW | FAAB-* |
 
 **Unique Parameters:**
 - `HOLD_VW_V1` through `HOLD_VW_V4` - Volt-Watt curve voltage points
 - `HOLD_VW_P1` through `HOLD_VW_P4` - Volt-Watt curve power points
 - `_12K_HOLD_GRID_PEAK_SHAVING_POWER` - Peak shaving power limit
 - `HOLD_PARALLEL_REGISTER` - Parallel operation settings
+- `HOLD_SET_COMPOSED_PHASE` - System type configuration
 
-**Sample Models:**
-- 18KPV: 18kW, device type code 2092, HOLD_MODEL 0x986C0
-- FlexBOSS21: 21kW, device type code 10284
+**Sample Data:**
+| Model | Device Type Code | powerRating | HOLD_MODEL | Firmware |
+|-------|------------------|-------------|------------|----------|
+| 12KPV | 2092 | 2 | 0x98640 | EAAB-2525 |
+| 18KPV | 2092 | 6 | 0x986C0 | EAAB-2525 |
+| FlexBOSS21 | 10284 | 8 | 0x1098200 | FAAB-2525 |
 
 ### Luxpower Series (LXP)
 
@@ -158,7 +198,7 @@ The `HOLD_MODEL` register (registers 0-1) contains a 32-bit bitfield with hardwa
 | 0-3 | `battery_type` | 0=Lead-acid, 1=Lithium primary, 2=Hybrid |
 | 4-7 | `lead_acid_type` | Lead-acid battery subtype |
 | 8-11 | `lithium_type` | Lithium protocol (1=Standard, 2=EG4, 6=EU) |
-| 12-15 | `power_rating` | Power code (6=12K, 7=15K, 8=18K) |
+| 12-15 | `power_rating` | Power code (see table below) |
 | 16 | `us_version` | 1=US market, 0=EU/other |
 | 17 | `measurement` | Measurement unit type |
 | 18 | `wireless_meter` | Wireless CT meter flag |
@@ -167,30 +207,76 @@ The `HOLD_MODEL` register (registers 0-1) contains a 32-bit bitfield with hardwa
 | 25-27 | `rule` | Grid compliance rule |
 | 28 | `rule_mask` | Grid compliance mask |
 
+### Power Rating Code Mapping
+
+The `power_rating` field is an internal code that varies by device family:
+
+**EG4 Off-Grid Series (device type 54):**
+| Code | kW | Model |
+|------|-----|-------|
+| 6 | 12 | 12000XP |
+| 8 | 18 | 18000XP |
+
+**EG4 PV Series (device type 2092):**
+| Code | kW | Model |
+|------|-----|-------|
+| 2 | 12 | 12KPV |
+| 6 | 18 | 18KPV |
+
+**EG4 FlexBOSS Series (device type 10284):**
+| Code | kW | Model |
+|------|-----|-------|
+| 6 | 18 | FlexBOSS18 |
+| 8 | 21 | FlexBOSS21 |
+
+> **Important**: Use `InverterModelInfo.get_power_rating_kw(device_type_code)` for accurate
+> family-aware power rating. The `power_rating_kw` property only works for EG4 Off-Grid series.
+
 ### Example Decoding
 
-**SNA12K-US (0x90AC1 = 592577):**
+**12KPV (0x98640):**
 ```
-battery_type = 1 (Lithium primary → Hybrid)
-lithium_type = 2 (EG4 protocol)
-power_rating = 6 (12kW)
-us_version = 1 (US market)
-```
-
-**18KPV (0x986C0 = 624320):**
-```
-battery_type = 0 (Lead-acid → Hybrid capable)
+battery_type = 2 (Hybrid)
 lithium_type = 1 (Standard)
-power_rating = 6 (mapped to 18kW for this model)
+power_rating = 2 → 12kW
 us_version = 1 (US market)
+HOLD_DEVICE_TYPE_CODE = 2092 (PV Series)
 ```
 
-**LXP-EU 12K (0x19AC0 = 105152):**
+**18KPV (0x986C0):**
+```
+battery_type = 2 (Hybrid)
+lithium_type = 1 (Standard)
+power_rating = 6 → 18kW
+us_version = 1 (US market)
+HOLD_DEVICE_TYPE_CODE = 2092 (PV Series)
+```
+
+**FlexBOSS21 (0x1098200):**
+```
+battery_type = 2 (Hybrid)
+lithium_type = 0 (None/External BMS)
+power_rating = 8 → 21kW
+us_version = 1 (US market)
+HOLD_DEVICE_TYPE_CODE = 10284 (FlexBOSS Series)
+```
+
+**SNA12K-US (0x90AC1):**
+```
+battery_type = 1 (Lithium primary)
+lithium_type = 2 (EG4 protocol)
+power_rating = 6
+us_version = 1 (US market)
+HOLD_DEVICE_TYPE_CODE = 54 (EG4 Off-Grid)
+```
+
+**LXP-EU 12K (0x19AC0):**
 ```
 battery_type = 0 (Hybrid capable)
 lithium_type = 6 (EU protocol)
-power_rating = 6 (12kW)
+power_rating = 6
 us_version = 0 (EU market)
+HOLD_DEVICE_TYPE_CODE = 12 (Luxpower)
 ```
 
 ## Feature Detection System
@@ -306,7 +392,7 @@ async def configure_inverter(inverter):
 | Feature | EG4 Off-Grid | EG4 Hybrid | Luxpower (LXP) | GridBOSS |
 |---------|--------------|------------|----------------|----------|
 | Split-Phase Grid | Yes | Yes | No | N/A |
-| Three-Phase Capable* | No | No | Yes | N/A |
+| Configurable System Type* | No | Yes | Yes | N/A |
 | Off-Grid/EPS | Yes | Yes | Yes | N/A |
 | Parallel Operation | No | Yes | Yes | Controller |
 | Discharge Recovery Hysteresis | Yes | No | No | N/A |
@@ -320,7 +406,7 @@ async def configure_inverter(inverter):
 | AC Coupling Ports | No | No | No | Yes (4) |
 | Load Shedding | No | No | No | Yes (4) |
 
-> **Note**: *"Three-Phase Capable" indicates hardware capability. EG4 Hybrid models (18kPV, 12kPV, FlexBOSS) in US markets use split-phase. Luxpower models (LXP-EU, LXP-BR, LXP-LV) can support three-phase configurations. GridBOSS is a MID controller that manages parallel groups rather than generating power directly.
+> **Note**: *"Configurable System Type" means the inverter can be configured as 1 Phase Master, 3 Phase Master, 2x208 Master, or Slave via `HOLD_SET_COMPOSED_PHASE`. This is a software configuration, not a hardware limitation. EG4 Hybrid models (12kPV, 18kPV, FlexBOSS18, FlexBOSS21) all support these configurations when used in parallel setups with GridBOSS.
 
 ## Adding New Device Types
 

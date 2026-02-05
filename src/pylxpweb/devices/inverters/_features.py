@@ -307,13 +307,18 @@ class InverterModelInfo:
 
     @property
     def power_rating_kw(self) -> int:
-        """Get power rating in kilowatts.
+        """Get power rating in kilowatts (legacy mapping for EG4 Off-Grid series).
 
         Returns:
             Nominal power rating in kW, or 0 if unknown
+
+        Note:
+            Power rating codes are family-specific. This property uses the
+            original EG4 Off-Grid (SNA) series mapping. For accurate power
+            ratings across all families, use get_power_rating_kw() with
+            the device type code.
         """
-        # Power rating codes observed:
-        # 6 = 12kW, 7 = 15kW, 8 = 18kW, 9 = 21kW
+        # Original mapping for EG4 Off-Grid (SNA) series
         rating_map = {
             4: 6,  # 6kW
             5: 8,  # 8kW
@@ -323,6 +328,34 @@ class InverterModelInfo:
             9: 21,  # 21kW
         }
         return rating_map.get(self.power_rating, 0)
+
+    def get_power_rating_kw(self, device_type_code: int) -> int:
+        """Get power rating in kilowatts based on device family.
+
+        Args:
+            device_type_code: Value from HOLD_DEVICE_TYPE_CODE register
+
+        Returns:
+            Nominal power rating in kW, or 0 if unknown
+
+        Note:
+            Power rating codes are interpreted differently by device family:
+            - EG4 Off-Grid (54): 6=12kW, 8=18kW
+            - PV Series (2092): 2=12kW, 6=18kW
+            - FlexBOSS (10284): 6=18kW, 8=21kW
+        """
+        # EG4 PV Series (12KPV, 18KPV)
+        if device_type_code == 2092:
+            pv_rating_map = {2: 12, 6: 18}
+            return pv_rating_map.get(self.power_rating, 0)
+
+        # EG4 FlexBOSS Series
+        if device_type_code == 10284:
+            flexboss_rating_map = {6: 18, 8: 21}
+            return flexboss_rating_map.get(self.power_rating, 0)
+
+        # EG4 Off-Grid Series (SNA) and others - use default mapping
+        return self.power_rating_kw
 
     @property
     def lithium_protocol_name(self) -> str:
@@ -343,6 +376,45 @@ class InverterModelInfo:
             6: "EU Standard",
         }
         return protocol_map.get(self.lithium_type, f"Unknown ({self.lithium_type})")
+
+    def get_model_name(self, device_type_code: int) -> str:
+        """Get the specific model name based on device type code and power rating.
+
+        Args:
+            device_type_code: Value from HOLD_DEVICE_TYPE_CODE register
+
+        Returns:
+            Model name string (e.g., "12KPV", "18KPV", "FlexBOSS21")
+        """
+        kw = self.get_power_rating_kw(device_type_code)
+
+        # EG4 PV Series (device type code 2092)
+        if device_type_code == 2092:
+            pv_models = {2: "12KPV", 6: "18KPV"}
+            return pv_models.get(self.power_rating, f"PV-{kw}K" if kw else "PV-Unknown")
+
+        # EG4 FlexBOSS Series (device type code 10284)
+        if device_type_code == 10284:
+            flexboss_models = {6: "FlexBOSS18", 8: "FlexBOSS21"}
+            return flexboss_models.get(
+                self.power_rating, f"FlexBOSS{kw}" if kw else "FlexBOSS-Unknown"
+            )
+
+        # EG4 Off-Grid Series (device type code 54)
+        if device_type_code == 54:
+            return f"EG4-{kw}KXP" if kw else "EG4-XP"
+
+        # Luxpower Series (device type codes 12, 44, etc.)
+        if device_type_code == 12:
+            return f"LXP-EU-{kw}K" if kw else "LXP-EU"
+        if device_type_code == 44:
+            return f"LXP-{kw}K" if kw else "LXP"
+
+        # GridBOSS (device type code 50)
+        if device_type_code == 50:
+            return "GridBOSS"
+
+        return f"Unknown-{device_type_code}"
 
 
 @dataclass

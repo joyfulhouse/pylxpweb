@@ -1,0 +1,5876 @@
+{
+  "metadata": {
+    "timestamp": "2026-02-05T14:52:07.255459+00:00",
+    "pylxpweb_version": "0.8.0",
+    "base_url": "https://monitor.eg4electronics.com",
+    "serial_num": "52******23",
+    "device_type": "Grid Boss",
+    "merged_ranges": [
+      {
+        "start": 0,
+        "length": 381,
+        "end": 380
+      },
+      {
+        "start": 2032,
+        "length": 127,
+        "end": 2158
+      }
+    ]
+  },
+  "statistics": {
+    "total_blocks": 241,
+    "total_parameters": 583,
+    "blocks_with_leading_empty": 19
+  },
+  "register_blocks": [
+    {
+      "start_register": 0,
+      "block_size": 2,
+      "end_register": 1,
+      "parameter_count": 12,
+      "parameter_keys": [
+        "HOLD_MODEL",
+        "HOLD_MODEL_batteryType",
+        "HOLD_MODEL_leadAcidType",
+        "HOLD_MODEL_lithiumType",
+        "HOLD_MODEL_measurement",
+        "HOLD_MODEL_meterBrand",
+        "HOLD_MODEL_meterType",
+        "HOLD_MODEL_powerRating",
+        "HOLD_MODEL_rule",
+        "HOLD_MODEL_ruleMask",
+        "HOLD_MODEL_usVersion",
+        "HOLD_MODEL_wirelessMeter"
+      ],
+      "sample_values": {
+        "HOLD_MODEL": "0x400900C0",
+        "HOLD_MODEL_wirelessMeter": 0,
+        "HOLD_MODEL_meterType": 0,
+        "HOLD_MODEL_usVersion": 1,
+        "HOLD_MODEL_meterBrand": 0,
+        "HOLD_MODEL_measurement": 1,
+        "HOLD_MODEL_ruleMask": 0,
+        "HOLD_MODEL_batteryType": 0,
+        "HOLD_MODEL_leadAcidType": 0,
+        "HOLD_MODEL_lithiumType": 0,
+        "HOLD_MODEL_powerRating": 6,
+        "HOLD_MODEL_rule": 0
+      },
+      "boundary_validation": {
+        "original_start": 0,
+        "original_size": 2,
+        "actual_start": 0,
+        "actual_size": 2,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 2,
+      "block_size": 5,
+      "end_register": 6,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_SERIAL_NUM"
+      ],
+      "sample_values": {
+        "HOLD_SERIAL_NUM": "52******23"
+      },
+      "boundary_validation": {
+        "original_start": 2,
+        "original_size": 5,
+        "actual_start": 2,
+        "actual_size": 5,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 7,
+      "block_size": 4,
+      "end_register": 10,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FW_CODE"
+      ],
+      "sample_values": {
+        "HOLD_FW_CODE": "IAAB-1600"
+      },
+      "boundary_validation": {
+        "original_start": 7,
+        "original_size": 4,
+        "actual_start": 7,
+        "actual_size": 4,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 11,
+      "block_size": 4,
+      "end_register": 14,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_TIME"
+      ],
+      "sample_values": {
+        "HOLD_TIME": "2026-02-05 08:40:15"
+      },
+      "boundary_validation": {
+        "original_start": 11,
+        "original_size": 4,
+        "actual_start": 12,
+        "actual_size": 3,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 15,
+      "block_size": 1,
+      "end_register": 15,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_COM_ADDR"
+      ],
+      "sample_values": {
+        "HOLD_COM_ADDR": "1"
+      },
+      "boundary_validation": {
+        "original_start": 15,
+        "original_size": 1,
+        "actual_start": 15,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 16,
+      "block_size": 1,
+      "end_register": 16,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LANGUAGE"
+      ],
+      "sample_values": {
+        "HOLD_LANGUAGE": "1"
+      },
+      "boundary_validation": {
+        "original_start": 16,
+        "original_size": 1,
+        "actual_start": 16,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 17,
+      "block_size": 3,
+      "end_register": 19,
+      "parameter_count": 3,
+      "parameter_keys": [
+        "BIT_DEVICE_TYPE_ODM",
+        "BIT_MACHINE_TYPE",
+        "HOLD_DEVICE_TYPE_CODE"
+      ],
+      "sample_values": {
+        "HOLD_DEVICE_TYPE_CODE": "50",
+        "BIT_DEVICE_TYPE_ODM": 0,
+        "BIT_MACHINE_TYPE": 0
+      },
+      "boundary_validation": {
+        "original_start": 17,
+        "original_size": 3,
+        "actual_start": 19,
+        "actual_size": 1,
+        "leading_empty_registers": 2
+      }
+    },
+    {
+      "start_register": 20,
+      "block_size": 1,
+      "end_register": 20,
+      "parameter_count": 5,
+      "parameter_keys": [
+        "BIT_MIDBOX_SP_MODE_1",
+        "BIT_MIDBOX_SP_MODE_2",
+        "BIT_MIDBOX_SP_MODE_3",
+        "BIT_MIDBOX_SP_MODE_4",
+        "MIDBOX_HOLD_SMART_PORT_MODE"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SMART_PORT_MODE": "96",
+        "BIT_MIDBOX_SP_MODE_1": 0,
+        "BIT_MIDBOX_SP_MODE_2": 0,
+        "BIT_MIDBOX_SP_MODE_3": 2,
+        "BIT_MIDBOX_SP_MODE_4": 1
+      },
+      "boundary_validation": {
+        "original_start": 20,
+        "original_size": 1,
+        "actual_start": 20,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 21,
+      "block_size": 1,
+      "end_register": 21,
+      "parameter_count": 27,
+      "parameter_keys": [
+        "FUNC_AC_CHARGE",
+        "FUNC_ANTI_ISLAND_EN",
+        "FUNC_DCI_EN",
+        "FUNC_DRMS_EN",
+        "FUNC_EPS_EN",
+        "FUNC_FEED_IN_GRID_EN",
+        "FUNC_FORCED_CHG_EN",
+        "FUNC_FORCED_DISCHG_EN",
+        "FUNC_GFCI_EN",
+        "FUNC_GRID_ON_POWER_SS_EN",
+        "FUNC_ISO_EN",
+        "FUNC_LSP_AC_CHARGE",
+        "FUNC_LSP_BAT_ACTIVATION_EN",
+        "FUNC_LSP_BYPASS_EN",
+        "FUNC_LSP_BYPASS_MODE_EN",
+        "FUNC_LSP_CHARGE_PRIORITY_EN",
+        "FUNC_LSP_FAN_CHECK_EN",
+        "FUNC_LSP_ISO_EN",
+        "FUNC_LSP_LCD_REMOTE_DIS_CHG_EN",
+        "FUNC_LSP_SELF_CONSUMPTION_EN",
+        "FUNC_LSP_SET_TO_STANDBY",
+        "FUNC_LSP_WHOLE_DAY_SCHEDULE_EN",
+        "FUNC_LVRT_EN",
+        "FUNC_NEUTRAL_DETECT_EN",
+        "FUNC_OVF_LOAD_DERATE_EN",
+        "FUNC_SET_TO_STANDBY",
+        "FUNC_SW_SEAMLESSLY_EN"
+      ],
+      "sample_values": {
+        "FUNC_EPS_EN": true,
+        "FUNC_OVF_LOAD_DERATE_EN": false,
+        "FUNC_DRMS_EN": true,
+        "FUNC_LVRT_EN": false,
+        "FUNC_ANTI_ISLAND_EN": true,
+        "FUNC_NEUTRAL_DETECT_EN": false,
+        "FUNC_GRID_ON_POWER_SS_EN": true,
+        "FUNC_AC_CHARGE": false,
+        "FUNC_SW_SEAMLESSLY_EN": false,
+        "FUNC_SET_TO_STANDBY": true,
+        "FUNC_FORCED_DISCHG_EN": false,
+        "FUNC_FORCED_CHG_EN": false,
+        "FUNC_ISO_EN": true,
+        "FUNC_GFCI_EN": true,
+        "FUNC_DCI_EN": true,
+        "FUNC_FEED_IN_GRID_EN": true,
+        "FUNC_LSP_SET_TO_STANDBY": true,
+        "FUNC_LSP_ISO_EN": false,
+        "FUNC_LSP_FAN_CHECK_EN": true,
+        "FUNC_LSP_WHOLE_DAY_SCHEDULE_EN": false,
+        "FUNC_LSP_LCD_REMOTE_DIS_CHG_EN": true,
+        "FUNC_LSP_SELF_CONSUMPTION_EN": false,
+        "FUNC_LSP_AC_CHARGE": false,
+        "FUNC_LSP_BAT_ACTIVATION_EN": true,
+        "FUNC_LSP_BYPASS_MODE_EN": false,
+        "FUNC_LSP_BYPASS_EN": true,
+        "FUNC_LSP_CHARGE_PRIORITY_EN": true
+      },
+      "boundary_validation": {
+        "original_start": 21,
+        "original_size": 1,
+        "actual_start": 21,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 22,
+      "block_size": 1,
+      "end_register": 22,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_START_PV_VOLT"
+      ],
+      "sample_values": {
+        "HOLD_START_PV_VOLT": "140"
+      },
+      "boundary_validation": {
+        "original_start": 22,
+        "original_size": 1,
+        "actual_start": 22,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 23,
+      "block_size": 1,
+      "end_register": 23,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_CONNECT_TIME"
+      ],
+      "sample_values": {
+        "HOLD_CONNECT_TIME": "300"
+      },
+      "boundary_validation": {
+        "original_start": 23,
+        "original_size": 1,
+        "actual_start": 23,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 24,
+      "block_size": 1,
+      "end_register": 24,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_RECONNECT_TIME"
+      ],
+      "sample_values": {
+        "HOLD_RECONNECT_TIME": "300"
+      },
+      "boundary_validation": {
+        "original_start": 24,
+        "original_size": 1,
+        "actual_start": 24,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 25,
+      "block_size": 1,
+      "end_register": 25,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_CONN_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_CONN_LOW": "220"
+      },
+      "boundary_validation": {
+        "original_start": 25,
+        "original_size": 1,
+        "actual_start": 25,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 26,
+      "block_size": 1,
+      "end_register": 26,
+      "parameter_count": 11,
+      "parameter_keys": [
+        "FUNC_LSP_BATT_VOLT_OR_SOC",
+        "FUNC_LSP_WHOLE_BAT_FIRST_1_EN",
+        "FUNC_LSP_WHOLE_BAT_FIRST_2_EN",
+        "FUNC_LSP_WHOLE_BAT_FIRST_3_EN",
+        "FUNC_LSP_WHOLE_BYPASS_1_EN",
+        "FUNC_LSP_WHOLE_BYPASS_2_EN",
+        "FUNC_LSP_WHOLE_BYPASS_3_EN",
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_1_EN",
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_2_EN",
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_3_EN",
+        "HOLD_GRID_VOLT_CONN_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_CONN_HIGH": "252",
+        "FUNC_LSP_WHOLE_BYPASS_1_EN": false,
+        "FUNC_LSP_WHOLE_BYPASS_2_EN": false,
+        "FUNC_LSP_WHOLE_BYPASS_3_EN": false,
+        "FUNC_LSP_WHOLE_BAT_FIRST_1_EN": true,
+        "FUNC_LSP_WHOLE_BAT_FIRST_2_EN": true,
+        "FUNC_LSP_WHOLE_BAT_FIRST_3_EN": false,
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_1_EN": true,
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_2_EN": true,
+        "FUNC_LSP_WHOLE_SELF_CONSUMPTION_3_EN": true,
+        "FUNC_LSP_BATT_VOLT_OR_SOC": false
+      },
+      "boundary_validation": {
+        "original_start": 26,
+        "original_size": 1,
+        "actual_start": 26,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 27,
+      "block_size": 1,
+      "end_register": 27,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_CONN_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_CONN_LOW": "59.5"
+      },
+      "boundary_validation": {
+        "original_start": 27,
+        "original_size": 1,
+        "actual_start": 27,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 28,
+      "block_size": 1,
+      "end_register": 28,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_CONN_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_CONN_HIGH": "60.1"
+      },
+      "boundary_validation": {
+        "original_start": 28,
+        "original_size": 1,
+        "actual_start": 28,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 29,
+      "block_size": 1,
+      "end_register": 29,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT1_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT1_LOW": "211.2"
+      },
+      "boundary_validation": {
+        "original_start": 29,
+        "original_size": 1,
+        "actual_start": 29,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 30,
+      "block_size": 1,
+      "end_register": 30,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT1_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT1_HIGH": "264"
+      },
+      "boundary_validation": {
+        "original_start": 30,
+        "original_size": 1,
+        "actual_start": 30,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 31,
+      "block_size": 1,
+      "end_register": 31,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT1_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT1_LOW_TIME": "2100"
+      },
+      "boundary_validation": {
+        "original_start": 31,
+        "original_size": 1,
+        "actual_start": 31,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 32,
+      "block_size": 1,
+      "end_register": 32,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT1_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT1_HIGH_TIME": "1300"
+      },
+      "boundary_validation": {
+        "original_start": 32,
+        "original_size": 1,
+        "actual_start": 32,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 33,
+      "block_size": 1,
+      "end_register": 33,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT2_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT2_LOW": "120"
+      },
+      "boundary_validation": {
+        "original_start": 33,
+        "original_size": 1,
+        "actual_start": 33,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 34,
+      "block_size": 1,
+      "end_register": 34,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT2_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT2_HIGH": "288"
+      },
+      "boundary_validation": {
+        "original_start": 34,
+        "original_size": 1,
+        "actual_start": 34,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 35,
+      "block_size": 1,
+      "end_register": 35,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT2_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT2_LOW_TIME": "200"
+      },
+      "boundary_validation": {
+        "original_start": 35,
+        "original_size": 1,
+        "actual_start": 35,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 36,
+      "block_size": 1,
+      "end_register": 36,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT2_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT2_HIGH_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 36,
+        "original_size": 1,
+        "actual_start": 36,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 37,
+      "block_size": 1,
+      "end_register": 37,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT3_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT3_LOW": "120"
+      },
+      "boundary_validation": {
+        "original_start": 37,
+        "original_size": 1,
+        "actual_start": 37,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 38,
+      "block_size": 1,
+      "end_register": 38,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT3_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT3_HIGH": "288"
+      },
+      "boundary_validation": {
+        "original_start": 38,
+        "original_size": 1,
+        "actual_start": 38,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 39,
+      "block_size": 1,
+      "end_register": 39,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT3_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT3_LOW_TIME": "200"
+      },
+      "boundary_validation": {
+        "original_start": 39,
+        "original_size": 1,
+        "actual_start": 39,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 40,
+      "block_size": 1,
+      "end_register": 40,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_LIMIT3_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_LIMIT3_HIGH_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 40,
+        "original_size": 1,
+        "actual_start": 40,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 41,
+      "block_size": 1,
+      "end_register": 41,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_VOLT_MOV_AVG_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_VOLT_MOV_AVG_HIGH": "264"
+      },
+      "boundary_validation": {
+        "original_start": 41,
+        "original_size": 1,
+        "actual_start": 41,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 42,
+      "block_size": 1,
+      "end_register": 42,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT1_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT1_LOW": "58.5"
+      },
+      "boundary_validation": {
+        "original_start": 42,
+        "original_size": 1,
+        "actual_start": 42,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 43,
+      "block_size": 1,
+      "end_register": 43,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT1_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT1_HIGH": "61.2"
+      },
+      "boundary_validation": {
+        "original_start": 43,
+        "original_size": 1,
+        "actual_start": 43,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 44,
+      "block_size": 1,
+      "end_register": 44,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT1_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT1_LOW_TIME": "30000"
+      },
+      "boundary_validation": {
+        "original_start": 44,
+        "original_size": 1,
+        "actual_start": 44,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 45,
+      "block_size": 1,
+      "end_register": 45,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT1_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT1_HIGH_TIME": "30000"
+      },
+      "boundary_validation": {
+        "original_start": 45,
+        "original_size": 1,
+        "actual_start": 45,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 46,
+      "block_size": 1,
+      "end_register": 46,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT2_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT2_LOW": "56.5"
+      },
+      "boundary_validation": {
+        "original_start": 46,
+        "original_size": 1,
+        "actual_start": 46,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 47,
+      "block_size": 1,
+      "end_register": 47,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT2_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT2_HIGH": "62"
+      },
+      "boundary_validation": {
+        "original_start": 47,
+        "original_size": 1,
+        "actual_start": 47,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 48,
+      "block_size": 1,
+      "end_register": 48,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT2_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT2_LOW_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 48,
+        "original_size": 1,
+        "actual_start": 48,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 49,
+      "block_size": 1,
+      "end_register": 49,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT2_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT2_HIGH_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 49,
+        "original_size": 1,
+        "actual_start": 49,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 50,
+      "block_size": 1,
+      "end_register": 50,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT3_LOW"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT3_LOW": "56.5"
+      },
+      "boundary_validation": {
+        "original_start": 50,
+        "original_size": 1,
+        "actual_start": 50,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 51,
+      "block_size": 1,
+      "end_register": 51,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT3_HIGH"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT3_HIGH": "62"
+      },
+      "boundary_validation": {
+        "original_start": 51,
+        "original_size": 1,
+        "actual_start": 51,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 52,
+      "block_size": 1,
+      "end_register": 52,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT3_LOW_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT3_LOW_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 52,
+        "original_size": 1,
+        "actual_start": 52,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 53,
+      "block_size": 1,
+      "end_register": 53,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_GRID_FREQ_LIMIT3_HIGH_TIME"
+      ],
+      "sample_values": {
+        "HOLD_GRID_FREQ_LIMIT3_HIGH_TIME": "16"
+      },
+      "boundary_validation": {
+        "original_start": 53,
+        "original_size": 1,
+        "actual_start": 53,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 54,
+      "block_size": 1,
+      "end_register": 54,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_MAX_Q_PERCENT_FOR_QV"
+      ],
+      "sample_values": {
+        "HOLD_MAX_Q_PERCENT_FOR_QV": "44"
+      },
+      "boundary_validation": {
+        "original_start": 54,
+        "original_size": 1,
+        "actual_start": 54,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 55,
+      "block_size": 1,
+      "end_register": 55,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_V1L"
+      ],
+      "sample_values": {
+        "HOLD_V1L": "235.2"
+      },
+      "boundary_validation": {
+        "original_start": 55,
+        "original_size": 1,
+        "actual_start": 55,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 56,
+      "block_size": 1,
+      "end_register": 56,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_V2L"
+      ],
+      "sample_values": {
+        "HOLD_V2L": "220.8"
+      },
+      "boundary_validation": {
+        "original_start": 56,
+        "original_size": 1,
+        "actual_start": 56,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 57,
+      "block_size": 1,
+      "end_register": 57,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_V1H"
+      ],
+      "sample_values": {
+        "HOLD_V1H": "244.8"
+      },
+      "boundary_validation": {
+        "original_start": 57,
+        "original_size": 1,
+        "actual_start": 57,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 58,
+      "block_size": 1,
+      "end_register": 58,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_V2H"
+      ],
+      "sample_values": {
+        "HOLD_V2H": "259.2"
+      },
+      "boundary_validation": {
+        "original_start": 58,
+        "original_size": 1,
+        "actual_start": 58,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 59,
+      "block_size": 1,
+      "end_register": 59,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_REACTIVE_POWER_CMD_TYPE"
+      ],
+      "sample_values": {
+        "HOLD_REACTIVE_POWER_CMD_TYPE": "0"
+      },
+      "boundary_validation": {
+        "original_start": 59,
+        "original_size": 1,
+        "actual_start": 59,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 60,
+      "block_size": 1,
+      "end_register": 60,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_ACTIVE_POWER_PERCENT_CMD"
+      ],
+      "sample_values": {
+        "HOLD_ACTIVE_POWER_PERCENT_CMD": "100"
+      },
+      "boundary_validation": {
+        "original_start": 60,
+        "original_size": 1,
+        "actual_start": 60,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 61,
+      "block_size": 1,
+      "end_register": 61,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_REACTIVE_POWER_PERCENT_CMD"
+      ],
+      "sample_values": {
+        "HOLD_REACTIVE_POWER_PERCENT_CMD": "100"
+      },
+      "boundary_validation": {
+        "original_start": 61,
+        "original_size": 1,
+        "actual_start": 61,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 62,
+      "block_size": 1,
+      "end_register": 62,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_PF_CMD",
+        "HOLD_PF_CMD_TEXT"
+      ],
+      "sample_values": {
+        "HOLD_PF_CMD": "1000",
+        "HOLD_PF_CMD_TEXT": "1"
+      },
+      "boundary_validation": {
+        "original_start": 62,
+        "original_size": 1,
+        "actual_start": 62,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 63,
+      "block_size": 1,
+      "end_register": 63,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_POWER_SOFT_START_SLOPE"
+      ],
+      "sample_values": {
+        "HOLD_POWER_SOFT_START_SLOPE": "100"
+      },
+      "boundary_validation": {
+        "original_start": 63,
+        "original_size": 1,
+        "actual_start": 63,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 64,
+      "block_size": 1,
+      "end_register": 64,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_CHARGE_POWER_PERCENT_CMD"
+      ],
+      "sample_values": {
+        "HOLD_CHARGE_POWER_PERCENT_CMD": "100"
+      },
+      "boundary_validation": {
+        "original_start": 64,
+        "original_size": 1,
+        "actual_start": 64,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 65,
+      "block_size": 1,
+      "end_register": 65,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_DISCHG_POWER_PERCENT_CMD"
+      ],
+      "sample_values": {
+        "HOLD_DISCHG_POWER_PERCENT_CMD": "100"
+      },
+      "boundary_validation": {
+        "original_start": 65,
+        "original_size": 1,
+        "actual_start": 65,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 66,
+      "block_size": 1,
+      "end_register": 66,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_POWER_CMD"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_POWER_CMD": "12"
+      },
+      "boundary_validation": {
+        "original_start": 66,
+        "original_size": 1,
+        "actual_start": 66,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 67,
+      "block_size": 1,
+      "end_register": 67,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_SOC_LIMIT"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_SOC_LIMIT": "100"
+      },
+      "boundary_validation": {
+        "original_start": 67,
+        "original_size": 1,
+        "actual_start": 67,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 68,
+      "block_size": 1,
+      "end_register": 68,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_START_HOUR",
+        "HOLD_AC_CHARGE_START_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_START_HOUR": "00",
+        "HOLD_AC_CHARGE_START_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 68,
+        "original_size": 1,
+        "actual_start": 68,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 69,
+      "block_size": 1,
+      "end_register": 69,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_END_HOUR",
+        "HOLD_AC_CHARGE_END_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_END_HOUR": "00",
+        "HOLD_AC_CHARGE_END_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 69,
+        "original_size": 1,
+        "actual_start": 69,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 70,
+      "block_size": 1,
+      "end_register": 70,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_START_HOUR_1",
+        "HOLD_AC_CHARGE_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_START_HOUR_1": "00",
+        "HOLD_AC_CHARGE_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 70,
+        "original_size": 1,
+        "actual_start": 70,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 71,
+      "block_size": 1,
+      "end_register": 71,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_END_HOUR_1",
+        "HOLD_AC_CHARGE_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_END_HOUR_1": "00",
+        "HOLD_AC_CHARGE_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 71,
+        "original_size": 1,
+        "actual_start": 71,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 72,
+      "block_size": 1,
+      "end_register": 72,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_START_HOUR_2",
+        "HOLD_AC_CHARGE_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_START_HOUR_2": "00",
+        "HOLD_AC_CHARGE_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 72,
+        "original_size": 1,
+        "actual_start": 72,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 73,
+      "block_size": 1,
+      "end_register": 73,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_END_HOUR_2",
+        "HOLD_AC_CHARGE_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_END_HOUR_2": "00",
+        "HOLD_AC_CHARGE_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 73,
+        "original_size": 1,
+        "actual_start": 73,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 74,
+      "block_size": 1,
+      "end_register": 74,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FORCED_CHG_POWER_CMD"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHG_POWER_CMD": "12"
+      },
+      "boundary_validation": {
+        "original_start": 74,
+        "original_size": 1,
+        "actual_start": 74,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 75,
+      "block_size": 1,
+      "end_register": 75,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FORCED_CHG_SOC_LIMIT"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHG_SOC_LIMIT": "100"
+      },
+      "boundary_validation": {
+        "original_start": 75,
+        "original_size": 1,
+        "actual_start": 75,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 76,
+      "block_size": 1,
+      "end_register": 76,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_START_HOUR",
+        "HOLD_FORCED_CHARGE_START_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_START_HOUR": "00",
+        "HOLD_FORCED_CHARGE_START_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 76,
+        "original_size": 1,
+        "actual_start": 76,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 77,
+      "block_size": 1,
+      "end_register": 77,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_END_HOUR",
+        "HOLD_FORCED_CHARGE_END_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_END_HOUR": "00",
+        "HOLD_FORCED_CHARGE_END_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 77,
+        "original_size": 1,
+        "actual_start": 77,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 78,
+      "block_size": 1,
+      "end_register": 78,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_START_HOUR_1",
+        "HOLD_FORCED_CHARGE_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_START_HOUR_1": "00",
+        "HOLD_FORCED_CHARGE_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 78,
+        "original_size": 1,
+        "actual_start": 78,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 79,
+      "block_size": 1,
+      "end_register": 79,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_END_HOUR_1",
+        "HOLD_FORCED_CHARGE_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_END_HOUR_1": "00",
+        "HOLD_FORCED_CHARGE_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 79,
+        "original_size": 1,
+        "actual_start": 79,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 80,
+      "block_size": 1,
+      "end_register": 80,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_START_HOUR_2",
+        "HOLD_FORCED_CHARGE_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_START_HOUR_2": "00",
+        "HOLD_FORCED_CHARGE_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 80,
+        "original_size": 1,
+        "actual_start": 80,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 81,
+      "block_size": 1,
+      "end_register": 81,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_CHARGE_END_HOUR_2",
+        "HOLD_FORCED_CHARGE_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_CHARGE_END_HOUR_2": "00",
+        "HOLD_FORCED_CHARGE_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 81,
+        "original_size": 1,
+        "actual_start": 81,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 82,
+      "block_size": 1,
+      "end_register": 82,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHG_POWER_CMD"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHG_POWER_CMD": "12"
+      },
+      "boundary_validation": {
+        "original_start": 82,
+        "original_size": 1,
+        "actual_start": 82,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 83,
+      "block_size": 1,
+      "end_register": 83,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHG_SOC_LIMIT"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHG_SOC_LIMIT": "20"
+      },
+      "boundary_validation": {
+        "original_start": 83,
+        "original_size": 1,
+        "actual_start": 83,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 84,
+      "block_size": 1,
+      "end_register": 84,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_START_HOUR",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_START_HOUR": "00",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 84,
+        "original_size": 1,
+        "actual_start": 84,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 85,
+      "block_size": 1,
+      "end_register": 85,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_END_HOUR",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_END_HOUR": "00",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 85,
+        "original_size": 1,
+        "actual_start": 85,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 86,
+      "block_size": 1,
+      "end_register": 86,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_START_HOUR_1",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_START_HOUR_1": "00",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 86,
+        "original_size": 1,
+        "actual_start": 86,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 87,
+      "block_size": 1,
+      "end_register": 87,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_END_HOUR_1",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_END_HOUR_1": "00",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 87,
+        "original_size": 1,
+        "actual_start": 87,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 88,
+      "block_size": 1,
+      "end_register": 88,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_START_HOUR_2",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_START_HOUR_2": "00",
+        "HOLD_FORCED_DISCHARGE_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 88,
+        "original_size": 1,
+        "actual_start": 88,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 89,
+      "block_size": 1,
+      "end_register": 89,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_FORCED_DISCHARGE_END_HOUR_2",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_FORCED_DISCHARGE_END_HOUR_2": "00",
+        "HOLD_FORCED_DISCHARGE_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 89,
+        "original_size": 1,
+        "actual_start": 89,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 90,
+      "block_size": 1,
+      "end_register": 90,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_EPS_VOLT_SET"
+      ],
+      "sample_values": {
+        "HOLD_EPS_VOLT_SET": "240"
+      },
+      "boundary_validation": {
+        "original_start": 90,
+        "original_size": 1,
+        "actual_start": 90,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 91,
+      "block_size": 1,
+      "end_register": 91,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_EPS_FREQ_SET"
+      ],
+      "sample_values": {
+        "HOLD_EPS_FREQ_SET": "60"
+      },
+      "boundary_validation": {
+        "original_start": 91,
+        "original_size": 1,
+        "actual_start": 91,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 92,
+      "block_size": 8,
+      "end_register": 99,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_CHARGE_VOLT_REF"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_CHARGE_VOLT_REF": "55"
+      },
+      "boundary_validation": {
+        "original_start": 92,
+        "original_size": 8,
+        "actual_start": 99,
+        "actual_size": 1,
+        "leading_empty_registers": 7
+      }
+    },
+    {
+      "start_register": 100,
+      "block_size": 1,
+      "end_register": 100,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT": "40"
+      },
+      "boundary_validation": {
+        "original_start": 100,
+        "original_size": 1,
+        "actual_start": 100,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 101,
+      "block_size": 1,
+      "end_register": 101,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_CHARGE_RATE"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_CHARGE_RATE": "250"
+      },
+      "boundary_validation": {
+        "original_start": 101,
+        "original_size": 1,
+        "actual_start": 101,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 102,
+      "block_size": 1,
+      "end_register": 102,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_DISCHARGE_RATE"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_DISCHARGE_RATE": "250"
+      },
+      "boundary_validation": {
+        "original_start": 102,
+        "original_size": 1,
+        "actual_start": 102,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 103,
+      "block_size": 1,
+      "end_register": 103,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FEED_IN_GRID_POWER_PERCENT"
+      ],
+      "sample_values": {
+        "HOLD_FEED_IN_GRID_POWER_PERCENT": "12"
+      },
+      "boundary_validation": {
+        "original_start": 103,
+        "original_size": 1,
+        "actual_start": 103,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 104,
+      "block_size": 2,
+      "end_register": 105,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_DISCHG_CUT_OFF_SOC_EOD"
+      ],
+      "sample_values": {
+        "HOLD_DISCHG_CUT_OFF_SOC_EOD": "10"
+      },
+      "boundary_validation": {
+        "original_start": 104,
+        "original_size": 2,
+        "actual_start": 105,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 106,
+      "block_size": 1,
+      "end_register": 106,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_DISCHG"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_DISCHG": "-20"
+      },
+      "boundary_validation": {
+        "original_start": 106,
+        "original_size": 1,
+        "actual_start": 106,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 107,
+      "block_size": 1,
+      "end_register": 107,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_DISCHG"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_DISCHG": "55"
+      },
+      "boundary_validation": {
+        "original_start": 107,
+        "original_size": 1,
+        "actual_start": 107,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 108,
+      "block_size": 1,
+      "end_register": 108,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_CHG"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_CHG": "0"
+      },
+      "boundary_validation": {
+        "original_start": 108,
+        "original_size": 1,
+        "actual_start": 108,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 109,
+      "block_size": 1,
+      "end_register": 109,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_CHG"
+      ],
+      "sample_values": {
+        "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_CHG": "40"
+      },
+      "boundary_validation": {
+        "original_start": 109,
+        "original_size": 1,
+        "actual_start": 109,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 110,
+      "block_size": 1,
+      "end_register": 110,
+      "parameter_count": 14,
+      "parameter_keys": [
+        "BIT_CT_SAMPLE_RATIO",
+        "BIT_PVCT_SAMPLE_RATIO",
+        "BIT_PVCT_SAMPLE_TYPE",
+        "BIT_WORKING_MODE",
+        "FUNC_BATTERY_ECO_EN",
+        "FUNC_BAT_SHARED",
+        "FUNC_BUZZER_EN",
+        "FUNC_CHARGE_LAST",
+        "FUNC_GO_TO_OFFGRID",
+        "FUNC_GREEN_EN",
+        "FUNC_MICRO_GRID_EN",
+        "FUNC_PV_GRID_OFF_EN",
+        "FUNC_RUN_WITHOUT_GRID",
+        "FUNC_TAKE_LOAD_TOGETHER"
+      ],
+      "sample_values": {
+        "FUNC_PV_GRID_OFF_EN": false,
+        "FUNC_RUN_WITHOUT_GRID": false,
+        "FUNC_MICRO_GRID_EN": false,
+        "FUNC_BAT_SHARED": false,
+        "FUNC_CHARGE_LAST": false,
+        "FUNC_BUZZER_EN": false,
+        "FUNC_TAKE_LOAD_TOGETHER": true,
+        "FUNC_GO_TO_OFFGRID": false,
+        "FUNC_GREEN_EN": false,
+        "FUNC_BATTERY_ECO_EN": false,
+        "BIT_WORKING_MODE": 0,
+        "BIT_PVCT_SAMPLE_TYPE": 0,
+        "BIT_PVCT_SAMPLE_RATIO": 0,
+        "BIT_CT_SAMPLE_RATIO": 1
+      },
+      "boundary_validation": {
+        "original_start": 110,
+        "original_size": 1,
+        "actual_start": 110,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 111,
+      "block_size": 2,
+      "end_register": 112,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_SET_MASTER_OR_SLAVE"
+      ],
+      "sample_values": {
+        "HOLD_SET_MASTER_OR_SLAVE": "1"
+      },
+      "boundary_validation": {
+        "original_start": 111,
+        "original_size": 2,
+        "actual_start": 112,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 113,
+      "block_size": 1,
+      "end_register": 113,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_SET_COMPOSED_PHASE"
+      ],
+      "sample_values": {
+        "HOLD_SET_COMPOSED_PHASE": "1"
+      },
+      "boundary_validation": {
+        "original_start": 113,
+        "original_size": 1,
+        "actual_start": 113,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 114,
+      "block_size": 3,
+      "end_register": 116,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_P_TO_USER_START_DISCHG"
+      ],
+      "sample_values": {
+        "HOLD_P_TO_USER_START_DISCHG": "100"
+      },
+      "boundary_validation": {
+        "original_start": 114,
+        "original_size": 3,
+        "actual_start": 116,
+        "actual_size": 1,
+        "leading_empty_registers": 2
+      }
+    },
+    {
+      "start_register": 117,
+      "block_size": 2,
+      "end_register": 118,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_VBAT_START_DERATING"
+      ],
+      "sample_values": {
+        "HOLD_VBAT_START_DERATING": "40"
+      },
+      "boundary_validation": {
+        "original_start": 117,
+        "original_size": 2,
+        "actual_start": 118,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 119,
+      "block_size": 1,
+      "end_register": 119,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_CT_POWER_OFFSET"
+      ],
+      "sample_values": {
+        "HOLD_CT_POWER_OFFSET": "0"
+      },
+      "boundary_validation": {
+        "original_start": 119,
+        "original_size": 1,
+        "actual_start": 119,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 120,
+      "block_size": 1,
+      "end_register": 120,
+      "parameter_count": 7,
+      "parameter_keys": [
+        "BIT_AC_CHARGE_TYPE",
+        "BIT_DISCHG_CONTROL_TYPE",
+        "BIT_GENERATOR_CHARGE_TYPE",
+        "BIT_ON_GRID_EOD_TYPE",
+        "FUNC_HALF_HOUR_AC_CHG_START_EN",
+        "FUNC_PHASE_INDEPEND_COMPENSATE_EN",
+        "FUNC_SNA_BAT_DISCHARGE_CONTROL"
+      ],
+      "sample_values": {
+        "FUNC_HALF_HOUR_AC_CHG_START_EN": false,
+        "FUNC_SNA_BAT_DISCHARGE_CONTROL": false,
+        "FUNC_PHASE_INDEPEND_COMPENSATE_EN": false,
+        "BIT_AC_CHARGE_TYPE": 0,
+        "BIT_DISCHG_CONTROL_TYPE": 0,
+        "BIT_ON_GRID_EOD_TYPE": 0,
+        "BIT_GENERATOR_CHARGE_TYPE": 0
+      },
+      "boundary_validation": {
+        "original_start": 120,
+        "original_size": 1,
+        "actual_start": 120,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 121,
+      "block_size": 2,
+      "end_register": 122,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_MAINTENANCE_COUNT"
+      ],
+      "sample_values": {
+        "HOLD_MAINTENANCE_COUNT": "0"
+      },
+      "boundary_validation": {
+        "original_start": 121,
+        "original_size": 2,
+        "actual_start": 122,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 123,
+      "block_size": 3,
+      "end_register": 125,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_SOC_LOW_LIMIT_EPS_DISCHG"
+      ],
+      "sample_values": {
+        "HOLD_SOC_LOW_LIMIT_EPS_DISCHG": "0"
+      },
+      "boundary_validation": {
+        "original_start": 123,
+        "original_size": 3,
+        "actual_start": 125,
+        "actual_size": 1,
+        "leading_empty_registers": 2
+      }
+    },
+    {
+      "start_register": 126,
+      "block_size": 12,
+      "end_register": 137,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_SPEC_LOAD_COMPENSATE"
+      ],
+      "sample_values": {
+        "HOLD_SPEC_LOAD_COMPENSATE": "0"
+      },
+      "boundary_validation": {
+        "original_start": 126,
+        "original_size": 12,
+        "actual_start": 137,
+        "actual_size": 1,
+        "leading_empty_registers": 11
+      }
+    },
+    {
+      "start_register": 138,
+      "block_size": 7,
+      "end_register": 144,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_FLOATING_VOLTAGE"
+      ],
+      "sample_values": {
+        "HOLD_FLOATING_VOLTAGE": "54"
+      },
+      "boundary_validation": {
+        "original_start": 138,
+        "original_size": 7,
+        "actual_start": 144,
+        "actual_size": 1,
+        "leading_empty_registers": 6
+      }
+    },
+    {
+      "start_register": 145,
+      "block_size": 1,
+      "end_register": 145,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_OUTPUT_CONFIGURATION"
+      ],
+      "sample_values": {
+        "HOLD_OUTPUT_CONFIGURATION": "0"
+      },
+      "boundary_validation": {
+        "original_start": 145,
+        "original_size": 1,
+        "actual_start": 145,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 146,
+      "block_size": 1,
+      "end_register": 146,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LINE_MODE_INPUT"
+      ],
+      "sample_values": {
+        "HOLD_LINE_MODE_INPUT": "0"
+      },
+      "boundary_validation": {
+        "original_start": 146,
+        "original_size": 1,
+        "actual_start": 146,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 147,
+      "block_size": 2,
+      "end_register": 148,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_NOMINAL_BATTERY_VOLTAGE"
+      ],
+      "sample_values": {
+        "HOLD_NOMINAL_BATTERY_VOLTAGE": "0"
+      },
+      "boundary_validation": {
+        "original_start": 147,
+        "original_size": 2,
+        "actual_start": 148,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 149,
+      "block_size": 1,
+      "end_register": 149,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_EQUALIZATION_VOLTAGE"
+      ],
+      "sample_values": {
+        "HOLD_EQUALIZATION_VOLTAGE": "0"
+      },
+      "boundary_validation": {
+        "original_start": 149,
+        "original_size": 1,
+        "actual_start": 149,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 150,
+      "block_size": 1,
+      "end_register": 150,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_EQUALIZATION_PERIOD"
+      ],
+      "sample_values": {
+        "HOLD_EQUALIZATION_PERIOD": "0"
+      },
+      "boundary_validation": {
+        "original_start": 150,
+        "original_size": 1,
+        "actual_start": 150,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 151,
+      "block_size": 1,
+      "end_register": 151,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_EQUALIZATION_TIME"
+      ],
+      "sample_values": {
+        "HOLD_EQUALIZATION_TIME": "0"
+      },
+      "boundary_validation": {
+        "original_start": 151,
+        "original_size": 1,
+        "actual_start": 151,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 152,
+      "block_size": 1,
+      "end_register": 152,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_FIRST_START_HOUR",
+        "HOLD_AC_FIRST_START_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_AC_FIRST_START_HOUR": "00",
+        "HOLD_AC_FIRST_START_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 152,
+        "original_size": 1,
+        "actual_start": 152,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 153,
+      "block_size": 1,
+      "end_register": 153,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_FIRST_END_HOUR",
+        "HOLD_AC_FIRST_END_MINUTE"
+      ],
+      "sample_values": {
+        "HOLD_AC_FIRST_END_HOUR": "00",
+        "HOLD_AC_FIRST_END_MINUTE": "00"
+      },
+      "boundary_validation": {
+        "original_start": 153,
+        "original_size": 1,
+        "actual_start": 153,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 154,
+      "block_size": 1,
+      "end_register": 154,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_FIRST_START_HOUR_1",
+        "HOLD_AC_FIRST_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_AC_FIRST_START_HOUR_1": "00",
+        "HOLD_AC_FIRST_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 154,
+        "original_size": 1,
+        "actual_start": 154,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 155,
+      "block_size": 1,
+      "end_register": 155,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_FIRST_END_HOUR_1",
+        "HOLD_AC_FIRST_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_AC_FIRST_END_HOUR_1": "00",
+        "HOLD_AC_FIRST_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 155,
+        "original_size": 1,
+        "actual_start": 155,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 156,
+      "block_size": 1,
+      "end_register": 156,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_FIRST_START_HOUR_2",
+        "HOLD_AC_FIRST_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_AC_FIRST_START_HOUR_2": "00",
+        "HOLD_AC_FIRST_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 156,
+        "original_size": 1,
+        "actual_start": 156,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 157,
+      "block_size": 1,
+      "end_register": 157,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_AC_FIRST_END_HOUR_2",
+        "HOLD_AC_FIRST_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_AC_FIRST_END_HOUR_2": "00",
+        "HOLD_AC_FIRST_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 157,
+        "original_size": 1,
+        "actual_start": 157,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 158,
+      "block_size": 1,
+      "end_register": 158,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE": "38.5"
+      },
+      "boundary_validation": {
+        "original_start": 158,
+        "original_size": 1,
+        "actual_start": 158,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 159,
+      "block_size": 1,
+      "end_register": 159,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE": "56"
+      },
+      "boundary_validation": {
+        "original_start": 159,
+        "original_size": 1,
+        "actual_start": 159,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 160,
+      "block_size": 1,
+      "end_register": 160,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_START_BATTERY_SOC"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_START_BATTERY_SOC": "5"
+      },
+      "boundary_validation": {
+        "original_start": 160,
+        "original_size": 1,
+        "actual_start": 160,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 161,
+      "block_size": 1,
+      "end_register": 161,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_END_BATTERY_SOC"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_END_BATTERY_SOC": "0"
+      },
+      "boundary_validation": {
+        "original_start": 161,
+        "original_size": 1,
+        "actual_start": 161,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 162,
+      "block_size": 1,
+      "end_register": 162,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_BATTERY_WARNING_VOLTAGE"
+      ],
+      "sample_values": {
+        "HOLD_BATTERY_WARNING_VOLTAGE": "0"
+      },
+      "boundary_validation": {
+        "original_start": 162,
+        "original_size": 1,
+        "actual_start": 162,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 163,
+      "block_size": 1,
+      "end_register": 163,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_BATTERY_WARNING_RECOVERY_VOLTAGE"
+      ],
+      "sample_values": {
+        "HOLD_BATTERY_WARNING_RECOVERY_VOLTAGE": "0"
+      },
+      "boundary_validation": {
+        "original_start": 163,
+        "original_size": 1,
+        "actual_start": 163,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 164,
+      "block_size": 1,
+      "end_register": 164,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_BATTERY_WARNING_SOC"
+      ],
+      "sample_values": {
+        "HOLD_BATTERY_WARNING_SOC": "0"
+      },
+      "boundary_validation": {
+        "original_start": 164,
+        "original_size": 1,
+        "actual_start": 164,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 165,
+      "block_size": 1,
+      "end_register": 165,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_BATTERY_WARNING_RECOVERY_SOC"
+      ],
+      "sample_values": {
+        "HOLD_BATTERY_WARNING_RECOVERY_SOC": "0"
+      },
+      "boundary_validation": {
+        "original_start": 165,
+        "original_size": 1,
+        "actual_start": 165,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 166,
+      "block_size": 1,
+      "end_register": 166,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_BATTERY_LOW_TO_UTILITY_VOLTAGE"
+      ],
+      "sample_values": {
+        "HOLD_BATTERY_LOW_TO_UTILITY_VOLTAGE": "0"
+      },
+      "boundary_validation": {
+        "original_start": 166,
+        "original_size": 1,
+        "actual_start": 166,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 167,
+      "block_size": 1,
+      "end_register": 167,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_BATTERY_LOW_TO_UTILITY_SOC"
+      ],
+      "sample_values": {
+        "HOLD_BATTERY_LOW_TO_UTILITY_SOC": "0"
+      },
+      "boundary_validation": {
+        "original_start": 167,
+        "original_size": 1,
+        "actual_start": 167,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 168,
+      "block_size": 1,
+      "end_register": 168,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_AC_CHARGE_BATTERY_CURRENT"
+      ],
+      "sample_values": {
+        "HOLD_AC_CHARGE_BATTERY_CURRENT": "0"
+      },
+      "boundary_validation": {
+        "original_start": 168,
+        "original_size": 1,
+        "actual_start": 168,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 169,
+      "block_size": 1,
+      "end_register": 169,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_ON_GRID_EOD_VOLTAGE"
+      ],
+      "sample_values": {
+        "HOLD_ON_GRID_EOD_VOLTAGE": "40"
+      },
+      "boundary_validation": {
+        "original_start": 169,
+        "original_size": 1,
+        "actual_start": 169,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 170,
+      "block_size": 7,
+      "end_register": 176,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_MAX_AC_INPUT_POWER"
+      ],
+      "sample_values": {
+        "HOLD_MAX_AC_INPUT_POWER": "6553.5"
+      },
+      "boundary_validation": {
+        "original_start": 170,
+        "original_size": 7,
+        "actual_start": 176,
+        "actual_size": 1,
+        "leading_empty_registers": 6
+      }
+    },
+    {
+      "start_register": 177,
+      "block_size": 1,
+      "end_register": 177,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_MAX_GENERATOR_INPUT_POWER"
+      ],
+      "sample_values": {
+        "HOLD_MAX_GENERATOR_INPUT_POWER": "15"
+      },
+      "boundary_validation": {
+        "original_start": 177,
+        "original_size": 1,
+        "actual_start": 177,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 178,
+      "block_size": 1,
+      "end_register": 178,
+      "parameter_count": 4,
+      "parameter_keys": [
+        "BIT_FAN_1_MAX_SPEED",
+        "BIT_FAN_2_MAX_SPEED",
+        "FUNC_FAN_SPEED_SLOPE_CTRL_1",
+        "FUNC_FAN_SPEED_SLOPE_CTRL_2"
+      ],
+      "sample_values": {
+        "FUNC_FAN_SPEED_SLOPE_CTRL_1": false,
+        "FUNC_FAN_SPEED_SLOPE_CTRL_2": false,
+        "BIT_FAN_1_MAX_SPEED": 0,
+        "BIT_FAN_2_MAX_SPEED": 0
+      },
+      "boundary_validation": {
+        "original_start": 178,
+        "original_size": 1,
+        "actual_start": 178,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 179,
+      "block_size": 1,
+      "end_register": 179,
+      "parameter_count": 16,
+      "parameter_keys": [
+        "FUNC_ACTIVE_POWER_LIMIT_MODE",
+        "FUNC_AC_COUPLING_FUNCTION",
+        "FUNC_BAT_CHARGE_CONTROL",
+        "FUNC_BAT_DISCHARGE_CONTROL",
+        "FUNC_CT_DIRECTION_REVERSED",
+        "FUNC_GEN_PEAK_SHAVING",
+        "FUNC_GRID_PEAK_SHAVING",
+        "FUNC_ON_GRID_ALWAYS_ON",
+        "FUNC_PV_ARC",
+        "FUNC_PV_ARC_FAULT_CLEAR",
+        "FUNC_PV_SELL_TO_GRID_EN",
+        "FUNC_RSD_DISABLE",
+        "FUNC_SMART_LOAD_ENABLE",
+        "FUNC_TOTAL_LOAD_COMPENSATION_EN",
+        "FUNC_TRIP_TIME_UNIT",
+        "FUNC_WATT_VOLT_EN"
+      ],
+      "sample_values": {
+        "FUNC_CT_DIRECTION_REVERSED": false,
+        "FUNC_TOTAL_LOAD_COMPENSATION_EN": false,
+        "FUNC_PV_ARC_FAULT_CLEAR": false,
+        "FUNC_PV_SELL_TO_GRID_EN": false,
+        "FUNC_WATT_VOLT_EN": false,
+        "FUNC_TRIP_TIME_UNIT": false,
+        "FUNC_ACTIVE_POWER_LIMIT_MODE": true,
+        "FUNC_GRID_PEAK_SHAVING": false,
+        "FUNC_GEN_PEAK_SHAVING": false,
+        "FUNC_BAT_CHARGE_CONTROL": false,
+        "FUNC_BAT_DISCHARGE_CONTROL": false,
+        "FUNC_AC_COUPLING_FUNCTION": false,
+        "FUNC_PV_ARC": false,
+        "FUNC_SMART_LOAD_ENABLE": false,
+        "FUNC_RSD_DISABLE": false,
+        "FUNC_ON_GRID_ALWAYS_ON": false
+      },
+      "boundary_validation": {
+        "original_start": 179,
+        "original_size": 1,
+        "actual_start": 179,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 180,
+      "block_size": 15,
+      "end_register": 194,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "OFF_GRID_HOLD_GEN_CHG_START_VOLT"
+      ],
+      "sample_values": {
+        "OFF_GRID_HOLD_GEN_CHG_START_VOLT": "40"
+      },
+      "boundary_validation": {
+        "original_start": 180,
+        "original_size": 15,
+        "actual_start": 194,
+        "actual_size": 1,
+        "leading_empty_registers": 14
+      }
+    },
+    {
+      "start_register": 195,
+      "block_size": 1,
+      "end_register": 195,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "OFF_GRID_HOLD_GEN_CHG_END_VOLT"
+      ],
+      "sample_values": {
+        "OFF_GRID_HOLD_GEN_CHG_END_VOLT": "56"
+      },
+      "boundary_validation": {
+        "original_start": 195,
+        "original_size": 1,
+        "actual_start": 195,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 196,
+      "block_size": 1,
+      "end_register": 196,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "OFF_GRID_HOLD_GEN_CHG_START_SOC"
+      ],
+      "sample_values": {
+        "OFF_GRID_HOLD_GEN_CHG_START_SOC": "10"
+      },
+      "boundary_validation": {
+        "original_start": 196,
+        "original_size": 1,
+        "actual_start": 196,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 197,
+      "block_size": 1,
+      "end_register": 197,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "OFF_GRID_HOLD_GEN_CHG_END_SOC"
+      ],
+      "sample_values": {
+        "OFF_GRID_HOLD_GEN_CHG_END_SOC": "25"
+      },
+      "boundary_validation": {
+        "original_start": 197,
+        "original_size": 1,
+        "actual_start": 197,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 198,
+      "block_size": 1,
+      "end_register": 198,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR"
+      ],
+      "sample_values": {
+        "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR": "100"
+      },
+      "boundary_validation": {
+        "original_start": 198,
+        "original_size": 1,
+        "actual_start": 198,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 199,
+      "block_size": 6,
+      "end_register": 204,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "_12K_HOLD_LEAD_CAPACITY"
+      ],
+      "sample_values": {
+        "_12K_HOLD_LEAD_CAPACITY": "200"
+      },
+      "boundary_validation": {
+        "original_start": 199,
+        "original_size": 6,
+        "actual_start": 204,
+        "actual_size": 1,
+        "leading_empty_registers": 5
+      }
+    },
+    {
+      "start_register": 205,
+      "block_size": 11,
+      "end_register": 215,
+      "parameter_count": 12,
+      "parameter_keys": [
+        "FUNC_LSP_OUTPUT_10_EN",
+        "FUNC_LSP_OUTPUT_11_EN",
+        "FUNC_LSP_OUTPUT_12_EN",
+        "FUNC_LSP_OUTPUT_1_EN",
+        "FUNC_LSP_OUTPUT_2_EN",
+        "FUNC_LSP_OUTPUT_3_EN",
+        "FUNC_LSP_OUTPUT_4_EN",
+        "FUNC_LSP_OUTPUT_5_EN",
+        "FUNC_LSP_OUTPUT_6_EN",
+        "FUNC_LSP_OUTPUT_7_EN",
+        "FUNC_LSP_OUTPUT_8_EN",
+        "FUNC_LSP_OUTPUT_9_EN"
+      ],
+      "sample_values": {
+        "FUNC_LSP_OUTPUT_1_EN": false,
+        "FUNC_LSP_OUTPUT_2_EN": true,
+        "FUNC_LSP_OUTPUT_3_EN": false,
+        "FUNC_LSP_OUTPUT_4_EN": true,
+        "FUNC_LSP_OUTPUT_5_EN": true,
+        "FUNC_LSP_OUTPUT_6_EN": false,
+        "FUNC_LSP_OUTPUT_7_EN": true,
+        "FUNC_LSP_OUTPUT_8_EN": false,
+        "FUNC_LSP_OUTPUT_9_EN": false,
+        "FUNC_LSP_OUTPUT_10_EN": false,
+        "FUNC_LSP_OUTPUT_11_EN": false,
+        "FUNC_LSP_OUTPUT_12_EN": false
+      },
+      "boundary_validation": {
+        "original_start": 205,
+        "original_size": 11,
+        "actual_start": 215,
+        "actual_size": 1,
+        "leading_empty_registers": 10
+      }
+    },
+    {
+      "start_register": 216,
+      "block_size": 1,
+      "end_register": 216,
+      "parameter_count": 16,
+      "parameter_keys": [
+        "FUNC_LSP_BAT_FIRST_10_EN",
+        "FUNC_LSP_BAT_FIRST_11_EN",
+        "FUNC_LSP_BAT_FIRST_12_EN",
+        "FUNC_LSP_BAT_FIRST_13_EN",
+        "FUNC_LSP_BAT_FIRST_14_EN",
+        "FUNC_LSP_BAT_FIRST_15_EN",
+        "FUNC_LSP_BAT_FIRST_16_EN",
+        "FUNC_LSP_BAT_FIRST_1_EN",
+        "FUNC_LSP_BAT_FIRST_2_EN",
+        "FUNC_LSP_BAT_FIRST_3_EN",
+        "FUNC_LSP_BAT_FIRST_4_EN",
+        "FUNC_LSP_BAT_FIRST_5_EN",
+        "FUNC_LSP_BAT_FIRST_6_EN",
+        "FUNC_LSP_BAT_FIRST_7_EN",
+        "FUNC_LSP_BAT_FIRST_8_EN",
+        "FUNC_LSP_BAT_FIRST_9_EN"
+      ],
+      "sample_values": {
+        "FUNC_LSP_BAT_FIRST_1_EN": false,
+        "FUNC_LSP_BAT_FIRST_2_EN": false,
+        "FUNC_LSP_BAT_FIRST_3_EN": true,
+        "FUNC_LSP_BAT_FIRST_4_EN": true,
+        "FUNC_LSP_BAT_FIRST_5_EN": true,
+        "FUNC_LSP_BAT_FIRST_6_EN": true,
+        "FUNC_LSP_BAT_FIRST_7_EN": false,
+        "FUNC_LSP_BAT_FIRST_8_EN": false,
+        "FUNC_LSP_BAT_FIRST_9_EN": false,
+        "FUNC_LSP_BAT_FIRST_10_EN": false,
+        "FUNC_LSP_BAT_FIRST_11_EN": false,
+        "FUNC_LSP_BAT_FIRST_12_EN": false,
+        "FUNC_LSP_BAT_FIRST_13_EN": false,
+        "FUNC_LSP_BAT_FIRST_14_EN": false,
+        "FUNC_LSP_BAT_FIRST_15_EN": false,
+        "FUNC_LSP_BAT_FIRST_16_EN": false
+      },
+      "boundary_validation": {
+        "original_start": 216,
+        "original_size": 1,
+        "actual_start": 216,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 217,
+      "block_size": 1,
+      "end_register": 217,
+      "parameter_count": 16,
+      "parameter_keys": [
+        "FUNC_LSP_BAT_FIRST_17_EN",
+        "FUNC_LSP_BAT_FIRST_18_EN",
+        "FUNC_LSP_BAT_FIRST_19_EN",
+        "FUNC_LSP_BAT_FIRST_20_EN",
+        "FUNC_LSP_BAT_FIRST_21_EN",
+        "FUNC_LSP_BAT_FIRST_22_EN",
+        "FUNC_LSP_BAT_FIRST_23_EN",
+        "FUNC_LSP_BAT_FIRST_24_EN",
+        "FUNC_LSP_BAT_FIRST_25_EN",
+        "FUNC_LSP_BAT_FIRST_26_EN",
+        "FUNC_LSP_BAT_FIRST_27_EN",
+        "FUNC_LSP_BAT_FIRST_28_EN",
+        "FUNC_LSP_BAT_FIRST_29_EN",
+        "FUNC_LSP_BAT_FIRST_30_EN",
+        "FUNC_LSP_BAT_FIRST_31_EN",
+        "FUNC_LSP_BAT_FIRST_32_EN"
+      ],
+      "sample_values": {
+        "FUNC_LSP_BAT_FIRST_17_EN": true,
+        "FUNC_LSP_BAT_FIRST_18_EN": false,
+        "FUNC_LSP_BAT_FIRST_19_EN": true,
+        "FUNC_LSP_BAT_FIRST_20_EN": false,
+        "FUNC_LSP_BAT_FIRST_21_EN": false,
+        "FUNC_LSP_BAT_FIRST_22_EN": false,
+        "FUNC_LSP_BAT_FIRST_23_EN": false,
+        "FUNC_LSP_BAT_FIRST_24_EN": false,
+        "FUNC_LSP_BAT_FIRST_25_EN": false,
+        "FUNC_LSP_BAT_FIRST_26_EN": false,
+        "FUNC_LSP_BAT_FIRST_27_EN": false,
+        "FUNC_LSP_BAT_FIRST_28_EN": false,
+        "FUNC_LSP_BAT_FIRST_29_EN": false,
+        "FUNC_LSP_BAT_FIRST_30_EN": false,
+        "FUNC_LSP_BAT_FIRST_31_EN": false,
+        "FUNC_LSP_BAT_FIRST_32_EN": false
+      },
+      "boundary_validation": {
+        "original_start": 217,
+        "original_size": 1,
+        "actual_start": 217,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 218,
+      "block_size": 1,
+      "end_register": 218,
+      "parameter_count": 16,
+      "parameter_keys": [
+        "FUNC_LSP_BAT_FIRST_33_EN",
+        "FUNC_LSP_BAT_FIRST_34_EN",
+        "FUNC_LSP_BAT_FIRST_35_EN",
+        "FUNC_LSP_BAT_FIRST_36_EN",
+        "FUNC_LSP_BAT_FIRST_37_EN",
+        "FUNC_LSP_BAT_FIRST_38_EN",
+        "FUNC_LSP_BAT_FIRST_39_EN",
+        "FUNC_LSP_BAT_FIRST_40_EN",
+        "FUNC_LSP_BAT_FIRST_41_EN",
+        "FUNC_LSP_BAT_FIRST_42_EN",
+        "FUNC_LSP_BAT_FIRST_43_EN",
+        "FUNC_LSP_BAT_FIRST_44_EN",
+        "FUNC_LSP_BAT_FIRST_45_EN",
+        "FUNC_LSP_BAT_FIRST_46_EN",
+        "FUNC_LSP_BAT_FIRST_47_EN",
+        "FUNC_LSP_BAT_FIRST_48_EN"
+      ],
+      "sample_values": {
+        "FUNC_LSP_BAT_FIRST_33_EN": false,
+        "FUNC_LSP_BAT_FIRST_34_EN": true,
+        "FUNC_LSP_BAT_FIRST_35_EN": false,
+        "FUNC_LSP_BAT_FIRST_36_EN": false,
+        "FUNC_LSP_BAT_FIRST_37_EN": true,
+        "FUNC_LSP_BAT_FIRST_38_EN": true,
+        "FUNC_LSP_BAT_FIRST_39_EN": false,
+        "FUNC_LSP_BAT_FIRST_40_EN": false,
+        "FUNC_LSP_BAT_FIRST_41_EN": false,
+        "FUNC_LSP_BAT_FIRST_42_EN": false,
+        "FUNC_LSP_BAT_FIRST_43_EN": false,
+        "FUNC_LSP_BAT_FIRST_44_EN": false,
+        "FUNC_LSP_BAT_FIRST_45_EN": false,
+        "FUNC_LSP_BAT_FIRST_46_EN": false,
+        "FUNC_LSP_BAT_FIRST_47_EN": false,
+        "FUNC_LSP_BAT_FIRST_48_EN": false
+      },
+      "boundary_validation": {
+        "original_start": 218,
+        "original_size": 1,
+        "actual_start": 218,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 219,
+      "block_size": 1,
+      "end_register": 219,
+      "parameter_count": 16,
+      "parameter_keys": [
+        "FUNC_LSP_BYPASS_10_EN",
+        "FUNC_LSP_BYPASS_11_EN",
+        "FUNC_LSP_BYPASS_12_EN",
+        "FUNC_LSP_BYPASS_13_EN",
+        "FUNC_LSP_BYPASS_14_EN",
+        "FUNC_LSP_BYPASS_15_EN",
+        "FUNC_LSP_BYPASS_16_EN",
+        "FUNC_LSP_BYPASS_1_EN",
+        "FUNC_LSP_BYPASS_2_EN",
+        "FUNC_LSP_BYPASS_3_EN",
+        "FUNC_LSP_BYPASS_4_EN",
+        "FUNC_LSP_BYPASS_5_EN",
+        "FUNC_LSP_BYPASS_6_EN",
+        "FUNC_LSP_BYPASS_7_EN",
+        "FUNC_LSP_BYPASS_8_EN",
+        "FUNC_LSP_BYPASS_9_EN"
+      ],
+      "sample_values": {
+        "FUNC_LSP_BYPASS_1_EN": false,
+        "FUNC_LSP_BYPASS_2_EN": false,
+        "FUNC_LSP_BYPASS_3_EN": false,
+        "FUNC_LSP_BYPASS_4_EN": true,
+        "FUNC_LSP_BYPASS_5_EN": false,
+        "FUNC_LSP_BYPASS_6_EN": false,
+        "FUNC_LSP_BYPASS_7_EN": false,
+        "FUNC_LSP_BYPASS_8_EN": false,
+        "FUNC_LSP_BYPASS_9_EN": false,
+        "FUNC_LSP_BYPASS_10_EN": true,
+        "FUNC_LSP_BYPASS_11_EN": false,
+        "FUNC_LSP_BYPASS_12_EN": false,
+        "FUNC_LSP_BYPASS_13_EN": false,
+        "FUNC_LSP_BYPASS_14_EN": false,
+        "FUNC_LSP_BYPASS_15_EN": false,
+        "FUNC_LSP_BYPASS_16_EN": false
+      },
+      "boundary_validation": {
+        "original_start": 219,
+        "original_size": 1,
+        "actual_start": 219,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 220,
+      "block_size": 1,
+      "end_register": 220,
+      "parameter_count": 16,
+      "parameter_keys": [
+        "FUNC_LSP_BYPASS_17_EN",
+        "FUNC_LSP_BYPASS_18_EN",
+        "FUNC_LSP_BYPASS_19_EN",
+        "FUNC_LSP_BYPASS_20_EN",
+        "FUNC_LSP_BYPASS_21_EN",
+        "FUNC_LSP_BYPASS_22_EN",
+        "FUNC_LSP_BYPASS_23_EN",
+        "FUNC_LSP_BYPASS_24_EN",
+        "FUNC_LSP_BYPASS_25_EN",
+        "FUNC_LSP_BYPASS_26_EN",
+        "FUNC_LSP_BYPASS_27_EN",
+        "FUNC_LSP_BYPASS_28_EN",
+        "FUNC_LSP_BYPASS_29_EN",
+        "FUNC_LSP_BYPASS_30_EN",
+        "FUNC_LSP_BYPASS_31_EN",
+        "FUNC_LSP_BYPASS_32_EN"
+      ],
+      "sample_values": {
+        "FUNC_LSP_BYPASS_17_EN": false,
+        "FUNC_LSP_BYPASS_18_EN": true,
+        "FUNC_LSP_BYPASS_19_EN": false,
+        "FUNC_LSP_BYPASS_20_EN": false,
+        "FUNC_LSP_BYPASS_21_EN": true,
+        "FUNC_LSP_BYPASS_22_EN": true,
+        "FUNC_LSP_BYPASS_23_EN": false,
+        "FUNC_LSP_BYPASS_24_EN": false,
+        "FUNC_LSP_BYPASS_25_EN": false,
+        "FUNC_LSP_BYPASS_26_EN": false,
+        "FUNC_LSP_BYPASS_27_EN": false,
+        "FUNC_LSP_BYPASS_28_EN": false,
+        "FUNC_LSP_BYPASS_29_EN": false,
+        "FUNC_LSP_BYPASS_30_EN": false,
+        "FUNC_LSP_BYPASS_31_EN": false,
+        "FUNC_LSP_BYPASS_32_EN": false
+      },
+      "boundary_validation": {
+        "original_start": 220,
+        "original_size": 1,
+        "actual_start": 220,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 221,
+      "block_size": 1,
+      "end_register": 221,
+      "parameter_count": 16,
+      "parameter_keys": [
+        "FUNC_LSP_BYPASS_33_EN",
+        "FUNC_LSP_BYPASS_34_EN",
+        "FUNC_LSP_BYPASS_35_EN",
+        "FUNC_LSP_BYPASS_36_EN",
+        "FUNC_LSP_BYPASS_37_EN",
+        "FUNC_LSP_BYPASS_38_EN",
+        "FUNC_LSP_BYPASS_39_EN",
+        "FUNC_LSP_BYPASS_40_EN",
+        "FUNC_LSP_BYPASS_41_EN",
+        "FUNC_LSP_BYPASS_42_EN",
+        "FUNC_LSP_BYPASS_43_EN",
+        "FUNC_LSP_BYPASS_44_EN",
+        "FUNC_LSP_BYPASS_45_EN",
+        "FUNC_LSP_BYPASS_46_EN",
+        "FUNC_LSP_BYPASS_47_EN",
+        "FUNC_LSP_BYPASS_48_EN"
+      ],
+      "sample_values": {
+        "FUNC_LSP_BYPASS_33_EN": false,
+        "FUNC_LSP_BYPASS_34_EN": true,
+        "FUNC_LSP_BYPASS_35_EN": false,
+        "FUNC_LSP_BYPASS_36_EN": true,
+        "FUNC_LSP_BYPASS_37_EN": true,
+        "FUNC_LSP_BYPASS_38_EN": false,
+        "FUNC_LSP_BYPASS_39_EN": true,
+        "FUNC_LSP_BYPASS_40_EN": false,
+        "FUNC_LSP_BYPASS_41_EN": false,
+        "FUNC_LSP_BYPASS_42_EN": false,
+        "FUNC_LSP_BYPASS_43_EN": false,
+        "FUNC_LSP_BYPASS_44_EN": false,
+        "FUNC_LSP_BYPASS_45_EN": false,
+        "FUNC_LSP_BYPASS_46_EN": false,
+        "FUNC_LSP_BYPASS_47_EN": false,
+        "FUNC_LSP_BYPASS_48_EN": false
+      },
+      "boundary_validation": {
+        "original_start": 221,
+        "original_size": 1,
+        "actual_start": 221,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 222,
+      "block_size": 3,
+      "end_register": 224,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE": "1"
+      },
+      "boundary_validation": {
+        "original_start": 222,
+        "original_size": 3,
+        "actual_start": 224,
+        "actual_size": 1,
+        "leading_empty_registers": 2
+      }
+    },
+    {
+      "start_register": 225,
+      "block_size": 1,
+      "end_register": 225,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_GEN_REMOTE_CTRL"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_GEN_REMOTE_CTRL": "0"
+      },
+      "boundary_validation": {
+        "original_start": 225,
+        "original_size": 1,
+        "actual_start": 225,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 226,
+      "block_size": 1,
+      "end_register": 226,
+      "parameter_count": 12,
+      "parameter_keys": [
+        "FUNC_AC_COUPLE_DARK_START_EN",
+        "FUNC_AC_COUPLE_ON_EPS_PORT_EN",
+        "FUNC_GEN_CTRL",
+        "FUNC_GRID_CT_CONNECTION_EN",
+        "FUNC_MIDBOX_EN",
+        "FUNC_NTC_DETECTION",
+        "FUNC_N_PE_CONNECT_INNER_EN",
+        "FUNC_PARALLEL_DATA_SYNC_EN",
+        "FUNC_RETAIN_SHUTDOWN",
+        "FUNC_RETAIN_STANDBY",
+        "FUNC_RUN_WITHOUT_GRID_12K",
+        "MIDBOX_HOLD_GEN_WARN_UP_TIME"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_GEN_WARN_UP_TIME": "120",
+        "FUNC_GRID_CT_CONNECTION_EN": false,
+        "FUNC_NTC_DETECTION": false,
+        "FUNC_RUN_WITHOUT_GRID_12K": true,
+        "FUNC_N_PE_CONNECT_INNER_EN": true,
+        "FUNC_RETAIN_SHUTDOWN": true,
+        "FUNC_RETAIN_STANDBY": true,
+        "FUNC_PARALLEL_DATA_SYNC_EN": false,
+        "FUNC_AC_COUPLE_DARK_START_EN": false,
+        "FUNC_MIDBOX_EN": false,
+        "FUNC_AC_COUPLE_ON_EPS_PORT_EN": false,
+        "FUNC_GEN_CTRL": false
+      },
+      "boundary_validation": {
+        "original_start": 226,
+        "original_size": 1,
+        "actual_start": 226,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 227,
+      "block_size": 1,
+      "end_register": 227,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_GEN_COOL_DOWN_TIME"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_GEN_COOL_DOWN_TIME": "120"
+      },
+      "boundary_validation": {
+        "original_start": 227,
+        "original_size": 1,
+        "actual_start": 227,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 228,
+      "block_size": 1,
+      "end_register": 228,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME": "20"
+      },
+      "boundary_validation": {
+        "original_start": 228,
+        "original_size": 1,
+        "actual_start": 228,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 229,
+      "block_size": 1,
+      "end_register": 229,
+      "parameter_count": 17,
+      "parameter_keys": [
+        "FUNC_AC_COUPLE_EN_1",
+        "FUNC_AC_COUPLE_EN_2",
+        "FUNC_AC_COUPLE_EN_3",
+        "FUNC_AC_COUPLE_EN_4",
+        "FUNC_SHEDDING_MODE_EN_1",
+        "FUNC_SHEDDING_MODE_EN_2",
+        "FUNC_SHEDDING_MODE_EN_3",
+        "FUNC_SHEDDING_MODE_EN_4",
+        "FUNC_SMART_LOAD_EN_1",
+        "FUNC_SMART_LOAD_EN_2",
+        "FUNC_SMART_LOAD_EN_3",
+        "FUNC_SMART_LOAD_EN_4",
+        "FUNC_SMART_LOAD_GRID_ON_1",
+        "FUNC_SMART_LOAD_GRID_ON_2",
+        "FUNC_SMART_LOAD_GRID_ON_3",
+        "FUNC_SMART_LOAD_GRID_ON_4",
+        "HOLD_OFFLINE_TIMEOUT"
+      ],
+      "sample_values": {
+        "HOLD_OFFLINE_TIMEOUT": "116",
+        "FUNC_SMART_LOAD_EN_1": false,
+        "FUNC_SMART_LOAD_EN_2": false,
+        "FUNC_SMART_LOAD_EN_3": false,
+        "FUNC_SMART_LOAD_EN_4": true,
+        "FUNC_SMART_LOAD_GRID_ON_1": false,
+        "FUNC_SMART_LOAD_GRID_ON_2": false,
+        "FUNC_SMART_LOAD_GRID_ON_3": false,
+        "FUNC_SMART_LOAD_GRID_ON_4": true,
+        "FUNC_AC_COUPLE_EN_1": false,
+        "FUNC_AC_COUPLE_EN_2": false,
+        "FUNC_AC_COUPLE_EN_3": true,
+        "FUNC_AC_COUPLE_EN_4": false,
+        "FUNC_SHEDDING_MODE_EN_1": false,
+        "FUNC_SHEDDING_MODE_EN_2": false,
+        "FUNC_SHEDDING_MODE_EN_3": false,
+        "FUNC_SHEDDING_MODE_EN_4": false
+      },
+      "boundary_validation": {
+        "original_start": 229,
+        "original_size": 1,
+        "actual_start": 229,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 230,
+      "block_size": 1,
+      "end_register": 230,
+      "parameter_count": 4,
+      "parameter_keys": [
+        "BIT_METER_NUMBER",
+        "BIT_METER_PHASE",
+        "MIDBOX_HOLD_SL_END_SOC_1",
+        "MIDBOX_HOLD_SL_START_SOC_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_SOC_1": "90",
+        "MIDBOX_HOLD_SL_END_SOC_1": "60",
+        "BIT_METER_NUMBER": 10,
+        "BIT_METER_PHASE": 2
+      },
+      "boundary_validation": {
+        "original_start": 230,
+        "original_size": 1,
+        "actual_start": 230,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 231,
+      "block_size": 1,
+      "end_register": 231,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_END_SOC_2",
+        "MIDBOX_HOLD_SL_START_SOC_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_SOC_2": "90",
+        "MIDBOX_HOLD_SL_END_SOC_2": "60"
+      },
+      "boundary_validation": {
+        "original_start": 231,
+        "original_size": 1,
+        "actual_start": 231,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 232,
+      "block_size": 1,
+      "end_register": 232,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_END_SOC_3",
+        "MIDBOX_HOLD_SL_START_SOC_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_SOC_3": "90",
+        "MIDBOX_HOLD_SL_END_SOC_3": "60"
+      },
+      "boundary_validation": {
+        "original_start": 232,
+        "original_size": 1,
+        "actual_start": 232,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 233,
+      "block_size": 1,
+      "end_register": 233,
+      "parameter_count": 11,
+      "parameter_keys": [
+        "BIT_DRY_CONTRACTOR_MULTIPLEX",
+        "BIT_LCD_TYPE",
+        "BIT_OUT_CT_POSITION",
+        "FUNC_BATTERY_BACKUP_CTRL",
+        "FUNC_BATTERY_CALIBRATION_EN",
+        "FUNC_ENERTEK_WORKING_MODE",
+        "FUNC_FAN_DC3",
+        "FUNC_QUICK_CHARGE_CTRL",
+        "FUNC_SPORADIC_CHARGE",
+        "MIDBOX_HOLD_SL_END_SOC_4",
+        "MIDBOX_HOLD_SL_START_SOC_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_SOC_4": "90",
+        "MIDBOX_HOLD_SL_END_SOC_4": "60",
+        "FUNC_SPORADIC_CHARGE": true,
+        "FUNC_FAN_DC3": false,
+        "FUNC_QUICK_CHARGE_CTRL": false,
+        "FUNC_BATTERY_BACKUP_CTRL": true,
+        "FUNC_BATTERY_CALIBRATION_EN": false,
+        "FUNC_ENERTEK_WORKING_MODE": true,
+        "BIT_DRY_CONTRACTOR_MULTIPLEX": 5,
+        "BIT_OUT_CT_POSITION": 0,
+        "BIT_LCD_TYPE": 1
+      },
+      "boundary_validation": {
+        "original_start": 233,
+        "original_size": 1,
+        "actual_start": 233,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 234,
+      "block_size": 1,
+      "end_register": 234,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_START_VOLT_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_VOLT_1": "54"
+      },
+      "boundary_validation": {
+        "original_start": 234,
+        "original_size": 1,
+        "actual_start": 234,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 235,
+      "block_size": 1,
+      "end_register": 235,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_END_VOLT_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_END_VOLT_1": "48"
+      },
+      "boundary_validation": {
+        "original_start": 235,
+        "original_size": 1,
+        "actual_start": 235,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 236,
+      "block_size": 1,
+      "end_register": 236,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_START_VOLT_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_VOLT_2": "54"
+      },
+      "boundary_validation": {
+        "original_start": 236,
+        "original_size": 1,
+        "actual_start": 236,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 237,
+      "block_size": 1,
+      "end_register": 237,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_END_VOLT_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_END_VOLT_2": "48"
+      },
+      "boundary_validation": {
+        "original_start": 237,
+        "original_size": 1,
+        "actual_start": 237,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 238,
+      "block_size": 1,
+      "end_register": 238,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_START_VOLT_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_VOLT_3": "54"
+      },
+      "boundary_validation": {
+        "original_start": 238,
+        "original_size": 1,
+        "actual_start": 238,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 239,
+      "block_size": 1,
+      "end_register": 239,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_END_VOLT_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_END_VOLT_3": "48"
+      },
+      "boundary_validation": {
+        "original_start": 239,
+        "original_size": 1,
+        "actual_start": 239,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 240,
+      "block_size": 1,
+      "end_register": 240,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_START_VOLT_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_VOLT_4": "54"
+      },
+      "boundary_validation": {
+        "original_start": 240,
+        "original_size": 1,
+        "actual_start": 240,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 241,
+      "block_size": 1,
+      "end_register": 241,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_END_VOLT_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_END_VOLT_4": "48"
+      },
+      "boundary_validation": {
+        "original_start": 241,
+        "original_size": 1,
+        "actual_start": 241,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 242,
+      "block_size": 1,
+      "end_register": 242,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_AC_END_SOC_1",
+        "MIDBOX_HOLD_AC_START_SOC_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_START_SOC_1": "50",
+        "MIDBOX_HOLD_AC_END_SOC_1": "90"
+      },
+      "boundary_validation": {
+        "original_start": 242,
+        "original_size": 1,
+        "actual_start": 242,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 243,
+      "block_size": 1,
+      "end_register": 243,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_AC_END_SOC_2",
+        "MIDBOX_HOLD_AC_START_SOC_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_START_SOC_2": "50",
+        "MIDBOX_HOLD_AC_END_SOC_2": "90"
+      },
+      "boundary_validation": {
+        "original_start": 243,
+        "original_size": 1,
+        "actual_start": 243,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 244,
+      "block_size": 1,
+      "end_register": 244,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_AC_END_SOC_3",
+        "MIDBOX_HOLD_AC_START_SOC_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_START_SOC_3": "10",
+        "MIDBOX_HOLD_AC_END_SOC_3": "101"
+      },
+      "boundary_validation": {
+        "original_start": 244,
+        "original_size": 1,
+        "actual_start": 244,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 245,
+      "block_size": 1,
+      "end_register": 245,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_AC_END_SOC_4",
+        "MIDBOX_HOLD_AC_START_SOC_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_START_SOC_4": "50",
+        "MIDBOX_HOLD_AC_END_SOC_4": "90"
+      },
+      "boundary_validation": {
+        "original_start": 245,
+        "original_size": 1,
+        "actual_start": 245,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 246,
+      "block_size": 1,
+      "end_register": 246,
+      "parameter_count": 5,
+      "parameter_keys": [
+        "BIT_FAN_3_MAX_SPEED",
+        "BIT_FAN_4_MAX_SPEED",
+        "FUNC_FAN_SPEED_SLOPE_CTRL_3",
+        "FUNC_FAN_SPEED_SLOPE_CTRL_4",
+        "MIDBOX_HOLD_AC_START_VOLT_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_START_VOLT_1": "50",
+        "FUNC_FAN_SPEED_SLOPE_CTRL_3": false,
+        "FUNC_FAN_SPEED_SLOPE_CTRL_4": true,
+        "BIT_FAN_3_MAX_SPEED": 122,
+        "BIT_FAN_4_MAX_SPEED": 0
+      },
+      "boundary_validation": {
+        "original_start": 246,
+        "original_size": 1,
+        "actual_start": 246,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 247,
+      "block_size": 1,
+      "end_register": 247,
+      "parameter_count": 3,
+      "parameter_keys": [
+        "BIT_FAN_5_MAX_SPEED",
+        "FUNC_FAN_SPEED_SLOPE_CTRL_5",
+        "MIDBOX_HOLD_AC_END_VOLT_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_END_VOLT_1": "54",
+        "FUNC_FAN_SPEED_SLOPE_CTRL_5": false,
+        "BIT_FAN_5_MAX_SPEED": 14
+      },
+      "boundary_validation": {
+        "original_start": 247,
+        "original_size": 1,
+        "actual_start": 247,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 248,
+      "block_size": 1,
+      "end_register": 248,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_AC_START_VOLT_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_START_VOLT_2": "50"
+      },
+      "boundary_validation": {
+        "original_start": 248,
+        "original_size": 1,
+        "actual_start": 248,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 249,
+      "block_size": 1,
+      "end_register": 249,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_AC_END_VOLT_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_END_VOLT_2": "54"
+      },
+      "boundary_validation": {
+        "original_start": 249,
+        "original_size": 1,
+        "actual_start": 249,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 250,
+      "block_size": 1,
+      "end_register": 250,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_AC_START_VOLT_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_START_VOLT_3": "50"
+      },
+      "boundary_validation": {
+        "original_start": 250,
+        "original_size": 1,
+        "actual_start": 250,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 251,
+      "block_size": 1,
+      "end_register": 251,
+      "parameter_count": 6,
+      "parameter_keys": [
+        "BIT_WATT_NODE_UPDATE_FREQUENCY",
+        "FUNC_REGISTER_SETTING_CT_METER_EN",
+        "FUNC_WATT_NODE_CT_DIRECTION_A",
+        "FUNC_WATT_NODE_CT_DIRECTION_B",
+        "FUNC_WATT_NODE_CT_DIRECTION_C",
+        "MIDBOX_HOLD_AC_END_VOLT_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_END_VOLT_3": "54",
+        "FUNC_WATT_NODE_CT_DIRECTION_A": false,
+        "FUNC_WATT_NODE_CT_DIRECTION_B": false,
+        "FUNC_WATT_NODE_CT_DIRECTION_C": true,
+        "FUNC_REGISTER_SETTING_CT_METER_EN": false,
+        "BIT_WATT_NODE_UPDATE_FREQUENCY": 3
+      },
+      "boundary_validation": {
+        "original_start": 251,
+        "original_size": 1,
+        "actual_start": 251,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 252,
+      "block_size": 1,
+      "end_register": 252,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_AC_START_VOLT_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_START_VOLT_4": "50"
+      },
+      "boundary_validation": {
+        "original_start": 252,
+        "original_size": 1,
+        "actual_start": 252,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 253,
+      "block_size": 1,
+      "end_register": 253,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_AC_END_VOLT_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_AC_END_VOLT_4": "54"
+      },
+      "boundary_validation": {
+        "original_start": 253,
+        "original_size": 1,
+        "actual_start": 253,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 254,
+      "block_size": 1,
+      "end_register": 254,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_START_PV_P_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_PV_P_1": "0"
+      },
+      "boundary_validation": {
+        "original_start": 254,
+        "original_size": 1,
+        "actual_start": 254,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 255,
+      "block_size": 1,
+      "end_register": 255,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_START_PV_P_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_PV_P_2": "0"
+      },
+      "boundary_validation": {
+        "original_start": 255,
+        "original_size": 1,
+        "actual_start": 255,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 256,
+      "block_size": 1,
+      "end_register": 256,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_START_PV_P_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_PV_P_3": "0"
+      },
+      "boundary_validation": {
+        "original_start": 256,
+        "original_size": 1,
+        "actual_start": 256,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 257,
+      "block_size": 1,
+      "end_register": 257,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_START_PV_P_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_START_PV_P_4": "0"
+      },
+      "boundary_validation": {
+        "original_start": 257,
+        "original_size": 1,
+        "actual_start": 257,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 258,
+      "block_size": 1,
+      "end_register": 258,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_END_SOC_1",
+        "MIDBOX_HOLD_SL_PS_START_SOC_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_START_SOC_1": "90",
+        "MIDBOX_HOLD_SL_PS_END_SOC_1": "60"
+      },
+      "boundary_validation": {
+        "original_start": 258,
+        "original_size": 1,
+        "actual_start": 258,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 259,
+      "block_size": 1,
+      "end_register": 259,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_END_SOC_2",
+        "MIDBOX_HOLD_SL_PS_START_SOC_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_START_SOC_2": "90",
+        "MIDBOX_HOLD_SL_PS_END_SOC_2": "60"
+      },
+      "boundary_validation": {
+        "original_start": 259,
+        "original_size": 1,
+        "actual_start": 259,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 260,
+      "block_size": 1,
+      "end_register": 260,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_END_SOC_3",
+        "MIDBOX_HOLD_SL_PS_START_SOC_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_START_SOC_3": "90",
+        "MIDBOX_HOLD_SL_PS_END_SOC_3": "60"
+      },
+      "boundary_validation": {
+        "original_start": 260,
+        "original_size": 1,
+        "actual_start": 260,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 261,
+      "block_size": 1,
+      "end_register": 261,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_END_SOC_4",
+        "MIDBOX_HOLD_SL_PS_START_SOC_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_START_SOC_4": "90",
+        "MIDBOX_HOLD_SL_PS_END_SOC_4": "60"
+      },
+      "boundary_validation": {
+        "original_start": 261,
+        "original_size": 1,
+        "actual_start": 261,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 262,
+      "block_size": 1,
+      "end_register": 262,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_START_VOLT_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_START_VOLT_1": "54"
+      },
+      "boundary_validation": {
+        "original_start": 262,
+        "original_size": 1,
+        "actual_start": 262,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 263,
+      "block_size": 1,
+      "end_register": 263,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_END_VOLT_1"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_END_VOLT_1": "48"
+      },
+      "boundary_validation": {
+        "original_start": 263,
+        "original_size": 1,
+        "actual_start": 263,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 264,
+      "block_size": 1,
+      "end_register": 264,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_START_VOLT_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_START_VOLT_2": "54"
+      },
+      "boundary_validation": {
+        "original_start": 264,
+        "original_size": 1,
+        "actual_start": 264,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 265,
+      "block_size": 1,
+      "end_register": 265,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_END_VOLT_2"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_END_VOLT_2": "48"
+      },
+      "boundary_validation": {
+        "original_start": 265,
+        "original_size": 1,
+        "actual_start": 265,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 266,
+      "block_size": 1,
+      "end_register": 266,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_START_VOLT_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_START_VOLT_3": "54"
+      },
+      "boundary_validation": {
+        "original_start": 266,
+        "original_size": 1,
+        "actual_start": 266,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 267,
+      "block_size": 1,
+      "end_register": 267,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_END_VOLT_3"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_END_VOLT_3": "48"
+      },
+      "boundary_validation": {
+        "original_start": 267,
+        "original_size": 1,
+        "actual_start": 267,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 268,
+      "block_size": 1,
+      "end_register": 268,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_START_VOLT_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_START_VOLT_4": "54"
+      },
+      "boundary_validation": {
+        "original_start": 268,
+        "original_size": 1,
+        "actual_start": 268,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 269,
+      "block_size": 1,
+      "end_register": 269,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_SL_PS_END_VOLT_4"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_SL_PS_END_VOLT_4": "48"
+      },
+      "boundary_validation": {
+        "original_start": 269,
+        "original_size": 1,
+        "actual_start": 269,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 270,
+      "block_size": 1,
+      "end_register": 270,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_1_START_HOUR_1",
+        "HOLD_MIDBOX_SL_1_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_1_START_HOUR_1": "00",
+        "HOLD_MIDBOX_SL_1_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 270,
+        "original_size": 1,
+        "actual_start": 270,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 271,
+      "block_size": 1,
+      "end_register": 271,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_1_END_HOUR_1",
+        "HOLD_MIDBOX_SL_1_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_1_END_HOUR_1": "00",
+        "HOLD_MIDBOX_SL_1_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 271,
+        "original_size": 1,
+        "actual_start": 271,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 272,
+      "block_size": 1,
+      "end_register": 272,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_1_START_HOUR_2",
+        "HOLD_MIDBOX_SL_1_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_1_START_HOUR_2": "00",
+        "HOLD_MIDBOX_SL_1_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 272,
+        "original_size": 1,
+        "actual_start": 272,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 273,
+      "block_size": 1,
+      "end_register": 273,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_1_END_HOUR_2",
+        "HOLD_MIDBOX_SL_1_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_1_END_HOUR_2": "00",
+        "HOLD_MIDBOX_SL_1_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 273,
+        "original_size": 1,
+        "actual_start": 273,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 274,
+      "block_size": 1,
+      "end_register": 274,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_1_START_HOUR_3",
+        "HOLD_MIDBOX_SL_1_START_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_1_START_HOUR_3": "00",
+        "HOLD_MIDBOX_SL_1_START_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 274,
+        "original_size": 1,
+        "actual_start": 274,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 275,
+      "block_size": 1,
+      "end_register": 275,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_1_END_HOUR_3",
+        "HOLD_MIDBOX_SL_1_END_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_1_END_HOUR_3": "00",
+        "HOLD_MIDBOX_SL_1_END_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 275,
+        "original_size": 1,
+        "actual_start": 275,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 276,
+      "block_size": 1,
+      "end_register": 276,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_2_START_HOUR_1",
+        "HOLD_MIDBOX_SL_2_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_2_START_HOUR_1": "00",
+        "HOLD_MIDBOX_SL_2_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 276,
+        "original_size": 1,
+        "actual_start": 276,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 277,
+      "block_size": 1,
+      "end_register": 277,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_2_END_HOUR_1",
+        "HOLD_MIDBOX_SL_2_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_2_END_HOUR_1": "00",
+        "HOLD_MIDBOX_SL_2_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 277,
+        "original_size": 1,
+        "actual_start": 277,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 278,
+      "block_size": 1,
+      "end_register": 278,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_2_START_HOUR_2",
+        "HOLD_MIDBOX_SL_2_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_2_START_HOUR_2": "00",
+        "HOLD_MIDBOX_SL_2_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 278,
+        "original_size": 1,
+        "actual_start": 278,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 279,
+      "block_size": 1,
+      "end_register": 279,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_2_END_HOUR_2",
+        "HOLD_MIDBOX_SL_2_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_2_END_HOUR_2": "00",
+        "HOLD_MIDBOX_SL_2_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 279,
+        "original_size": 1,
+        "actual_start": 279,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 280,
+      "block_size": 1,
+      "end_register": 280,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_2_START_HOUR_3",
+        "HOLD_MIDBOX_SL_2_START_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_2_START_HOUR_3": "00",
+        "HOLD_MIDBOX_SL_2_START_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 280,
+        "original_size": 1,
+        "actual_start": 280,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 281,
+      "block_size": 1,
+      "end_register": 281,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_2_END_HOUR_3",
+        "HOLD_MIDBOX_SL_2_END_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_2_END_HOUR_3": "00",
+        "HOLD_MIDBOX_SL_2_END_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 281,
+        "original_size": 1,
+        "actual_start": 281,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 282,
+      "block_size": 1,
+      "end_register": 282,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_3_START_HOUR_1",
+        "HOLD_MIDBOX_SL_3_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_3_START_HOUR_1": "00",
+        "HOLD_MIDBOX_SL_3_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 282,
+        "original_size": 1,
+        "actual_start": 282,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 283,
+      "block_size": 1,
+      "end_register": 283,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_3_END_HOUR_1",
+        "HOLD_MIDBOX_SL_3_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_3_END_HOUR_1": "00",
+        "HOLD_MIDBOX_SL_3_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 283,
+        "original_size": 1,
+        "actual_start": 283,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 284,
+      "block_size": 1,
+      "end_register": 284,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_3_START_HOUR_2",
+        "HOLD_MIDBOX_SL_3_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_3_START_HOUR_2": "00",
+        "HOLD_MIDBOX_SL_3_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 284,
+        "original_size": 1,
+        "actual_start": 284,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 285,
+      "block_size": 1,
+      "end_register": 285,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_3_END_HOUR_2",
+        "HOLD_MIDBOX_SL_3_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_3_END_HOUR_2": "00",
+        "HOLD_MIDBOX_SL_3_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 285,
+        "original_size": 1,
+        "actual_start": 285,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 286,
+      "block_size": 1,
+      "end_register": 286,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_3_START_HOUR_3",
+        "HOLD_MIDBOX_SL_3_START_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_3_START_HOUR_3": "00",
+        "HOLD_MIDBOX_SL_3_START_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 286,
+        "original_size": 1,
+        "actual_start": 286,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 287,
+      "block_size": 1,
+      "end_register": 287,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_3_END_HOUR_3",
+        "HOLD_MIDBOX_SL_3_END_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_3_END_HOUR_3": "00",
+        "HOLD_MIDBOX_SL_3_END_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 287,
+        "original_size": 1,
+        "actual_start": 287,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 288,
+      "block_size": 1,
+      "end_register": 288,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_4_START_HOUR_1",
+        "HOLD_MIDBOX_SL_4_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_4_START_HOUR_1": "00",
+        "HOLD_MIDBOX_SL_4_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 288,
+        "original_size": 1,
+        "actual_start": 288,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 289,
+      "block_size": 1,
+      "end_register": 289,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_4_END_HOUR_1",
+        "HOLD_MIDBOX_SL_4_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_4_END_HOUR_1": "23",
+        "HOLD_MIDBOX_SL_4_END_MINUTE_1": "59"
+      },
+      "boundary_validation": {
+        "original_start": 289,
+        "original_size": 1,
+        "actual_start": 289,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 290,
+      "block_size": 1,
+      "end_register": 290,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_4_START_HOUR_2",
+        "HOLD_MIDBOX_SL_4_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_4_START_HOUR_2": "00",
+        "HOLD_MIDBOX_SL_4_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 290,
+        "original_size": 1,
+        "actual_start": 290,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 291,
+      "block_size": 1,
+      "end_register": 291,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_4_END_HOUR_2",
+        "HOLD_MIDBOX_SL_4_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_4_END_HOUR_2": "00",
+        "HOLD_MIDBOX_SL_4_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 291,
+        "original_size": 1,
+        "actual_start": 291,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 292,
+      "block_size": 1,
+      "end_register": 292,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_4_START_HOUR_3",
+        "HOLD_MIDBOX_SL_4_START_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_4_START_HOUR_3": "00",
+        "HOLD_MIDBOX_SL_4_START_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 292,
+        "original_size": 1,
+        "actual_start": 292,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 293,
+      "block_size": 1,
+      "end_register": 293,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_SL_4_END_HOUR_3",
+        "HOLD_MIDBOX_SL_4_END_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_SL_4_END_HOUR_3": "00",
+        "HOLD_MIDBOX_SL_4_END_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 293,
+        "original_size": 1,
+        "actual_start": 293,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 294,
+      "block_size": 1,
+      "end_register": 294,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_1_START_HOUR_1",
+        "HOLD_MIDBOX_AC_COUPLE_1_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_1_START_HOUR_1": "00",
+        "HOLD_MIDBOX_AC_COUPLE_1_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 294,
+        "original_size": 1,
+        "actual_start": 294,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 295,
+      "block_size": 1,
+      "end_register": 295,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_1_END_HOUR_1",
+        "HOLD_MIDBOX_AC_COUPLE_1_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_1_END_HOUR_1": "00",
+        "HOLD_MIDBOX_AC_COUPLE_1_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 295,
+        "original_size": 1,
+        "actual_start": 295,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 296,
+      "block_size": 1,
+      "end_register": 296,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_1_START_HOUR_2",
+        "HOLD_MIDBOX_AC_COUPLE_1_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_1_START_HOUR_2": "00",
+        "HOLD_MIDBOX_AC_COUPLE_1_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 296,
+        "original_size": 1,
+        "actual_start": 296,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 297,
+      "block_size": 1,
+      "end_register": 297,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_1_END_HOUR_2",
+        "HOLD_MIDBOX_AC_COUPLE_1_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_1_END_HOUR_2": "00",
+        "HOLD_MIDBOX_AC_COUPLE_1_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 297,
+        "original_size": 1,
+        "actual_start": 297,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 298,
+      "block_size": 1,
+      "end_register": 298,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_1_START_HOUR_3",
+        "HOLD_MIDBOX_AC_COUPLE_1_START_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_1_START_HOUR_3": "00",
+        "HOLD_MIDBOX_AC_COUPLE_1_START_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 298,
+        "original_size": 1,
+        "actual_start": 298,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 299,
+      "block_size": 1,
+      "end_register": 299,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_1_END_HOUR_3",
+        "HOLD_MIDBOX_AC_COUPLE_1_END_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_1_END_HOUR_3": "00",
+        "HOLD_MIDBOX_AC_COUPLE_1_END_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 299,
+        "original_size": 1,
+        "actual_start": 299,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 300,
+      "block_size": 1,
+      "end_register": 300,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_2_START_HOUR_1",
+        "HOLD_MIDBOX_AC_COUPLE_2_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_2_START_HOUR_1": "00",
+        "HOLD_MIDBOX_AC_COUPLE_2_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 300,
+        "original_size": 1,
+        "actual_start": 300,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 301,
+      "block_size": 1,
+      "end_register": 301,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_2_END_HOUR_1",
+        "HOLD_MIDBOX_AC_COUPLE_2_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_2_END_HOUR_1": "00",
+        "HOLD_MIDBOX_AC_COUPLE_2_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 301,
+        "original_size": 1,
+        "actual_start": 301,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 302,
+      "block_size": 1,
+      "end_register": 302,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_2_START_HOUR_2",
+        "HOLD_MIDBOX_AC_COUPLE_2_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_2_START_HOUR_2": "00",
+        "HOLD_MIDBOX_AC_COUPLE_2_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 302,
+        "original_size": 1,
+        "actual_start": 302,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 303,
+      "block_size": 1,
+      "end_register": 303,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_2_END_HOUR_2",
+        "HOLD_MIDBOX_AC_COUPLE_2_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_2_END_HOUR_2": "00",
+        "HOLD_MIDBOX_AC_COUPLE_2_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 303,
+        "original_size": 1,
+        "actual_start": 303,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 304,
+      "block_size": 1,
+      "end_register": 304,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_2_START_HOUR_3",
+        "HOLD_MIDBOX_AC_COUPLE_2_START_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_2_START_HOUR_3": "00",
+        "HOLD_MIDBOX_AC_COUPLE_2_START_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 304,
+        "original_size": 1,
+        "actual_start": 304,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 305,
+      "block_size": 1,
+      "end_register": 305,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_2_END_HOUR_3",
+        "HOLD_MIDBOX_AC_COUPLE_2_END_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_2_END_HOUR_3": "00",
+        "HOLD_MIDBOX_AC_COUPLE_2_END_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 305,
+        "original_size": 1,
+        "actual_start": 305,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 306,
+      "block_size": 1,
+      "end_register": 306,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_3_START_HOUR_1",
+        "HOLD_MIDBOX_AC_COUPLE_3_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_3_START_HOUR_1": "00",
+        "HOLD_MIDBOX_AC_COUPLE_3_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 306,
+        "original_size": 1,
+        "actual_start": 306,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 307,
+      "block_size": 1,
+      "end_register": 307,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_3_END_HOUR_1",
+        "HOLD_MIDBOX_AC_COUPLE_3_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_3_END_HOUR_1": "23",
+        "HOLD_MIDBOX_AC_COUPLE_3_END_MINUTE_1": "59"
+      },
+      "boundary_validation": {
+        "original_start": 307,
+        "original_size": 1,
+        "actual_start": 307,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 308,
+      "block_size": 1,
+      "end_register": 308,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_3_START_HOUR_2",
+        "HOLD_MIDBOX_AC_COUPLE_3_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_3_START_HOUR_2": "00",
+        "HOLD_MIDBOX_AC_COUPLE_3_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 308,
+        "original_size": 1,
+        "actual_start": 308,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 309,
+      "block_size": 1,
+      "end_register": 309,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_3_END_HOUR_2",
+        "HOLD_MIDBOX_AC_COUPLE_3_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_3_END_HOUR_2": "00",
+        "HOLD_MIDBOX_AC_COUPLE_3_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 309,
+        "original_size": 1,
+        "actual_start": 309,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 310,
+      "block_size": 1,
+      "end_register": 310,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_3_START_HOUR_3",
+        "HOLD_MIDBOX_AC_COUPLE_3_START_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_3_START_HOUR_3": "00",
+        "HOLD_MIDBOX_AC_COUPLE_3_START_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 310,
+        "original_size": 1,
+        "actual_start": 310,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 311,
+      "block_size": 1,
+      "end_register": 311,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_3_END_HOUR_3",
+        "HOLD_MIDBOX_AC_COUPLE_3_END_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_3_END_HOUR_3": "00",
+        "HOLD_MIDBOX_AC_COUPLE_3_END_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 311,
+        "original_size": 1,
+        "actual_start": 311,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 312,
+      "block_size": 1,
+      "end_register": 312,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_4_START_HOUR_1",
+        "HOLD_MIDBOX_AC_COUPLE_4_START_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_4_START_HOUR_1": "00",
+        "HOLD_MIDBOX_AC_COUPLE_4_START_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 312,
+        "original_size": 1,
+        "actual_start": 312,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 313,
+      "block_size": 1,
+      "end_register": 313,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_4_END_HOUR_1",
+        "HOLD_MIDBOX_AC_COUPLE_4_END_MINUTE_1"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_4_END_HOUR_1": "00",
+        "HOLD_MIDBOX_AC_COUPLE_4_END_MINUTE_1": "00"
+      },
+      "boundary_validation": {
+        "original_start": 313,
+        "original_size": 1,
+        "actual_start": 313,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 314,
+      "block_size": 1,
+      "end_register": 314,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_4_START_HOUR_2",
+        "HOLD_MIDBOX_AC_COUPLE_4_START_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_4_START_HOUR_2": "00",
+        "HOLD_MIDBOX_AC_COUPLE_4_START_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 314,
+        "original_size": 1,
+        "actual_start": 314,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 315,
+      "block_size": 1,
+      "end_register": 315,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_4_END_HOUR_2",
+        "HOLD_MIDBOX_AC_COUPLE_4_END_MINUTE_2"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_4_END_HOUR_2": "00",
+        "HOLD_MIDBOX_AC_COUPLE_4_END_MINUTE_2": "00"
+      },
+      "boundary_validation": {
+        "original_start": 315,
+        "original_size": 1,
+        "actual_start": 315,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 316,
+      "block_size": 1,
+      "end_register": 316,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_4_START_HOUR_3",
+        "HOLD_MIDBOX_AC_COUPLE_4_START_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_4_START_HOUR_3": "00",
+        "HOLD_MIDBOX_AC_COUPLE_4_START_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 316,
+        "original_size": 1,
+        "actual_start": 316,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 317,
+      "block_size": 1,
+      "end_register": 317,
+      "parameter_count": 2,
+      "parameter_keys": [
+        "HOLD_MIDBOX_AC_COUPLE_4_END_HOUR_3",
+        "HOLD_MIDBOX_AC_COUPLE_4_END_MINUTE_3"
+      ],
+      "sample_values": {
+        "HOLD_MIDBOX_AC_COUPLE_4_END_HOUR_3": "00",
+        "HOLD_MIDBOX_AC_COUPLE_4_END_MINUTE_3": "00"
+      },
+      "boundary_validation": {
+        "original_start": 317,
+        "original_size": 1,
+        "actual_start": 317,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 2032,
+      "block_size": 1,
+      "end_register": 2032,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "masterInverterSn"
+      ],
+      "sample_values": {
+        "masterInverterSn": "52500E0178"
+      },
+      "boundary_validation": {
+        "original_start": 2032,
+        "original_size": 1,
+        "actual_start": 2032,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 2033,
+      "block_size": 67,
+      "end_register": 2099,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "MIDBOX_HOLD_BUSBAR_PCS_RATING"
+      ],
+      "sample_values": {
+        "MIDBOX_HOLD_BUSBAR_PCS_RATING": "240"
+      },
+      "boundary_validation": {
+        "original_start": 2033,
+        "original_size": 67,
+        "actual_start": 2099,
+        "actual_size": 1,
+        "leading_empty_registers": 66
+      }
+    },
+    {
+      "start_register": 2100,
+      "block_size": 2,
+      "end_register": 2101,
+      "parameter_count": 9,
+      "parameter_keys": [
+        "BIT_MID_INSTALL_POSITION",
+        "BIT_SMART_LOAD_BASE_ON_1",
+        "BIT_SMART_LOAD_BASE_ON_2",
+        "BIT_SMART_LOAD_BASE_ON_3",
+        "BIT_SMART_LOAD_BASE_ON_4",
+        "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_1",
+        "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_2",
+        "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_3",
+        "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_4"
+      ],
+      "sample_values": {
+        "BIT_MID_INSTALL_POSITION": 0,
+        "BIT_SMART_LOAD_BASE_ON_1": 0,
+        "BIT_SMART_LOAD_BASE_ON_2": 0,
+        "BIT_SMART_LOAD_BASE_ON_3": 0,
+        "BIT_SMART_LOAD_BASE_ON_4": 0,
+        "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_1": 0,
+        "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_2": 0,
+        "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_3": 0,
+        "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_4": 0
+      },
+      "boundary_validation": {
+        "original_start": 2100,
+        "original_size": 2,
+        "actual_start": 2101,
+        "actual_size": 1,
+        "leading_empty_registers": 1
+      }
+    },
+    {
+      "start_register": 2102,
+      "block_size": 1,
+      "end_register": 2102,
+      "parameter_count": 3,
+      "parameter_keys": [
+        "BIT_PARALLEL_SETTINGS_ROLE",
+        "FUNC_INDEPENDENT_MIDBOX_MODE",
+        "FUNC_RUN_WITHOUT_GRID_MIDBOX"
+      ],
+      "sample_values": {
+        "FUNC_INDEPENDENT_MIDBOX_MODE": false,
+        "FUNC_RUN_WITHOUT_GRID_MIDBOX": false,
+        "BIT_PARALLEL_SETTINGS_ROLE": 0
+      },
+      "boundary_validation": {
+        "original_start": 2102,
+        "original_size": 1,
+        "actual_start": 2102,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 2103,
+      "block_size": 1,
+      "end_register": 2103,
+      "parameter_count": 8,
+      "parameter_keys": [
+        "BIT_SMART_LOAD_SHEDDING_PRIORITY_1",
+        "BIT_SMART_LOAD_SHEDDING_PRIORITY_2",
+        "BIT_SMART_LOAD_SHEDDING_PRIORITY_3",
+        "BIT_SMART_LOAD_SHEDDING_PRIORITY_4",
+        "FUNC_SMART_LOAD_NEVER_OFF_EN_1",
+        "FUNC_SMART_LOAD_NEVER_OFF_EN_2",
+        "FUNC_SMART_LOAD_NEVER_OFF_EN_3",
+        "FUNC_SMART_LOAD_NEVER_OFF_EN_4"
+      ],
+      "sample_values": {
+        "FUNC_SMART_LOAD_NEVER_OFF_EN_1": false,
+        "FUNC_SMART_LOAD_NEVER_OFF_EN_2": false,
+        "FUNC_SMART_LOAD_NEVER_OFF_EN_3": false,
+        "FUNC_SMART_LOAD_NEVER_OFF_EN_4": false,
+        "BIT_SMART_LOAD_SHEDDING_PRIORITY_1": 0,
+        "BIT_SMART_LOAD_SHEDDING_PRIORITY_2": 1,
+        "BIT_SMART_LOAD_SHEDDING_PRIORITY_3": 2,
+        "BIT_SMART_LOAD_SHEDDING_PRIORITY_4": 3
+      },
+      "boundary_validation": {
+        "original_start": 2103,
+        "original_size": 1,
+        "actual_start": 2103,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    },
+    {
+      "start_register": 2104,
+      "block_size": 1,
+      "end_register": 2104,
+      "parameter_count": 1,
+      "parameter_keys": [
+        "HOLD_LOAD_SHEDDING_POWER_RATING"
+      ],
+      "sample_values": {
+        "HOLD_LOAD_SHEDDING_POWER_RATING": "80"
+      },
+      "boundary_validation": {
+        "original_start": 2104,
+        "original_size": 1,
+        "actual_start": 2104,
+        "actual_size": 1,
+        "leading_empty_registers": 0
+      }
+    }
+  ],
+  "all_parameter_names": [
+    "BIT_AC_CHARGE_TYPE",
+    "BIT_CT_SAMPLE_RATIO",
+    "BIT_DEVICE_TYPE_ODM",
+    "BIT_DISCHG_CONTROL_TYPE",
+    "BIT_DRY_CONTRACTOR_MULTIPLEX",
+    "BIT_FAN_1_MAX_SPEED",
+    "BIT_FAN_2_MAX_SPEED",
+    "BIT_FAN_3_MAX_SPEED",
+    "BIT_FAN_4_MAX_SPEED",
+    "BIT_FAN_5_MAX_SPEED",
+    "BIT_GENERATOR_CHARGE_TYPE",
+    "BIT_LCD_TYPE",
+    "BIT_MACHINE_TYPE",
+    "BIT_METER_NUMBER",
+    "BIT_METER_PHASE",
+    "BIT_MIDBOX_SP_MODE_1",
+    "BIT_MIDBOX_SP_MODE_2",
+    "BIT_MIDBOX_SP_MODE_3",
+    "BIT_MIDBOX_SP_MODE_4",
+    "BIT_MID_INSTALL_POSITION",
+    "BIT_ON_GRID_EOD_TYPE",
+    "BIT_OUT_CT_POSITION",
+    "BIT_PARALLEL_SETTINGS_ROLE",
+    "BIT_PVCT_SAMPLE_RATIO",
+    "BIT_PVCT_SAMPLE_TYPE",
+    "BIT_SMART_LOAD_BASE_ON_1",
+    "BIT_SMART_LOAD_BASE_ON_2",
+    "BIT_SMART_LOAD_BASE_ON_3",
+    "BIT_SMART_LOAD_BASE_ON_4",
+    "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_1",
+    "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_2",
+    "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_3",
+    "BIT_SMART_LOAD_BASE_ON_TIME_SOC_VOLT_4",
+    "BIT_SMART_LOAD_SHEDDING_PRIORITY_1",
+    "BIT_SMART_LOAD_SHEDDING_PRIORITY_2",
+    "BIT_SMART_LOAD_SHEDDING_PRIORITY_3",
+    "BIT_SMART_LOAD_SHEDDING_PRIORITY_4",
+    "BIT_WATT_NODE_UPDATE_FREQUENCY",
+    "BIT_WORKING_MODE",
+    "FUNC_ACTIVE_POWER_LIMIT_MODE",
+    "FUNC_AC_CHARGE",
+    "FUNC_AC_COUPLE_DARK_START_EN",
+    "FUNC_AC_COUPLE_EN_1",
+    "FUNC_AC_COUPLE_EN_2",
+    "FUNC_AC_COUPLE_EN_3",
+    "FUNC_AC_COUPLE_EN_4",
+    "FUNC_AC_COUPLE_ON_EPS_PORT_EN",
+    "FUNC_AC_COUPLING_FUNCTION",
+    "FUNC_ANTI_ISLAND_EN",
+    "FUNC_BATTERY_BACKUP_CTRL",
+    "FUNC_BATTERY_CALIBRATION_EN",
+    "FUNC_BATTERY_ECO_EN",
+    "FUNC_BAT_CHARGE_CONTROL",
+    "FUNC_BAT_DISCHARGE_CONTROL",
+    "FUNC_BAT_SHARED",
+    "FUNC_BUZZER_EN",
+    "FUNC_CHARGE_LAST",
+    "FUNC_CT_DIRECTION_REVERSED",
+    "FUNC_DCI_EN",
+    "FUNC_DRMS_EN",
+    "FUNC_ENERTEK_WORKING_MODE",
+    "FUNC_EPS_EN",
+    "FUNC_FAN_DC3",
+    "FUNC_FAN_SPEED_SLOPE_CTRL_1",
+    "FUNC_FAN_SPEED_SLOPE_CTRL_2",
+    "FUNC_FAN_SPEED_SLOPE_CTRL_3",
+    "FUNC_FAN_SPEED_SLOPE_CTRL_4",
+    "FUNC_FAN_SPEED_SLOPE_CTRL_5",
+    "FUNC_FEED_IN_GRID_EN",
+    "FUNC_FORCED_CHG_EN",
+    "FUNC_FORCED_DISCHG_EN",
+    "FUNC_GEN_CTRL",
+    "FUNC_GEN_PEAK_SHAVING",
+    "FUNC_GFCI_EN",
+    "FUNC_GO_TO_OFFGRID",
+    "FUNC_GREEN_EN",
+    "FUNC_GRID_CT_CONNECTION_EN",
+    "FUNC_GRID_ON_POWER_SS_EN",
+    "FUNC_GRID_PEAK_SHAVING",
+    "FUNC_HALF_HOUR_AC_CHG_START_EN",
+    "FUNC_INDEPENDENT_MIDBOX_MODE",
+    "FUNC_ISO_EN",
+    "FUNC_LSP_AC_CHARGE",
+    "FUNC_LSP_BATT_VOLT_OR_SOC",
+    "FUNC_LSP_BAT_ACTIVATION_EN",
+    "FUNC_LSP_BAT_FIRST_10_EN",
+    "FUNC_LSP_BAT_FIRST_11_EN",
+    "FUNC_LSP_BAT_FIRST_12_EN",
+    "FUNC_LSP_BAT_FIRST_13_EN",
+    "FUNC_LSP_BAT_FIRST_14_EN",
+    "FUNC_LSP_BAT_FIRST_15_EN",
+    "FUNC_LSP_BAT_FIRST_16_EN",
+    "FUNC_LSP_BAT_FIRST_17_EN",
+    "FUNC_LSP_BAT_FIRST_18_EN",
+    "FUNC_LSP_BAT_FIRST_19_EN",
+    "FUNC_LSP_BAT_FIRST_1_EN",
+    "FUNC_LSP_BAT_FIRST_20_EN",
+    "FUNC_LSP_BAT_FIRST_21_EN",
+    "FUNC_LSP_BAT_FIRST_22_EN",
+    "FUNC_LSP_BAT_FIRST_23_EN",
+    "FUNC_LSP_BAT_FIRST_24_EN",
+    "FUNC_LSP_BAT_FIRST_25_EN",
+    "FUNC_LSP_BAT_FIRST_26_EN",
+    "FUNC_LSP_BAT_FIRST_27_EN",
+    "FUNC_LSP_BAT_FIRST_28_EN",
+    "FUNC_LSP_BAT_FIRST_29_EN",
+    "FUNC_LSP_BAT_FIRST_2_EN",
+    "FUNC_LSP_BAT_FIRST_30_EN",
+    "FUNC_LSP_BAT_FIRST_31_EN",
+    "FUNC_LSP_BAT_FIRST_32_EN",
+    "FUNC_LSP_BAT_FIRST_33_EN",
+    "FUNC_LSP_BAT_FIRST_34_EN",
+    "FUNC_LSP_BAT_FIRST_35_EN",
+    "FUNC_LSP_BAT_FIRST_36_EN",
+    "FUNC_LSP_BAT_FIRST_37_EN",
+    "FUNC_LSP_BAT_FIRST_38_EN",
+    "FUNC_LSP_BAT_FIRST_39_EN",
+    "FUNC_LSP_BAT_FIRST_3_EN",
+    "FUNC_LSP_BAT_FIRST_40_EN",
+    "FUNC_LSP_BAT_FIRST_41_EN",
+    "FUNC_LSP_BAT_FIRST_42_EN",
+    "FUNC_LSP_BAT_FIRST_43_EN",
+    "FUNC_LSP_BAT_FIRST_44_EN",
+    "FUNC_LSP_BAT_FIRST_45_EN",
+    "FUNC_LSP_BAT_FIRST_46_EN",
+    "FUNC_LSP_BAT_FIRST_47_EN",
+    "FUNC_LSP_BAT_FIRST_48_EN",
+    "FUNC_LSP_BAT_FIRST_4_EN",
+    "FUNC_LSP_BAT_FIRST_5_EN",
+    "FUNC_LSP_BAT_FIRST_6_EN",
+    "FUNC_LSP_BAT_FIRST_7_EN",
+    "FUNC_LSP_BAT_FIRST_8_EN",
+    "FUNC_LSP_BAT_FIRST_9_EN",
+    "FUNC_LSP_BYPASS_10_EN",
+    "FUNC_LSP_BYPASS_11_EN",
+    "FUNC_LSP_BYPASS_12_EN",
+    "FUNC_LSP_BYPASS_13_EN",
+    "FUNC_LSP_BYPASS_14_EN",
+    "FUNC_LSP_BYPASS_15_EN",
+    "FUNC_LSP_BYPASS_16_EN",
+    "FUNC_LSP_BYPASS_17_EN",
+    "FUNC_LSP_BYPASS_18_EN",
+    "FUNC_LSP_BYPASS_19_EN",
+    "FUNC_LSP_BYPASS_1_EN",
+    "FUNC_LSP_BYPASS_20_EN",
+    "FUNC_LSP_BYPASS_21_EN",
+    "FUNC_LSP_BYPASS_22_EN",
+    "FUNC_LSP_BYPASS_23_EN",
+    "FUNC_LSP_BYPASS_24_EN",
+    "FUNC_LSP_BYPASS_25_EN",
+    "FUNC_LSP_BYPASS_26_EN",
+    "FUNC_LSP_BYPASS_27_EN",
+    "FUNC_LSP_BYPASS_28_EN",
+    "FUNC_LSP_BYPASS_29_EN",
+    "FUNC_LSP_BYPASS_2_EN",
+    "FUNC_LSP_BYPASS_30_EN",
+    "FUNC_LSP_BYPASS_31_EN",
+    "FUNC_LSP_BYPASS_32_EN",
+    "FUNC_LSP_BYPASS_33_EN",
+    "FUNC_LSP_BYPASS_34_EN",
+    "FUNC_LSP_BYPASS_35_EN",
+    "FUNC_LSP_BYPASS_36_EN",
+    "FUNC_LSP_BYPASS_37_EN",
+    "FUNC_LSP_BYPASS_38_EN",
+    "FUNC_LSP_BYPASS_39_EN",
+    "FUNC_LSP_BYPASS_3_EN",
+    "FUNC_LSP_BYPASS_40_EN",
+    "FUNC_LSP_BYPASS_41_EN",
+    "FUNC_LSP_BYPASS_42_EN",
+    "FUNC_LSP_BYPASS_43_EN",
+    "FUNC_LSP_BYPASS_44_EN",
+    "FUNC_LSP_BYPASS_45_EN",
+    "FUNC_LSP_BYPASS_46_EN",
+    "FUNC_LSP_BYPASS_47_EN",
+    "FUNC_LSP_BYPASS_48_EN",
+    "FUNC_LSP_BYPASS_4_EN",
+    "FUNC_LSP_BYPASS_5_EN",
+    "FUNC_LSP_BYPASS_6_EN",
+    "FUNC_LSP_BYPASS_7_EN",
+    "FUNC_LSP_BYPASS_8_EN",
+    "FUNC_LSP_BYPASS_9_EN",
+    "FUNC_LSP_BYPASS_EN",
+    "FUNC_LSP_BYPASS_MODE_EN",
+    "FUNC_LSP_CHARGE_PRIORITY_EN",
+    "FUNC_LSP_FAN_CHECK_EN",
+    "FUNC_LSP_ISO_EN",
+    "FUNC_LSP_LCD_REMOTE_DIS_CHG_EN",
+    "FUNC_LSP_OUTPUT_10_EN",
+    "FUNC_LSP_OUTPUT_11_EN",
+    "FUNC_LSP_OUTPUT_12_EN",
+    "FUNC_LSP_OUTPUT_1_EN",
+    "FUNC_LSP_OUTPUT_2_EN",
+    "FUNC_LSP_OUTPUT_3_EN",
+    "FUNC_LSP_OUTPUT_4_EN",
+    "FUNC_LSP_OUTPUT_5_EN",
+    "FUNC_LSP_OUTPUT_6_EN",
+    "FUNC_LSP_OUTPUT_7_EN",
+    "FUNC_LSP_OUTPUT_8_EN",
+    "FUNC_LSP_OUTPUT_9_EN",
+    "FUNC_LSP_SELF_CONSUMPTION_EN",
+    "FUNC_LSP_SET_TO_STANDBY",
+    "FUNC_LSP_WHOLE_BAT_FIRST_1_EN",
+    "FUNC_LSP_WHOLE_BAT_FIRST_2_EN",
+    "FUNC_LSP_WHOLE_BAT_FIRST_3_EN",
+    "FUNC_LSP_WHOLE_BYPASS_1_EN",
+    "FUNC_LSP_WHOLE_BYPASS_2_EN",
+    "FUNC_LSP_WHOLE_BYPASS_3_EN",
+    "FUNC_LSP_WHOLE_DAY_SCHEDULE_EN",
+    "FUNC_LSP_WHOLE_SELF_CONSUMPTION_1_EN",
+    "FUNC_LSP_WHOLE_SELF_CONSUMPTION_2_EN",
+    "FUNC_LSP_WHOLE_SELF_CONSUMPTION_3_EN",
+    "FUNC_LVRT_EN",
+    "FUNC_MICRO_GRID_EN",
+    "FUNC_MIDBOX_EN",
+    "FUNC_NEUTRAL_DETECT_EN",
+    "FUNC_NTC_DETECTION",
+    "FUNC_N_PE_CONNECT_INNER_EN",
+    "FUNC_ON_GRID_ALWAYS_ON",
+    "FUNC_OVF_LOAD_DERATE_EN",
+    "FUNC_PARALLEL_DATA_SYNC_EN",
+    "FUNC_PHASE_INDEPEND_COMPENSATE_EN",
+    "FUNC_PV_ARC",
+    "FUNC_PV_ARC_FAULT_CLEAR",
+    "FUNC_PV_GRID_OFF_EN",
+    "FUNC_PV_SELL_TO_GRID_EN",
+    "FUNC_QUICK_CHARGE_CTRL",
+    "FUNC_REGISTER_SETTING_CT_METER_EN",
+    "FUNC_RETAIN_SHUTDOWN",
+    "FUNC_RETAIN_STANDBY",
+    "FUNC_RSD_DISABLE",
+    "FUNC_RUN_WITHOUT_GRID",
+    "FUNC_RUN_WITHOUT_GRID_12K",
+    "FUNC_RUN_WITHOUT_GRID_MIDBOX",
+    "FUNC_SET_TO_STANDBY",
+    "FUNC_SHEDDING_MODE_EN_1",
+    "FUNC_SHEDDING_MODE_EN_2",
+    "FUNC_SHEDDING_MODE_EN_3",
+    "FUNC_SHEDDING_MODE_EN_4",
+    "FUNC_SMART_LOAD_ENABLE",
+    "FUNC_SMART_LOAD_EN_1",
+    "FUNC_SMART_LOAD_EN_2",
+    "FUNC_SMART_LOAD_EN_3",
+    "FUNC_SMART_LOAD_EN_4",
+    "FUNC_SMART_LOAD_GRID_ON_1",
+    "FUNC_SMART_LOAD_GRID_ON_2",
+    "FUNC_SMART_LOAD_GRID_ON_3",
+    "FUNC_SMART_LOAD_GRID_ON_4",
+    "FUNC_SMART_LOAD_NEVER_OFF_EN_1",
+    "FUNC_SMART_LOAD_NEVER_OFF_EN_2",
+    "FUNC_SMART_LOAD_NEVER_OFF_EN_3",
+    "FUNC_SMART_LOAD_NEVER_OFF_EN_4",
+    "FUNC_SNA_BAT_DISCHARGE_CONTROL",
+    "FUNC_SPORADIC_CHARGE",
+    "FUNC_SW_SEAMLESSLY_EN",
+    "FUNC_TAKE_LOAD_TOGETHER",
+    "FUNC_TOTAL_LOAD_COMPENSATION_EN",
+    "FUNC_TRIP_TIME_UNIT",
+    "FUNC_WATT_NODE_CT_DIRECTION_A",
+    "FUNC_WATT_NODE_CT_DIRECTION_B",
+    "FUNC_WATT_NODE_CT_DIRECTION_C",
+    "FUNC_WATT_VOLT_EN",
+    "HOLD_ACTIVE_POWER_PERCENT_CMD",
+    "HOLD_AC_CHARGE_BATTERY_CURRENT",
+    "HOLD_AC_CHARGE_END_BATTERY_SOC",
+    "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE",
+    "HOLD_AC_CHARGE_END_HOUR",
+    "HOLD_AC_CHARGE_END_HOUR_1",
+    "HOLD_AC_CHARGE_END_HOUR_2",
+    "HOLD_AC_CHARGE_END_MINUTE",
+    "HOLD_AC_CHARGE_END_MINUTE_1",
+    "HOLD_AC_CHARGE_END_MINUTE_2",
+    "HOLD_AC_CHARGE_POWER_CMD",
+    "HOLD_AC_CHARGE_SOC_LIMIT",
+    "HOLD_AC_CHARGE_START_BATTERY_SOC",
+    "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE",
+    "HOLD_AC_CHARGE_START_HOUR",
+    "HOLD_AC_CHARGE_START_HOUR_1",
+    "HOLD_AC_CHARGE_START_HOUR_2",
+    "HOLD_AC_CHARGE_START_MINUTE",
+    "HOLD_AC_CHARGE_START_MINUTE_1",
+    "HOLD_AC_CHARGE_START_MINUTE_2",
+    "HOLD_AC_FIRST_END_HOUR",
+    "HOLD_AC_FIRST_END_HOUR_1",
+    "HOLD_AC_FIRST_END_HOUR_2",
+    "HOLD_AC_FIRST_END_MINUTE",
+    "HOLD_AC_FIRST_END_MINUTE_1",
+    "HOLD_AC_FIRST_END_MINUTE_2",
+    "HOLD_AC_FIRST_START_HOUR",
+    "HOLD_AC_FIRST_START_HOUR_1",
+    "HOLD_AC_FIRST_START_HOUR_2",
+    "HOLD_AC_FIRST_START_MINUTE",
+    "HOLD_AC_FIRST_START_MINUTE_1",
+    "HOLD_AC_FIRST_START_MINUTE_2",
+    "HOLD_BATTERY_LOW_TO_UTILITY_SOC",
+    "HOLD_BATTERY_LOW_TO_UTILITY_VOLTAGE",
+    "HOLD_BATTERY_WARNING_RECOVERY_SOC",
+    "HOLD_BATTERY_WARNING_RECOVERY_VOLTAGE",
+    "HOLD_BATTERY_WARNING_SOC",
+    "HOLD_BATTERY_WARNING_VOLTAGE",
+    "HOLD_CHARGE_POWER_PERCENT_CMD",
+    "HOLD_COM_ADDR",
+    "HOLD_CONNECT_TIME",
+    "HOLD_CT_POWER_OFFSET",
+    "HOLD_DEVICE_TYPE_CODE",
+    "HOLD_DISCHG_CUT_OFF_SOC_EOD",
+    "HOLD_DISCHG_POWER_PERCENT_CMD",
+    "HOLD_EPS_FREQ_SET",
+    "HOLD_EPS_VOLT_SET",
+    "HOLD_EQUALIZATION_PERIOD",
+    "HOLD_EQUALIZATION_TIME",
+    "HOLD_EQUALIZATION_VOLTAGE",
+    "HOLD_FEED_IN_GRID_POWER_PERCENT",
+    "HOLD_FLOATING_VOLTAGE",
+    "HOLD_FORCED_CHARGE_END_HOUR",
+    "HOLD_FORCED_CHARGE_END_HOUR_1",
+    "HOLD_FORCED_CHARGE_END_HOUR_2",
+    "HOLD_FORCED_CHARGE_END_MINUTE",
+    "HOLD_FORCED_CHARGE_END_MINUTE_1",
+    "HOLD_FORCED_CHARGE_END_MINUTE_2",
+    "HOLD_FORCED_CHARGE_START_HOUR",
+    "HOLD_FORCED_CHARGE_START_HOUR_1",
+    "HOLD_FORCED_CHARGE_START_HOUR_2",
+    "HOLD_FORCED_CHARGE_START_MINUTE",
+    "HOLD_FORCED_CHARGE_START_MINUTE_1",
+    "HOLD_FORCED_CHARGE_START_MINUTE_2",
+    "HOLD_FORCED_CHG_POWER_CMD",
+    "HOLD_FORCED_CHG_SOC_LIMIT",
+    "HOLD_FORCED_DISCHARGE_END_HOUR",
+    "HOLD_FORCED_DISCHARGE_END_HOUR_1",
+    "HOLD_FORCED_DISCHARGE_END_HOUR_2",
+    "HOLD_FORCED_DISCHARGE_END_MINUTE",
+    "HOLD_FORCED_DISCHARGE_END_MINUTE_1",
+    "HOLD_FORCED_DISCHARGE_END_MINUTE_2",
+    "HOLD_FORCED_DISCHARGE_START_HOUR",
+    "HOLD_FORCED_DISCHARGE_START_HOUR_1",
+    "HOLD_FORCED_DISCHARGE_START_HOUR_2",
+    "HOLD_FORCED_DISCHARGE_START_MINUTE",
+    "HOLD_FORCED_DISCHARGE_START_MINUTE_1",
+    "HOLD_FORCED_DISCHARGE_START_MINUTE_2",
+    "HOLD_FORCED_DISCHG_POWER_CMD",
+    "HOLD_FORCED_DISCHG_SOC_LIMIT",
+    "HOLD_FW_CODE",
+    "HOLD_GRID_FREQ_CONN_HIGH",
+    "HOLD_GRID_FREQ_CONN_LOW",
+    "HOLD_GRID_FREQ_LIMIT1_HIGH",
+    "HOLD_GRID_FREQ_LIMIT1_HIGH_TIME",
+    "HOLD_GRID_FREQ_LIMIT1_LOW",
+    "HOLD_GRID_FREQ_LIMIT1_LOW_TIME",
+    "HOLD_GRID_FREQ_LIMIT2_HIGH",
+    "HOLD_GRID_FREQ_LIMIT2_HIGH_TIME",
+    "HOLD_GRID_FREQ_LIMIT2_LOW",
+    "HOLD_GRID_FREQ_LIMIT2_LOW_TIME",
+    "HOLD_GRID_FREQ_LIMIT3_HIGH",
+    "HOLD_GRID_FREQ_LIMIT3_HIGH_TIME",
+    "HOLD_GRID_FREQ_LIMIT3_LOW",
+    "HOLD_GRID_FREQ_LIMIT3_LOW_TIME",
+    "HOLD_GRID_VOLT_CONN_HIGH",
+    "HOLD_GRID_VOLT_CONN_LOW",
+    "HOLD_GRID_VOLT_LIMIT1_HIGH",
+    "HOLD_GRID_VOLT_LIMIT1_HIGH_TIME",
+    "HOLD_GRID_VOLT_LIMIT1_LOW",
+    "HOLD_GRID_VOLT_LIMIT1_LOW_TIME",
+    "HOLD_GRID_VOLT_LIMIT2_HIGH",
+    "HOLD_GRID_VOLT_LIMIT2_HIGH_TIME",
+    "HOLD_GRID_VOLT_LIMIT2_LOW",
+    "HOLD_GRID_VOLT_LIMIT2_LOW_TIME",
+    "HOLD_GRID_VOLT_LIMIT3_HIGH",
+    "HOLD_GRID_VOLT_LIMIT3_HIGH_TIME",
+    "HOLD_GRID_VOLT_LIMIT3_LOW",
+    "HOLD_GRID_VOLT_LIMIT3_LOW_TIME",
+    "HOLD_GRID_VOLT_MOV_AVG_HIGH",
+    "HOLD_LANGUAGE",
+    "HOLD_LEAD_ACID_CHARGE_RATE",
+    "HOLD_LEAD_ACID_CHARGE_VOLT_REF",
+    "HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT",
+    "HOLD_LEAD_ACID_DISCHARGE_RATE",
+    "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_CHG",
+    "HOLD_LEAD_ACID_TEMPR_LOWER_LIMIT_DISCHG",
+    "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_CHG",
+    "HOLD_LEAD_ACID_TEMPR_UPPER_LIMIT_DISCHG",
+    "HOLD_LINE_MODE_INPUT",
+    "HOLD_LOAD_SHEDDING_POWER_RATING",
+    "HOLD_MAINTENANCE_COUNT",
+    "HOLD_MAX_AC_INPUT_POWER",
+    "HOLD_MAX_GENERATOR_INPUT_POWER",
+    "HOLD_MAX_Q_PERCENT_FOR_QV",
+    "HOLD_MIDBOX_AC_COUPLE_1_END_HOUR_1",
+    "HOLD_MIDBOX_AC_COUPLE_1_END_HOUR_2",
+    "HOLD_MIDBOX_AC_COUPLE_1_END_HOUR_3",
+    "HOLD_MIDBOX_AC_COUPLE_1_END_MINUTE_1",
+    "HOLD_MIDBOX_AC_COUPLE_1_END_MINUTE_2",
+    "HOLD_MIDBOX_AC_COUPLE_1_END_MINUTE_3",
+    "HOLD_MIDBOX_AC_COUPLE_1_START_HOUR_1",
+    "HOLD_MIDBOX_AC_COUPLE_1_START_HOUR_2",
+    "HOLD_MIDBOX_AC_COUPLE_1_START_HOUR_3",
+    "HOLD_MIDBOX_AC_COUPLE_1_START_MINUTE_1",
+    "HOLD_MIDBOX_AC_COUPLE_1_START_MINUTE_2",
+    "HOLD_MIDBOX_AC_COUPLE_1_START_MINUTE_3",
+    "HOLD_MIDBOX_AC_COUPLE_2_END_HOUR_1",
+    "HOLD_MIDBOX_AC_COUPLE_2_END_HOUR_2",
+    "HOLD_MIDBOX_AC_COUPLE_2_END_HOUR_3",
+    "HOLD_MIDBOX_AC_COUPLE_2_END_MINUTE_1",
+    "HOLD_MIDBOX_AC_COUPLE_2_END_MINUTE_2",
+    "HOLD_MIDBOX_AC_COUPLE_2_END_MINUTE_3",
+    "HOLD_MIDBOX_AC_COUPLE_2_START_HOUR_1",
+    "HOLD_MIDBOX_AC_COUPLE_2_START_HOUR_2",
+    "HOLD_MIDBOX_AC_COUPLE_2_START_HOUR_3",
+    "HOLD_MIDBOX_AC_COUPLE_2_START_MINUTE_1",
+    "HOLD_MIDBOX_AC_COUPLE_2_START_MINUTE_2",
+    "HOLD_MIDBOX_AC_COUPLE_2_START_MINUTE_3",
+    "HOLD_MIDBOX_AC_COUPLE_3_END_HOUR_1",
+    "HOLD_MIDBOX_AC_COUPLE_3_END_HOUR_2",
+    "HOLD_MIDBOX_AC_COUPLE_3_END_HOUR_3",
+    "HOLD_MIDBOX_AC_COUPLE_3_END_MINUTE_1",
+    "HOLD_MIDBOX_AC_COUPLE_3_END_MINUTE_2",
+    "HOLD_MIDBOX_AC_COUPLE_3_END_MINUTE_3",
+    "HOLD_MIDBOX_AC_COUPLE_3_START_HOUR_1",
+    "HOLD_MIDBOX_AC_COUPLE_3_START_HOUR_2",
+    "HOLD_MIDBOX_AC_COUPLE_3_START_HOUR_3",
+    "HOLD_MIDBOX_AC_COUPLE_3_START_MINUTE_1",
+    "HOLD_MIDBOX_AC_COUPLE_3_START_MINUTE_2",
+    "HOLD_MIDBOX_AC_COUPLE_3_START_MINUTE_3",
+    "HOLD_MIDBOX_AC_COUPLE_4_END_HOUR_1",
+    "HOLD_MIDBOX_AC_COUPLE_4_END_HOUR_2",
+    "HOLD_MIDBOX_AC_COUPLE_4_END_HOUR_3",
+    "HOLD_MIDBOX_AC_COUPLE_4_END_MINUTE_1",
+    "HOLD_MIDBOX_AC_COUPLE_4_END_MINUTE_2",
+    "HOLD_MIDBOX_AC_COUPLE_4_END_MINUTE_3",
+    "HOLD_MIDBOX_AC_COUPLE_4_START_HOUR_1",
+    "HOLD_MIDBOX_AC_COUPLE_4_START_HOUR_2",
+    "HOLD_MIDBOX_AC_COUPLE_4_START_HOUR_3",
+    "HOLD_MIDBOX_AC_COUPLE_4_START_MINUTE_1",
+    "HOLD_MIDBOX_AC_COUPLE_4_START_MINUTE_2",
+    "HOLD_MIDBOX_AC_COUPLE_4_START_MINUTE_3",
+    "HOLD_MIDBOX_SL_1_END_HOUR_1",
+    "HOLD_MIDBOX_SL_1_END_HOUR_2",
+    "HOLD_MIDBOX_SL_1_END_HOUR_3",
+    "HOLD_MIDBOX_SL_1_END_MINUTE_1",
+    "HOLD_MIDBOX_SL_1_END_MINUTE_2",
+    "HOLD_MIDBOX_SL_1_END_MINUTE_3",
+    "HOLD_MIDBOX_SL_1_START_HOUR_1",
+    "HOLD_MIDBOX_SL_1_START_HOUR_2",
+    "HOLD_MIDBOX_SL_1_START_HOUR_3",
+    "HOLD_MIDBOX_SL_1_START_MINUTE_1",
+    "HOLD_MIDBOX_SL_1_START_MINUTE_2",
+    "HOLD_MIDBOX_SL_1_START_MINUTE_3",
+    "HOLD_MIDBOX_SL_2_END_HOUR_1",
+    "HOLD_MIDBOX_SL_2_END_HOUR_2",
+    "HOLD_MIDBOX_SL_2_END_HOUR_3",
+    "HOLD_MIDBOX_SL_2_END_MINUTE_1",
+    "HOLD_MIDBOX_SL_2_END_MINUTE_2",
+    "HOLD_MIDBOX_SL_2_END_MINUTE_3",
+    "HOLD_MIDBOX_SL_2_START_HOUR_1",
+    "HOLD_MIDBOX_SL_2_START_HOUR_2",
+    "HOLD_MIDBOX_SL_2_START_HOUR_3",
+    "HOLD_MIDBOX_SL_2_START_MINUTE_1",
+    "HOLD_MIDBOX_SL_2_START_MINUTE_2",
+    "HOLD_MIDBOX_SL_2_START_MINUTE_3",
+    "HOLD_MIDBOX_SL_3_END_HOUR_1",
+    "HOLD_MIDBOX_SL_3_END_HOUR_2",
+    "HOLD_MIDBOX_SL_3_END_HOUR_3",
+    "HOLD_MIDBOX_SL_3_END_MINUTE_1",
+    "HOLD_MIDBOX_SL_3_END_MINUTE_2",
+    "HOLD_MIDBOX_SL_3_END_MINUTE_3",
+    "HOLD_MIDBOX_SL_3_START_HOUR_1",
+    "HOLD_MIDBOX_SL_3_START_HOUR_2",
+    "HOLD_MIDBOX_SL_3_START_HOUR_3",
+    "HOLD_MIDBOX_SL_3_START_MINUTE_1",
+    "HOLD_MIDBOX_SL_3_START_MINUTE_2",
+    "HOLD_MIDBOX_SL_3_START_MINUTE_3",
+    "HOLD_MIDBOX_SL_4_END_HOUR_1",
+    "HOLD_MIDBOX_SL_4_END_HOUR_2",
+    "HOLD_MIDBOX_SL_4_END_HOUR_3",
+    "HOLD_MIDBOX_SL_4_END_MINUTE_1",
+    "HOLD_MIDBOX_SL_4_END_MINUTE_2",
+    "HOLD_MIDBOX_SL_4_END_MINUTE_3",
+    "HOLD_MIDBOX_SL_4_START_HOUR_1",
+    "HOLD_MIDBOX_SL_4_START_HOUR_2",
+    "HOLD_MIDBOX_SL_4_START_HOUR_3",
+    "HOLD_MIDBOX_SL_4_START_MINUTE_1",
+    "HOLD_MIDBOX_SL_4_START_MINUTE_2",
+    "HOLD_MIDBOX_SL_4_START_MINUTE_3",
+    "HOLD_MODEL",
+    "HOLD_MODEL_batteryType",
+    "HOLD_MODEL_leadAcidType",
+    "HOLD_MODEL_lithiumType",
+    "HOLD_MODEL_measurement",
+    "HOLD_MODEL_meterBrand",
+    "HOLD_MODEL_meterType",
+    "HOLD_MODEL_powerRating",
+    "HOLD_MODEL_rule",
+    "HOLD_MODEL_ruleMask",
+    "HOLD_MODEL_usVersion",
+    "HOLD_MODEL_wirelessMeter",
+    "HOLD_NOMINAL_BATTERY_VOLTAGE",
+    "HOLD_OFFLINE_TIMEOUT",
+    "HOLD_ON_GRID_EOD_VOLTAGE",
+    "HOLD_OUTPUT_CONFIGURATION",
+    "HOLD_PF_CMD",
+    "HOLD_PF_CMD_TEXT",
+    "HOLD_POWER_SOFT_START_SLOPE",
+    "HOLD_P_TO_USER_START_DISCHG",
+    "HOLD_REACTIVE_POWER_CMD_TYPE",
+    "HOLD_REACTIVE_POWER_PERCENT_CMD",
+    "HOLD_RECONNECT_TIME",
+    "HOLD_SERIAL_NUM",
+    "HOLD_SET_COMPOSED_PHASE",
+    "HOLD_SET_MASTER_OR_SLAVE",
+    "HOLD_SOC_LOW_LIMIT_EPS_DISCHG",
+    "HOLD_SPEC_LOAD_COMPENSATE",
+    "HOLD_START_PV_VOLT",
+    "HOLD_TIME",
+    "HOLD_V1H",
+    "HOLD_V1L",
+    "HOLD_V2H",
+    "HOLD_V2L",
+    "HOLD_VBAT_START_DERATING",
+    "MIDBOX_HOLD_AC_END_SOC_1",
+    "MIDBOX_HOLD_AC_END_SOC_2",
+    "MIDBOX_HOLD_AC_END_SOC_3",
+    "MIDBOX_HOLD_AC_END_SOC_4",
+    "MIDBOX_HOLD_AC_END_VOLT_1",
+    "MIDBOX_HOLD_AC_END_VOLT_2",
+    "MIDBOX_HOLD_AC_END_VOLT_3",
+    "MIDBOX_HOLD_AC_END_VOLT_4",
+    "MIDBOX_HOLD_AC_START_SOC_1",
+    "MIDBOX_HOLD_AC_START_SOC_2",
+    "MIDBOX_HOLD_AC_START_SOC_3",
+    "MIDBOX_HOLD_AC_START_SOC_4",
+    "MIDBOX_HOLD_AC_START_VOLT_1",
+    "MIDBOX_HOLD_AC_START_VOLT_2",
+    "MIDBOX_HOLD_AC_START_VOLT_3",
+    "MIDBOX_HOLD_AC_START_VOLT_4",
+    "MIDBOX_HOLD_BUSBAR_PCS_RATING",
+    "MIDBOX_HOLD_GEN_COOL_DOWN_TIME",
+    "MIDBOX_HOLD_GEN_REMOTE_CTRL",
+    "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME",
+    "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE",
+    "MIDBOX_HOLD_GEN_WARN_UP_TIME",
+    "MIDBOX_HOLD_SL_END_SOC_1",
+    "MIDBOX_HOLD_SL_END_SOC_2",
+    "MIDBOX_HOLD_SL_END_SOC_3",
+    "MIDBOX_HOLD_SL_END_SOC_4",
+    "MIDBOX_HOLD_SL_END_VOLT_1",
+    "MIDBOX_HOLD_SL_END_VOLT_2",
+    "MIDBOX_HOLD_SL_END_VOLT_3",
+    "MIDBOX_HOLD_SL_END_VOLT_4",
+    "MIDBOX_HOLD_SL_PS_END_SOC_1",
+    "MIDBOX_HOLD_SL_PS_END_SOC_2",
+    "MIDBOX_HOLD_SL_PS_END_SOC_3",
+    "MIDBOX_HOLD_SL_PS_END_SOC_4",
+    "MIDBOX_HOLD_SL_PS_END_VOLT_1",
+    "MIDBOX_HOLD_SL_PS_END_VOLT_2",
+    "MIDBOX_HOLD_SL_PS_END_VOLT_3",
+    "MIDBOX_HOLD_SL_PS_END_VOLT_4",
+    "MIDBOX_HOLD_SL_PS_START_SOC_1",
+    "MIDBOX_HOLD_SL_PS_START_SOC_2",
+    "MIDBOX_HOLD_SL_PS_START_SOC_3",
+    "MIDBOX_HOLD_SL_PS_START_SOC_4",
+    "MIDBOX_HOLD_SL_PS_START_VOLT_1",
+    "MIDBOX_HOLD_SL_PS_START_VOLT_2",
+    "MIDBOX_HOLD_SL_PS_START_VOLT_3",
+    "MIDBOX_HOLD_SL_PS_START_VOLT_4",
+    "MIDBOX_HOLD_SL_START_PV_P_1",
+    "MIDBOX_HOLD_SL_START_PV_P_2",
+    "MIDBOX_HOLD_SL_START_PV_P_3",
+    "MIDBOX_HOLD_SL_START_PV_P_4",
+    "MIDBOX_HOLD_SL_START_SOC_1",
+    "MIDBOX_HOLD_SL_START_SOC_2",
+    "MIDBOX_HOLD_SL_START_SOC_3",
+    "MIDBOX_HOLD_SL_START_SOC_4",
+    "MIDBOX_HOLD_SL_START_VOLT_1",
+    "MIDBOX_HOLD_SL_START_VOLT_2",
+    "MIDBOX_HOLD_SL_START_VOLT_3",
+    "MIDBOX_HOLD_SL_START_VOLT_4",
+    "MIDBOX_HOLD_SMART_PORT_MODE",
+    "OFF_GRID_HOLD_GEN_CHG_END_SOC",
+    "OFF_GRID_HOLD_GEN_CHG_END_VOLT",
+    "OFF_GRID_HOLD_GEN_CHG_START_SOC",
+    "OFF_GRID_HOLD_GEN_CHG_START_VOLT",
+    "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR",
+    "_12K_HOLD_LEAD_CAPACITY",
+    "masterInverterSn"
+  ]
+}
