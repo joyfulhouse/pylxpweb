@@ -111,8 +111,7 @@ def resolve_family(name: str | InverterFamily) -> InverterFamily:
     if name in _DEPRECATED_FAMILY_NAMES:
         new_name = _DEPRECATED_FAMILY_NAMES[name]
         warnings.warn(
-            f"InverterFamily '{name}' is deprecated since v0.8.0. "
-            f"Use '{new_name}' instead.",
+            f"InverterFamily '{name}' is deprecated since v0.8.0. Use '{new_name}' instead.",
             DeprecationWarning,
             stacklevel=2,
         )

@@ -868,9 +868,9 @@ class BatteryData:
         Returns:
             Capacity percentage (0-100), or SOC if current_capacity unavailable.
         """
-        has_capacity = self.current_capacity is not None and self.current_capacity > 0
-        if self.max_capacity > 0 and has_capacity:
-            return round((self.current_capacity / self.max_capacity) * 100)
+        current_cap = self.current_capacity
+        if self.max_capacity > 0 and current_cap is not None and current_cap > 0:
+            return round((current_cap / self.max_capacity) * 100)
         # Fall back to SOC if current_capacity not available
         return self.soc
 

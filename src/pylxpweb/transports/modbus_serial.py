@@ -125,7 +125,7 @@ class ModbusSerialTransport(BaseModbusTransport):
         self._parity = parity
         self._stopbits = stopbits
         # Narrow type for serial client
-        self._client: AsyncModbusSerialClient | None = None  # type: ignore[assignment]
+        self._client: AsyncModbusSerialClient | None = None
 
     @property
     def capabilities(self) -> TransportCapabilities:

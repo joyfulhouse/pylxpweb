@@ -116,7 +116,7 @@ class ModbusTransport(BaseModbusTransport):
         self._host = host
         self._port = port
         # Narrow type for TCP client
-        self._client: AsyncModbusTcpClient | None = None  # type: ignore[assignment]
+        self._client: AsyncModbusTcpClient | None = None
 
     @property
     def capabilities(self) -> TransportCapabilities:

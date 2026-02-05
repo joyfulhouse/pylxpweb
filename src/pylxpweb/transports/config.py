@@ -223,19 +223,16 @@ class TransportConfig:
         Returns:
             TransportConfig instance with values from dictionary
         """
-        from pylxpweb.devices.inverters._features import InverterFamily, resolve_family
+        from pylxpweb.devices.inverters._features import resolve_family
 
         # Parse transport type
         transport_type_str = data.get("transport_type", "modbus_tcp")
         transport_type = TransportType(transport_type_str)
 
         # Parse inverter family if present, with deprecation warnings for legacy names
+        # resolve_family() handles legacy name migration with deprecation warnings
         family_str = data.get("inverter_family")
-        if family_str:
-            # resolve_family() handles legacy name migration with deprecation warnings
-            inverter_family = resolve_family(family_str)
-        else:
-            inverter_family = None
+        inverter_family = resolve_family(family_str) if family_str else None
 
         # Create instance without validation (we'll validate after)
         instance = object.__new__(cls)
