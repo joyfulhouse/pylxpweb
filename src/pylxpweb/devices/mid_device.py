@@ -23,6 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
     from pylxpweb.models import MidboxRuntime
+    from pylxpweb.transports.data import MidboxRuntimeData
     from pylxpweb.transports.protocol import InverterTransport
 
 
@@ -66,6 +67,7 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
 
         # Runtime data (private - use properties for access)
         self._runtime: MidboxRuntime | None = None
+        self._transport_runtime: MidboxRuntimeData | None = None
 
         # Initialize firmware update detection (from FirmwareUpdateMixin)
         self._init_firmware_update_cache()
@@ -160,191 +162,44 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         """Refresh MID device runtime data from API or transport.
 
         Uses transport if available, otherwise falls back to HTTP API.
+        Transport data is stored directly in ``_transport_runtime`` as a
+        pre-scaled ``MidboxRuntimeData`` dataclass — no conversion needed.
         """
         try:
             if self._transport is not None and hasattr(self._transport, "read_midbox_runtime"):
-                # Use transport for direct local communication
-                # read_midbox_runtime is implemented by ModbusTcpTransport and DongleTransport
-                # but not part of the generic InverterTransport protocol
                 read_midbox = self._transport.read_midbox_runtime
-                runtime_data = await read_midbox()
-
-                # MidboxRuntimeData has to_dict() for backward compatibility
-                transport_data: dict[str, float | int] = runtime_data.to_dict()
-
-                # Convert transport dict to MidboxRuntime model
-                self._runtime = self._create_runtime_from_transport(transport_data)
+                self._transport_runtime = await read_midbox()
                 self._last_refresh = datetime.now()
                 _LOGGER.debug(
-                    "Refreshed MID device %s via transport: %d data points",
+                    "Refreshed MID device %s via transport",
                     self.serial_number,
-                    len(transport_data),
                 )
             elif self._client is not None:
-                # Use HTTP API
-                runtime_data = await self._client.api.devices.get_midbox_runtime(self.serial_number)
-                self._runtime = runtime_data
+                self._runtime = await self._client.api.devices.get_midbox_runtime(
+                    self.serial_number
+                )
                 self._last_refresh = datetime.now()
             else:
                 _LOGGER.warning(
                     "No transport or client available for MID device %s",
                     self.serial_number,
                 )
-        except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
-            # Graceful error handling - keep existing cached data
-            _LOGGER.debug("Failed to fetch MID device runtime for %s: %s", self.serial_number, err)
-        except Exception as err:
-            # Catch transport errors too
+        except (
+            LuxpowerAPIError,
+            LuxpowerConnectionError,
+            LuxpowerDeviceError,
+        ) as err:
             _LOGGER.debug(
-                "Failed to fetch MID device runtime for %s via transport: %s",
+                "Failed to fetch MID device runtime for %s: %s",
                 self.serial_number,
                 err,
             )
-
-    def _create_runtime_from_transport(
-        self, transport_data: dict[str, float | int]
-    ) -> MidboxRuntime:
-        """Create MidboxRuntime model from transport data dict.
-
-        Args:
-            transport_data: Dict with MidboxData-compatible field names from transport
-
-        Returns:
-            MidboxRuntime model with midboxData populated from transport
-        """
-        from pylxpweb.models import MidboxData, MidboxRuntime
-
-        def _int_or_none(key: str) -> int | None:
-            """Get int value from transport data, preserving None."""
-            val = transport_data.get(key)
-            return int(val) if val is not None else None
-
-        def _str(key: str) -> str:
-            """Get str value from transport data, treating None as empty."""
-            val = transport_data.get(key)
-            return str(val) if val is not None else ""
-
-        # Build MidboxData from transport dict — transport may contain None
-        # for unmapped energy registers, so _int/_str handle that safely.
-        midbox_data = MidboxData(
-            status=_int_or_none("status"),
-            serverTime=_str("serverTime"),
-            deviceTime=_str("deviceTime"),
-            # Voltages
-            gridRmsVolt=_int_or_none("gridRmsVolt"),
-            upsRmsVolt=_int_or_none("upsRmsVolt"),
-            genRmsVolt=_int_or_none("genRmsVolt"),
-            gridL1RmsVolt=_int_or_none("gridL1RmsVolt"),
-            gridL2RmsVolt=_int_or_none("gridL2RmsVolt"),
-            upsL1RmsVolt=_int_or_none("upsL1RmsVolt"),
-            upsL2RmsVolt=_int_or_none("upsL2RmsVolt"),
-            genL1RmsVolt=_int_or_none("genL1RmsVolt"),
-            genL2RmsVolt=_int_or_none("genL2RmsVolt"),
-            # Currents
-            gridL1RmsCurr=_int_or_none("gridL1RmsCurr"),
-            gridL2RmsCurr=_int_or_none("gridL2RmsCurr"),
-            loadL1RmsCurr=_int_or_none("loadL1RmsCurr"),
-            loadL2RmsCurr=_int_or_none("loadL2RmsCurr"),
-            genL1RmsCurr=_int_or_none("genL1RmsCurr"),
-            genL2RmsCurr=_int_or_none("genL2RmsCurr"),
-            upsL1RmsCurr=_int_or_none("upsL1RmsCurr"),
-            upsL2RmsCurr=_int_or_none("upsL2RmsCurr"),
-            # Power
-            gridL1ActivePower=_int_or_none("gridL1ActivePower"),
-            gridL2ActivePower=_int_or_none("gridL2ActivePower"),
-            loadL1ActivePower=_int_or_none("loadL1ActivePower"),
-            loadL2ActivePower=_int_or_none("loadL2ActivePower"),
-            genL1ActivePower=_int_or_none("genL1ActivePower"),
-            genL2ActivePower=_int_or_none("genL2ActivePower"),
-            upsL1ActivePower=_int_or_none("upsL1ActivePower"),
-            upsL2ActivePower=_int_or_none("upsL2ActivePower"),
-            hybridPower=_int_or_none("hybridPower"),
-            # Smart port status
-            smartPort1Status=_int_or_none("smartPort1Status"),
-            smartPort2Status=_int_or_none("smartPort2Status"),
-            smartPort3Status=_int_or_none("smartPort3Status"),
-            smartPort4Status=_int_or_none("smartPort4Status"),
-            # Frequency
-            phaseLockFreq=_int_or_none("phaseLockFreq"),
-            gridFreq=_int_or_none("gridFreq"),
-            genFreq=_int_or_none("genFreq"),
-            # Smart Load Power (optional)
-            smartLoad1L1ActivePower=_int_or_none("smartLoad1L1ActivePower"),
-            smartLoad1L2ActivePower=_int_or_none("smartLoad1L2ActivePower"),
-            smartLoad2L1ActivePower=_int_or_none("smartLoad2L1ActivePower"),
-            smartLoad2L2ActivePower=_int_or_none("smartLoad2L2ActivePower"),
-            smartLoad3L1ActivePower=_int_or_none("smartLoad3L1ActivePower"),
-            smartLoad3L2ActivePower=_int_or_none("smartLoad3L2ActivePower"),
-            smartLoad4L1ActivePower=_int_or_none("smartLoad4L1ActivePower"),
-            smartLoad4L2ActivePower=_int_or_none("smartLoad4L2ActivePower"),
-            # AC Couple Power (optional)
-            acCouple1L1ActivePower=_int_or_none("acCouple1L1ActivePower"),
-            acCouple1L2ActivePower=_int_or_none("acCouple1L2ActivePower"),
-            acCouple2L1ActivePower=_int_or_none("acCouple2L1ActivePower"),
-            acCouple2L2ActivePower=_int_or_none("acCouple2L2ActivePower"),
-            acCouple3L1ActivePower=_int_or_none("acCouple3L1ActivePower"),
-            acCouple3L2ActivePower=_int_or_none("acCouple3L2ActivePower"),
-            acCouple4L1ActivePower=_int_or_none("acCouple4L1ActivePower"),
-            acCouple4L2ActivePower=_int_or_none("acCouple4L2ActivePower"),
-            # Energy Today (0.1 kWh units, None = unavailable)
-            eLoadTodayL1=_int_or_none("eLoadTodayL1"),
-            eLoadTodayL2=_int_or_none("eLoadTodayL2"),
-            eUpsTodayL1=_int_or_none("eUpsTodayL1"),
-            eUpsTodayL2=_int_or_none("eUpsTodayL2"),
-            eToGridTodayL1=_int_or_none("eToGridTodayL1"),
-            eToGridTodayL2=_int_or_none("eToGridTodayL2"),
-            eToUserTodayL1=_int_or_none("eToUserTodayL1"),
-            eToUserTodayL2=_int_or_none("eToUserTodayL2"),
-            eACcouple1TodayL1=_int_or_none("eACcouple1TodayL1"),
-            eACcouple1TodayL2=_int_or_none("eACcouple1TodayL2"),
-            eACcouple2TodayL1=_int_or_none("eACcouple2TodayL1"),
-            eACcouple2TodayL2=_int_or_none("eACcouple2TodayL2"),
-            eACcouple3TodayL1=_int_or_none("eACcouple3TodayL1"),
-            eACcouple3TodayL2=_int_or_none("eACcouple3TodayL2"),
-            eACcouple4TodayL1=_int_or_none("eACcouple4TodayL1"),
-            eACcouple4TodayL2=_int_or_none("eACcouple4TodayL2"),
-            eSmartLoad1TodayL1=_int_or_none("eSmartLoad1TodayL1"),
-            eSmartLoad1TodayL2=_int_or_none("eSmartLoad1TodayL2"),
-            eSmartLoad2TodayL1=_int_or_none("eSmartLoad2TodayL1"),
-            eSmartLoad2TodayL2=_int_or_none("eSmartLoad2TodayL2"),
-            eSmartLoad3TodayL1=_int_or_none("eSmartLoad3TodayL1"),
-            eSmartLoad3TodayL2=_int_or_none("eSmartLoad3TodayL2"),
-            eSmartLoad4TodayL1=_int_or_none("eSmartLoad4TodayL1"),
-            eSmartLoad4TodayL2=_int_or_none("eSmartLoad4TodayL2"),
-            # Energy Total (0.1 kWh units, 32-bit, None = unavailable)
-            eLoadTotalL1=_int_or_none("eLoadTotalL1"),
-            eLoadTotalL2=_int_or_none("eLoadTotalL2"),
-            eUpsTotalL1=_int_or_none("eUpsTotalL1"),
-            eUpsTotalL2=_int_or_none("eUpsTotalL2"),
-            eToGridTotalL1=_int_or_none("eToGridTotalL1"),
-            eToGridTotalL2=_int_or_none("eToGridTotalL2"),
-            eToUserTotalL1=_int_or_none("eToUserTotalL1"),
-            eToUserTotalL2=_int_or_none("eToUserTotalL2"),
-            eACcouple1TotalL1=_int_or_none("eACcouple1TotalL1"),
-            eACcouple1TotalL2=_int_or_none("eACcouple1TotalL2"),
-            eACcouple2TotalL1=_int_or_none("eACcouple2TotalL1"),
-            eACcouple2TotalL2=_int_or_none("eACcouple2TotalL2"),
-            eACcouple3TotalL1=_int_or_none("eACcouple3TotalL1"),
-            eACcouple3TotalL2=_int_or_none("eACcouple3TotalL2"),
-            eACcouple4TotalL1=_int_or_none("eACcouple4TotalL1"),
-            eACcouple4TotalL2=_int_or_none("eACcouple4TotalL2"),
-            eSmartLoad1TotalL1=_int_or_none("eSmartLoad1TotalL1"),
-            eSmartLoad1TotalL2=_int_or_none("eSmartLoad1TotalL2"),
-            eSmartLoad2TotalL1=_int_or_none("eSmartLoad2TotalL1"),
-            eSmartLoad2TotalL2=_int_or_none("eSmartLoad2TotalL2"),
-            eSmartLoad3TotalL1=_int_or_none("eSmartLoad3TotalL1"),
-            eSmartLoad3TotalL2=_int_or_none("eSmartLoad3TotalL2"),
-            eSmartLoad4TotalL1=_int_or_none("eSmartLoad4TotalL1"),
-            eSmartLoad4TotalL2=_int_or_none("eSmartLoad4TotalL2"),
-        )
-
-        # Wrap in MidboxRuntime
-        return MidboxRuntime(
-            success=True,
-            serialNum=self.serial_number,
-            fwCode="",  # Firmware not available via transport
-            midboxData=midbox_data,
-        )
+        except Exception as err:
+            _LOGGER.debug(
+                "Failed to fetch MID device runtime for %s: %s",
+                self.serial_number,
+                err,
+            )
 
     # All properties are provided by MIDRuntimePropertiesMixin
 
