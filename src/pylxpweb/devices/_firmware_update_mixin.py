@@ -15,8 +15,19 @@ if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
     from pylxpweb.models import FirmwareUpdateInfo
 
+    class _FirmwareMixinBase:
+        """Typed stubs so mypy sees attributes provided by the host class."""
 
-class FirmwareUpdateMixin:
+        _client: LuxpowerClient
+        serial_number: str
+
+        @property
+        def model(self) -> str: ...
+else:
+    _FirmwareMixinBase = object
+
+
+class FirmwareUpdateMixin(_FirmwareMixinBase):
     """Mixin class providing firmware update detection for devices.
 
     This mixin adds:
@@ -240,10 +251,10 @@ class FirmwareUpdateMixin:
                     assert self._firmware_update_info is not None
                     return self._firmware_update_info
 
-        # Fetch from API
-        client: LuxpowerClient = self._client  # type: ignore[attr-defined]
-        serial: str = self.serial_number  # type: ignore[attr-defined]
-        model: str = self.model  # type: ignore[attr-defined]
+        # Fetch from API (requires cloud client)
+        client: LuxpowerClient = self._client
+        serial: str = self.serial_number
+        model: str = self.model
 
         check = await client.api.firmware.check_firmware_updates(serial)
 
@@ -309,8 +320,8 @@ class FirmwareUpdateMixin:
 
         from pylxpweb.models import FirmwareUpdateInfo
 
-        client: LuxpowerClient = self._client  # type: ignore[attr-defined]
-        serial: str = self.serial_number  # type: ignore[attr-defined]
+        client: LuxpowerClient = self._client
+        serial: str = self.serial_number
 
         # Check cache (only if not forced)
         # Note: We check cache age first, but if there's an active update,
@@ -444,8 +455,8 @@ class FirmwareUpdateMixin:
         # Import here to avoid circular imports
         from pylxpweb.models import FirmwareUpdateInfo
 
-        client: LuxpowerClient = self._client  # type: ignore[attr-defined]
-        serial: str = self.serial_number  # type: ignore[attr-defined]
+        client: LuxpowerClient = self._client
+        serial: str = self.serial_number
 
         # Start the firmware update
         success = await client.api.firmware.start_firmware_update(
@@ -497,8 +508,8 @@ class FirmwareUpdateMixin:
             >>> else:
             ...     print("Device is not eligible for update (may be updating already)")
         """
-        client: LuxpowerClient = self._client  # type: ignore[attr-defined]
-        serial: str = self.serial_number  # type: ignore[attr-defined]
+        client: LuxpowerClient = self._client
+        serial: str = self.serial_number
 
         eligibility = await client.api.firmware.check_update_eligibility(serial)
         return eligibility.is_allowed

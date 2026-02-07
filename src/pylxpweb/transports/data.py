@@ -399,17 +399,16 @@ class InverterRuntimeData:
         Args:
             input_registers: Dict mapping register address to raw value
             register_map: Optional RuntimeRegisterMap for model-specific register
-                locations. If None, defaults to PV_SERIES_RUNTIME_MAP for
-                backward compatibility.
+                locations. If None, defaults to EG4_HYBRID_RUNTIME_MAP.
 
         Returns:
             Transport-agnostic runtime data with scaling applied
         """
-        from pylxpweb.transports.register_maps import PV_SERIES_RUNTIME_MAP
+        from pylxpweb.transports.register_maps import EG4_HYBRID_RUNTIME_MAP
 
         # Use default map if none provided (backward compatible)
         if register_map is None:
-            register_map = PV_SERIES_RUNTIME_MAP
+            register_map = EG4_HYBRID_RUNTIME_MAP
 
         # Read power values using register map
         pv1_power = _read_and_scale_field(input_registers, register_map.pv1_power)
@@ -685,17 +684,16 @@ class InverterEnergyData:
         Args:
             input_registers: Dict mapping register address to raw value
             register_map: Optional EnergyRegisterMap for model-specific register
-                locations. If None, defaults to PV_SERIES_ENERGY_MAP for
-                backward compatibility.
+                locations. If None, defaults to EG4_HYBRID_ENERGY_MAP.
 
         Returns:
             Transport-agnostic energy data with scaling applied
         """
-        from pylxpweb.transports.register_maps import PV_SERIES_ENERGY_MAP
+        from pylxpweb.transports.register_maps import EG4_HYBRID_ENERGY_MAP
 
         # Use default map if none provided (backward compatible)
         if register_map is None:
-            register_map = PV_SERIES_ENERGY_MAP
+            register_map = EG4_HYBRID_ENERGY_MAP
 
         def read_energy_field(
             field_def: RegisterField | None,
@@ -1205,7 +1203,7 @@ class BatteryBankData:
         Args:
             input_registers: Dict mapping register address to raw value (0-127)
             register_map: RuntimeRegisterMap for model-specific register locations.
-                If None, defaults to PV_SERIES_RUNTIME_MAP.
+                If None, defaults to EG4_HYBRID_RUNTIME_MAP.
             individual_battery_registers: Optional dict with extended register
                 range (5000+) containing individual battery data. If provided,
                 individual batteries will be populated in the batteries list.
@@ -1213,10 +1211,10 @@ class BatteryBankData:
         Returns:
             BatteryBankData with all values properly scaled, or None if no battery
         """
-        from pylxpweb.transports.register_maps import PV_SERIES_RUNTIME_MAP
+        from pylxpweb.transports.register_maps import EG4_HYBRID_RUNTIME_MAP
 
         if register_map is None:
-            register_map = PV_SERIES_RUNTIME_MAP
+            register_map = EG4_HYBRID_RUNTIME_MAP
 
         # Battery voltage from register map
         battery_voltage = _read_and_scale_field(input_registers, register_map.battery_voltage)

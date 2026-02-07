@@ -37,37 +37,6 @@ from ._runtime_properties import InverterRuntimePropertiesMixin
 
 _LOGGER = logging.getLogger(__name__)
 
-# ============================================================================
-# Holding Register Constants for Transport Control Operations
-# ============================================================================
-# Register 21: FUNC_EN - Function enable bit field
-HOLD_FUNC_EN = 21
-FUNC_EN_BIT_EPS = 0  # EPS/Battery Backup mode
-FUNC_EN_BIT_AC_CHARGE = 7  # AC Charge enable
-FUNC_EN_BIT_STANDBY = 9  # Standby mode (power off)
-FUNC_EN_BIT_FORCED_DISCHARGE = 10  # Forced discharge
-FUNC_EN_BIT_FORCED_CHARGE = 11  # Forced charge
-FUNC_EN_BIT_PV_PRIORITY = 12  # PV charge priority
-
-# Register 110: SYS_FUNC - System function bit field
-HOLD_SYS_FUNC = 110
-SYS_FUNC_BIT_GREEN_MODE = 8  # Green/Off-Grid mode
-
-# Value registers - AC charge settings
-HOLD_AC_CHARGE_POWER = 66  # AC charge power percentage (0-100)
-HOLD_AC_CHARGE_SOC_LIMIT = 67  # AC charge SOC limit (0-100)
-
-# Value registers - SOC limits
-HOLD_ON_GRID_SOC_CUTOFF = 105  # On-grid discharge SOC cutoff (10-90)
-HOLD_OFF_GRID_SOC_CUTOFF = 106  # Off-grid discharge SOC cutoff (0-100)
-
-# Value registers - charge/discharge current
-HOLD_CHARGE_CURRENT = 101  # Max charge current (amps)
-HOLD_DISCHARGE_CURRENT = 102  # Max discharge current (amps)
-
-# Value registers - power settings
-HOLD_PV_CHARGE_POWER = 64  # PV charge power percentage (0-100)
-HOLD_DISCHARGE_POWER = 65  # Discharge power percentage (0-100)
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient

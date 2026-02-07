@@ -1365,22 +1365,31 @@ __all__ = [
     "INDIVIDUAL_BATTERY_BASE_ADDRESS",
     "INDIVIDUAL_BATTERY_REGISTER_COUNT",
     "INDIVIDUAL_BATTERY_MAX_COUNT",
-    # Deprecated aliases (for backwards compatibility)
-    "PV_SERIES_RUNTIME_MAP",
-    "PV_SERIES_ENERGY_MAP",
-    "PV_SERIES_HOLDING_MAP",
-    "LXP_EU_RUNTIME_MAP",
-    "LXP_EU_ENERGY_MAP",
-    "LXP_EU_HOLDING_MAP",
 ]
 
 # =============================================================================
 # DEPRECATED ALIASES - Will be removed in a future version
 # Use the new names: EG4_HYBRID_* and LXP_* instead of PV_SERIES_* and LXP_EU_*
 # =============================================================================
-PV_SERIES_RUNTIME_MAP = EG4_HYBRID_RUNTIME_MAP
-PV_SERIES_ENERGY_MAP = EG4_HYBRID_ENERGY_MAP
-PV_SERIES_HOLDING_MAP = EG4_HYBRID_HOLDING_MAP
-LXP_EU_RUNTIME_MAP = LXP_RUNTIME_MAP
-LXP_EU_ENERGY_MAP = LXP_ENERGY_MAP
-LXP_EU_HOLDING_MAP = LXP_HOLDING_MAP
+_DEPRECATED_ALIASES: dict[str, str] = {
+    "PV_SERIES_RUNTIME_MAP": "EG4_HYBRID_RUNTIME_MAP",
+    "PV_SERIES_ENERGY_MAP": "EG4_HYBRID_ENERGY_MAP",
+    "PV_SERIES_HOLDING_MAP": "EG4_HYBRID_HOLDING_MAP",
+    "LXP_EU_RUNTIME_MAP": "LXP_RUNTIME_MAP",
+    "LXP_EU_ENERGY_MAP": "LXP_ENERGY_MAP",
+    "LXP_EU_HOLDING_MAP": "LXP_HOLDING_MAP",
+}
+
+
+def __getattr__(name: str) -> object:
+    if name in _DEPRECATED_ALIASES:
+        import warnings
+
+        new_name = _DEPRECATED_ALIASES[name]
+        warnings.warn(
+            f"'{name}' is deprecated. Use '{new_name}' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return globals()[new_name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

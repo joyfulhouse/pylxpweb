@@ -29,8 +29,8 @@ class BaseDevice(ABC):
 
     Subclasses must implement:
     - refresh(): Load/reload device data from API
-    - to_ha_device_info(): Convert to HA device registry format
-    - to_ha_entities(): Generate HA entity list
+    - to_device_info(): Convert to device info model
+    - to_entities(): Generate entity list
 
     Example:
         ```python
@@ -64,7 +64,10 @@ class BaseDevice(ABC):
         """Initialize base device.
 
         Args:
-            client: LuxpowerClient instance for API access
+            client: LuxpowerClient instance for API access.  Local-only
+                (transport-backed) devices pass ``None`` via
+                ``type: ignore[arg-type]`` since they never call cloud API
+                methods.
             serial_number: Device serial number (unique identifier)
             model: Device model name
         """

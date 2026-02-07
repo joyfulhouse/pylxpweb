@@ -2,12 +2,18 @@
 
 This module provides exception classes for transport operations,
 allowing clients to handle errors appropriately.
+
+All transport exceptions inherit from :class:`~pylxpweb.exceptions.LuxpowerError`
+so callers can use a single ``except LuxpowerError`` to catch both HTTP API
+and Modbus/dongle transport failures.
 """
 
 from __future__ import annotations
 
+from pylxpweb.exceptions import LuxpowerError
 
-class TransportError(Exception):
+
+class TransportError(LuxpowerError):
     """Base exception for all transport errors."""
 
     pass

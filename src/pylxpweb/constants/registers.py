@@ -1133,14 +1133,12 @@ def get_register_to_param_mapping(
 ) -> dict[int, list[str]]:
     """Get the register-to-parameter mapping for an inverter family.
 
-    Different inverter families may have different parameter names for the same
-    register addresses. This function returns the appropriate mapping based on
-    the inverter family.
+    Currently all families share the same 18KPV-based mapping.  The *family*
+    parameter is accepted for forward compatibility but has no effect yet.
 
     Args:
         family: Inverter family string (from InverterFamily enum value).
-            Supported values: "SNA", "PV_SERIES", "LXP_EU", "LXP_LV", "UNKNOWN", None.
-            If None or unrecognized, defaults to PV_SERIES mapping.
+            Currently unused — all families return the same mapping.
 
     Returns:
         Dict mapping register address to list of parameter key names.
@@ -1149,7 +1147,7 @@ def get_register_to_param_mapping(
         representing each bit position.
 
     Example:
-        mapping = get_register_to_param_mapping("PV_SERIES")
+        mapping = get_register_to_param_mapping()
         param_keys = mapping.get(21)  # ["FUNC_EPS_EN", "FUNC_OVF_LOAD_DERATE_EN", ...]
     """
     # Currently all families use the 18KPV mapping as the base
@@ -1168,16 +1166,15 @@ def get_param_to_register_mapping(
 ) -> dict[str, int]:
     """Get the parameter-to-register mapping for an inverter family.
 
-    This is the reverse mapping of get_register_to_param_mapping(), useful for
-    converting parameter names back to register addresses when writing.
+    Reverse of :func:`get_register_to_param_mapping`, useful for converting
+    parameter names back to register addresses when writing.
 
     Includes alias support: both canonical names and their aliases will map
     to the same register address.
 
     Args:
         family: Inverter family string (from InverterFamily enum value).
-            Supported values: "SNA", "PV_SERIES", "LXP_EU", "LXP_LV", "UNKNOWN", None.
-            If None or unrecognized, defaults to PV_SERIES mapping.
+            Currently unused — all families return the same mapping.
 
     Returns:
         Dict mapping parameter key name to register address.

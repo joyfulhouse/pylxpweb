@@ -89,10 +89,6 @@ from .modbus import ModbusTransport
 from .modbus_serial import ModbusSerialTransport
 from .protocol import BaseTransport, InverterTransport
 from .register_maps import (
-    LXP_EU_ENERGY_MAP,
-    LXP_EU_RUNTIME_MAP,
-    PV_SERIES_ENERGY_MAP,
-    PV_SERIES_RUNTIME_MAP,
     EnergyRegisterMap,
     RegisterField,
     RuntimeRegisterMap,
@@ -148,10 +144,6 @@ __all__ = [
     "RegisterField",
     "RuntimeRegisterMap",
     "EnergyRegisterMap",
-    "PV_SERIES_RUNTIME_MAP",
-    "PV_SERIES_ENERGY_MAP",
-    "LXP_EU_RUNTIME_MAP",
-    "LXP_EU_ENERGY_MAP",
     "get_runtime_map",
     "get_energy_map",
     # Exceptions
@@ -162,3 +154,28 @@ __all__ = [
     "TransportWriteError",
     "UnsupportedOperationError",
 ]
+
+# Deprecated register map aliases — forwarded via __getattr__
+_DEPRECATED_MAP_ALIASES: dict[str, str] = {
+    "PV_SERIES_RUNTIME_MAP": "EG4_HYBRID_RUNTIME_MAP",
+    "PV_SERIES_ENERGY_MAP": "EG4_HYBRID_ENERGY_MAP",
+    "LXP_EU_RUNTIME_MAP": "LXP_RUNTIME_MAP",
+    "LXP_EU_ENERGY_MAP": "LXP_ENERGY_MAP",
+}
+
+
+def __getattr__(name: str) -> object:
+    if name in _DEPRECATED_MAP_ALIASES:
+        import warnings
+
+        new_name = _DEPRECATED_MAP_ALIASES[name]
+        warnings.warn(
+            f"'{name}' is deprecated. Use '{new_name}' from "
+            "pylxpweb.transports.register_maps instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from . import register_maps
+
+        return getattr(register_maps, new_name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
