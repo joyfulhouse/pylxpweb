@@ -40,7 +40,7 @@ pylxpweb-collect = "pylxpweb.cli.collect_device_data:main"
 pylxpweb-modbus-diag = "pylxpweb.cli.modbus_diag:main"
 
 [build-system]
-requires = ["uv_build>=0.9.10,<0.10.0"]
+requires = ["uv_build>=0.9.10,<0.11.0"]
 build-backend = "uv_build"
 
 [tool.ruff]
