@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-02-10
+
+### Changed
+
+- **Canonical register migration**: Replaced legacy `register_maps.py` (~1395 lines) with typed `RegisterDefinition` system in `registers/` module. All `from_modbus_registers()` methods now consume canonical definitions directly via `_canonical_reader.py` (read_raw/read_scaled) and `_field_mappings.py` dictionaries.
+- **RegisterDataMixin extraction**: Consolidated duplicated register read/decode logic from `_modbus_base.py` and `dongle.py` into shared `_register_data.py` mixin, reducing transport code by ~500 lines.
+- **HA boundary bleed cleanup**: Removed Home Assistant-specific concepts from pylxpweb device layer, ensuring clean library boundaries.
+- **MIDDevice dual-source properties**: All GridBOSS runtime properties now support both Modbus register data and HTTP API data via `MidboxRuntimeData` as single data source. Properties fall through from transport runtime to HTTP data when register values are None.
+
+### Fixed
+
+- **Smart port status register**: Smart port status is in **holding register 20** (bit-packed, 2 bits per port), not input registers 105-108 (those are AC couple energy high words). `read_midbox_runtime()` now reads holding reg 20 in addition to input register groups.
+- **`from_http_response()` voltage scaling**: Fixed missing `/10` division for decivolts in HTTP-sourced voltage values.
+
+### Removed
+
+- `register_maps.py` (~1395 lines) — replaced by canonical register system
+- `_scaled()` method on MIDDevice (69 call sites migrated to `_raw_float()`)
+- Dead imports: `scale_mid_voltage`, `scale_mid_current`, `scale_mid_frequency`, `_scale_energy`, `Callable`
+
+## [0.8.7] - 2026-02-07
+
+### Changed
+
+- **Rate limiter**: Replaced hourly counter with sliding window algorithm, changed rate unit to req/hr
+
+## [0.8.6] - 2026-02-06
+
+### Fixed
+
+- **Windows compatibility**: Renamed files containing asterisk characters for Windows filesystem compatibility
+
+## [0.8.5] - 2026-02-05
+
+### Added
+
+- **3-phase RMS current**: Added RMS current support for LXP three-phase inverters
+
 ## [0.8.4] - 2026-02-05
 
 ### Fixed
