@@ -371,10 +371,61 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     150: ["HOLD_EQUALIZATION_PERIOD"],
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
     190: ["HOLD_P2"],
+    # Register 179: Extended function enable bit field (verified via Modbus probe 2026-02-13)
+    # API returns 16 FUNC_* params for this register (alphabetical, NOT bit order).
+    # Only bit 7 (FUNC_GRID_PEAK_SHAVING) confirmed via live toggle test.
+    # Other known params: FUNC_ACTIVE_POWER_LIMIT_MODE, FUNC_AC_COUPLING_FUNCTION,
+    # FUNC_BAT_CHARGE_CONTROL, FUNC_BAT_DISCHARGE_CONTROL, FUNC_CT_DIRECTION_REVERSED,
+    # FUNC_GEN_PEAK_SHAVING, FUNC_ON_GRID_ALWAYS_ON, FUNC_PV_ARC, FUNC_PV_ARC_FAULT_CLEAR,
+    # FUNC_PV_SELL_TO_GRID_EN, FUNC_RSD_DISABLE, FUNC_SMART_LOAD_ENABLE,
+    # FUNC_TOTAL_LOAD_COMPENSATION_EN, FUNC_TRIP_TIME_UNIT, FUNC_WATT_VOLT_EN
+    179: [
+        "FUNC_179_BIT0",  # Bit 0: unknown
+        "FUNC_179_BIT1",  # Bit 1: unknown
+        "FUNC_179_BIT2",  # Bit 2: unknown
+        "FUNC_179_BIT3",  # Bit 3: unknown (set on FlexBOSS21)
+        "FUNC_179_BIT4",  # Bit 4: unknown
+        "FUNC_179_BIT5",  # Bit 5: unknown
+        "FUNC_179_BIT6",  # Bit 6: unknown (set on FlexBOSS21)
+        "FUNC_GRID_PEAK_SHAVING",  # Bit 7: Grid peak shaving (confirmed)
+        "FUNC_179_BIT8",  # Bit 8: unknown
+        "FUNC_179_BIT9",  # Bit 9: unknown
+        "FUNC_179_BIT10",  # Bit 10: unknown
+        "FUNC_179_BIT11",  # Bit 11: unknown
+        "FUNC_179_BIT12",  # Bit 12: unknown
+        "FUNC_179_BIT13",  # Bit 13: unknown
+        "FUNC_179_BIT14",  # Bit 14: unknown
+        "FUNC_179_BIT15",  # Bit 15: unknown
+    ],
     # System charge limit (verified via live testing 2026-01-27)
     227: ["HOLD_SYSTEM_CHARGE_SOC_LIMIT"],
     # Grid peak shaving power (2 registers, 32-bit value in kW)
     231: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER"],
+    # Register 233: Extended function enable 2 bit field (verified via Modbus probe 2026-02-13)
+    # API returns 9 params for this register (alphabetical, NOT bit order).
+    # Bit 1 (FUNC_BATTERY_BACKUP_CTRL) confirmed via live toggle test.
+    # Bit 12 observed set (likely FUNC_QUICK_CHARGE_CTRL enable/disable flag).
+    # Other known params: BIT_DRY_CONTRACTOR_MULTIPLEX, BIT_LCD_TYPE, BIT_OUT_CT_POSITION,
+    # FUNC_BATTERY_CALIBRATION_EN, FUNC_ENERTEK_WORKING_MODE, FUNC_FAN_DC3,
+    # FUNC_SPORADIC_CHARGE
+    233: [
+        "FUNC_233_BIT0",  # Bit 0: unknown
+        "FUNC_BATTERY_BACKUP_CTRL",  # Bit 1: Battery backup control (confirmed)
+        "FUNC_233_BIT2",  # Bit 2: unknown
+        "FUNC_233_BIT3",  # Bit 3: unknown
+        "FUNC_233_BIT4",  # Bit 4: unknown
+        "FUNC_233_BIT5",  # Bit 5: unknown
+        "FUNC_233_BIT6",  # Bit 6: unknown
+        "FUNC_233_BIT7",  # Bit 7: unknown
+        "FUNC_233_BIT8",  # Bit 8: unknown
+        "FUNC_233_BIT9",  # Bit 9: unknown
+        "FUNC_233_BIT10",  # Bit 10: unknown
+        "FUNC_233_BIT11",  # Bit 11: unknown
+        "FUNC_233_BIT12",  # Bit 12: unknown (observed set, possibly FUNC_QUICK_CHARGE_CTRL)
+        "FUNC_233_BIT13",  # Bit 13: unknown
+        "FUNC_233_BIT14",  # Bit 14: unknown
+        "FUNC_233_BIT15",  # Bit 15: unknown
+    ],
 }
 
 # Reverse mapping: API Parameter Key → Register (for 18KPV)
