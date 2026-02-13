@@ -230,7 +230,7 @@ def format_comparison(
     # ------------------------------------------------------------------
     # Smart port status from holding register 20
     # ------------------------------------------------------------------
-    print(f"\n--- SMART PORT STATUS (holding register 20) ---")
+    print("\n--- SMART PORT STATUS (holding register 20) ---")
     hold_20 = modbus_regs.get("hold_20", 0)
     print(f"Holding reg 20 raw = {hold_20} (0b{hold_20:08b})")
     for port in range(1, 5):
@@ -251,7 +251,7 @@ def format_comparison(
     # ------------------------------------------------------------------
     # Smart port energy focus (the off-by-one diagnostic)
     # ------------------------------------------------------------------
-    print(f"\n--- SMART PORT ENERGY FOCUS (issue #146 diagnostic) ---")
+    print("\n--- SMART PORT ENERGY FOCUS (issue #146 diagnostic) ---")
     print("Checking if Cloud API port N energy matches Modbus port N-1 (off-by-one).")
 
     for energy_type, daily_base, lifetime_base in [
@@ -381,7 +381,7 @@ async def main() -> None:
     )
 
     cloud_data, modbus_regs = await asyncio.gather(cloud_task, dongle_task)
-    print(f"  Cloud API: OK")
+    print("  Cloud API: OK")
     print(f"  Dongle Modbus: {len([k for k in modbus_regs if isinstance(k, int)])} input registers")
 
     format_comparison(cloud_data, modbus_regs)

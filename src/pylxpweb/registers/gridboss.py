@@ -13,9 +13,12 @@ Register space layout:
     18-25    Unused / unknown
     26-33    Power (W, signed, no scaling)
     34-41    Smart load power (W, signed, no scaling)
-    42-67    Daily energy (kWh, raw ÷10)
-    68-99    Lifetime energy 32-bit (kWh, raw ÷10)
-    100-103  Unused / unknown
+    42-49    Daily energy: load, UPS, grid export/import (kWh, raw ÷10)
+    50-51    Unused / unknown
+    52-59    Daily energy: smart load ports 1-4 (kWh, raw ÷10)
+    60-67    Daily energy: AC couple ports 1-4 (kWh, raw ÷10)
+    68-87    Lifetime energy 32-bit: load, UPS, grid export/import (kWh, raw ÷10)
+    88-103   Lifetime energy 32-bit: smart load ports 1-4 (kWh, raw ÷10)
     104-118  AC couple lifetime energy 32-bit (kWh, raw ÷10)
     105-108  Smart port status (overlaps energy — read in separate operation)
     128-130  Frequency (Hz, raw ÷100)
@@ -543,9 +546,11 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         category=GridBossCategory.ENERGY_DAILY,
         description="Grid import L2 energy today.",
     ),
-    # Smart load daily (regs 50-57)
+    # Smart load daily (regs 52-59)
+    # Note: regs 50-51 are unused/unknown — the smart load daily block starts
+    # at reg 52, NOT 50.  Confirmed by Cloud API ↔ Modbus comparison (#146).
     GridBossRegisterDefinition(
-        address=50,
+        address=52,
         canonical_name="smart_load1_energy_today_l1",
         cloud_api_field="eSmartLoad1TodayL1",
         ha_sensor_key="smart_load1_l1",
@@ -555,7 +560,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 1, L1 energy today.",
     ),
     GridBossRegisterDefinition(
-        address=51,
+        address=53,
         canonical_name="smart_load1_energy_today_l2",
         cloud_api_field="eSmartLoad1TodayL2",
         ha_sensor_key="smart_load1_l2",
@@ -565,7 +570,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 1, L2 energy today.",
     ),
     GridBossRegisterDefinition(
-        address=52,
+        address=54,
         canonical_name="smart_load2_energy_today_l1",
         cloud_api_field="eSmartLoad2TodayL1",
         ha_sensor_key="smart_load2_l1",
@@ -575,7 +580,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 2, L1 energy today.",
     ),
     GridBossRegisterDefinition(
-        address=53,
+        address=55,
         canonical_name="smart_load2_energy_today_l2",
         cloud_api_field="eSmartLoad2TodayL2",
         ha_sensor_key="smart_load2_l2",
@@ -585,7 +590,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 2, L2 energy today.",
     ),
     GridBossRegisterDefinition(
-        address=54,
+        address=56,
         canonical_name="smart_load3_energy_today_l1",
         cloud_api_field="eSmartLoad3TodayL1",
         ha_sensor_key="smart_load3_l1",
@@ -595,7 +600,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 3, L1 energy today.",
     ),
     GridBossRegisterDefinition(
-        address=55,
+        address=57,
         canonical_name="smart_load3_energy_today_l2",
         cloud_api_field="eSmartLoad3TodayL2",
         ha_sensor_key="smart_load3_l2",
@@ -605,7 +610,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 3, L2 energy today.",
     ),
     GridBossRegisterDefinition(
-        address=56,
+        address=58,
         canonical_name="smart_load4_energy_today_l1",
         cloud_api_field="eSmartLoad4TodayL1",
         ha_sensor_key="smart_load4_l1",
@@ -615,7 +620,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 4, L1 energy today.",
     ),
     GridBossRegisterDefinition(
-        address=57,
+        address=59,
         canonical_name="smart_load4_energy_today_l2",
         cloud_api_field="eSmartLoad4TodayL2",
         ha_sensor_key="smart_load4_l2",
@@ -624,7 +629,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         category=GridBossCategory.ENERGY_DAILY,
         description="Smart load port 4, L2 energy today.",
     ),
-    # AC couple daily (regs 60-67) — gap at 58-59
+    # AC couple daily (regs 60-67)
     GridBossRegisterDefinition(
         address=60,
         canonical_name="ac_couple1_energy_today_l1",
@@ -800,9 +805,11 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         category=GridBossCategory.ENERGY_LIFETIME,
         description="Grid import L2 lifetime energy (32-bit).",
     ),
-    # Smart load lifetime (regs 84-99)
+    # Smart load lifetime (regs 88-103)
+    # Note: regs 84-87 are unused/unknown — the smart load lifetime block
+    # starts at reg 88, NOT 84.  Confirmed by Cloud API ↔ Modbus comparison (#146).
     GridBossRegisterDefinition(
-        address=84,
+        address=88,
         canonical_name="smart_load1_energy_total_l1",
         cloud_api_field="eSmartLoad1TotalL1",
         ha_sensor_key="smart_load1_lifetime_l1",
@@ -813,7 +820,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 1, L1 lifetime energy (32-bit).",
     ),
     GridBossRegisterDefinition(
-        address=86,
+        address=90,
         canonical_name="smart_load1_energy_total_l2",
         cloud_api_field="eSmartLoad1TotalL2",
         ha_sensor_key="smart_load1_lifetime_l2",
@@ -824,7 +831,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 1, L2 lifetime energy (32-bit).",
     ),
     GridBossRegisterDefinition(
-        address=88,
+        address=92,
         canonical_name="smart_load2_energy_total_l1",
         cloud_api_field="eSmartLoad2TotalL1",
         ha_sensor_key="smart_load2_lifetime_l1",
@@ -835,7 +842,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 2, L1 lifetime energy (32-bit).",
     ),
     GridBossRegisterDefinition(
-        address=90,
+        address=94,
         canonical_name="smart_load2_energy_total_l2",
         cloud_api_field="eSmartLoad2TotalL2",
         ha_sensor_key="smart_load2_lifetime_l2",
@@ -846,7 +853,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 2, L2 lifetime energy (32-bit).",
     ),
     GridBossRegisterDefinition(
-        address=92,
+        address=96,
         canonical_name="smart_load3_energy_total_l1",
         cloud_api_field="eSmartLoad3TotalL1",
         ha_sensor_key="smart_load3_lifetime_l1",
@@ -857,7 +864,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 3, L1 lifetime energy (32-bit).",
     ),
     GridBossRegisterDefinition(
-        address=94,
+        address=98,
         canonical_name="smart_load3_energy_total_l2",
         cloud_api_field="eSmartLoad3TotalL2",
         ha_sensor_key="smart_load3_lifetime_l2",
@@ -868,7 +875,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 3, L2 lifetime energy (32-bit).",
     ),
     GridBossRegisterDefinition(
-        address=96,
+        address=100,
         canonical_name="smart_load4_energy_total_l1",
         cloud_api_field="eSmartLoad4TotalL1",
         ha_sensor_key="smart_load4_lifetime_l1",
@@ -879,7 +886,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         description="Smart load port 4, L1 lifetime energy (32-bit).",
     ),
     GridBossRegisterDefinition(
-        address=98,
+        address=102,
         canonical_name="smart_load4_energy_total_l2",
         cloud_api_field="eSmartLoad4TotalL2",
         ha_sensor_key="smart_load4_lifetime_l2",
@@ -889,7 +896,7 @@ GRIDBOSS_REGISTERS: tuple[GridBossRegisterDefinition, ...] = (
         category=GridBossCategory.ENERGY_LIFETIME,
         description="Smart load port 4, L2 lifetime energy (32-bit).",
     ),
-    # AC couple lifetime (regs 104-118) — gap at 100-103
+    # AC couple lifetime (regs 104-118)
     # Note: regs 104-108 overlap with smart_port_status in the runtime read group.
     GridBossRegisterDefinition(
         address=104,
