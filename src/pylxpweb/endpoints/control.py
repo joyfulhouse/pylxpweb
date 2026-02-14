@@ -202,23 +202,14 @@ class ControlEndpoints(BaseEndpoint):
                 {21: 512, 66: 50, 67: 100}  # Register addresses and values
             )
         """
-        # Note: The API doesn't support batch writes, so we write sequentially
-        # For now, just write the first parameter (most common use case is single register)
-        # Multi-parameter support would require sequential writes with proper error handling
         if not parameters:
             return SuccessResponse(success=True)
 
-        # For now, we only support single parameter writes through this method
-        # Multi-parameter support would require discovering parameter names from register IDs
-        register, value = next(iter(parameters.items()))
-
-        # This is a simplified implementation - would need register-to-param mapping
-        # for production use. For now, used primarily by device classes for single writes.
         await self.client._ensure_authenticated()
 
         data = {
             "inverterSn": inverter_sn,
-            "data": {str(register): value},
+            "data": {str(reg): val for reg, val in parameters.items()},
             "clientType": client_type,
         }
 
@@ -227,7 +218,6 @@ class ControlEndpoints(BaseEndpoint):
         )
         result = SuccessResponse.model_validate(response)
 
-        # Invalidate cache after successful write to ensure fresh data on next read
         if result.success:
             self.client.invalidate_cache_for_device(inverter_sn)
 

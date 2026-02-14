@@ -251,6 +251,18 @@ class TestCacheInvalidation:
         assert result.success is True
         api_client.invalidate_cache_for_device.assert_called_once_with(SERIAL)
 
+    @pytest.mark.asyncio
+    async def test_write_parameters_sends_all_registers(self, api_client: Mock) -> None:
+        """Test that write_parameters sends all registers in data dict."""
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
+
+        result = await control.write_parameters(SERIAL, {160: 20, 67: 100})
+
+        assert result.success is True
+        call_data = api_client._request.call_args[1]["data"]
+        assert call_data["data"] == {"160": 20, "67": 100}
+
 
 class TestSystemChargeSocLimit:
     """Test system charge SOC limit convenience methods."""
