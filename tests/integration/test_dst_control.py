@@ -1,21 +1,14 @@
 """Integration tests for DST control functionality."""
 
+import zoneinfo
+from datetime import datetime
+
 import pytest
+
+from pylxpweb import LuxpowerClient
 
 # Mark all tests in this module as integration tests
 pytestmark = pytest.mark.integration
-
-# Import redaction helper
-import sys
-import zoneinfo
-from datetime import datetime
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from pylxpweb import LuxpowerClient
 
 
 async def ensure_correct_dst(client: LuxpowerClient, plant_id: str) -> bool:

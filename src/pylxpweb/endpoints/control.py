@@ -8,8 +8,8 @@ This module provides device control functionality including:
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import TYPE_CHECKING
 
 from pylxpweb.endpoints.base import BaseEndpoint
 from pylxpweb.models import (
@@ -18,22 +18,11 @@ from pylxpweb.models import (
     SuccessResponse,
 )
 
-if TYPE_CHECKING:
-    from pylxpweb.client import LuxpowerClient
-
 _LOGGER = logging.getLogger(__name__)
 
 
 class ControlEndpoints(BaseEndpoint):
     """Device control endpoints for parameters, functions, and quick charge."""
-
-    def __init__(self, client: LuxpowerClient) -> None:
-        """Initialize control endpoints.
-
-        Args:
-            client: The parent LuxpowerClient instance
-        """
-        super().__init__(client)
 
     async def read_parameters(
         self,
@@ -201,23 +190,14 @@ class ControlEndpoints(BaseEndpoint):
                 {21: 512, 66: 50, 67: 100}  # Register addresses and values
             )
         """
-        # Note: The API doesn't support batch writes, so we write sequentially
-        # For now, just write the first parameter (most common use case is single register)
-        # Multi-parameter support would require sequential writes with proper error handling
         if not parameters:
             return SuccessResponse(success=True)
 
-        # For now, we only support single parameter writes through this method
-        # Multi-parameter support would require discovering parameter names from register IDs
-        register, value = next(iter(parameters.items()))
-
-        # This is a simplified implementation - would need register-to-param mapping
-        # for production use. For now, used primarily by device classes for single writes.
         await self.client._ensure_authenticated()
 
         data = {
             "inverterSn": inverter_sn,
-            "data": {str(register): value},
+            "data": {str(reg): val for reg, val in parameters.items()},
             "clientType": client_type,
         }
 
@@ -226,7 +206,6 @@ class ControlEndpoints(BaseEndpoint):
         )
         result = SuccessResponse.model_validate(response)
 
-        # Invalidate cache after successful write to ensure fresh data on next read
         if result.success:
             self.client.invalidate_cache_for_device(inverter_sn)
 
@@ -496,6 +475,27 @@ class ControlEndpoints(BaseEndpoint):
         return SuccessResponse.model_validate(response)
 
     # ============================================================================
+    # Private Helpers
+    # ============================================================================
+
+    async def _get_function_status(self, inverter_sn: str, register: int, param_key: str) -> bool:
+        """Read a single function register and return a boolean flag.
+
+        Consolidates the repeated pattern of reading one register and extracting
+        a named boolean parameter from the response.
+
+        Args:
+            inverter_sn: Inverter serial number
+            register: Starting register address (e.g., 21, 110, 233)
+            param_key: Parameter key to extract (e.g., "FUNC_EPS_EN")
+
+        Returns:
+            True if the function is enabled, False otherwise
+        """
+        response = await self.read_parameters(inverter_sn, register, 1)
+        return bool(response.parameters.get(param_key, False))
+
+    # ============================================================================
     # Convenience Helper Methods
     # ============================================================================
 
@@ -713,9 +713,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("EPS mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_EPS_EN", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_EPS_EN")
 
     # ============================================================================
     # Working Mode Controls (Issue #16)
@@ -783,9 +781,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("AC charge mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_AC_CHARGE", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_AC_CHARGE")
 
     async def enable_pv_charge_priority(
         self, inverter_sn: str, client_type: str = "WEB"
@@ -849,9 +845,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("PV charge priority mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_FORCED_CHG_EN", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_FORCED_CHG_EN")
 
     async def enable_forced_discharge(
         self, inverter_sn: str, client_type: str = "WEB"
@@ -915,9 +909,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("Forced discharge mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_FORCED_DISCHG_EN", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_FORCED_DISCHG_EN")
 
     async def enable_peak_shaving_mode(
         self, inverter_sn: str, client_type: str = "WEB"
@@ -981,9 +973,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("Peak shaving mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_GRID_PEAK_SHAVING", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_GRID_PEAK_SHAVING")
 
     # ============================================================================
     # Green Mode Controls (Off-Grid Mode in Web Monitor)
@@ -1068,9 +1058,380 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("Green mode (off-grid) is active")
         """
-        response = await self.read_parameters(inverter_sn, 110, 1)
-        value = response.parameters.get("FUNC_GREEN_EN", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 110, "FUNC_GREEN_EN")
+
+    # ============================================================================
+    # AC Charge Schedule Controls (Cloud API)
+    # ============================================================================
+
+    async def set_ac_charge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set AC charge time period schedule via cloud API.
+
+        The cloud API uses separate hour/minute parameters (not packed Modbus
+        format). Period 0 uses unsuffixed names, periods 1-2 use _1/_2 suffixes.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+
+        Example:
+            >>> # Set period 0: 11pm to 7am
+            >>> await client.control.set_ac_charge_schedule(
+            ...     "1234567890", 0, 23, 0, 7, 0
+            ... )
+        """
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+        for name, value, upper in [
+            ("start_hour", start_hour, 23),
+            ("start_minute", start_minute, 59),
+            ("end_hour", end_hour, 23),
+            ("end_minute", end_minute, 59),
+        ]:
+            if not 0 <= value <= upper:
+                raise ValueError(f"{name} must be 0-{upper}, got {value}")
+
+        suffix = "" if period == 0 else f"_{period}"
+
+        await self.write_parameter(
+            inverter_sn,
+            f"HOLD_AC_CHARGE_START_HOUR{suffix}",
+            str(start_hour),
+            client_type=client_type,
+        )
+        await self.write_parameter(
+            inverter_sn,
+            f"HOLD_AC_CHARGE_START_MINUTE{suffix}",
+            str(start_minute),
+            client_type=client_type,
+        )
+        await self.write_parameter(
+            inverter_sn,
+            f"HOLD_AC_CHARGE_END_HOUR{suffix}",
+            str(end_hour),
+            client_type=client_type,
+        )
+        return await self.write_parameter(
+            inverter_sn,
+            f"HOLD_AC_CHARGE_END_MINUTE{suffix}",
+            str(end_minute),
+            client_type=client_type,
+        )
+
+    async def get_ac_charge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+    ) -> dict[str, int]:
+        """Read AC charge time period schedule via cloud API.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+
+        Example:
+            >>> schedule = await client.control.get_ac_charge_schedule("1234567890", 0)
+            >>> schedule
+            {'start_hour': 23, 'start_minute': 0, 'end_hour': 7, 'end_minute': 0}
+        """
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+
+        suffix = "" if period == 0 else f"_{period}"
+        params = await self.read_device_parameters_ranges(inverter_sn)
+
+        return {
+            "start_hour": int(params.get(f"HOLD_AC_CHARGE_START_HOUR{suffix}", 0)),
+            "start_minute": int(params.get(f"HOLD_AC_CHARGE_START_MINUTE{suffix}", 0)),
+            "end_hour": int(params.get(f"HOLD_AC_CHARGE_END_HOUR{suffix}", 0)),
+            "end_minute": int(params.get(f"HOLD_AC_CHARGE_END_MINUTE{suffix}", 0)),
+        }
+
+    # ============================================================================
+    # AC Charge Type Controls (Cloud API)
+    # ============================================================================
+
+    async def set_ac_charge_type(
+        self,
+        inverter_sn: str,
+        charge_type: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set AC charge type via cloud API.
+
+        Controls what the AC charge schedule is based on. Uses the
+        BIT_AC_CHARGE_TYPE bit parameter in register 120.
+
+        Args:
+            inverter_sn: Inverter serial number
+            charge_type: 0 = Time, 1 = SOC/Volt, 2 = Time + SOC/Volt
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If charge_type is not 0, 1, or 2
+
+        Example:
+            >>> await client.control.set_ac_charge_type("1234567890", 0)  # Time
+        """
+        if charge_type not in (0, 1, 2):
+            raise ValueError(f"charge_type must be 0, 1, or 2, got {charge_type}")
+
+        return await self.control_bit_param(
+            inverter_sn,
+            "BIT_AC_CHARGE_TYPE",
+            charge_type,
+            client_type=client_type,
+        )
+
+    async def get_ac_charge_type(self, inverter_sn: str) -> int:
+        """Get AC charge type via cloud API.
+
+        Returns:
+            0 = Time, 1 = SOC/Volt, 2 = Time + SOC/Volt
+
+        Example:
+            >>> charge_type = await client.control.get_ac_charge_type("1234567890")
+            >>> charge_type  # 0 = Time
+            0
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        return int(params.get("BIT_AC_CHARGE_TYPE", 0))
+
+    # ============================================================================
+    # AC Charge SOC/Voltage Threshold Controls (Cloud API)
+    # ============================================================================
+
+    async def set_ac_charge_soc_limits(
+        self,
+        inverter_sn: str,
+        start_soc: int,
+        end_soc: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set AC charge start/stop SOC thresholds via cloud API.
+
+        These control when AC charging starts and stops based on battery SOC.
+        Active when charge type is SOC/Volt or Time+SOC/Volt.
+
+        Args:
+            inverter_sn: Inverter serial number
+            start_soc: Battery SOC (%) to start AC charging (0-90)
+            end_soc: Battery SOC (%) to stop AC charging (0-100)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If SOC values are out of range
+
+        Example:
+            >>> await client.control.set_ac_charge_soc_limits(
+            ...     "1234567890", start_soc=20, end_soc=100
+            ... )
+        """
+        if not 0 <= start_soc <= 90:
+            raise ValueError(f"start_soc must be 0-90, got {start_soc}")
+        if not 0 <= end_soc <= 100:
+            raise ValueError(f"end_soc must be 0-100, got {end_soc}")
+
+        await self.write_parameter(
+            inverter_sn,
+            "HOLD_AC_CHARGE_START_BATTERY_SOC",
+            str(start_soc),
+            client_type=client_type,
+        )
+        return await self.write_parameter(
+            inverter_sn,
+            "HOLD_AC_CHARGE_SOC_LIMIT",
+            str(end_soc),
+            client_type=client_type,
+        )
+
+    async def get_ac_charge_soc_limits(self, inverter_sn: str) -> dict[str, int]:
+        """Get AC charge start/stop SOC thresholds via cloud API.
+
+        Returns:
+            Dictionary with start_soc and end_soc
+
+        Example:
+            >>> limits = await client.control.get_ac_charge_soc_limits("1234567890")
+            >>> limits
+            {'start_soc': 20, 'end_soc': 100}
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        return {
+            "start_soc": int(params.get("HOLD_AC_CHARGE_START_BATTERY_SOC", 0)),
+            "end_soc": int(params.get("HOLD_AC_CHARGE_SOC_LIMIT", 0)),
+        }
+
+    async def set_ac_charge_voltage_limits(
+        self,
+        inverter_sn: str,
+        start_voltage: int,
+        end_voltage: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set AC charge start/stop voltage thresholds via cloud API.
+
+        Only whole volt values are accepted.
+
+        Args:
+            inverter_sn: Inverter serial number
+            start_voltage: Battery voltage (V) to start AC charging (39-52)
+            end_voltage: Battery voltage (V) to stop AC charging (48-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If voltage values are out of range
+
+        Example:
+            >>> await client.control.set_ac_charge_voltage_limits(
+            ...     "1234567890", start_voltage=40, end_voltage=58
+            ... )
+        """
+        if not 39 <= start_voltage <= 52:
+            raise ValueError(f"start_voltage must be 39-52V, got {start_voltage}")
+        if not 48 <= end_voltage <= 59:
+            raise ValueError(f"end_voltage must be 48-59V, got {end_voltage}")
+
+        # Cloud API expects decivolts (×10)
+        await self.write_parameter(
+            inverter_sn,
+            "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE",
+            str(start_voltage * 10),
+            client_type=client_type,
+        )
+        return await self.write_parameter(
+            inverter_sn,
+            "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE",
+            str(end_voltage * 10),
+            client_type=client_type,
+        )
+
+    async def get_ac_charge_voltage_limits(self, inverter_sn: str) -> dict[str, int]:
+        """Get AC charge start/stop voltage thresholds via cloud API.
+
+        Returns:
+            Dictionary with start_voltage and end_voltage (whole volts)
+
+        Example:
+            >>> limits = await client.control.get_ac_charge_voltage_limits("1234567890")
+            >>> limits
+            {'start_voltage': 40, 'end_voltage': 58}
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        start_raw = int(params.get("HOLD_AC_CHARGE_START_BATTERY_VOLTAGE", 0))
+        end_raw = int(params.get("HOLD_AC_CHARGE_END_BATTERY_VOLTAGE", 0))
+        return {
+            "start_voltage": start_raw // 10,
+            "end_voltage": end_raw // 10,
+        }
+
+    # ============================================================================
+    # Sporadic Charge Controls (Cloud API)
+    # ============================================================================
+
+    async def enable_sporadic_charge(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable sporadic charge via cloud API.
+
+        Sporadic charge is controlled via FUNC_SPORADIC_CHARGE (register 233,
+        bit 12). Confirmed via web UI toggle + Modbus read on FlexBOSS21.
+
+        Convenience wrapper for control_function(..., "FUNC_SPORADIC_CHARGE", True).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_sporadic_charge("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_SPORADIC_CHARGE", True, client_type=client_type
+        )
+
+    async def disable_sporadic_charge(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable sporadic charge via cloud API.
+
+        Convenience wrapper for control_function(..., "FUNC_SPORADIC_CHARGE", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_sporadic_charge("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_SPORADIC_CHARGE", False, client_type=client_type
+        )
+
+    async def get_sporadic_charge_status(self, inverter_sn: str) -> bool:
+        """Get sporadic charge enabled status via cloud API.
+
+        Reads register 233 and extracts FUNC_SPORADIC_CHARGE bit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if sporadic charge is enabled
+
+        Example:
+            >>> enabled = await client.control.get_sporadic_charge_status("1234567890")
+        """
+        return await self._get_function_status(inverter_sn, 233, "FUNC_SPORADIC_CHARGE")
+
+    # ============================================================================
+    # Utility Methods
+    # ============================================================================
 
     async def read_device_parameters_ranges(self, inverter_sn: str) -> dict[str, int | bool]:
         """Read all device parameters across three common register ranges.
@@ -1093,28 +1454,19 @@ class ControlEndpoints(BaseEndpoint):
             >>> params["FUNC_EPS_EN"]
             True
         """
-        import asyncio
-
         # Read all three ranges concurrently
         range1_task = self.read_parameters(inverter_sn, 0, 127)
         range2_task = self.read_parameters(inverter_sn, 127, 127)
         range3_task = self.read_parameters(inverter_sn, 240, 127)
 
-        range1, range2, range3 = await asyncio.gather(
+        results = await asyncio.gather(
             range1_task, range2_task, range3_task, return_exceptions=True
         )
 
-        # Combine parameters from all ranges
         combined: dict[str, int | bool] = {}
-
-        if not isinstance(range1, BaseException):
-            combined.update(range1.parameters)
-
-        if not isinstance(range2, BaseException):
-            combined.update(range2.parameters)
-
-        if not isinstance(range3, BaseException):
-            combined.update(range3.parameters)
+        for result in results:
+            if not isinstance(result, BaseException):
+                combined.update(result.parameters)
 
         return combined
 

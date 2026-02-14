@@ -7,482 +7,154 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from pylxpweb import LuxpowerClient
+from pylxpweb.endpoints.control import ControlEndpoints
 from pylxpweb.models import ParameterReadResponse, SuccessResponse
+
+SERIAL = "1234567890"
 
 
 @pytest.fixture
-def mock_client() -> LuxpowerClient:
-    """Create a mock client for testing."""
-    client = Mock(spec=LuxpowerClient)
-    client.api = Mock()
-    client.api.control = Mock()
-    return client
+def control() -> ControlEndpoints:
+    """Create a ControlEndpoints instance with a mocked client."""
+    return ControlEndpoints(Mock(spec=LuxpowerClient))
 
 
-class TestBatteryBackupHelpers:
-    """Test battery backup (EPS) convenience methods."""
+# ============================================================================
+# Convenience method tests (enable/disable wrappers around control_function)
+# ============================================================================
+
+
+class TestFunctionToggleHelpers:
+    """Test enable/disable convenience methods that wrap control_function.
+
+    Each parametrized case verifies that the convenience method delegates
+    to control_function with the correct function parameter and enable flag.
+    """
 
     @pytest.mark.asyncio
-    async def test_enable_battery_backup(self) -> None:
-        """Test enable_battery_backup convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
+    @pytest.mark.parametrize(
+        ("method_name", "func_param", "enable"),
+        [
+            ("enable_battery_backup", "FUNC_EPS_EN", True),
+            ("disable_battery_backup", "FUNC_EPS_EN", False),
+            ("enable_battery_backup_ctrl", "FUNC_BATTERY_BACKUP_CTRL", True),
+            ("disable_battery_backup_ctrl", "FUNC_BATTERY_BACKUP_CTRL", False),
+            ("enable_normal_mode", "FUNC_SET_TO_STANDBY", True),
+            ("enable_standby_mode", "FUNC_SET_TO_STANDBY", False),
+            ("enable_grid_peak_shaving", "FUNC_GRID_PEAK_SHAVING", True),
+            ("disable_grid_peak_shaving", "FUNC_GRID_PEAK_SHAVING", False),
+            ("enable_ac_charge_mode", "FUNC_AC_CHARGE", True),
+            ("disable_ac_charge_mode", "FUNC_AC_CHARGE", False),
+            ("enable_pv_charge_priority", "FUNC_FORCED_CHG_EN", True),
+            ("disable_pv_charge_priority", "FUNC_FORCED_CHG_EN", False),
+            ("enable_forced_discharge", "FUNC_FORCED_DISCHG_EN", True),
+            ("disable_forced_discharge", "FUNC_FORCED_DISCHG_EN", False),
+            ("enable_peak_shaving_mode", "FUNC_GRID_PEAK_SHAVING", True),
+            ("disable_peak_shaving_mode", "FUNC_GRID_PEAK_SHAVING", False),
+            ("enable_green_mode", "FUNC_GREEN_EN", True),
+            ("disable_green_mode", "FUNC_GREEN_EN", False),
+            ("enable_sporadic_charge", "FUNC_SPORADIC_CHARGE", True),
+            ("disable_sporadic_charge", "FUNC_SPORADIC_CHARGE", False),
+        ],
+    )
+    async def test_toggle_delegates_to_control_function(
+        self, control: ControlEndpoints, method_name: str, func_param: str, enable: bool
+    ) -> None:
+        """Verify convenience method delegates to control_function correctly."""
         mock_response = SuccessResponse(success=True)
         control.control_function = AsyncMock(return_value=mock_response)
 
-        # Call convenience method
-        result = await control.enable_battery_backup("1234567890")
+        result = await getattr(control, method_name)(SERIAL)
 
-        # Verify control_function was called correctly
         control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_EPS_EN", True, client_type="WEB"
+            SERIAL, func_param, enable, client_type="WEB"
         )
         assert result.success is True
 
-    @pytest.mark.asyncio
-    async def test_disable_battery_backup(self) -> None:
-        """Test disable_battery_backup convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
 
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
+# ============================================================================
+# Function status tests (get_*_status wrappers around read_parameters)
+# ============================================================================
 
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
 
-        # Call convenience method
-        result = await control.disable_battery_backup("1234567890")
+class TestFunctionStatusHelpers:
+    """Test get_*_status methods that read a register and extract a bool flag.
 
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_EPS_EN", False, client_type="WEB"
-        )
-        assert result.success is True
+    Each parametrized case verifies the correct register and parameter key.
+    """
 
     @pytest.mark.asyncio
-    async def test_get_battery_backup_status(self) -> None:
-        """Test get_battery_backup_status method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters response
+    @pytest.mark.parametrize(
+        ("method_name", "register", "param_key"),
+        [
+            ("get_battery_backup_status", 21, "FUNC_EPS_EN"),
+            ("get_ac_charge_mode_status", 21, "FUNC_AC_CHARGE"),
+            ("get_pv_charge_priority_status", 21, "FUNC_FORCED_CHG_EN"),
+            ("get_forced_discharge_status", 21, "FUNC_FORCED_DISCHG_EN"),
+            ("get_peak_shaving_mode_status", 21, "FUNC_GRID_PEAK_SHAVING"),
+            ("get_green_mode_status", 110, "FUNC_GREEN_EN"),
+            ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
+        ],
+    )
+    async def test_status_enabled(
+        self, control: ControlEndpoints, method_name: str, register: int, param_key: str
+    ) -> None:
+        """Verify status method returns True when function is enabled."""
         mock_params = Mock(spec=ParameterReadResponse)
-        mock_params.parameters = {"FUNC_EPS_EN": True}
+        mock_params.parameters = {param_key: True}
         control.read_parameters = AsyncMock(return_value=mock_params)
 
-        # Get status
-        status = await control.get_battery_backup_status("1234567890")
+        status = await getattr(control, method_name)(SERIAL)
 
-        # Verify read_parameters was called
-        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
+        control.read_parameters.assert_called_once_with(SERIAL, register, 1)
         assert status is True
 
     @pytest.mark.asyncio
-    async def test_get_battery_backup_status_disabled(self) -> None:
-        """Test get_battery_backup_status when EPS is disabled."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters response
+    @pytest.mark.parametrize(
+        ("method_name", "register", "param_key"),
+        [
+            ("get_battery_backup_status", 21, "FUNC_EPS_EN"),
+            ("get_green_mode_status", 110, "FUNC_GREEN_EN"),
+            ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
+        ],
+    )
+    async def test_status_disabled(
+        self, control: ControlEndpoints, method_name: str, register: int, param_key: str
+    ) -> None:
+        """Verify status method returns False when function is disabled."""
         mock_params = Mock(spec=ParameterReadResponse)
-        mock_params.parameters = {"FUNC_EPS_EN": False}
+        mock_params.parameters = {param_key: False}
         control.read_parameters = AsyncMock(return_value=mock_params)
 
-        # Get status
-        status = await control.get_battery_backup_status("1234567890")
-
+        status = await getattr(control, method_name)(SERIAL)
         assert status is False
 
     @pytest.mark.asyncio
-    async def test_get_battery_backup_status_missing_field(self) -> None:
-        """Test get_battery_backup_status when field is missing."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters response without FUNC_EPS_EN
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "get_battery_backup_status",
+            "get_green_mode_status",
+        ],
+    )
+    async def test_status_missing_field_defaults_false(
+        self, control: ControlEndpoints, method_name: str
+    ) -> None:
+        """Verify status method defaults to False when parameter key is absent."""
         mock_params = Mock(spec=ParameterReadResponse)
         mock_params.parameters = {}
         control.read_parameters = AsyncMock(return_value=mock_params)
 
-        # Get status (should default to False)
-        status = await control.get_battery_backup_status("1234567890")
-
+        status = await getattr(control, method_name)(SERIAL)
         assert status is False
-
-
-class TestStandbyModeHelpers:
-    """Test standby mode convenience methods."""
-
-    @pytest.mark.asyncio
-    async def test_enable_normal_mode(self) -> None:
-        """Test enable_normal_mode convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.enable_normal_mode("1234567890")
-
-        # Verify control_function was called correctly
-        # Note: FUNC_SET_TO_STANDBY = True means NOT in standby (normal mode)
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_SET_TO_STANDBY", True, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_enable_standby_mode(self) -> None:
-        """Test enable_standby_mode convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.enable_standby_mode("1234567890")
-
-        # Verify control_function was called correctly
-        # Note: FUNC_SET_TO_STANDBY = False means standby mode is active
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_SET_TO_STANDBY", False, client_type="WEB"
-        )
-        assert result.success is True
-
-
-class TestPeakShavingHelpers:
-    """Test grid peak shaving convenience methods."""
-
-    @pytest.mark.asyncio
-    async def test_enable_grid_peak_shaving(self) -> None:
-        """Test enable_grid_peak_shaving convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.enable_grid_peak_shaving("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_GRID_PEAK_SHAVING", True, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_disable_grid_peak_shaving(self) -> None:
-        """Test disable_grid_peak_shaving convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.disable_grid_peak_shaving("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_GRID_PEAK_SHAVING", False, client_type="WEB"
-        )
-        assert result.success is True
-
-
-class TestWorkingModeHelpers:
-    """Test working mode convenience methods (Issue #16)."""
-
-    # AC Charge Mode tests
-    @pytest.mark.asyncio
-    async def test_enable_ac_charge_mode(self) -> None:
-        """Test enable_ac_charge_mode convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.enable_ac_charge_mode("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_AC_CHARGE", True, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_disable_ac_charge_mode(self) -> None:
-        """Test disable_ac_charge_mode convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.disable_ac_charge_mode("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_AC_CHARGE", False, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_get_ac_charge_mode_status(self) -> None:
-        """Test get_ac_charge_mode_status method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters response
-        mock_params = Mock(spec=ParameterReadResponse)
-        mock_params.parameters = {"FUNC_AC_CHARGE": True}
-        control.read_parameters = AsyncMock(return_value=mock_params)
-
-        # Get status
-        status = await control.get_ac_charge_mode_status("1234567890")
-
-        # Verify read_parameters was called
-        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
-        assert status is True
-
-    # PV Charge Priority tests
-    @pytest.mark.asyncio
-    async def test_enable_pv_charge_priority(self) -> None:
-        """Test enable_pv_charge_priority convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.enable_pv_charge_priority("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_FORCED_CHG_EN", True, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_disable_pv_charge_priority(self) -> None:
-        """Test disable_pv_charge_priority convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.disable_pv_charge_priority("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_FORCED_CHG_EN", False, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_get_pv_charge_priority_status(self) -> None:
-        """Test get_pv_charge_priority_status method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters response
-        mock_params = Mock(spec=ParameterReadResponse)
-        mock_params.parameters = {"FUNC_FORCED_CHG_EN": True}
-        control.read_parameters = AsyncMock(return_value=mock_params)
-
-        # Get status
-        status = await control.get_pv_charge_priority_status("1234567890")
-
-        # Verify read_parameters was called
-        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
-        assert status is True
-
-    # Forced Discharge tests
-    @pytest.mark.asyncio
-    async def test_enable_forced_discharge(self) -> None:
-        """Test enable_forced_discharge convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.enable_forced_discharge("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_FORCED_DISCHG_EN", True, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_disable_forced_discharge(self) -> None:
-        """Test disable_forced_discharge convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.disable_forced_discharge("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_FORCED_DISCHG_EN", False, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_get_forced_discharge_status(self) -> None:
-        """Test get_forced_discharge_status method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters response
-        mock_params = Mock(spec=ParameterReadResponse)
-        mock_params.parameters = {"FUNC_FORCED_DISCHG_EN": True}
-        control.read_parameters = AsyncMock(return_value=mock_params)
-
-        # Get status
-        status = await control.get_forced_discharge_status("1234567890")
-
-        # Verify read_parameters was called
-        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
-        assert status is True
-
-    # Peak Shaving Mode tests (additional to existing tests above)
-    @pytest.mark.asyncio
-    async def test_enable_peak_shaving_mode(self) -> None:
-        """Test enable_peak_shaving_mode convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.enable_peak_shaving_mode("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_GRID_PEAK_SHAVING", True, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_disable_peak_shaving_mode(self) -> None:
-        """Test disable_peak_shaving_mode convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
-
-        # Call convenience method
-        result = await control.disable_peak_shaving_mode("1234567890")
-
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_GRID_PEAK_SHAVING", False, client_type="WEB"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_get_peak_shaving_mode_status(self) -> None:
-        """Test get_peak_shaving_mode_status method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters response
-        mock_params = Mock(spec=ParameterReadResponse)
-        mock_params.parameters = {"FUNC_GRID_PEAK_SHAVING": True}
-        control.read_parameters = AsyncMock(return_value=mock_params)
-
-        # Get status
-        status = await control.get_peak_shaving_mode_status("1234567890")
-
-        # Verify read_parameters was called
-        control.read_parameters.assert_called_once_with("1234567890", 21, 1)
-        assert status is True
 
 
 class TestBulkParameterRead:
     """Test bulk parameter reading method."""
 
     @pytest.mark.asyncio
-    async def test_read_device_parameters_ranges(self) -> None:
+    async def test_read_device_parameters_ranges(self, control: ControlEndpoints) -> None:
         """Test reading all parameter ranges concurrently."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters for three ranges
         mock_range1 = Mock(spec=ParameterReadResponse)
         mock_range1.parameters = {"HOLD_AC_CHARGE_POWER_CMD": 50, "FUNC_EPS_EN": True}
 
@@ -494,30 +166,23 @@ class TestBulkParameterRead:
 
         control.read_parameters = AsyncMock(side_effect=[mock_range1, mock_range2, mock_range3])
 
-        # Read all ranges
-        combined = await control.read_device_parameters_ranges("1234567890")
+        combined = await control.read_device_parameters_ranges(SERIAL)
 
-        # Verify all three read_parameters calls
         assert control.read_parameters.call_count == 3
-        control.read_parameters.assert_any_call("1234567890", 0, 127)
-        control.read_parameters.assert_any_call("1234567890", 127, 127)
-        control.read_parameters.assert_any_call("1234567890", 240, 127)
+        control.read_parameters.assert_any_call(SERIAL, 0, 127)
+        control.read_parameters.assert_any_call(SERIAL, 127, 127)
+        control.read_parameters.assert_any_call(SERIAL, 240, 127)
 
-        # Verify combined parameters
         assert combined["HOLD_AC_CHARGE_POWER_CMD"] == 50
         assert combined["FUNC_EPS_EN"] is True
         assert combined["HOLD_SYSTEM_CHARGE_SOC_LIMIT"] == 90
         assert combined["HOLD_DISCHG_POWER_CMD"] == 80
 
     @pytest.mark.asyncio
-    async def test_read_device_parameters_ranges_with_errors(self) -> None:
+    async def test_read_device_parameters_ranges_with_errors(
+        self, control: ControlEndpoints
+    ) -> None:
         """Test handling errors in bulk parameter read."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters with one error
         mock_range1 = Mock(spec=ParameterReadResponse)
         mock_range1.parameters = {"HOLD_AC_CHARGE_POWER_CMD": 50}
 
@@ -525,10 +190,8 @@ class TestBulkParameterRead:
             side_effect=[mock_range1, Exception("Network error"), mock_range1]
         )
 
-        # Read all ranges (should not raise exception)
-        combined = await control.read_device_parameters_ranges("1234567890")
+        combined = await control.read_device_parameters_ranges(SERIAL)
 
-        # Verify we got data from successful calls only
         assert "HOLD_AC_CHARGE_POWER_CMD" in combined
         assert len(combined) > 0
 
@@ -536,330 +199,308 @@ class TestBulkParameterRead:
 class TestCacheInvalidation:
     """Test cache invalidation on write operations."""
 
+    @pytest.fixture
+    def api_client(self) -> Mock:
+        """Create a mock client with API-level mocks for cache invalidation tests."""
+        client = Mock(spec=LuxpowerClient)
+        client._ensure_authenticated = AsyncMock()
+        client.invalidate_cache_for_device = Mock()
+        return client
+
     @pytest.mark.asyncio
-    async def test_write_parameter_invalidates_cache(self) -> None:
+    async def test_write_parameter_invalidates_cache(self, api_client: Mock) -> None:
         """Test that write_parameter invalidates cache on successful write."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
 
-        mock_client = Mock(spec=LuxpowerClient)
-        mock_client._ensure_authenticated = AsyncMock()
-        mock_client._request = AsyncMock(return_value={"success": True})
-        mock_client.invalidate_cache_for_device = Mock()
+        result = await control.write_parameter(SERIAL, "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "90")
 
-        control = ControlEndpoints(mock_client)
-
-        # Write parameter
-        result = await control.write_parameter("1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "90")
-
-        # Verify cache was invalidated
         assert result.success is True
-        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+        api_client.invalidate_cache_for_device.assert_called_once_with(SERIAL)
 
     @pytest.mark.asyncio
-    async def test_write_parameter_no_cache_invalidation_on_failure(self) -> None:
+    async def test_write_parameter_no_cache_invalidation_on_failure(self, api_client: Mock) -> None:
         """Test that write_parameter does NOT invalidate cache on failure."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+        api_client._request = AsyncMock(return_value={"success": False})
+        control = ControlEndpoints(api_client)
 
-        mock_client = Mock(spec=LuxpowerClient)
-        mock_client._ensure_authenticated = AsyncMock()
-        mock_client._request = AsyncMock(return_value={"success": False})
-        mock_client.invalidate_cache_for_device = Mock()
+        result = await control.write_parameter(SERIAL, "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "90")
 
-        control = ControlEndpoints(mock_client)
-
-        # Write parameter (fails)
-        result = await control.write_parameter("1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "90")
-
-        # Verify cache was NOT invalidated
         assert result.success is False
-        mock_client.invalidate_cache_for_device.assert_not_called()
+        api_client.invalidate_cache_for_device.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_control_function_invalidates_cache(self) -> None:
+    async def test_control_function_invalidates_cache(self, api_client: Mock) -> None:
         """Test that control_function invalidates cache on successful operation."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
 
-        mock_client = Mock(spec=LuxpowerClient)
-        mock_client._ensure_authenticated = AsyncMock()
-        mock_client._request = AsyncMock(return_value={"success": True})
-        mock_client.invalidate_cache_for_device = Mock()
+        result = await control.control_function(SERIAL, "FUNC_EPS_EN", True)
 
-        control = ControlEndpoints(mock_client)
-
-        # Call control_function
-        result = await control.control_function("1234567890", "FUNC_EPS_EN", True)
-
-        # Verify cache was invalidated
         assert result.success is True
-        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+        api_client.invalidate_cache_for_device.assert_called_once_with(SERIAL)
 
     @pytest.mark.asyncio
-    async def test_write_parameters_invalidates_cache(self) -> None:
+    async def test_write_parameters_invalidates_cache(self, api_client: Mock) -> None:
         """Test that write_parameters invalidates cache on successful write."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
 
-        mock_client = Mock(spec=LuxpowerClient)
-        mock_client._ensure_authenticated = AsyncMock()
-        mock_client._request = AsyncMock(return_value={"success": True})
-        mock_client.invalidate_cache_for_device = Mock()
+        result = await control.write_parameters(SERIAL, {21: 512})
 
-        control = ControlEndpoints(mock_client)
-
-        # Write parameters
-        result = await control.write_parameters("1234567890", {21: 512})
-
-        # Verify cache was invalidated
         assert result.success is True
-        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+        api_client.invalidate_cache_for_device.assert_called_once_with(SERIAL)
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_sends_all_registers(self, api_client: Mock) -> None:
+        """Test that write_parameters sends all registers in data dict."""
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
+
+        result = await control.write_parameters(SERIAL, {160: 20, 67: 100})
+
+        assert result.success is True
+        call_data = api_client._request.call_args[1]["data"]
+        assert call_data["data"] == {"160": 20, "67": 100}
 
 
 class TestSystemChargeSocLimit:
     """Test system charge SOC limit convenience methods."""
 
     @pytest.mark.asyncio
-    async def test_set_system_charge_soc_limit_normal(self) -> None:
-        """Test setting system charge SOC limit to normal value."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+    @pytest.mark.parametrize(
+        ("percent", "expected_value_str"),
+        [
+            (90, "90"),
+            (101, "101"),
+            (0, "0"),
+        ],
+        ids=["normal_90", "top_balance_101", "zero"],
+    )
+    async def test_set_system_charge_soc_limit_valid(
+        self, control: ControlEndpoints, percent: int, expected_value_str: str
+    ) -> None:
+        """Test setting system charge SOC limit to valid values."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
 
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
+        result = await control.set_system_charge_soc_limit(SERIAL, percent)
 
-        # Mock write_parameter
-        mock_response = SuccessResponse(success=True)
-        control.write_parameter = AsyncMock(return_value=mock_response)
-
-        # Set SOC limit to 90%
-        result = await control.set_system_charge_soc_limit("1234567890", 90)
-
-        # Verify write_parameter was called correctly
         control.write_parameter.assert_called_once_with(
-            "1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "90"
+            SERIAL, "HOLD_SYSTEM_CHARGE_SOC_LIMIT", expected_value_str
         )
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_set_system_charge_soc_limit_top_balance(self) -> None:
-        """Test setting system charge SOC limit to 101 for top balancing."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock write_parameter
-        mock_response = SuccessResponse(success=True)
-        control.write_parameter = AsyncMock(return_value=mock_response)
-
-        # Set SOC limit to 101% (top balancing)
-        result = await control.set_system_charge_soc_limit("1234567890", 101)
-
-        # Verify write_parameter was called correctly
-        control.write_parameter.assert_called_once_with(
-            "1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "101"
-        )
-        assert result.success is True
+    @pytest.mark.parametrize("percent", [102, -1], ids=["too_high", "negative"])
+    async def test_set_system_charge_soc_limit_invalid(
+        self, control: ControlEndpoints, percent: int
+    ) -> None:
+        """Test that out-of-range values raise ValueError."""
+        with pytest.raises(ValueError, match="0-101%"):
+            await control.set_system_charge_soc_limit(SERIAL, percent)
 
     @pytest.mark.asyncio
-    async def test_set_system_charge_soc_limit_zero(self) -> None:
-        """Test setting system charge SOC limit to 0%."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock write_parameter
-        mock_response = SuccessResponse(success=True)
-        control.write_parameter = AsyncMock(return_value=mock_response)
-
-        # Set SOC limit to 0%
-        result = await control.set_system_charge_soc_limit("1234567890", 0)
-
-        # Verify write_parameter was called correctly
-        control.write_parameter.assert_called_once_with(
-            "1234567890", "HOLD_SYSTEM_CHARGE_SOC_LIMIT", "0"
-        )
-        assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_set_system_charge_soc_limit_invalid_high(self) -> None:
-        """Test that values above 101 raise ValueError."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Attempt to set invalid value
-        with pytest.raises(ValueError) as exc_info:
-            await control.set_system_charge_soc_limit("1234567890", 102)
-
-        assert "0-101%" in str(exc_info.value)
-        assert "102" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_set_system_charge_soc_limit_invalid_negative(self) -> None:
-        """Test that negative values raise ValueError."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Attempt to set invalid value
-        with pytest.raises(ValueError) as exc_info:
-            await control.set_system_charge_soc_limit("1234567890", -1)
-
-        assert "0-101%" in str(exc_info.value)
-
-    @pytest.mark.asyncio
-    async def test_get_system_charge_soc_limit(self) -> None:
+    @pytest.mark.parametrize(
+        ("params", "expected"),
+        [
+            ({"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 90}, 90),
+            ({"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}, 101),
+            ({}, 100),
+        ],
+        ids=["normal", "top_balance", "default_100"],
+    )
+    async def test_get_system_charge_soc_limit(
+        self, control: ControlEndpoints, params: dict[str, int], expected: int
+    ) -> None:
         """Test getting current system charge SOC limit."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+        control.read_device_parameters_ranges = AsyncMock(return_value=params)
 
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
+        limit = await control.get_system_charge_soc_limit(SERIAL)
 
-        # Mock read_device_parameters_ranges
-        control.read_device_parameters_ranges = AsyncMock(
-            return_value={"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 90}
+        control.read_device_parameters_ranges.assert_called_once_with(SERIAL)
+        assert limit == expected
+
+
+class TestACChargeScheduleCloud:
+    """Test AC charge schedule cloud API methods."""
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_schedule_period_0(self, control: ControlEndpoints) -> None:
+        """Test setting AC charge schedule for period 0 (unsuffixed params)."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await control.set_ac_charge_schedule(SERIAL, 0, 23, 0, 7, 0)
+
+        assert result.success is True
+        assert control.write_parameter.call_count == 4
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_START_HOUR", "23", client_type="WEB"
+        )
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_START_MINUTE", "0", client_type="WEB"
+        )
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_END_HOUR", "7", client_type="WEB"
+        )
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_END_MINUTE", "0", client_type="WEB"
         )
 
-        # Get SOC limit
-        limit = await control.get_system_charge_soc_limit("1234567890")
-
-        # Verify
-        control.read_device_parameters_ranges.assert_called_once_with("1234567890")
-        assert limit == 90
-
     @pytest.mark.asyncio
-    async def test_get_system_charge_soc_limit_top_balance(self) -> None:
-        """Test getting system charge SOC limit when set to 101 (top balancing)."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+    async def test_set_ac_charge_schedule_period_1(self, control: ControlEndpoints) -> None:
+        """Test setting AC charge schedule for period 1 (_1 suffix)."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
 
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
+        await control.set_ac_charge_schedule(SERIAL, 1, 8, 30, 16, 0)
 
-        # Mock read_device_parameters_ranges
-        control.read_device_parameters_ranges = AsyncMock(
-            return_value={"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_START_HOUR_1", "8", client_type="WEB"
+        )
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_END_MINUTE_1", "0", client_type="WEB"
         )
 
-        # Get SOC limit
-        limit = await control.get_system_charge_soc_limit("1234567890")
-
-        assert limit == 101
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_schedule_invalid_period(self, control: ControlEndpoints) -> None:
+        """Test that invalid period raises ValueError."""
+        with pytest.raises(ValueError, match="period must be 0, 1, or 2"):
+            await control.set_ac_charge_schedule(SERIAL, 3, 0, 0, 0, 0)
 
     @pytest.mark.asyncio
-    async def test_get_system_charge_soc_limit_default(self) -> None:
-        """Test getting system charge SOC limit defaults to 100 if not present."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_device_parameters_ranges without the parameter
-        control.read_device_parameters_ranges = AsyncMock(return_value={})
-
-        # Get SOC limit
-        limit = await control.get_system_charge_soc_limit("1234567890")
-
-        assert limit == 100
-
-
-class TestGreenModeHelpers:
-    """Test green mode (off-grid mode) convenience methods."""
+    async def test_set_ac_charge_schedule_invalid_hour(self, control: ControlEndpoints) -> None:
+        """Test that invalid hour raises ValueError."""
+        with pytest.raises(ValueError, match="start_hour must be 0-23"):
+            await control.set_ac_charge_schedule(SERIAL, 0, 24, 0, 7, 0)
 
     @pytest.mark.asyncio
-    async def test_enable_green_mode(self) -> None:
-        """Test enable_green_mode convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+    async def test_get_ac_charge_schedule(self, control: ControlEndpoints) -> None:
+        """Test getting AC charge schedule via cloud API."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_AC_CHARGE_START_HOUR": 23,
+                "HOLD_AC_CHARGE_START_MINUTE": 0,
+                "HOLD_AC_CHARGE_END_HOUR": 7,
+                "HOLD_AC_CHARGE_END_MINUTE": 0,
+            }
+        )
 
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
+        schedule = await control.get_ac_charge_schedule(SERIAL, 0)
 
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
+        assert schedule == {
+            "start_hour": 23,
+            "start_minute": 0,
+            "end_hour": 7,
+            "end_minute": 0,
+        }
 
-        # Call convenience method
-        result = await control.enable_green_mode("1234567890")
 
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_GREEN_EN", True, client_type="WEB"
+class TestACChargeTypeCloud:
+    """Test AC charge type cloud API methods."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("charge_type", [0, 1, 2], ids=["time", "soc_volt", "time_soc_volt"])
+    async def test_set_ac_charge_type_valid(
+        self, control: ControlEndpoints, charge_type: int
+    ) -> None:
+        """Test setting AC charge type to valid values."""
+        control.control_bit_param = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await control.set_ac_charge_type(SERIAL, charge_type)
+
+        control.control_bit_param.assert_called_once_with(
+            SERIAL, "BIT_AC_CHARGE_TYPE", charge_type, client_type="WEB"
         )
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_disable_green_mode(self) -> None:
-        """Test disable_green_mode convenience method."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+    async def test_set_ac_charge_type_invalid(self, control: ControlEndpoints) -> None:
+        """Test that invalid charge type raises ValueError."""
+        with pytest.raises(ValueError, match="charge_type must be 0, 1, or 2"):
+            await control.set_ac_charge_type(SERIAL, 5)
 
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
+    @pytest.mark.asyncio
+    async def test_get_ac_charge_type(self, control: ControlEndpoints) -> None:
+        """Test getting AC charge type via cloud API."""
+        control.read_device_parameters_ranges = AsyncMock(return_value={"BIT_AC_CHARGE_TYPE": 2})
 
-        # Mock control_function
-        mock_response = SuccessResponse(success=True)
-        control.control_function = AsyncMock(return_value=mock_response)
+        charge_type = await control.get_ac_charge_type(SERIAL)
+        assert charge_type == 2
 
-        # Call convenience method
-        result = await control.disable_green_mode("1234567890")
 
-        # Verify control_function was called correctly
-        control.control_function.assert_called_once_with(
-            "1234567890", "FUNC_GREEN_EN", False, client_type="WEB"
-        )
+class TestACChargeSocLimitsCloud:
+    """Test AC charge SOC limit cloud API methods."""
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_soc_limits(self, control: ControlEndpoints) -> None:
+        """Test setting AC charge SOC limits."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await control.set_ac_charge_soc_limits(SERIAL, 20, 100)
+
         assert result.success is True
+        assert control.write_parameter.call_count == 2
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_START_BATTERY_SOC", "20", client_type="WEB"
+        )
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_SOC_LIMIT", "100", client_type="WEB"
+        )
 
     @pytest.mark.asyncio
-    async def test_get_green_mode_status_enabled(self) -> None:
-        """Test get_green_mode_status when enabled."""
-        from pylxpweb.endpoints.control import ControlEndpoints
-
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
-
-        # Mock read_parameters response
-        mock_params = Mock(spec=ParameterReadResponse)
-        mock_params.parameters = {"FUNC_GREEN_EN": True}
-        control.read_parameters = AsyncMock(return_value=mock_params)
-
-        # Get status
-        status = await control.get_green_mode_status("1234567890")
-
-        # Verify read_parameters was called with register 110 (system functions)
-        control.read_parameters.assert_called_once_with("1234567890", 110, 1)
-        assert status is True
+    async def test_set_ac_charge_soc_limits_invalid_start(self, control: ControlEndpoints) -> None:
+        """Test that invalid start_soc raises ValueError."""
+        with pytest.raises(ValueError, match="start_soc must be 0-90"):
+            await control.set_ac_charge_soc_limits(SERIAL, 95, 100)
 
     @pytest.mark.asyncio
-    async def test_get_green_mode_status_disabled(self) -> None:
-        """Test get_green_mode_status when disabled."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+    async def test_get_ac_charge_soc_limits(self, control: ControlEndpoints) -> None:
+        """Test getting AC charge SOC limits."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_AC_CHARGE_START_BATTERY_SOC": 20,
+                "HOLD_AC_CHARGE_SOC_LIMIT": 100,
+            }
+        )
 
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
+        limits = await control.get_ac_charge_soc_limits(SERIAL)
+        assert limits == {"start_soc": 20, "end_soc": 100}
 
-        # Mock read_parameters response
-        mock_params = Mock(spec=ParameterReadResponse)
-        mock_params.parameters = {"FUNC_GREEN_EN": False}
-        control.read_parameters = AsyncMock(return_value=mock_params)
 
-        # Get status
-        status = await control.get_green_mode_status("1234567890")
-
-        assert status is False
+class TestACChargeVoltageLimitsCloud:
+    """Test AC charge voltage limit cloud API methods."""
 
     @pytest.mark.asyncio
-    async def test_get_green_mode_status_missing_field(self) -> None:
-        """Test get_green_mode_status when field is missing (defaults to False)."""
-        from pylxpweb.endpoints.control import ControlEndpoints
+    async def test_set_ac_charge_voltage_limits(self, control: ControlEndpoints) -> None:
+        """Test setting AC charge voltage limits (decivolts conversion)."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
 
-        mock_client = Mock(spec=LuxpowerClient)
-        control = ControlEndpoints(mock_client)
+        result = await control.set_ac_charge_voltage_limits(SERIAL, 40, 58)
 
-        # Mock read_parameters response without FUNC_GREEN_EN
-        mock_params = Mock(spec=ParameterReadResponse)
-        mock_params.parameters = {}
-        control.read_parameters = AsyncMock(return_value=mock_params)
+        assert result.success is True
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE", "400", client_type="WEB"
+        )
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE", "580", client_type="WEB"
+        )
 
-        # Get status (should default to False)
-        status = await control.get_green_mode_status("1234567890")
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_voltage_limits_invalid_start(
+        self, control: ControlEndpoints
+    ) -> None:
+        """Test that invalid start_voltage raises ValueError."""
+        with pytest.raises(ValueError, match="start_voltage must be 39-52V"):
+            await control.set_ac_charge_voltage_limits(SERIAL, 30, 58)
 
-        assert status is False
+    @pytest.mark.asyncio
+    async def test_get_ac_charge_voltage_limits(self, control: ControlEndpoints) -> None:
+        """Test getting AC charge voltage limits (decivolts conversion)."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE": 400,
+                "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE": 580,
+            }
+        )
+
+        limits = await control.get_ac_charge_voltage_limits(SERIAL)
+        assert limits == {"start_voltage": 40, "end_voltage": 58}
