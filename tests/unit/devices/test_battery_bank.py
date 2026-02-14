@@ -428,6 +428,166 @@ class TestBatteryBankEnhancedProperties:
         assert battery_bank.current_text == "49.8"
         assert battery_bank.current_type == "charge"
 
+    def test_current_charge(self, mock_client):
+        """Test current property returns positive amps for charging."""
+        battery_info = BatteryInfo.model_construct(
+            batStatus="Charging",
+            currentText="49.8A",
+            currentType="charge",
+            soc=85,
+            vBat=538,
+            pCharge=2500,
+            pDisCharge=0,
+            maxBatteryCharge=200,
+            currentBatteryCharge=170.0,
+            batteryArray=[],
+        )
+        battery_bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+        assert battery_bank.current == 49.8
+
+    def test_current_discharge(self, mock_client):
+        """Test current property returns negative amps for discharging."""
+        battery_info = BatteryInfo.model_construct(
+            batStatus="Discharging",
+            currentText="18.1A",
+            currentType="discharge",
+            soc=60,
+            vBat=520,
+            pCharge=0,
+            pDisCharge=900,
+            maxBatteryCharge=200,
+            currentBatteryCharge=120.0,
+            batteryArray=[],
+        )
+        battery_bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+        assert battery_bank.current == -18.1
+
+    def test_current_no_suffix(self, mock_client):
+        """Test current property parses text without unit suffix."""
+        battery_info = BatteryInfo.model_construct(
+            batStatus="Charging",
+            currentText="49.8",
+            currentType="charge",
+            soc=85,
+            vBat=538,
+            pCharge=2500,
+            pDisCharge=0,
+            maxBatteryCharge=200,
+            currentBatteryCharge=170.0,
+            batteryArray=[],
+        )
+        battery_bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+        assert battery_bank.current == 49.8
+
+    def test_current_none_text(self, mock_client):
+        """Test current property returns None when currentText is None."""
+        battery_info = BatteryInfo.model_construct(
+            batStatus="Idle",
+            currentText=None,
+            currentType=None,
+            soc=50,
+            vBat=520,
+            pCharge=0,
+            pDisCharge=0,
+            maxBatteryCharge=200,
+            currentBatteryCharge=100.0,
+            batteryArray=[],
+        )
+        battery_bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+        assert battery_bank.current is None
+
+    def test_current_empty_string(self, mock_client):
+        """Test current property returns None for empty currentText."""
+        battery_info = BatteryInfo.model_construct(
+            batStatus="Idle",
+            currentText="",
+            currentType=None,
+            soc=50,
+            vBat=520,
+            pCharge=0,
+            pDisCharge=0,
+            maxBatteryCharge=200,
+            currentBatteryCharge=100.0,
+            batteryArray=[],
+        )
+        battery_bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+        assert battery_bank.current is None
+
+    def test_current_transport_precedence(self, mock_client):
+        """Test current property prefers transport data over cloud API."""
+        battery_info = BatteryInfo.model_construct(
+            batStatus="Charging",
+            currentText="49.8A",
+            currentType="charge",
+            soc=85,
+            vBat=538,
+            pCharge=2500,
+            pDisCharge=0,
+            maxBatteryCharge=200,
+            currentBatteryCharge=170.0,
+            batteryArray=[],
+        )
+        mock_inverter = Mock()
+        mock_inverter._transport_battery = None
+        mock_inverter._transport_runtime = Mock()
+        mock_inverter._transport_runtime.current = -22.5
+
+        battery_bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+            inverter=mock_inverter,
+        )
+        # Transport value (-22.5) takes precedence over cloud (49.8)
+        assert battery_bank.current == -22.5
+
+    def test_current_transport_zero_is_valid(self, mock_client):
+        """Test current property returns 0.0 from transport (falsy but valid)."""
+        battery_info = BatteryInfo.model_construct(
+            batStatus="Idle",
+            currentText="5.0A",
+            currentType="charge",
+            soc=50,
+            vBat=520,
+            pCharge=0,
+            pDisCharge=0,
+            maxBatteryCharge=200,
+            currentBatteryCharge=100.0,
+            batteryArray=[],
+        )
+        mock_inverter = Mock()
+        mock_inverter._transport_battery = None
+        mock_inverter._transport_runtime = Mock()
+        mock_inverter._transport_runtime.current = 0
+
+        battery_bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+            inverter=mock_inverter,
+        )
+        assert battery_bank.current == 0.0
+
     def test_battery_count_with_total_number(self, mock_client):
         """Test battery_count uses totalNumber when available."""
         battery_info = BatteryInfo.model_construct(
