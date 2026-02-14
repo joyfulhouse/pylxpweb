@@ -1072,6 +1072,381 @@ class ControlEndpoints(BaseEndpoint):
         value = response.parameters.get("FUNC_GREEN_EN", False)
         return bool(value)
 
+    # ============================================================================
+    # AC Charge Schedule Controls (Cloud API)
+    # ============================================================================
+
+    async def set_ac_charge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set AC charge time period schedule via cloud API.
+
+        The cloud API uses separate hour/minute parameters (not packed Modbus
+        format). Period 0 uses unsuffixed names, periods 1-2 use _1/_2 suffixes.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+
+        Example:
+            >>> # Set period 0: 11pm to 7am
+            >>> await client.control.set_ac_charge_schedule(
+            ...     "1234567890", 0, 23, 0, 7, 0
+            ... )
+        """
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+        if not 0 <= start_hour <= 23:
+            raise ValueError(f"start_hour must be 0-23, got {start_hour}")
+        if not 0 <= start_minute <= 59:
+            raise ValueError(f"start_minute must be 0-59, got {start_minute}")
+        if not 0 <= end_hour <= 23:
+            raise ValueError(f"end_hour must be 0-23, got {end_hour}")
+        if not 0 <= end_minute <= 59:
+            raise ValueError(f"end_minute must be 0-59, got {end_minute}")
+
+        suffix = "" if period == 0 else f"_{period}"
+
+        await self.write_parameter(
+            inverter_sn,
+            f"HOLD_AC_CHARGE_START_HOUR{suffix}",
+            str(start_hour),
+            client_type=client_type,
+        )
+        await self.write_parameter(
+            inverter_sn,
+            f"HOLD_AC_CHARGE_START_MINUTE{suffix}",
+            str(start_minute),
+            client_type=client_type,
+        )
+        await self.write_parameter(
+            inverter_sn,
+            f"HOLD_AC_CHARGE_END_HOUR{suffix}",
+            str(end_hour),
+            client_type=client_type,
+        )
+        return await self.write_parameter(
+            inverter_sn,
+            f"HOLD_AC_CHARGE_END_MINUTE{suffix}",
+            str(end_minute),
+            client_type=client_type,
+        )
+
+    async def get_ac_charge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+    ) -> dict[str, int]:
+        """Read AC charge time period schedule via cloud API.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+
+        Example:
+            >>> schedule = await client.control.get_ac_charge_schedule("1234567890", 0)
+            >>> schedule
+            {'start_hour': 23, 'start_minute': 0, 'end_hour': 7, 'end_minute': 0}
+        """
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+
+        suffix = "" if period == 0 else f"_{period}"
+        params = await self.read_device_parameters_ranges(inverter_sn)
+
+        return {
+            "start_hour": int(params.get(f"HOLD_AC_CHARGE_START_HOUR{suffix}", 0)),
+            "start_minute": int(params.get(f"HOLD_AC_CHARGE_START_MINUTE{suffix}", 0)),
+            "end_hour": int(params.get(f"HOLD_AC_CHARGE_END_HOUR{suffix}", 0)),
+            "end_minute": int(params.get(f"HOLD_AC_CHARGE_END_MINUTE{suffix}", 0)),
+        }
+
+    # ============================================================================
+    # AC Charge Type Controls (Cloud API)
+    # ============================================================================
+
+    async def set_ac_charge_type(
+        self,
+        inverter_sn: str,
+        charge_type: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set AC charge type via cloud API.
+
+        Controls what the AC charge schedule is based on. Uses the
+        BIT_AC_CHARGE_TYPE bit parameter in register 120.
+
+        Args:
+            inverter_sn: Inverter serial number
+            charge_type: 0 = Time, 1 = SOC/Volt, 2 = Time + SOC/Volt
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If charge_type is not 0, 1, or 2
+
+        Example:
+            >>> await client.control.set_ac_charge_type("1234567890", 0)  # Time
+        """
+        if charge_type not in (0, 1, 2):
+            raise ValueError(f"charge_type must be 0, 1, or 2, got {charge_type}")
+
+        return await self.control_bit_param(
+            inverter_sn,
+            "BIT_AC_CHARGE_TYPE",
+            charge_type,
+            client_type=client_type,
+        )
+
+    async def get_ac_charge_type(self, inverter_sn: str) -> int:
+        """Get AC charge type via cloud API.
+
+        Returns:
+            0 = Time, 1 = SOC/Volt, 2 = Time + SOC/Volt
+
+        Example:
+            >>> charge_type = await client.control.get_ac_charge_type("1234567890")
+            >>> charge_type  # 0 = Time
+            0
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        return int(params.get("BIT_AC_CHARGE_TYPE", 0))
+
+    # ============================================================================
+    # AC Charge SOC/Voltage Threshold Controls (Cloud API)
+    # ============================================================================
+
+    async def set_ac_charge_soc_limits(
+        self,
+        inverter_sn: str,
+        start_soc: int,
+        end_soc: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set AC charge start/stop SOC thresholds via cloud API.
+
+        These control when AC charging starts and stops based on battery SOC.
+        Active when charge type is SOC/Volt or Time+SOC/Volt.
+
+        Args:
+            inverter_sn: Inverter serial number
+            start_soc: Battery SOC (%) to start AC charging (0-90)
+            end_soc: Battery SOC (%) to stop AC charging (0-100)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If SOC values are out of range
+
+        Example:
+            >>> await client.control.set_ac_charge_soc_limits(
+            ...     "1234567890", start_soc=20, end_soc=100
+            ... )
+        """
+        if not 0 <= start_soc <= 90:
+            raise ValueError(f"start_soc must be 0-90, got {start_soc}")
+        if not 0 <= end_soc <= 100:
+            raise ValueError(f"end_soc must be 0-100, got {end_soc}")
+
+        await self.write_parameter(
+            inverter_sn,
+            "HOLD_AC_CHARGE_START_BATTERY_SOC",
+            str(start_soc),
+            client_type=client_type,
+        )
+        return await self.write_parameter(
+            inverter_sn,
+            "HOLD_AC_CHARGE_SOC_LIMIT",
+            str(end_soc),
+            client_type=client_type,
+        )
+
+    async def get_ac_charge_soc_limits(self, inverter_sn: str) -> dict[str, int]:
+        """Get AC charge start/stop SOC thresholds via cloud API.
+
+        Returns:
+            Dictionary with start_soc and end_soc
+
+        Example:
+            >>> limits = await client.control.get_ac_charge_soc_limits("1234567890")
+            >>> limits
+            {'start_soc': 20, 'end_soc': 100}
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        return {
+            "start_soc": int(params.get("HOLD_AC_CHARGE_START_BATTERY_SOC", 0)),
+            "end_soc": int(params.get("HOLD_AC_CHARGE_SOC_LIMIT", 0)),
+        }
+
+    async def set_ac_charge_voltage_limits(
+        self,
+        inverter_sn: str,
+        start_voltage: int,
+        end_voltage: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set AC charge start/stop voltage thresholds via cloud API.
+
+        Only whole volt values are accepted.
+
+        Args:
+            inverter_sn: Inverter serial number
+            start_voltage: Battery voltage (V) to start AC charging (39-52)
+            end_voltage: Battery voltage (V) to stop AC charging (48-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If voltage values are out of range
+
+        Example:
+            >>> await client.control.set_ac_charge_voltage_limits(
+            ...     "1234567890", start_voltage=40, end_voltage=58
+            ... )
+        """
+        if not 39 <= start_voltage <= 52:
+            raise ValueError(f"start_voltage must be 39-52V, got {start_voltage}")
+        if not 48 <= end_voltage <= 59:
+            raise ValueError(f"end_voltage must be 48-59V, got {end_voltage}")
+
+        # Cloud API expects decivolts (×10)
+        await self.write_parameter(
+            inverter_sn,
+            "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE",
+            str(start_voltage * 10),
+            client_type=client_type,
+        )
+        return await self.write_parameter(
+            inverter_sn,
+            "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE",
+            str(end_voltage * 10),
+            client_type=client_type,
+        )
+
+    async def get_ac_charge_voltage_limits(self, inverter_sn: str) -> dict[str, int]:
+        """Get AC charge start/stop voltage thresholds via cloud API.
+
+        Returns:
+            Dictionary with start_voltage and end_voltage (whole volts)
+
+        Example:
+            >>> limits = await client.control.get_ac_charge_voltage_limits("1234567890")
+            >>> limits
+            {'start_voltage': 40, 'end_voltage': 58}
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        start_raw = int(params.get("HOLD_AC_CHARGE_START_BATTERY_VOLTAGE", 0))
+        end_raw = int(params.get("HOLD_AC_CHARGE_END_BATTERY_VOLTAGE", 0))
+        return {
+            "start_voltage": start_raw // 10,
+            "end_voltage": end_raw // 10,
+        }
+
+    # ============================================================================
+    # Sporadic Charge Controls (Cloud API)
+    # ============================================================================
+
+    async def enable_sporadic_charge(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable sporadic charge via cloud API.
+
+        Sporadic charge is controlled via FUNC_SPORADIC_CHARGE (register 233,
+        bit 12). Confirmed via web UI toggle + Modbus read on FlexBOSS21.
+
+        Convenience wrapper for control_function(..., "FUNC_SPORADIC_CHARGE", True).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_sporadic_charge("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_SPORADIC_CHARGE", True, client_type=client_type
+        )
+
+    async def disable_sporadic_charge(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable sporadic charge via cloud API.
+
+        Convenience wrapper for control_function(..., "FUNC_SPORADIC_CHARGE", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_sporadic_charge("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_SPORADIC_CHARGE", False, client_type=client_type
+        )
+
+    async def get_sporadic_charge_status(self, inverter_sn: str) -> bool:
+        """Get sporadic charge enabled status via cloud API.
+
+        Reads register 233 and extracts FUNC_SPORADIC_CHARGE bit.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if sporadic charge is enabled
+
+        Example:
+            >>> enabled = await client.control.get_sporadic_charge_status("1234567890")
+        """
+        response = await self.read_parameters(inverter_sn, 233, 1)
+        value = response.parameters.get("FUNC_SPORADIC_CHARGE", False)
+        return bool(value)
+
+    # ============================================================================
+    # Utility Methods
+    # ============================================================================
+
     async def read_device_parameters_ranges(self, inverter_sn: str) -> dict[str, int | bool]:
         """Read all device parameters across three common register ranges.
 
