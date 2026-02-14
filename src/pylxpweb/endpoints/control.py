@@ -8,6 +8,7 @@ This module provides device control functionality including:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -496,6 +497,27 @@ class ControlEndpoints(BaseEndpoint):
         return SuccessResponse.model_validate(response)
 
     # ============================================================================
+    # Private Helpers
+    # ============================================================================
+
+    async def _get_function_status(self, inverter_sn: str, register: int, param_key: str) -> bool:
+        """Read a single function register and return a boolean flag.
+
+        Consolidates the repeated pattern of reading one register and extracting
+        a named boolean parameter from the response.
+
+        Args:
+            inverter_sn: Inverter serial number
+            register: Starting register address (e.g., 21, 110, 233)
+            param_key: Parameter key to extract (e.g., "FUNC_EPS_EN")
+
+        Returns:
+            True if the function is enabled, False otherwise
+        """
+        response = await self.read_parameters(inverter_sn, register, 1)
+        return bool(response.parameters.get(param_key, False))
+
+    # ============================================================================
     # Convenience Helper Methods
     # ============================================================================
 
@@ -713,9 +735,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("EPS mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_EPS_EN", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_EPS_EN")
 
     # ============================================================================
     # Working Mode Controls (Issue #16)
@@ -783,9 +803,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("AC charge mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_AC_CHARGE", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_AC_CHARGE")
 
     async def enable_pv_charge_priority(
         self, inverter_sn: str, client_type: str = "WEB"
@@ -849,9 +867,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("PV charge priority mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_FORCED_CHG_EN", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_FORCED_CHG_EN")
 
     async def enable_forced_discharge(
         self, inverter_sn: str, client_type: str = "WEB"
@@ -915,9 +931,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("Forced discharge mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_FORCED_DISCHG_EN", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_FORCED_DISCHG_EN")
 
     async def enable_peak_shaving_mode(
         self, inverter_sn: str, client_type: str = "WEB"
@@ -981,9 +995,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("Peak shaving mode is active")
         """
-        response = await self.read_parameters(inverter_sn, 21, 1)
-        value = response.parameters.get("FUNC_GRID_PEAK_SHAVING", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 21, "FUNC_GRID_PEAK_SHAVING")
 
     # ============================================================================
     # Green Mode Controls (Off-Grid Mode in Web Monitor)
@@ -1068,9 +1080,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("Green mode (off-grid) is active")
         """
-        response = await self.read_parameters(inverter_sn, 110, 1)
-        value = response.parameters.get("FUNC_GREEN_EN", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 110, "FUNC_GREEN_EN")
 
     # ============================================================================
     # AC Charge Schedule Controls (Cloud API)
@@ -1114,14 +1124,14 @@ class ControlEndpoints(BaseEndpoint):
         """
         if period not in (0, 1, 2):
             raise ValueError(f"period must be 0, 1, or 2, got {period}")
-        if not 0 <= start_hour <= 23:
-            raise ValueError(f"start_hour must be 0-23, got {start_hour}")
-        if not 0 <= start_minute <= 59:
-            raise ValueError(f"start_minute must be 0-59, got {start_minute}")
-        if not 0 <= end_hour <= 23:
-            raise ValueError(f"end_hour must be 0-23, got {end_hour}")
-        if not 0 <= end_minute <= 59:
-            raise ValueError(f"end_minute must be 0-59, got {end_minute}")
+        for name, value, upper in [
+            ("start_hour", start_hour, 23),
+            ("start_minute", start_minute, 59),
+            ("end_hour", end_hour, 23),
+            ("end_minute", end_minute, 59),
+        ]:
+            if not 0 <= value <= upper:
+                raise ValueError(f"{name} must be 0-{upper}, got {value}")
 
         suffix = "" if period == 0 else f"_{period}"
 
@@ -1439,9 +1449,7 @@ class ControlEndpoints(BaseEndpoint):
         Example:
             >>> enabled = await client.control.get_sporadic_charge_status("1234567890")
         """
-        response = await self.read_parameters(inverter_sn, 233, 1)
-        value = response.parameters.get("FUNC_SPORADIC_CHARGE", False)
-        return bool(value)
+        return await self._get_function_status(inverter_sn, 233, "FUNC_SPORADIC_CHARGE")
 
     # ============================================================================
     # Utility Methods
@@ -1468,28 +1476,19 @@ class ControlEndpoints(BaseEndpoint):
             >>> params["FUNC_EPS_EN"]
             True
         """
-        import asyncio
-
         # Read all three ranges concurrently
         range1_task = self.read_parameters(inverter_sn, 0, 127)
         range2_task = self.read_parameters(inverter_sn, 127, 127)
         range3_task = self.read_parameters(inverter_sn, 240, 127)
 
-        range1, range2, range3 = await asyncio.gather(
+        results = await asyncio.gather(
             range1_task, range2_task, range3_task, return_exceptions=True
         )
 
-        # Combine parameters from all ranges
         combined: dict[str, int | bool] = {}
-
-        if not isinstance(range1, BaseException):
-            combined.update(range1.parameters)
-
-        if not isinstance(range2, BaseException):
-            combined.update(range2.parameters)
-
-        if not isinstance(range3, BaseException):
-            combined.update(range3.parameters)
+        for result in results:
+            if not isinstance(result, BaseException):
+                combined.update(result.parameters)
 
         return combined
 
