@@ -272,3 +272,320 @@ class HybridInverter(GenericInverter):
             raise ValueError("power_percent must be between 0 and 100")
 
         return await self.write_parameters({HOLD_DISCHG_POWER_CMD: power_percent})
+
+    # ============================================================================
+    # Working Mode Time Schedule Operations
+    # ============================================================================
+    # Each mode supports 3 time periods (0, 1, 2).
+    # Registers use packed time format: value = (hour & 0xFF) | ((minute & 0xFF) << 8)
+    # Source: EG4-18KPV-12LV Modbus Protocol specification
+
+    async def set_ac_charge_schedule(
+        self,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+    ) -> bool:
+        """Set AC charge time period schedule.
+
+        Args:
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+
+        Example:
+            >>> # Set AC charge period 0: 11pm to 7am
+            >>> await inverter.set_ac_charge_schedule(0, 23, 0, 7, 0)
+            True
+        """
+        from pylxpweb.constants import HOLD_AC_CHARGE_TIME_0_START, pack_time
+
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+
+        start_reg = HOLD_AC_CHARGE_TIME_0_START + (period * 2)
+        end_reg = start_reg + 1
+
+        # Write each register individually — inverter rejects FC16 (write
+        # multiple) for schedule registers, only FC06 (write single) works.
+        await self.write_parameters({start_reg: pack_time(start_hour, start_minute)})
+        await self.write_parameters({end_reg: pack_time(end_hour, end_minute)})
+        return True
+
+    async def get_ac_charge_schedule(self, period: int) -> dict[str, int]:
+        """Read AC charge time period schedule.
+
+        Args:
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+
+        Example:
+            >>> schedule = await inverter.get_ac_charge_schedule(0)
+            >>> schedule
+            {'start_hour': 23, 'start_minute': 0, 'end_hour': 7, 'end_minute': 0}
+        """
+        from pylxpweb.constants import HOLD_AC_CHARGE_TIME_0_START, unpack_time
+
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+
+        start_reg = HOLD_AC_CHARGE_TIME_0_START + (period * 2)
+        params = await self.read_parameters(start_reg, 2)
+        start_val = params.get(f"reg_{start_reg}", 0)
+        end_val = params.get(f"reg_{start_reg + 1}", 0)
+        sh, sm = unpack_time(start_val)
+        eh, em = unpack_time(end_val)
+        return {"start_hour": sh, "start_minute": sm, "end_hour": eh, "end_minute": em}
+
+    async def get_ac_charge_type(self) -> int:
+        """Get AC charge type (what the charge schedule is based on).
+
+        Returns:
+            0 = Time, 1 = SOC/Volt, 2 = Time + SOC/Volt
+
+        Example:
+            >>> charge_type = await inverter.get_ac_charge_type()
+            >>> charge_type  # 0 = Time, 1 = SOC/Volt, 2 = Time+SOC/Volt
+            0
+        """
+        from pylxpweb.constants import (
+            AC_CHARGE_TYPE_MASK,
+            AC_CHARGE_TYPE_SHIFT,
+            HOLD_AC_CHARGE_TYPE_REGISTER,
+        )
+
+        params = await self.read_parameters(HOLD_AC_CHARGE_TYPE_REGISTER, 1)
+        raw: int = params.get(f"reg_{HOLD_AC_CHARGE_TYPE_REGISTER}", 0)
+        return (raw & AC_CHARGE_TYPE_MASK) >> AC_CHARGE_TYPE_SHIFT
+
+    async def set_ac_charge_type(self, charge_type: int) -> bool:
+        """Set AC charge type (what the charge schedule is based on).
+
+        Args:
+            charge_type: 0 = Time, 1 = SOC/Volt, 2 = Time + SOC/Volt
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If charge_type is not 0, 1, or 2
+
+        Example:
+            >>> await inverter.set_ac_charge_type(0)  # Time-based
+            True
+        """
+        from pylxpweb.constants import (
+            AC_CHARGE_TYPE_MASK,
+            AC_CHARGE_TYPE_SHIFT,
+            HOLD_AC_CHARGE_TYPE_REGISTER,
+        )
+
+        if charge_type not in (0, 1, 2):
+            raise ValueError(f"charge_type must be 0, 1, or 2, got {charge_type}")
+
+        # Read-modify-write to preserve other bits in register 120
+        params = await self.read_parameters(HOLD_AC_CHARGE_TYPE_REGISTER, 1)
+        current = params.get(f"reg_{HOLD_AC_CHARGE_TYPE_REGISTER}", 0)
+        new_value = (current & ~AC_CHARGE_TYPE_MASK) | (charge_type << AC_CHARGE_TYPE_SHIFT)
+
+        return await self.write_parameters({HOLD_AC_CHARGE_TYPE_REGISTER: new_value})
+
+    # ============================================================================
+    # AC Charge SOC/Voltage Threshold Operations
+    # ============================================================================
+    # These thresholds control when AC charging starts/stops based on battery
+    # SOC or voltage. Used when charge type is SOC/Volt or Time+SOC/Volt.
+    # Registers 158-161, verified via Modbus probe 2026-02-13.
+
+    async def get_ac_charge_soc_limits(self) -> dict[str, int]:
+        """Get AC charge start/stop SOC thresholds.
+
+        These control when AC charging starts and stops based on battery SOC.
+        Active when charge type is SOC/Volt or Time+SOC/Volt.
+
+        Returns:
+            Dictionary with:
+            - start_soc: Battery SOC (%) to start AC charging (0-90)
+            - end_soc: Battery SOC (%) to stop AC charging (0-100), reg 67
+
+        Example:
+            >>> limits = await inverter.get_ac_charge_soc_limits()
+            >>> limits
+            {'start_soc': 20, 'end_soc': 100}
+        """
+        from pylxpweb.constants import HOLD_AC_CHARGE_SOC_LIMIT, HOLD_AC_CHARGE_START_SOC
+
+        params = await self.read_parameters(HOLD_AC_CHARGE_START_SOC, 1)
+        start_soc: int = params.get(f"reg_{HOLD_AC_CHARGE_START_SOC}", 0)
+
+        # End SOC is register 67 (HOLD_AC_CHARGE_SOC_LIMIT), not 161
+        params2 = await self.read_parameters(HOLD_AC_CHARGE_SOC_LIMIT, 1)
+        end_soc: int = params2.get(f"reg_{HOLD_AC_CHARGE_SOC_LIMIT}", 0)
+
+        return {"start_soc": start_soc, "end_soc": end_soc}
+
+    async def set_ac_charge_soc_limits(self, start_soc: int, end_soc: int) -> bool:
+        """Set AC charge start/stop SOC thresholds.
+
+        Args:
+            start_soc: Battery SOC (%) to start AC charging (0-90)
+            end_soc: Battery SOC (%) to stop AC charging (0-100), reg 67
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If SOC values are out of range
+
+        Example:
+            >>> await inverter.set_ac_charge_soc_limits(start_soc=20, end_soc=100)
+            True
+        """
+        from pylxpweb.constants import HOLD_AC_CHARGE_SOC_LIMIT, HOLD_AC_CHARGE_START_SOC
+
+        if not 0 <= start_soc <= 90:
+            raise ValueError(f"start_soc must be 0-90, got {start_soc}")
+        if not 0 <= end_soc <= 100:
+            raise ValueError(f"end_soc must be 0-100, got {end_soc}")
+
+        return await self.write_parameters(
+            {HOLD_AC_CHARGE_START_SOC: start_soc, HOLD_AC_CHARGE_SOC_LIMIT: end_soc}
+        )
+
+    async def get_ac_charge_voltage_limits(self) -> dict[str, int]:
+        """Get AC charge start/stop voltage thresholds.
+
+        These control when AC charging starts and stops based on battery voltage.
+        Active when charge type is SOC/Volt or Time+SOC/Volt.
+
+        Returns:
+            Dictionary with:
+            - start_voltage: Battery voltage (V) to start AC charging
+            - end_voltage: Battery voltage (V) to stop AC charging
+
+        Example:
+            >>> limits = await inverter.get_ac_charge_voltage_limits()
+            >>> limits
+            {'start_voltage': 40, 'end_voltage': 58}
+        """
+        from pylxpweb.constants import HOLD_AC_CHARGE_START_VOLTAGE
+
+        params = await self.read_parameters(HOLD_AC_CHARGE_START_VOLTAGE, 2)
+        start_raw: int = params.get(f"reg_{HOLD_AC_CHARGE_START_VOLTAGE}", 0)
+        end_raw: int = params.get(f"reg_{HOLD_AC_CHARGE_START_VOLTAGE + 1}", 0)
+        return {"start_voltage": start_raw // 10, "end_voltage": end_raw // 10}
+
+    async def set_ac_charge_voltage_limits(self, start_voltage: int, end_voltage: int) -> bool:
+        """Set AC charge start/stop voltage thresholds.
+
+        Only whole volt values are accepted (inverter rejects fractional volts).
+
+        Args:
+            start_voltage: Battery voltage (V) to start AC charging (39-52)
+            end_voltage: Battery voltage (V) to stop AC charging (48-59)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If voltage values are out of range
+
+        Example:
+            >>> await inverter.set_ac_charge_voltage_limits(
+            ...     start_voltage=40, end_voltage=58
+            ... )
+            True
+        """
+        from pylxpweb.constants import HOLD_AC_CHARGE_END_VOLTAGE, HOLD_AC_CHARGE_START_VOLTAGE
+
+        if not isinstance(start_voltage, int):
+            raise ValueError(f"start_voltage must be a whole number, got {start_voltage}")
+        if not isinstance(end_voltage, int):
+            raise ValueError(f"end_voltage must be a whole number, got {end_voltage}")
+        if not 39 <= start_voltage <= 52:
+            raise ValueError(f"start_voltage must be 39-52V, got {start_voltage}")
+        if not 48 <= end_voltage <= 59:
+            raise ValueError(f"end_voltage must be 48-59V, got {end_voltage}")
+
+        return await self.write_parameters(
+            {
+                HOLD_AC_CHARGE_START_VOLTAGE: start_voltage * 10,
+                HOLD_AC_CHARGE_END_VOLTAGE: end_voltage * 10,
+            }
+        )
+
+    # ============================================================================
+    # Sporadic Charge Operations
+    # ============================================================================
+    # Sporadic charge is controlled via register 233, bit 12.
+    # Confirmed via web UI toggle + Modbus read on FlexBOSS21 (FAAB-2525).
+
+    async def get_sporadic_charge(self) -> bool:
+        """Get sporadic charge enabled state.
+
+        Returns:
+            True if sporadic charge is enabled, False otherwise
+
+        Example:
+            >>> enabled = await inverter.get_sporadic_charge()
+            >>> enabled
+            True
+        """
+        from pylxpweb.constants import FUNC_EN_2_BIT_SPORADIC_CHARGE, FUNC_EN_2_REGISTER
+
+        params = await self.read_parameters(FUNC_EN_2_REGISTER, 1)
+        value = params.get(f"reg_{FUNC_EN_2_REGISTER}", 0)
+        return bool(value & (1 << FUNC_EN_2_BIT_SPORADIC_CHARGE))
+
+    async def set_sporadic_charge(self, enabled: bool) -> bool:
+        """Enable or disable sporadic charge.
+
+        Uses read-modify-write to preserve other bits in register 233.
+
+        Args:
+            enabled: True to enable sporadic charge, False to disable
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_sporadic_charge(True)
+            True
+        """
+        from pylxpweb.constants import FUNC_EN_2_BIT_SPORADIC_CHARGE, FUNC_EN_2_REGISTER
+
+        # Read-modify-write to preserve other bits in register 233
+        params = await self.read_parameters(FUNC_EN_2_REGISTER, 1)
+        current_value = params.get(f"reg_{FUNC_EN_2_REGISTER}", 0)
+
+        if enabled:
+            new_value = current_value | (1 << FUNC_EN_2_BIT_SPORADIC_CHARGE)
+        else:
+            new_value = current_value & ~(1 << FUNC_EN_2_BIT_SPORADIC_CHARGE)
+
+        return await self.write_parameters({FUNC_EN_2_REGISTER: new_value})
+
+    # TODO: Charge priority schedule (regs 76-81) and forced discharge schedule
+    # (regs 82-89) are not yet implemented. The existing HOLD_DISCHG_* constants
+    # (regs 74-79) are named as "Discharge" but per the EG4-18KPV-12LV Modbus
+    # Protocol PDF, these are actually "Charging Priority" (ChgFirst*) registers.
+    # The real forced discharge registers start at 82. Additionally, there may be
+    # variation in register mappings between Luxpower-branded and EG4-branded
+    # inverters — the EG4 PDF is the only verified source, and further investigation
+    # is needed across different brands/models. Once the mismapping is investigated
+    # and resolved, they can follow the same pattern as set_ac_charge_schedule().

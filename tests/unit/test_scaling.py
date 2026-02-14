@@ -15,9 +15,11 @@ from pylxpweb.constants import (
     ScaleFactor,
     _get_scaling_for_field,
     apply_scale,
+    pack_time,
     scale_battery_value,
     scale_energy_value,
     scale_runtime_value,
+    unpack_time,
 )
 
 
@@ -386,6 +388,87 @@ class TestEdgeCases:
         # 1000000÷10=100000kWh
         assert scale_energy_value("totalYielding", 1000000, to_kwh=True) == 100000.0
         assert scale_runtime_value("pToUser", 15000) == 15000.0
+
+
+class TestPackTime:
+    """Test pack_time() function."""
+
+    def test_pack_time_basic(self) -> None:
+        """Test basic time packing."""
+        # 23:30 → 23 | (30 << 8) = 23 + 7680 = 7703
+        assert pack_time(23, 30) == (23 | (30 << 8))
+        assert pack_time(23, 30) == 7703
+
+    def test_pack_time_midnight(self) -> None:
+        """Test midnight packing."""
+        assert pack_time(0, 0) == 0
+
+    def test_pack_time_max_values(self) -> None:
+        """Test maximum valid hour and minute."""
+        result = pack_time(23, 59)
+        assert result == (23 | (59 << 8))
+
+    def test_pack_time_hour_only(self) -> None:
+        """Test packing with zero minutes."""
+        assert pack_time(7, 0) == 7
+        assert pack_time(12, 0) == 12
+
+    def test_pack_time_minute_only(self) -> None:
+        """Test packing with zero hour."""
+        assert pack_time(0, 30) == (30 << 8)
+
+    def test_pack_time_invalid_hour_negative(self) -> None:
+        """Test invalid negative hour raises ValueError."""
+        with pytest.raises(ValueError, match="Hour must be 0-23"):
+            pack_time(-1, 0)
+
+    def test_pack_time_invalid_hour_too_high(self) -> None:
+        """Test invalid hour > 23 raises ValueError."""
+        with pytest.raises(ValueError, match="Hour must be 0-23"):
+            pack_time(24, 0)
+
+    def test_pack_time_invalid_minute_negative(self) -> None:
+        """Test invalid negative minute raises ValueError."""
+        with pytest.raises(ValueError, match="Minute must be 0-59"):
+            pack_time(0, -1)
+
+    def test_pack_time_invalid_minute_too_high(self) -> None:
+        """Test invalid minute > 59 raises ValueError."""
+        with pytest.raises(ValueError, match="Minute must be 0-59"):
+            pack_time(0, 60)
+
+
+class TestUnpackTime:
+    """Test unpack_time() function."""
+
+    def test_unpack_time_basic(self) -> None:
+        """Test basic time unpacking."""
+        assert unpack_time(7703) == (23, 30)
+
+    def test_unpack_time_midnight(self) -> None:
+        """Test midnight unpacking."""
+        assert unpack_time(0) == (0, 0)
+
+    def test_unpack_time_max_values(self) -> None:
+        """Test unpacking maximum valid values."""
+        packed = 23 | (59 << 8)
+        assert unpack_time(packed) == (23, 59)
+
+    def test_pack_unpack_roundtrip(self) -> None:
+        """Test pack then unpack returns original values."""
+        test_cases = [(0, 0), (7, 0), (23, 30), (12, 45), (0, 59), (23, 59)]
+        for hour, minute in test_cases:
+            packed = pack_time(hour, minute)
+            unpacked = unpack_time(packed)
+            assert unpacked == (hour, minute), f"Roundtrip failed for {hour}:{minute}"
+
+    def test_unpack_time_hour_only(self) -> None:
+        """Test unpacking value with zero minutes."""
+        assert unpack_time(7) == (7, 0)
+
+    def test_unpack_time_minute_only(self) -> None:
+        """Test unpacking value with zero hour."""
+        assert unpack_time(30 << 8) == (0, 30)
 
 
 if __name__ == "__main__":

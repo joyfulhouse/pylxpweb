@@ -477,3 +477,57 @@ def scale_energy_value(field_name: str, value: int | float, to_kwh: bool = True)
     if not to_kwh:
         return kwh_value * 1000.0
     return kwh_value
+
+
+# ============================================================================
+# PACKED TIME HELPERS (Modbus Register Format)
+# ============================================================================
+# EG4 Modbus spec packs hour + minute into a single 16-bit register:
+#   value = (hour & 0xFF) | ((minute & 0xFF) << 8)
+# Used by AC Charge, Charge Priority, and Forced Discharge time schedules.
+
+
+def pack_time(hour: int, minute: int) -> int:
+    """Pack hour and minute into a Modbus register value.
+
+    Format per EG4 Modbus spec: hour in low byte, minute in high byte.
+
+    Args:
+        hour: Hour (0-23)
+        minute: Minute (0-59)
+
+    Returns:
+        Packed 16-bit register value
+
+    Raises:
+        ValueError: If hour or minute is out of range
+
+    Example:
+        >>> pack_time(23, 30)
+        7703
+        >>> pack_time(0, 0)
+        0
+    """
+    if not 0 <= hour <= 23:
+        raise ValueError(f"Hour must be 0-23, got {hour}")
+    if not 0 <= minute <= 59:
+        raise ValueError(f"Minute must be 0-59, got {minute}")
+    return (hour & 0xFF) | ((minute & 0xFF) << 8)
+
+
+def unpack_time(value: int) -> tuple[int, int]:
+    """Unpack a Modbus register value into (hour, minute).
+
+    Args:
+        value: Packed 16-bit register value
+
+    Returns:
+        Tuple of (hour, minute)
+
+    Example:
+        >>> unpack_time(7703)
+        (23, 30)
+        >>> unpack_time(0)
+        (0, 0)
+    """
+    return (value & 0xFF, (value >> 8) & 0xFF)

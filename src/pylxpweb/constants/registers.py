@@ -23,6 +23,10 @@ FUNC_EN_BIT_SET_TO_STANDBY = 9  # 0=Standby, 1=Power On
 FUNC_EN_BIT_FORCED_DISCHG_EN = 10  # Forced discharge enable
 FUNC_EN_BIT_FORCED_CHG_EN = 11  # Force charge enable
 
+# Extended Function Enable Register 2 (Address 233) - Bit Field
+FUNC_EN_2_REGISTER = 233
+FUNC_EN_2_BIT_SPORADIC_CHARGE = 12  # Sporadic charge enable (confirmed via Modbus)
+
 # AC Charge Parameters
 HOLD_AC_CHARGE_POWER_CMD = 66  # AC charge power in 100W units (0-150 = 0.0-15.0 kW)
 HOLD_AC_CHARGE_SOC_LIMIT = 67  # AC charge SOC limit (0-100%)
@@ -33,7 +37,61 @@ HOLD_AC_CHARGE_END_MIN_1 = 71  # Time period 1 end minute (0-59)
 HOLD_AC_CHARGE_ENABLE_1 = 72  # Time period 1 enable (0=Off, 1=On)
 HOLD_AC_CHARGE_ENABLE_2 = 73  # Time period 2 enable (0=Off, 1=On)
 
+# AC Charge Time Schedule (regs 68-73) - packed time format (Modbus)
+# Format: value = (hour & 0xFF) | ((minute & 0xFF) << 8)
+# Each register stores hour (low byte) + minute (high byte)
+HOLD_AC_CHARGE_TIME_0_START = 68  # Period 0 start (packed hour|minute)
+HOLD_AC_CHARGE_TIME_0_END = 69  # Period 0 end
+HOLD_AC_CHARGE_TIME_1_START = 70  # Period 1 start
+HOLD_AC_CHARGE_TIME_1_END = 71  # Period 1 end
+HOLD_AC_CHARGE_TIME_2_START = 72  # Period 2 start
+HOLD_AC_CHARGE_TIME_2_END = 73  # Period 2 end
+
+# AC Charge Type (register 120, bits 1-3)
+# Controls what the AC charge schedule is based on.
+# Verified via Modbus probe on FlexBOSS21 (FAAB-2525): bit field at (reg120 >> 1) & 0x07
+#
+# EG4 web UI presents 3 options, mapped to these values:
+#   0 = Time         (reg 120 = 0)
+#   1 = SOC/Volt     (reg 120 = 2)
+#   2 = Time+SOC/Volt (reg 120 = 4)
+#
+# Reference docs (MODBUS_WRITABLE_REGISTERS_ANALYSIS.md) indicate bits 1-3 support
+# up to 6 modes: 0=Disable, 1=By Time, 2=By Voltage, 3=By SOC, 4=Voltage+Time,
+# 5=SOC+Time. Only the 3 values above have been empirically verified; the inverter
+# may support additional modes not exposed by the EG4 web interface.
+HOLD_AC_CHARGE_TYPE_REGISTER = 120
+AC_CHARGE_TYPE_SHIFT = 1  # 3-bit field starting at bit 1
+AC_CHARGE_TYPE_MASK = 0x0E  # Bits 1-3 (0b00001110)
+AC_CHARGE_TYPE_TIME = 0  # Time-based schedule only
+AC_CHARGE_TYPE_SOC_VOLT = 1  # SOC/Voltage-based only
+AC_CHARGE_TYPE_TIME_SOC_VOLT = 2  # Time + SOC/Voltage combined
+
+# AC Charge SOC/Voltage Thresholds (regs 158-161)
+# These control when AC charging starts/stops based on battery SOC or voltage.
+# Used when AC charge type is set to SOC/Volt or Time+SOC/Volt.
+# Verified via Modbus probe 2026-02-13.
+HOLD_AC_CHARGE_START_VOLTAGE = 158  # Start AC charge voltage (÷10, whole volts only)
+HOLD_AC_CHARGE_END_VOLTAGE = 159  # Stop AC charge voltage (÷10, whole volts only)
+HOLD_AC_CHARGE_START_SOC = 160  # Battery SOC to start AC charging (0-90%)
+# Note: Stop AC Charge SOC is register 67 (HOLD_AC_CHARGE_SOC_LIMIT), NOT register 161.
+# Register 161 is read-only via Modbus and not used for this purpose.
+# Verified on FlexBOSS21 firmware FAAB-2525.
+
 # Discharge Parameters
+# TODO: Registers 74-79 are named HOLD_DISCHG_* but per the EG4-18KPV-12LV Modbus
+# Protocol PDF, regs 74-81 are actually "Charging Priority" (ChgFirst*) parameters,
+# NOT discharge. The real forced discharge registers are 82-89. These names are kept
+# for cloud API compatibility but should be investigated and corrected in a future
+# breaking change. See also: set_discharge_power() in hybrid.py writes reg 74.
+# Additionally, there may be variation in register mappings between Luxpower-branded
+# and EG4-branded inverters (the EG4 PDF is the only verified source). Further
+# investigation is needed across different inverter brands/models before correcting
+# these mappings.
+# TODO: Forced discharge schedule (regs 82-89) and charge priority schedule
+# (regs 76-81) are not yet exposed as methods due to this naming discrepancy.
+# Once the mismapping is investigated and resolved, schedule methods similar to
+# set_ac_charge_schedule() can be added for both modes.
 HOLD_DISCHG_POWER_CMD = 74  # Discharge power command (0-100%)
 HOLD_DISCHG_START_HOUR_1 = 75  # Discharge start hour 1 (0-23)
 HOLD_DISCHG_START_MIN_1 = 76  # Discharge start minute 1 (0-59)
@@ -404,10 +462,9 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # Register 233: Extended function enable 2 bit field (verified via Modbus probe 2026-02-13)
     # API returns 9 params for this register (alphabetical, NOT bit order).
     # Bit 1 (FUNC_BATTERY_BACKUP_CTRL) confirmed via live toggle test.
-    # Bit 12 observed set (likely FUNC_QUICK_CHARGE_CTRL enable/disable flag).
+    # Bit 12 (FUNC_SPORADIC_CHARGE) confirmed via web UI toggle + Modbus read (0→4096, 4096→0).
     # Other known params: BIT_DRY_CONTRACTOR_MULTIPLEX, BIT_LCD_TYPE, BIT_OUT_CT_POSITION,
-    # FUNC_BATTERY_CALIBRATION_EN, FUNC_ENERTEK_WORKING_MODE, FUNC_FAN_DC3,
-    # FUNC_SPORADIC_CHARGE
+    # FUNC_BATTERY_CALIBRATION_EN, FUNC_ENERTEK_WORKING_MODE, FUNC_FAN_DC3
     233: [
         "FUNC_233_BIT0",  # Bit 0: unknown
         "FUNC_BATTERY_BACKUP_CTRL",  # Bit 1: Battery backup control (confirmed)
@@ -421,7 +478,7 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "FUNC_233_BIT9",  # Bit 9: unknown
         "FUNC_233_BIT10",  # Bit 10: unknown
         "FUNC_233_BIT11",  # Bit 11: unknown
-        "FUNC_233_BIT12",  # Bit 12: unknown (observed set, possibly FUNC_QUICK_CHARGE_CTRL)
+        "FUNC_SPORADIC_CHARGE",  # Bit 12: Sporadic charge enable (confirmed)
         "FUNC_233_BIT13",  # Bit 13: unknown
         "FUNC_233_BIT14",  # Bit 14: unknown
         "FUNC_233_BIT15",  # Bit 15: unknown

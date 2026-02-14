@@ -93,6 +93,11 @@ from .locations import (
 # REGISTERS MODULE
 # ============================================================================
 from .registers import (
+    AC_CHARGE_TYPE_MASK,
+    AC_CHARGE_TYPE_SHIFT,
+    AC_CHARGE_TYPE_SOC_VOLT,
+    AC_CHARGE_TYPE_TIME,
+    AC_CHARGE_TYPE_TIME_SOC_VOLT,
     BATTERY_STATUS_MAP,
     DEVICE_TYPE_CODE_FLEXBOSS,
     DEVICE_TYPE_CODE_GRIDBOSS,
@@ -100,6 +105,9 @@ from .registers import (
     DEVICE_TYPE_CODE_LXP_LB,
     DEVICE_TYPE_CODE_PV_SERIES,
     DEVICE_TYPE_CODE_SNA,
+    FUNC_EN_2_BIT_SPORADIC_CHARGE,
+    # Extended function enable register 2
+    FUNC_EN_2_REGISTER,
     FUNC_EN_BIT_AC_CHARGE_EN,
     FUNC_EN_BIT_EPS_EN,
     FUNC_EN_BIT_FORCED_CHG_EN,
@@ -114,11 +122,23 @@ from .registers import (
     HOLD_AC_CHARGE_ENABLE_2,
     HOLD_AC_CHARGE_END_HOUR_1,
     HOLD_AC_CHARGE_END_MIN_1,
+    HOLD_AC_CHARGE_END_VOLTAGE,
     # AC charge parameters
     HOLD_AC_CHARGE_POWER_CMD,
     HOLD_AC_CHARGE_SOC_LIMIT,
     HOLD_AC_CHARGE_START_HOUR_1,
     HOLD_AC_CHARGE_START_MIN_1,
+    HOLD_AC_CHARGE_START_SOC,
+    # AC Charge SOC/Voltage thresholds
+    HOLD_AC_CHARGE_START_VOLTAGE,
+    # AC Charge time schedule (packed time format)
+    HOLD_AC_CHARGE_TIME_0_END,
+    HOLD_AC_CHARGE_TIME_0_START,
+    HOLD_AC_CHARGE_TIME_1_END,
+    HOLD_AC_CHARGE_TIME_1_START,
+    HOLD_AC_CHARGE_TIME_2_END,
+    HOLD_AC_CHARGE_TIME_2_START,
+    HOLD_AC_CHARGE_TYPE_REGISTER,
     # Battery protection parameters
     HOLD_BAT_VOLT_MAX_CHG,
     HOLD_BAT_VOLT_MAX_DISCHG,
@@ -276,9 +296,12 @@ from .scaling import (
     apply_scale,
     get_battery_field_precision,
     get_precision,
+    # Packed time helpers (Modbus register format)
+    pack_time,
     scale_battery_value,
     scale_energy_value,
     scale_runtime_value,
+    unpack_time,
 )
 
 # ============================================================================
@@ -304,6 +327,17 @@ __all__ = [
     "get_region_enum",
     "get_continent_enum",
     "get_continent_region_from_country",
+    # AC charge type
+    "AC_CHARGE_TYPE_SHIFT",
+    "AC_CHARGE_TYPE_MASK",
+    "AC_CHARGE_TYPE_TIME",
+    "AC_CHARGE_TYPE_SOC_VOLT",
+    "AC_CHARGE_TYPE_TIME_SOC_VOLT",
+    "HOLD_AC_CHARGE_TYPE_REGISTER",
+    # AC charge SOC/voltage thresholds
+    "HOLD_AC_CHARGE_START_VOLTAGE",
+    "HOLD_AC_CHARGE_END_VOLTAGE",
+    "HOLD_AC_CHARGE_START_SOC",
     # Registers
     "FUNC_EN_REGISTER",
     "FUNC_EN_BIT_EPS_EN",
@@ -311,6 +345,8 @@ __all__ = [
     "FUNC_EN_BIT_SET_TO_STANDBY",
     "FUNC_EN_BIT_FORCED_DISCHG_EN",
     "FUNC_EN_BIT_FORCED_CHG_EN",
+    "FUNC_EN_2_REGISTER",
+    "FUNC_EN_2_BIT_SPORADIC_CHARGE",
     "HOLD_AC_CHARGE_POWER_CMD",
     "HOLD_AC_CHARGE_SOC_LIMIT",
     "HOLD_AC_CHARGE_START_HOUR_1",
@@ -319,6 +355,12 @@ __all__ = [
     "HOLD_AC_CHARGE_END_MIN_1",
     "HOLD_AC_CHARGE_ENABLE_1",
     "HOLD_AC_CHARGE_ENABLE_2",
+    "HOLD_AC_CHARGE_TIME_0_START",
+    "HOLD_AC_CHARGE_TIME_0_END",
+    "HOLD_AC_CHARGE_TIME_1_START",
+    "HOLD_AC_CHARGE_TIME_1_END",
+    "HOLD_AC_CHARGE_TIME_2_START",
+    "HOLD_AC_CHARGE_TIME_2_END",
     "HOLD_DISCHG_POWER_CMD",
     "HOLD_DISCHG_START_HOUR_1",
     "HOLD_DISCHG_START_MIN_1",
@@ -464,6 +506,8 @@ __all__ = [
     "apply_scale",
     "get_precision",
     "get_battery_field_precision",
+    "pack_time",
+    "unpack_time",
     "scale_runtime_value",
     "scale_battery_value",
     "scale_energy_value",
