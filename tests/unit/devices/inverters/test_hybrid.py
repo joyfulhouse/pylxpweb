@@ -1024,9 +1024,7 @@ class TestSporadicChargeOperations:
         result = await inverter.set_sporadic_charge(True)
 
         # Bit 12 = 4096
-        mock_client.api.control.write_parameters.assert_called_once_with(
-            "1234567890", {233: 4096}
-        )
+        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {233: 4096})
         assert result is True
 
     @pytest.mark.asyncio
@@ -1046,9 +1044,7 @@ class TestSporadicChargeOperations:
 
         result = await inverter.set_sporadic_charge(False)
 
-        mock_client.api.control.write_parameters.assert_called_once_with(
-            "1234567890", {233: 0}
-        )
+        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {233: 0})
         assert result is True
 
     @pytest.mark.asyncio
@@ -1072,9 +1068,7 @@ class TestSporadicChargeOperations:
         result = await inverter.set_sporadic_charge(True)
 
         # Should set bit 12 (4096) while preserving bit 1 (2) = 4098
-        mock_client.api.control.write_parameters.assert_called_once_with(
-            "1234567890", {233: 4098}
-        )
+        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {233: 4098})
         assert result is True
 
     @pytest.mark.asyncio
@@ -1098,7 +1092,5 @@ class TestSporadicChargeOperations:
         result = await inverter.set_sporadic_charge(False)
 
         # Should clear bit 12 while preserving bit 1 (2)
-        mock_client.api.control.write_parameters.assert_called_once_with(
-            "1234567890", {233: 2}
-        )
+        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {233: 2})
         assert result is True

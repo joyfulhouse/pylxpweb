@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
 
 from pylxpweb.endpoints.base import BaseEndpoint
 from pylxpweb.models import (
@@ -19,22 +18,11 @@ from pylxpweb.models import (
     SuccessResponse,
 )
 
-if TYPE_CHECKING:
-    from pylxpweb.client import LuxpowerClient
-
 _LOGGER = logging.getLogger(__name__)
 
 
 class ControlEndpoints(BaseEndpoint):
     """Device control endpoints for parameters, functions, and quick charge."""
-
-    def __init__(self, client: LuxpowerClient) -> None:
-        """Initialize control endpoints.
-
-        Args:
-            client: The parent LuxpowerClient instance
-        """
-        super().__init__(client)
 
     async def read_parameters(
         self,

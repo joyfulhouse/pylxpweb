@@ -9,12 +9,7 @@ This module provides the HybridInverter class for hybrid inverters that support:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from .generic import GenericInverter
-
-if TYPE_CHECKING:
-    pass
 
 
 class HybridInverter(GenericInverter):
@@ -46,6 +41,29 @@ class HybridInverter(GenericInverter):
         await inverter.set_forced_charge(True)
         ```
     """
+
+    # ============================================================================
+    # Private Helpers
+    # ============================================================================
+
+    async def _set_register_bit(self, register: int, bit: int, enabled: bool) -> bool:
+        """Read-modify-write a single bit in a register.
+
+        Reads the current register value, sets or clears the specified bit,
+        and writes the new value back. Other bits are preserved.
+
+        Args:
+            register: Register address
+            bit: Bit number to set or clear
+            enabled: True to set bit, False to clear
+
+        Returns:
+            True if successful
+        """
+        params = await self.read_parameters(register, 1)
+        current_value = params.get(f"reg_{register}", 0)
+        new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
+        return await self.write_parameters({register: new_value})
 
     # ============================================================================
     # Hybrid-Specific Control Operations
@@ -166,16 +184,7 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EN_BIT_EPS_EN, FUNC_EN_REGISTER
 
-        # Read current function enable register
-        params = await self.read_parameters(FUNC_EN_REGISTER, 1)
-        current_value = params.get(f"reg_{FUNC_EN_REGISTER}", 0)
-
-        if enabled:
-            new_value = current_value | (1 << FUNC_EN_BIT_EPS_EN)
-        else:
-            new_value = current_value & ~(1 << FUNC_EN_BIT_EPS_EN)
-
-        return await self.write_parameters({FUNC_EN_REGISTER: new_value})
+        return await self._set_register_bit(FUNC_EN_REGISTER, FUNC_EN_BIT_EPS_EN, enabled)
 
     async def set_forced_charge(self, enabled: bool) -> bool:
         """Enable or disable forced charge mode.
@@ -194,15 +203,7 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EN_BIT_FORCED_CHG_EN, FUNC_EN_REGISTER
 
-        params = await self.read_parameters(FUNC_EN_REGISTER, 1)
-        current_value = params.get(f"reg_{FUNC_EN_REGISTER}", 0)
-
-        if enabled:
-            new_value = current_value | (1 << FUNC_EN_BIT_FORCED_CHG_EN)
-        else:
-            new_value = current_value & ~(1 << FUNC_EN_BIT_FORCED_CHG_EN)
-
-        return await self.write_parameters({FUNC_EN_REGISTER: new_value})
+        return await self._set_register_bit(FUNC_EN_REGISTER, FUNC_EN_BIT_FORCED_CHG_EN, enabled)
 
     async def set_forced_discharge(self, enabled: bool) -> bool:
         """Enable or disable forced discharge mode.
@@ -221,15 +222,7 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EN_BIT_FORCED_DISCHG_EN, FUNC_EN_REGISTER
 
-        params = await self.read_parameters(FUNC_EN_REGISTER, 1)
-        current_value = params.get(f"reg_{FUNC_EN_REGISTER}", 0)
-
-        if enabled:
-            new_value = current_value | (1 << FUNC_EN_BIT_FORCED_DISCHG_EN)
-        else:
-            new_value = current_value & ~(1 << FUNC_EN_BIT_FORCED_DISCHG_EN)
-
-        return await self.write_parameters({FUNC_EN_REGISTER: new_value})
+        return await self._set_register_bit(FUNC_EN_REGISTER, FUNC_EN_BIT_FORCED_DISCHG_EN, enabled)
 
     async def get_charge_discharge_power(self) -> dict[str, int]:
         """Get charge and discharge power settings.
@@ -569,16 +562,9 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EN_2_BIT_SPORADIC_CHARGE, FUNC_EN_2_REGISTER
 
-        # Read-modify-write to preserve other bits in register 233
-        params = await self.read_parameters(FUNC_EN_2_REGISTER, 1)
-        current_value = params.get(f"reg_{FUNC_EN_2_REGISTER}", 0)
-
-        if enabled:
-            new_value = current_value | (1 << FUNC_EN_2_BIT_SPORADIC_CHARGE)
-        else:
-            new_value = current_value & ~(1 << FUNC_EN_2_BIT_SPORADIC_CHARGE)
-
-        return await self.write_parameters({FUNC_EN_2_REGISTER: new_value})
+        return await self._set_register_bit(
+            FUNC_EN_2_REGISTER, FUNC_EN_2_BIT_SPORADIC_CHARGE, enabled
+        )
 
     # TODO: Charge priority schedule (regs 76-81) and forced discharge schedule
     # (regs 82-89) are not yet implemented. The existing HOLD_DISCHG_* constants
