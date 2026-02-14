@@ -2,18 +2,10 @@
 
 import pytest
 
+from pylxpweb import LuxpowerClient
+
 # Mark all tests in this module as integration tests
 pytestmark = pytest.mark.integration
-
-# Import redaction helper
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from pylxpweb import LuxpowerClient
 
 
 @pytest.mark.asyncio

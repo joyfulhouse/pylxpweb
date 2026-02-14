@@ -108,7 +108,7 @@ class HybridInverter(GenericInverter):
         return {
             "enabled": ac_charge_enabled,
             "power_percent": ac_params.get("HOLD_AC_CHARGE_POWER_CMD", 0),
-            "soc_limit": ac_params.get("HOLD_AC_CHARGE_SOC_LIMIT"),
+            "soc_limit": ac_params.get("HOLD_AC_CHARGE_SOC_LIMIT", 0),
             "schedule1_enabled": bool(ac_params.get("HOLD_AC_CHARGE_ENABLE_1", 0)),
             "schedule2_enabled": bool(ac_params.get("HOLD_AC_CHARGE_ENABLE_2", 0)),
         }
@@ -243,7 +243,7 @@ class HybridInverter(GenericInverter):
 
         return {
             "charge_power_percent": params.get("HOLD_AC_CHARGE_POWER_CMD", 0),
-            "discharge_power_percent": params.get("HOLD_DISCHG_POWER_CMD"),
+            "discharge_power_percent": params.get("HOLD_DISCHG_POWER_CMD", 0),
         }
 
     async def set_discharge_power(self, power_percent: int) -> bool:

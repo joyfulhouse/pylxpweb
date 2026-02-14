@@ -6,17 +6,14 @@ These tests require valid credentials in .env file.
 from __future__ import annotations
 
 import os
-
-import pytest
-
-# Mark all tests in this module as integration tests
-pytestmark = pytest.mark.integration
-
-# Import redaction helper
 import sys
 from pathlib import Path
 
+# Add parent test directory to path for conftest helper imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pytest
+from conftest import redact_sensitive
 
 from pylxpweb.client import LuxpowerClient
 from pylxpweb.models import (
@@ -25,8 +22,8 @@ from pylxpweb.models import (
     UpdateEligibilityStatus,
 )
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from conftest import redact_sensitive
+# Mark all tests in this module as integration tests
+pytestmark = pytest.mark.integration
 
 
 def load_env() -> dict[str, str]:
