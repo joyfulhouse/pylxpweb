@@ -22,6 +22,7 @@ from pylxpweb.constants import (
 )
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 from pylxpweb.models import OperatingMode
+from pylxpweb.transports.data import InverterEnergyData
 
 from .._firmware_update_mixin import FirmwareUpdateMixin
 from ..base import BaseDevice
@@ -551,7 +552,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 if self._transport is not None:
                     # Use transport for direct local communication
                     transport_data = await self._transport.read_runtime()
-                    if self.validate_data and transport_data.is_corrupt():
+                    if self.validate_data and transport_data.is_corrupt(
+                        max_power_watts=self._max_power_watts,
+                    ):
                         _LOGGER.warning(
                             "Corrupt runtime data for %s, keeping cached",
                             self.serial_number,
@@ -591,6 +594,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                             self.serial_number,
                         )
                         return
+                    if self._transport_energy is not None and not self._is_energy_valid(
+                        self._transport_energy.lifetime_energy_values(),
+                        transport_data.lifetime_energy_values(),
+                    ):
+                        return  # keep cached energy data
                     self._transport_energy = transport_data
                     self._energy_cache_time = datetime.now()
                 else:
@@ -598,6 +606,14 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     energy_data = await self._client.api.devices.get_inverter_energy(
                         self.serial_number
                     )
+                    if self._energy is not None:
+                        prev = InverterEnergyData.from_http_response(self._energy)
+                        curr = InverterEnergyData.from_http_response(energy_data)
+                        if not self._is_energy_valid(
+                            prev.lifetime_energy_values(),
+                            curr.lifetime_energy_values(),
+                        ):
+                            return  # keep cached energy data
                     self._energy = energy_data
                     self._energy_cache_time = datetime.now()
             except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
@@ -674,7 +690,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         try:
             runtime, energy, battery = await self._transport.read_all_input_data()  # type: ignore[union-attr]
             if self.validate_data:
-                if runtime.is_corrupt():
+                if runtime.is_corrupt(max_power_watts=self._max_power_watts):
                     _LOGGER.warning(
                         "Corrupt runtime in combined read for %s",
                         self.serial_number,
@@ -691,8 +707,15 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     return
             self._transport_runtime = runtime
             self._runtime_cache_time = datetime.now()
-            self._transport_energy = energy
-            self._energy_cache_time = datetime.now()
+            # Energy monotonicity: accept runtime regardless, but keep
+            # cached energy if lifetime counters are corrupt.
+            energy_valid = self._transport_energy is None or self._is_energy_valid(
+                self._transport_energy.lifetime_energy_values(),
+                energy.lifetime_energy_values(),
+            )
+            if energy_valid:
+                self._transport_energy = energy
+                self._energy_cache_time = datetime.now()
             if battery is not None:
                 # Accept battery data only if it passes all validation checks.
                 # Corrupt or serial-drifted battery data is silently skipped,
@@ -2697,11 +2720,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         await self._probe_optional_features()
 
         self._features_detected = True
+
+        # Compute dynamic thresholds from rated power.
+        rated_kw = self._features.model_info.get_power_rating_kw(device_type_code)
+        if rated_kw > 0:
+            self._max_energy_delta = rated_kw * 1.5  # 50% margin (kWh)
+            self._max_power_watts = rated_kw * 2000  # 2x margin (watts)
+
         _LOGGER.debug(
-            "Detected features for %s: family=%s, grid_type=%s",
+            "Detected features for %s: family=%s, grid_type=%s, "
+            "rated_kw=%s, max_energy_delta=%.0f kWh, max_power=%.0fW",
             self.serial_number,
             self._features.model_family.value,
             self._features.grid_type.value,
+            rated_kw if rated_kw > 0 else "unknown",
+            self._max_energy_delta,
+            self._max_power_watts,
         )
 
         return self._features

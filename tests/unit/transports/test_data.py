@@ -13,6 +13,7 @@ from pylxpweb.transports.data import (
     BatteryData,
     InverterEnergyData,
     InverterRuntimeData,
+    MidboxRuntimeData,
 )
 
 
@@ -366,3 +367,65 @@ class TestBatteryBankData:
         assert len(bank.batteries) == 2
         assert bank.batteries[0].serial_number == "BAT001"
         assert bank.batteries[1].serial_number == "BAT002"
+
+
+class TestInverterEnergyLifetimeValues:
+    """Test InverterEnergyData.lifetime_energy_values()."""
+
+    def test_returns_correct_keys(self) -> None:
+        """Method returns dict with expected lifetime energy keys."""
+        data = InverterEnergyData(
+            pv_energy_total=100.0,
+            charge_energy_total=200.0,
+            discharge_energy_total=300.0,
+            grid_import_total=400.0,
+            grid_export_total=500.0,
+            load_energy_total=600.0,
+            inverter_energy_total=700.0,
+            eps_energy_total=800.0,
+        )
+        result = data.lifetime_energy_values()
+        assert result == {
+            "pv_energy_total": 100.0,
+            "charge_energy_total": 200.0,
+            "discharge_energy_total": 300.0,
+            "grid_import_total": 400.0,
+            "grid_export_total": 500.0,
+            "load_energy_total": 600.0,
+            "inverter_energy_total": 700.0,
+            "eps_energy_total": 800.0,
+        }
+
+    def test_none_fields_preserved(self) -> None:
+        """None values are included in the dict (not filtered out)."""
+        data = InverterEnergyData()
+        result = data.lifetime_energy_values()
+        assert all(v is None for v in result.values())
+        assert len(result) == 8
+
+
+class TestMidboxRuntimeLifetimeValues:
+    """Test MidboxRuntimeData.lifetime_energy_values()."""
+
+    def test_returns_correct_keys(self) -> None:
+        """Method returns dict with expected lifetime energy keys."""
+        data = MidboxRuntimeData(
+            load_energy_total_l1=10.0,
+            load_energy_total_l2=20.0,
+            ups_energy_total_l1=30.0,
+            ups_energy_total_l2=40.0,
+        )
+        result = data.lifetime_energy_values()
+        assert result["load_energy_total_l1"] == 10.0
+        assert result["load_energy_total_l2"] == 20.0
+        assert result["ups_energy_total_l1"] == 30.0
+        assert result["ups_energy_total_l2"] == 40.0
+        # Total keys = 24 (8 categories * 2 legs + 8 smart load * 2 legs)
+        assert len(result) == 24
+
+    def test_none_fields_preserved(self) -> None:
+        """None values are included in the dict (not filtered out)."""
+        data = MidboxRuntimeData()
+        result = data.lifetime_energy_values()
+        assert all(v is None for v in result.values())
+        assert len(result) == 24

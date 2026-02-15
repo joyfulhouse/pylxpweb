@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from pylxpweb.validation import MAX_ENERGY_DELTA, validate_energy_monotonicity
+
 from .models import DeviceInfo, Entity
 
 if TYPE_CHECKING:
@@ -85,6 +87,20 @@ class BaseDevice(ABC):
         # from the CONF_DATA_VALIDATION option.
         self.validate_data: bool = False
 
+        # Energy monotonicity validation counter (consecutive rejections).
+        # Shared by BaseInverter and MIDDevice for lifetime energy checks.
+        self._energy_reject_count: int = 0
+
+        # Max energy delta (kWh) for spike detection.  Subclasses override
+        # with rated_power_kw * 1.5 once device capabilities are known.
+        self._max_energy_delta: float = MAX_ENERGY_DELTA
+
+        # Max power (watts) for canary checks.  Zero means "not yet known",
+        # so power checks are skipped until detect_features() or
+        # set_max_system_power() populates this.  Computed as rated_kw * 2000
+        # (2x margin) to catch 0xFFFF (65535W) corrupt register reads.
+        self._max_power_watts: float = 0.0
+
     @property
     def model(self) -> str:
         """Get device model name.
@@ -125,6 +141,34 @@ class BaseDevice(ABC):
             cloud API credentials, False otherwise.
         """
         return self._local_transport is not None and not self._client.username
+
+    def _is_energy_valid(
+        self,
+        prev_values: dict[str, float | None],
+        curr_values: dict[str, float | None],
+    ) -> bool:
+        """Check whether new lifetime energy values pass monotonicity validation.
+
+        Short-circuits to ``True`` when ``validate_data`` is disabled.
+        Updates ``_energy_reject_count`` as a side-effect.
+
+        Args:
+            prev_values: Previous cycle's lifetime energy dict.
+            curr_values: Current cycle's lifetime energy dict.
+
+        Returns:
+            True if the data should be accepted, False if it should be rejected.
+        """
+        if not self.validate_data:
+            return True
+        result, self._energy_reject_count = validate_energy_monotonicity(
+            prev_values,
+            curr_values,
+            self._energy_reject_count,
+            self.serial_number,
+            max_delta=self._max_energy_delta,
+        )
+        return result != "reject"
 
     @abstractmethod
     async def refresh(self) -> None:

@@ -69,11 +69,34 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         self._runtime: MidboxRuntime | None = None
         self._transport_runtime: MidboxRuntimeData | None = None
 
+        # Max power for the system behind this GridBOSS (kW).
+        # Set by the coordinator once inverter count and ratings are known.
+        self._max_system_power_kw: float = 0.0
+
         # Initialize firmware update detection (from FirmwareUpdateMixin)
         self._init_firmware_update_cache()
 
         # Local transport for hybrid/local-only mode (optional)
         self._transport: InverterTransport | None = None
+
+    def set_max_system_power(self, total_kw: float) -> None:
+        """Set the max system power behind this GridBOSS.
+
+        Called by the coordinator once inverter ratings are known.
+        Computes ``_max_energy_delta`` as ``total_kw * 1.5`` (50% margin)
+        and ``_max_power_watts`` as ``total_kw * 2000`` (2x margin).
+        """
+        self._max_system_power_kw = total_kw
+        if total_kw > 0:
+            self._max_energy_delta = total_kw * 1.5
+            self._max_power_watts = total_kw * 2000
+            _LOGGER.debug(
+                "GridBOSS %s: system power=%dkW, max_energy_delta=%.0f kWh, max_power=%.0fW",
+                self.serial_number,
+                total_kw,
+                self._max_energy_delta,
+                self._max_power_watts,
+            )
 
     @classmethod
     async def from_transport(
@@ -169,12 +192,19 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
             if self._transport is not None and hasattr(self._transport, "read_midbox_runtime"):
                 read_midbox = self._transport.read_midbox_runtime
                 runtime_data = await read_midbox()
-                if self.validate_data and runtime_data.is_corrupt():
+                if self.validate_data and runtime_data.is_corrupt(
+                    max_power_watts=self._max_power_watts,
+                ):
                     _LOGGER.warning(
                         "Corrupt MID runtime for %s, keeping cached",
                         self.serial_number,
                     )
                     return
+                if self._transport_runtime is not None and not self._is_energy_valid(
+                    self._transport_runtime.lifetime_energy_values(),
+                    runtime_data.lifetime_energy_values(),
+                ):
+                    return  # keep cached runtime
                 self._transport_runtime = runtime_data
                 self._last_refresh = datetime.now()
                 _LOGGER.debug(
@@ -187,9 +217,13 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
                 self._runtime = await self._client.api.devices.get_midbox_runtime(
                     self.serial_number
                 )
-                self._transport_runtime = MidboxRuntimeData.from_http_response(
-                    self._runtime.midboxData
-                )
+                new_runtime = MidboxRuntimeData.from_http_response(self._runtime.midboxData)
+                if self._transport_runtime is not None and not self._is_energy_valid(
+                    self._transport_runtime.lifetime_energy_values(),
+                    new_runtime.lifetime_energy_values(),
+                ):
+                    return  # keep cached runtime
+                self._transport_runtime = new_runtime
                 self._last_refresh = datetime.now()
             else:
                 _LOGGER.warning(

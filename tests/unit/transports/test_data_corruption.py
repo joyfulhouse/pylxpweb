@@ -250,3 +250,119 @@ class TestMidboxRuntimeDataCorruption:
         """is_corrupt() returns False when all fields are None (default construction)."""
         data = MidboxRuntimeData()
         assert data.is_corrupt() is False
+
+
+class TestInverterPowerCanary:
+    """Power canary checks for InverterRuntimeData.
+
+    When max_power_watts > 0 (rated power known), key power fields are
+    checked against the threshold.  Corrupt 16-bit reads produce 0xFFFF
+    = 65535W, which exceeds 2x rated for all EG4 models (6-21 kW).
+    """
+
+    def test_power_check_skipped_when_zero(self) -> None:
+        """Power checks skipped when max_power_watts=0 (rated power unknown)."""
+        data = InverterRuntimeData(pv_total_power=65535.0)
+        assert data.is_corrupt(max_power_watts=0.0) is False
+
+    def test_pv_power_exceeds_max(self) -> None:
+        """Corrupt PV power (0xFFFF=65535W) detected for 18kW inverter."""
+        data = InverterRuntimeData(pv_total_power=65535.0)
+        assert data.is_corrupt(max_power_watts=36000.0) is True  # 18kW * 2
+
+    def test_battery_charge_power_exceeds_max(self) -> None:
+        """Corrupt battery charge power detected."""
+        data = InverterRuntimeData(battery_charge_power=65535.0)
+        assert data.is_corrupt(max_power_watts=36000.0) is True
+
+    def test_battery_discharge_power_exceeds_max(self) -> None:
+        """Corrupt battery discharge power detected."""
+        data = InverterRuntimeData(battery_discharge_power=65535.0)
+        assert data.is_corrupt(max_power_watts=36000.0) is True
+
+    def test_inverter_power_exceeds_max(self) -> None:
+        """Corrupt inverter power detected."""
+        data = InverterRuntimeData(inverter_power=65535.0)
+        assert data.is_corrupt(max_power_watts=36000.0) is True
+
+    def test_eps_power_exceeds_max(self) -> None:
+        """Corrupt EPS power detected."""
+        data = InverterRuntimeData(eps_power=65535.0)
+        assert data.is_corrupt(max_power_watts=36000.0) is True
+
+    def test_valid_power_under_threshold(self) -> None:
+        """Normal power readings pass when under max threshold."""
+        data = InverterRuntimeData(
+            pv_total_power=15000.0,
+            battery_charge_power=8000.0,
+            inverter_power=18000.0,
+        )
+        assert data.is_corrupt(max_power_watts=36000.0) is False
+
+    def test_negative_power_within_threshold(self) -> None:
+        """Negative power (grid export) passes when abs value under threshold."""
+        data = InverterRuntimeData(inverter_power=-15000.0)
+        assert data.is_corrupt(max_power_watts=36000.0) is False
+
+    def test_negative_power_exceeds_threshold(self) -> None:
+        """Large negative power (corruption) detected via abs()."""
+        data = InverterRuntimeData(inverter_power=-65535.0)
+        assert data.is_corrupt(max_power_watts=36000.0) is True
+
+    def test_6kw_inverter_catches_corrupt(self) -> None:
+        """Smallest inverter (6kW, threshold=12000W) catches 0xFFFF."""
+        data = InverterRuntimeData(pv_total_power=65535.0)
+        assert data.is_corrupt(max_power_watts=12000.0) is True  # 6kW * 2
+
+
+class TestMidboxPowerCanary:
+    """Power canary checks for MidboxRuntimeData.
+
+    When max_power_watts > 0 (system power known), per-leg power fields
+    are checked against the threshold.
+    """
+
+    def test_power_check_skipped_when_zero(self) -> None:
+        """Power checks skipped when max_power_watts=0 (system power unknown)."""
+        data = MidboxRuntimeData(grid_l1_power=65535.0)
+        assert data.is_corrupt(max_power_watts=0.0) is False
+
+    def test_grid_l1_power_exceeds_max(self) -> None:
+        """Corrupt grid L1 power detected."""
+        data = MidboxRuntimeData(grid_l1_power=65535.0)
+        assert data.is_corrupt(max_power_watts=58000.0) is True  # 2*18+21=57kW
+
+    def test_grid_l2_power_exceeds_max(self) -> None:
+        """Corrupt grid L2 power detected."""
+        data = MidboxRuntimeData(grid_l2_power=65535.0)
+        assert data.is_corrupt(max_power_watts=58000.0) is True
+
+    def test_load_l1_power_exceeds_max(self) -> None:
+        """Corrupt load L1 power detected."""
+        data = MidboxRuntimeData(load_l1_power=65535.0)
+        assert data.is_corrupt(max_power_watts=58000.0) is True
+
+    def test_ups_l1_power_exceeds_max(self) -> None:
+        """Corrupt UPS L1 power detected."""
+        data = MidboxRuntimeData(ups_l1_power=65535.0)
+        assert data.is_corrupt(max_power_watts=58000.0) is True
+
+    def test_valid_power_under_threshold(self) -> None:
+        """Normal GridBOSS power readings pass."""
+        data = MidboxRuntimeData(
+            grid_l1_power=5000.0,
+            grid_l2_power=4000.0,
+            load_l1_power=3000.0,
+            load_l2_power=2000.0,
+        )
+        assert data.is_corrupt(max_power_watts=58000.0) is False
+
+    def test_negative_power_within_threshold(self) -> None:
+        """Negative grid power (export) passes when abs under threshold."""
+        data = MidboxRuntimeData(grid_l1_power=-15000.0)
+        assert data.is_corrupt(max_power_watts=58000.0) is False
+
+    def test_negative_power_exceeds_threshold(self) -> None:
+        """Large negative power (corruption) detected via abs()."""
+        data = MidboxRuntimeData(grid_l1_power=-65535.0)
+        assert data.is_corrupt(max_power_watts=58000.0) is True

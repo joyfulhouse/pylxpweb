@@ -20,7 +20,7 @@ values (SOC, SOH) to valid 0-100 range and log warnings for out-of-range values.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -210,13 +210,19 @@ class InverterRuntimeData:
         self.battery_soc = _clamp_percentage(self.battery_soc, "battery_soc")
         self.battery_soh = _clamp_percentage(self.battery_soh, "battery_soh")
 
-    def is_corrupt(self) -> bool:
+    def is_corrupt(self, max_power_watts: float = 0.0) -> bool:
         """Check if runtime data contains physically impossible values.
 
         Returns True if any canary field indicates corrupted register data.
         Canaries are deliberately conservative to avoid false positives:
         - SoC/SoH > 100 (pre-clamp raw value)
-        - Grid frequency > 0 but outside 45-65 Hz (0 is valid in off-grid/EPS mode)
+        - Grid frequency > 0 but outside 30-90 Hz (0 is valid in off-grid/EPS mode)
+        - Power fields exceeding max_power_watts (when > 0, i.e. rated power known)
+
+        Args:
+            max_power_watts: Maximum plausible power in watts, computed as
+                ``rated_power_kw * 2000`` (2x margin).  When 0, power checks
+                are skipped (rated power not yet known).
         """
         if self._raw_soc is not None and self._raw_soc > 100:
             _LOGGER.debug("Canary: raw_soc=%d > 100", self._raw_soc)
@@ -234,6 +240,25 @@ class InverterRuntimeData:
         ):
             _LOGGER.debug("Canary: grid_frequency=%.1f outside 30-90", self.grid_frequency)
             return True
+        # Power bounds: only checked when rated power is known (max_power_watts > 0).
+        # Corrupt 16-bit reads produce 0xFFFF = 65535W, which exceeds 2x rated
+        # for all EG4 models (6-21 kW → 12000-42000W threshold).
+        if max_power_watts > 0:
+            for label, val in (
+                ("pv_total_power", self.pv_total_power),
+                ("battery_charge_power", self.battery_charge_power),
+                ("battery_discharge_power", self.battery_discharge_power),
+                ("inverter_power", self.inverter_power),
+                ("eps_power", self.eps_power),
+            ):
+                if val is not None and abs(val) > max_power_watts:
+                    _LOGGER.debug(
+                        "Canary: %s=%.0f exceeds max %.0fW",
+                        label,
+                        val,
+                        max_power_watts,
+                    )
+                    return True
         return False
 
     @classmethod
@@ -442,12 +467,30 @@ class InverterEnergyData:
     generator_energy_today: float | None = None  # kWh
     generator_energy_total: float | None = None  # kWh
 
+    def lifetime_energy_values(self) -> dict[str, float | None]:
+        """Return all lifetime energy fields as a dict for monotonicity validation.
+
+        Only includes ``*_total`` fields (not daily or per-string totals)
+        that should never decrease between poll cycles.
+        """
+        return {
+            "pv_energy_total": self.pv_energy_total,
+            "charge_energy_total": self.charge_energy_total,
+            "discharge_energy_total": self.discharge_energy_total,
+            "grid_import_total": self.grid_import_total,
+            "grid_export_total": self.grid_export_total,
+            "load_energy_total": self.load_energy_total,
+            "inverter_energy_total": self.inverter_energy_total,
+            "eps_energy_total": self.eps_energy_total,
+        }
+
     def is_corrupt(self) -> bool:
         """Check if energy data contains physically impossible values.
 
         Energy registers have no strong physical-bounds canaries (all values
         are monotonic counters or daily accumulations). Temporal validation
-        occurs in the coordinator Layer 3.
+        (monotonicity checks) occurs in the device refresh layer via
+        ``_is_energy_valid()``.
         """
         return False
 
@@ -1284,11 +1327,28 @@ class MidboxRuntimeData:
     smart_load_4_energy_total_l1: float | None = None  # eSmartLoad4TotalL1
     smart_load_4_energy_total_l2: float | None = None  # eSmartLoad4TotalL2
 
-    def is_corrupt(self) -> bool:
+    def lifetime_energy_values(self) -> dict[str, float | None]:
+        """Return all lifetime energy fields as a dict for monotonicity validation.
+
+        Auto-discovers fields matching ``*_energy_total_*`` (not daily)
+        that should never decrease between poll cycles.
+        """
+        return {f.name: getattr(self, f.name) for f in fields(self) if "energy_total" in f.name}
+
+    def is_corrupt(self, max_power_watts: float = 0.0) -> bool:
         """Check if MID runtime data contains physically impossible values.
 
         Returns True if any canary field indicates corrupted register data.
-        Canaries: grid frequency > 0 but outside 45-65 Hz, smart port status > 2.
+        Canaries:
+        - Grid frequency > 0 but outside 30-90 Hz
+        - Smart port status > 2
+        - Grid voltage per leg > 300V (register corruption gives ~6553V)
+        - Per-leg power fields exceeding max_power_watts (when > 0)
+
+        Args:
+            max_power_watts: Maximum plausible power in watts, computed as
+                ``system_total_kw * 2000`` (2x margin).  When 0, power checks
+                are skipped (system power not yet known).
         """
         if (
             self.grid_frequency is not None
@@ -1309,6 +1369,35 @@ class MidboxRuntimeData:
             if sp is not None and sp > 2:
                 _LOGGER.debug("MID canary: smart_port_%d_status=%d > 2", i, sp)
                 return True
+        # Grid voltage: 0V is valid (grid down), but values above 300V per
+        # leg indicate register corruption.  A raw 0xFFFF/10 = 6553.5V.
+        for label, v in (
+            ("grid_l1_voltage", self.grid_l1_voltage),
+            ("grid_l2_voltage", self.grid_l2_voltage),
+        ):
+            if v is not None and v > 300:
+                _LOGGER.debug("MID canary: %s=%.1f > 300V", label, v)
+                return True
+        # Per-leg power bounds: only checked when system power is known.
+        # GridBOSS per-leg max = system_total / 2 (split-phase), so
+        # max_power_watts already accounts for the full system with margin.
+        if max_power_watts > 0:
+            for label, val in (
+                ("grid_l1_power", self.grid_l1_power),
+                ("grid_l2_power", self.grid_l2_power),
+                ("load_l1_power", self.load_l1_power),
+                ("load_l2_power", self.load_l2_power),
+                ("ups_l1_power", self.ups_l1_power),
+                ("ups_l2_power", self.ups_l2_power),
+            ):
+                if val is not None and abs(val) > max_power_watts:
+                    _LOGGER.debug(
+                        "MID canary: %s=%.0f exceeds max %.0fW",
+                        label,
+                        val,
+                        max_power_watts,
+                    )
+                    return True
         return False
 
     # -------------------------------------------------------------------------
