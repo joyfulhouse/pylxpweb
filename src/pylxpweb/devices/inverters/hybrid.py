@@ -9,6 +9,8 @@ This module provides the HybridInverter class for hybrid inverters that support:
 
 from __future__ import annotations
 
+from pylxpweb.constants import ScheduleType
+
 from .generic import GenericInverter
 
 

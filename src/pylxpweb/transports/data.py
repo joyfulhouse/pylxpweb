@@ -1024,7 +1024,12 @@ class BatteryBankData:
         for b in self.batteries:
             if b.max_cell_voltage and b.min_cell_voltage:
                 deltas.append(round(b.max_cell_voltage - b.min_cell_voltage, 3))
-        return max(deltas) if deltas else None
+        if deltas:
+            return max(deltas)
+        # Fallback to bank-level BMS registers when individual batteries absent
+        if self.max_cell_voltage is not None and self.min_cell_voltage is not None:
+            return round(self.max_cell_voltage - self.min_cell_voltage, 3)
+        return None
 
     @property
     def cycle_count_delta(self) -> int | None:
@@ -1038,7 +1043,10 @@ class BatteryBankData:
         vals = [
             b.max_cell_temperature for b in self.batteries if b.max_cell_temperature is not None
         ]
-        return max(vals) if vals else None
+        if vals:
+            return max(vals)
+        # Fallback to bank-level BMS register when individual batteries absent
+        return self.max_cell_temperature
 
     @property
     def temp_delta(self) -> float | None:
@@ -1051,6 +1059,9 @@ class BatteryBankData:
         ]
         if max_temps and min_temps:
             return round(max(max_temps) - min(min_temps), 1)
+        # Fallback to bank-level BMS registers when individual batteries absent
+        if self.max_cell_temperature is not None and self.min_cell_temperature is not None:
+            return round(self.max_cell_temperature - self.min_cell_temperature, 1)
         return None
 
     @classmethod

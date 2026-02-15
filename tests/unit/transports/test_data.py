@@ -369,6 +369,84 @@ class TestBatteryBankData:
         assert bank.batteries[1].serial_number == "BAT002"
 
 
+class TestBatteryBankDataBMSFallback:
+    """Tests for BatteryBankData bank-level BMS register fallbacks.
+
+    When individual batteries are absent (batteries=[]), diagnostic properties
+    should fall back to bank-level BMS registers (max/min cell voltage/temp)
+    which are always populated from input registers 101-106.
+    """
+
+    def test_max_cell_temp_fallback_to_bank_bms(self) -> None:
+        """max_cell_temp returns bank-level value when no individual batteries."""
+        bank = BatteryBankData(
+            batteries=[],
+            max_cell_temperature=35.0,
+        )
+        assert bank.max_cell_temp == 35.0
+
+    def test_temp_delta_fallback_to_bank_bms(self) -> None:
+        """temp_delta returns bank max-min when no individual batteries."""
+        bank = BatteryBankData(
+            batteries=[],
+            max_cell_temperature=38.0,
+            min_cell_temperature=32.5,
+        )
+        assert bank.temp_delta == 5.5
+
+    def test_cell_voltage_delta_fallback_to_bank_bms(self) -> None:
+        """cell_voltage_delta_max returns bank max-min when no batteries."""
+        bank = BatteryBankData(
+            batteries=[],
+            max_cell_voltage=3.400,
+            min_cell_voltage=3.350,
+        )
+        assert bank.cell_voltage_delta_max == 0.050
+
+    def test_diagnostics_prefer_individual_batteries(self) -> None:
+        """When batteries are populated, per-battery data is used over bank."""
+        bat1 = BatteryData(
+            battery_index=0,
+            serial_number="BAT001",
+            voltage=53.0,
+            soc=85,
+            max_cell_voltage=3.410,
+            min_cell_voltage=3.380,
+            max_cell_temperature=36.0,
+            min_cell_temperature=33.0,
+        )
+        bat2 = BatteryData(
+            battery_index=1,
+            serial_number="BAT002",
+            voltage=53.1,
+            soc=86,
+            max_cell_voltage=3.420,
+            min_cell_voltage=3.360,
+            max_cell_temperature=37.0,
+            min_cell_temperature=34.0,
+        )
+        bank = BatteryBankData(
+            batteries=[bat1, bat2],
+            max_cell_voltage=3.500,
+            min_cell_voltage=3.200,
+            max_cell_temperature=40.0,
+            min_cell_temperature=30.0,
+        )
+        # Per-battery values used, NOT bank-level (3.420 - 3.360 = 0.060)
+        assert bank.cell_voltage_delta_max == 0.060
+        # Per-battery: max(36.0, 37.0) = 37.0
+        assert bank.max_cell_temp == 37.0
+        # Per-battery: max(36.0, 37.0) - min(33.0, 34.0) = 4.0
+        assert bank.temp_delta == 4.0
+
+    def test_fallback_none_when_bank_bms_also_missing(self) -> None:
+        """Returns None when both batteries and bank BMS fields are absent."""
+        bank = BatteryBankData(batteries=[])
+        assert bank.max_cell_temp is None
+        assert bank.temp_delta is None
+        assert bank.cell_voltage_delta_max is None
+
+
 class TestInverterEnergyLifetimeValues:
     """Test InverterEnergyData.lifetime_energy_values()."""
 

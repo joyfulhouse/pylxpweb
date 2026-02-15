@@ -479,7 +479,7 @@ class BatteryBank(BaseDevice):
         Returns:
             Current in amps, or None if not available.
         """
-        val = self._get_transport_value("current")
+        val = self._get_transport_value("battery_current")
         if val is not None:
             return float(val)
 

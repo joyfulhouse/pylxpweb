@@ -373,11 +373,12 @@ class TestChargeDischargePowerOperations:
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        # Mock parameters read
+        # Mock parameters read — impl reads HOLD_AC_CHARGE_POWER_CMD and
+        # HOLD_FORCED_CHG_POWER_CMD (register 74)
         mock_response = Mock()
         mock_response.parameters = {
             "HOLD_AC_CHARGE_POWER_CMD": 60,
-            "HOLD_DISCHG_POWER_CMD": 80,
+            "HOLD_FORCED_CHG_POWER_CMD": 80,
         }
         mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
 
@@ -388,11 +389,11 @@ class TestChargeDischargePowerOperations:
         mock_client.api.control.read_parameters.assert_called_once_with("1234567890", 66, 9)
 
         # Verify returned data
-        assert power == {"charge_power_percent": 60, "discharge_power_percent": 80}
+        assert power == {"charge_power_percent": 60, "forced_charge_power_percent": 80}
 
     @pytest.mark.asyncio
-    async def test_set_discharge_power(self, mock_client: LuxpowerClient) -> None:
-        """Test setting discharge power limit."""
+    async def test_set_forced_charge_power(self, mock_client: LuxpowerClient) -> None:
+        """Test setting forced charge power limit."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
@@ -402,8 +403,8 @@ class TestChargeDischargePowerOperations:
         mock_write_response.success = True
         mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
 
-        # Set discharge power
-        result = await inverter.set_discharge_power(75)
+        # Set forced charge power (register 74 = HOLD_FORCED_CHG_POWER_CMD)
+        result = await inverter.set_forced_charge_power(75)
 
         # Verify write call
         mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {74: 75})
@@ -411,30 +412,28 @@ class TestChargeDischargePowerOperations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_set_discharge_power_validation_too_low(
+    async def test_set_forced_charge_power_validation_too_low(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Test discharge power validation - too low."""
+        """Test forced charge power validation - too low."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        # Try to set power below 0%
         with pytest.raises(ValueError, match="power_percent must be between 0 and 100"):
-            await inverter.set_discharge_power(-5)
+            await inverter.set_forced_charge_power(-5)
 
     @pytest.mark.asyncio
-    async def test_set_discharge_power_validation_too_high(
+    async def test_set_forced_charge_power_validation_too_high(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Test discharge power validation - too high."""
+        """Test forced charge power validation - too high."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        # Try to set power above 100%
         with pytest.raises(ValueError, match="power_percent must be between 0 and 100"):
-            await inverter.set_discharge_power(105)
+            await inverter.set_forced_charge_power(105)
 
 
 class TestACChargeScheduleOperations:

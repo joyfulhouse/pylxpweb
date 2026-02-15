@@ -550,7 +550,7 @@ class TestBatteryBankEnhancedProperties:
         mock_inverter = Mock()
         mock_inverter._transport_battery = None
         mock_inverter._transport_runtime = Mock()
-        mock_inverter._transport_runtime.current = -22.5
+        mock_inverter._transport_runtime.battery_current = -22.5
 
         battery_bank = BatteryBank(
             client=mock_client,
@@ -578,7 +578,7 @@ class TestBatteryBankEnhancedProperties:
         mock_inverter = Mock()
         mock_inverter._transport_battery = None
         mock_inverter._transport_runtime = Mock()
-        mock_inverter._transport_runtime.current = 0
+        mock_inverter._transport_runtime.battery_current = 0
 
         battery_bank = BatteryBank(
             client=mock_client,
@@ -587,6 +587,54 @@ class TestBatteryBankEnhancedProperties:
             inverter=mock_inverter,
         )
         assert battery_bank.current == 0.0
+
+    def test_current_uses_battery_current_from_transport(self, mock_client):
+        """Test current uses battery_current (not current) from transport runtime."""
+        battery_info = BatteryInfo.model_construct(
+            batStatus="Charging",
+            currentText="49.8A",
+            currentType="charge",
+            soc=85,
+            vBat=538,
+            pCharge=2500,
+            pDisCharge=0,
+            maxBatteryCharge=200,
+            currentBatteryCharge=170.0,
+            batteryArray=[],
+        )
+        mock_inverter = Mock()
+        mock_inverter._transport_battery = None
+        mock_inverter._transport_runtime = Mock(spec=[])
+        mock_inverter._transport_runtime.battery_current = 15.0
+
+        battery_bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+            inverter=mock_inverter,
+        )
+        assert battery_bank.current == 15.0
+
+    def test_current_falls_back_to_cloud_text(self, mock_client):
+        """Test current falls back to cloud text when no transport runtime."""
+        battery_info = BatteryInfo.model_construct(
+            batStatus="Discharging",
+            currentText="10.5A",
+            currentType="discharge",
+            soc=60,
+            vBat=520,
+            pCharge=0,
+            pDisCharge=500,
+            maxBatteryCharge=200,
+            currentBatteryCharge=120.0,
+            batteryArray=[],
+        )
+        battery_bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+        assert battery_bank.current == -10.5
 
     def test_battery_count_with_total_number(self, mock_client):
         """Test battery_count uses totalNumber when available."""
