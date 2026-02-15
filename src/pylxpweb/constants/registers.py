@@ -9,6 +9,53 @@ Source: EG4-18KPV-12LV Modbus Protocol specification
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
+
+# ============================================================================
+# SCHEDULE TYPE INFRASTRUCTURE
+# ============================================================================
+# Three schedule types share identical register patterns: a power cmd register,
+# a SOC limit register, and 6 packed-time registers (3 periods × 2 regs each).
+
+
+class ScheduleType(StrEnum):
+    """Inverter time schedule types.
+
+    Each type controls a different operating mode via time-based schedules
+    with up to 3 periods per day.
+    """
+
+    AC_CHARGE = "ac_charge"
+    FORCED_CHARGE = "forced_charge"
+    FORCED_DISCHARGE = "forced_discharge"
+
+
+@dataclass(frozen=True)
+class ScheduleConfig:
+    """Configuration for a schedule type's cloud API prefix and Modbus registers.
+
+    Attributes:
+        cloud_prefix: Cloud API parameter prefix (e.g. "HOLD_AC_CHARGE").
+            Schedule params follow the pattern: ``{cloud_prefix}_START_HOUR{suffix}``
+            where suffix is "" for period 0, "_1" for period 1, "_2" for period 2.
+        base_register: First packed-time register address (Modbus).
+            Each schedule occupies 6 consecutive registers (3 periods × 2 regs).
+    """
+
+    cloud_prefix: str
+    base_register: int
+
+
+# Mapping from schedule type to its configuration.
+# Used by both cloud API (control.py) and Modbus (hybrid.py) code paths.
+SCHEDULE_CONFIGS: dict[ScheduleType, ScheduleConfig] = {
+    ScheduleType.AC_CHARGE: ScheduleConfig("HOLD_AC_CHARGE", 68),
+    ScheduleType.FORCED_CHARGE: ScheduleConfig("HOLD_FORCED_CHARGE", 76),
+    ScheduleType.FORCED_DISCHARGE: ScheduleConfig("HOLD_FORCED_DISCHARGE", 84),
+}
+
+
 # ============================================================================
 # INVERTER PARAMETER MAPPINGS (Hold Registers)
 # ============================================================================
@@ -30,13 +77,6 @@ FUNC_EN_2_BIT_SPORADIC_CHARGE = 12  # Sporadic charge enable (confirmed via Modb
 # AC Charge Parameters
 HOLD_AC_CHARGE_POWER_CMD = 66  # AC charge power in 100W units (0-150 = 0.0-15.0 kW)
 HOLD_AC_CHARGE_SOC_LIMIT = 67  # AC charge SOC limit (0-100%)
-HOLD_AC_CHARGE_START_HOUR_1 = 68  # Time period 1 start hour (0-23)
-HOLD_AC_CHARGE_START_MIN_1 = 69  # Time period 1 start minute (0-59)
-HOLD_AC_CHARGE_END_HOUR_1 = 70  # Time period 1 end hour (0-23)
-HOLD_AC_CHARGE_END_MIN_1 = 71  # Time period 1 end minute (0-59)
-HOLD_AC_CHARGE_ENABLE_1 = 72  # Time period 1 enable (0=Off, 1=On)
-HOLD_AC_CHARGE_ENABLE_2 = 73  # Time period 2 enable (0=Off, 1=On)
-
 # AC Charge Time Schedule (regs 68-73) - packed time format (Modbus)
 # Format: value = (hour & 0xFF) | ((minute & 0xFF) << 8)
 # Each register stores hour (low byte) + minute (high byte)
@@ -78,26 +118,35 @@ HOLD_AC_CHARGE_START_SOC = 160  # Battery SOC to start AC charging (0-90%)
 # Register 161 is read-only via Modbus and not used for this purpose.
 # Verified on FlexBOSS21 firmware FAAB-2525.
 
-# Discharge Parameters
-# TODO: Registers 74-79 are named HOLD_DISCHG_* but per the EG4-18KPV-12LV Modbus
-# Protocol PDF, regs 74-81 are actually "Charging Priority" (ChgFirst*) parameters,
-# NOT discharge. The real forced discharge registers are 82-89. These names are kept
-# for cloud API compatibility but should be investigated and corrected in a future
-# breaking change. See also: set_discharge_power() in hybrid.py writes reg 74.
-# Additionally, there may be variation in register mappings between Luxpower-branded
-# and EG4-branded inverters (the EG4 PDF is the only verified source). Further
-# investigation is needed across different inverter brands/models before correcting
-# these mappings.
-# TODO: Forced discharge schedule (regs 82-89) and charge priority schedule
-# (regs 76-81) are not yet exposed as methods due to this naming discrepancy.
-# Once the mismapping is investigated and resolved, schedule methods similar to
-# set_ac_charge_schedule() can be added for both modes.
-HOLD_DISCHG_POWER_CMD = 74  # Discharge power command (0-100%)
-HOLD_DISCHG_START_HOUR_1 = 75  # Discharge start hour 1 (0-23)
-HOLD_DISCHG_START_MIN_1 = 76  # Discharge start minute 1 (0-59)
-HOLD_DISCHG_END_HOUR_1 = 77  # Discharge end hour 1 (0-23)
-HOLD_DISCHG_END_MIN_1 = 78  # Discharge end minute 1 (0-59)
-HOLD_DISCHG_ENABLE_1 = 79  # Discharge enable 1 (0=Off, 1=On)
+# Forced Charge (ChgFirst / PV Charge Priority) Parameters
+# Per EG4-18KPV-12LV Modbus PDF, regs 74-81 are "Charging Priority" (ChgFirst).
+# Cloud API names: HOLD_FORCED_CHG_POWER_CMD, HOLD_FORCED_CHG_SOC_LIMIT
+HOLD_FORCED_CHG_POWER_CMD = 74  # Forced charge power command (0-100%)
+HOLD_FORCED_CHG_SOC_LIMIT = 75  # Forced charge SOC limit (0-100%)
+
+# Forced Charge Time Schedule (regs 76-81) - packed time format (Modbus)
+# Format: value = (hour & 0xFF) | ((minute & 0xFF) << 8)
+# Cloud API names: HOLD_FORCED_CHARGE_START_HOUR{suffix}, etc.
+HOLD_FORCED_CHARGE_TIME_0_START = 76  # Period 0 start (packed hour|minute)
+HOLD_FORCED_CHARGE_TIME_0_END = 77  # Period 0 end
+HOLD_FORCED_CHARGE_TIME_1_START = 78  # Period 1 start
+HOLD_FORCED_CHARGE_TIME_1_END = 79  # Period 1 end
+HOLD_FORCED_CHARGE_TIME_2_START = 80  # Period 2 start
+HOLD_FORCED_CHARGE_TIME_2_END = 81  # Period 2 end
+
+# Forced Discharge Parameters
+# Cloud API names: HOLD_FORCED_DISCHG_POWER_CMD, HOLD_FORCED_DISCHG_SOC_LIMIT
+HOLD_FORCED_DISCHG_POWER_CMD = 82  # Forced discharge power command (0-100%)
+HOLD_FORCED_DISCHG_SOC_LIMIT = 83  # Forced discharge SOC limit (0-100%)
+
+# Forced Discharge Time Schedule (regs 84-89) - packed time format (Modbus)
+# Cloud API names: HOLD_FORCED_DISCHARGE_START_HOUR{suffix}, etc.
+HOLD_FORCED_DISCHARGE_TIME_0_START = 84  # Period 0 start (packed hour|minute)
+HOLD_FORCED_DISCHARGE_TIME_0_END = 85  # Period 0 end
+HOLD_FORCED_DISCHARGE_TIME_1_START = 86  # Period 1 start
+HOLD_FORCED_DISCHARGE_TIME_1_END = 87  # Period 1 end
+HOLD_FORCED_DISCHARGE_TIME_2_START = 88  # Period 2 start
+HOLD_FORCED_DISCHARGE_TIME_2_END = 89  # Period 2 end
 
 # Battery Protection Parameters
 HOLD_BAT_VOLT_MAX_CHG = 99  # Battery max charge voltage (V, /100)
@@ -281,7 +330,8 @@ HOLD_REGISTER_GROUPS = {
     "grid_protection": (25, 58),  # Grid voltage/frequency limits
     "reactive_power": (59, 62),  # Reactive power control
     "ac_charge": (66, 73),  # AC charging configuration
-    "discharge": (74, 89),  # Discharge configuration
+    "forced_charge": (74, 81),  # Forced charge (ChgFirst) configuration
+    "forced_discharge": (82, 89),  # Forced discharge configuration
     "battery_protection": (99, 109),  # Battery limits and protection
 }
 

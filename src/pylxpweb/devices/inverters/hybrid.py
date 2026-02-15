@@ -230,12 +230,12 @@ class HybridInverter(GenericInverter):
         Returns:
             Dictionary with:
             - charge_power_percent: AC charge power (0-100%)
-            - discharge_power_percent: Discharge power (0-100%)
+            - forced_charge_power_percent: Forced charge power (0-100%)
 
         Example:
             >>> settings = await inverter.get_charge_discharge_power()
             >>> settings
-            {'charge_power_percent': 50, 'discharge_power_percent': 100}
+            {'charge_power_percent': 50, 'forced_charge_power_percent': 100}
         """
         from pylxpweb.constants import HOLD_AC_CHARGE_POWER_CMD
 
@@ -243,35 +243,104 @@ class HybridInverter(GenericInverter):
 
         return {
             "charge_power_percent": params.get("HOLD_AC_CHARGE_POWER_CMD", 0),
-            "discharge_power_percent": params.get("HOLD_DISCHG_POWER_CMD", 0),
+            "forced_charge_power_percent": params.get("HOLD_FORCED_CHG_POWER_CMD", 0),
         }
 
-    async def set_discharge_power(self, power_percent: int) -> bool:
-        """Set battery discharge power limit.
+    async def set_forced_charge_power(self, power_percent: int) -> bool:
+        """Set forced charge (PV charge priority) power limit.
 
         Args:
-            power_percent: Discharge power percentage (0-100)
+            power_percent: Forced charge power percentage (0-100)
 
         Returns:
             True if successful
 
         Example:
-            >>> await inverter.set_discharge_power(80)
+            >>> await inverter.set_forced_charge_power(80)
             True
         """
-        from pylxpweb.constants import HOLD_DISCHG_POWER_CMD
+        from pylxpweb.constants import HOLD_FORCED_CHG_POWER_CMD
 
         if not 0 <= power_percent <= 100:
             raise ValueError("power_percent must be between 0 and 100")
 
-        return await self.write_parameters({HOLD_DISCHG_POWER_CMD: power_percent})
+        return await self.write_parameters({HOLD_FORCED_CHG_POWER_CMD: power_percent})
 
     # ============================================================================
-    # Working Mode Time Schedule Operations
+    # Working Mode Time Schedule Operations (Generic + Type-Specific)
     # ============================================================================
     # Each mode supports 3 time periods (0, 1, 2).
     # Registers use packed time format: value = (hour & 0xFF) | ((minute & 0xFF) << 8)
     # Source: EG4-18KPV-12LV Modbus Protocol specification
+
+    async def _set_schedule(
+        self,
+        schedule_type: ScheduleType,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+    ) -> bool:
+        """Set a time period schedule via Modbus (generic helper).
+
+        Args:
+            schedule_type: Which schedule to set
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+        """
+        from pylxpweb.constants import SCHEDULE_CONFIGS, pack_time
+
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+
+        base_reg = SCHEDULE_CONFIGS[schedule_type].base_register
+        start_reg = base_reg + (period * 2)
+        end_reg = start_reg + 1
+
+        # Write each register individually — inverter rejects FC16 (write
+        # multiple) for schedule registers, only FC06 (write single) works.
+        await self.write_parameters({start_reg: pack_time(start_hour, start_minute)})
+        await self.write_parameters({end_reg: pack_time(end_hour, end_minute)})
+        return True
+
+    async def _get_schedule(
+        self, schedule_type: ScheduleType, period: int
+    ) -> dict[str, int]:
+        """Read a time period schedule via Modbus (generic helper).
+
+        Args:
+            schedule_type: Which schedule to read
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+        """
+        from pylxpweb.constants import SCHEDULE_CONFIGS, unpack_time
+
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+
+        base_reg = SCHEDULE_CONFIGS[schedule_type].base_register
+        start_reg = base_reg + (period * 2)
+        params = await self.read_parameters(start_reg, 2)
+        start_val = params.get(f"reg_{start_reg}", 0)
+        end_val = params.get(f"reg_{start_reg + 1}", 0)
+        sh, sm = unpack_time(start_val)
+        eh, em = unpack_time(end_val)
+        return {"start_hour": sh, "start_minute": sm, "end_hour": eh, "end_minute": em}
 
     async def set_ac_charge_schedule(
         self,
@@ -297,23 +366,12 @@ class HybridInverter(GenericInverter):
             ValueError: If period, hour, or minute is out of range
 
         Example:
-            >>> # Set AC charge period 0: 11pm to 7am
             >>> await inverter.set_ac_charge_schedule(0, 23, 0, 7, 0)
             True
         """
-        from pylxpweb.constants import HOLD_AC_CHARGE_TIME_0_START, pack_time
-
-        if period not in (0, 1, 2):
-            raise ValueError(f"period must be 0, 1, or 2, got {period}")
-
-        start_reg = HOLD_AC_CHARGE_TIME_0_START + (period * 2)
-        end_reg = start_reg + 1
-
-        # Write each register individually — inverter rejects FC16 (write
-        # multiple) for schedule registers, only FC06 (write single) works.
-        await self.write_parameters({start_reg: pack_time(start_hour, start_minute)})
-        await self.write_parameters({end_reg: pack_time(end_hour, end_minute)})
-        return True
+        return await self._set_schedule(
+            ScheduleType.AC_CHARGE, period, start_hour, start_minute, end_hour, end_minute
+        )
 
     async def get_ac_charge_schedule(self, period: int) -> dict[str, int]:
         """Read AC charge time period schedule.
@@ -332,18 +390,107 @@ class HybridInverter(GenericInverter):
             >>> schedule
             {'start_hour': 23, 'start_minute': 0, 'end_hour': 7, 'end_minute': 0}
         """
-        from pylxpweb.constants import HOLD_AC_CHARGE_TIME_0_START, unpack_time
+        return await self._get_schedule(ScheduleType.AC_CHARGE, period)
 
-        if period not in (0, 1, 2):
-            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+    async def set_forced_charge_schedule(
+        self,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+    ) -> bool:
+        """Set forced charge (PV charge priority) time period schedule.
 
-        start_reg = HOLD_AC_CHARGE_TIME_0_START + (period * 2)
-        params = await self.read_parameters(start_reg, 2)
-        start_val = params.get(f"reg_{start_reg}", 0)
-        end_val = params.get(f"reg_{start_reg + 1}", 0)
-        sh, sm = unpack_time(start_val)
-        eh, em = unpack_time(end_val)
-        return {"start_hour": sh, "start_minute": sm, "end_hour": eh, "end_minute": em}
+        Args:
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+
+        Example:
+            >>> await inverter.set_forced_charge_schedule(0, 8, 0, 16, 0)
+            True
+        """
+        return await self._set_schedule(
+            ScheduleType.FORCED_CHARGE, period, start_hour, start_minute, end_hour, end_minute
+        )
+
+    async def get_forced_charge_schedule(self, period: int) -> dict[str, int]:
+        """Read forced charge (PV charge priority) time period schedule.
+
+        Args:
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+
+        Example:
+            >>> schedule = await inverter.get_forced_charge_schedule(0)
+            >>> schedule
+            {'start_hour': 8, 'start_minute': 0, 'end_hour': 16, 'end_minute': 0}
+        """
+        return await self._get_schedule(ScheduleType.FORCED_CHARGE, period)
+
+    async def set_forced_discharge_schedule(
+        self,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+    ) -> bool:
+        """Set forced discharge time period schedule.
+
+        Args:
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+
+        Example:
+            >>> await inverter.set_forced_discharge_schedule(0, 16, 0, 21, 0)
+            True
+        """
+        return await self._set_schedule(
+            ScheduleType.FORCED_DISCHARGE, period, start_hour, start_minute, end_hour, end_minute
+        )
+
+    async def get_forced_discharge_schedule(self, period: int) -> dict[str, int]:
+        """Read forced discharge time period schedule.
+
+        Args:
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+
+        Example:
+            >>> schedule = await inverter.get_forced_discharge_schedule(0)
+            >>> schedule
+            {'start_hour': 16, 'start_minute': 0, 'end_hour': 21, 'end_minute': 0}
+        """
+        return await self._get_schedule(ScheduleType.FORCED_DISCHARGE, period)
 
     async def get_ac_charge_type(self) -> int:
         """Get AC charge type (what the charge schedule is based on).

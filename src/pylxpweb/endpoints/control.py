@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from pylxpweb.constants import SCHEDULE_CONFIGS, ScheduleType
 from pylxpweb.endpoints.base import BaseEndpoint
 from pylxpweb.models import (
     ParameterReadResponse,
@@ -1061,6 +1062,114 @@ class ControlEndpoints(BaseEndpoint):
         return await self._get_function_status(inverter_sn, 110, "FUNC_GREEN_EN")
 
     # ============================================================================
+    # Schedule Controls (Cloud API) - Generic infrastructure
+    # ============================================================================
+
+    async def _set_schedule(
+        self,
+        inverter_sn: str,
+        schedule_type: ScheduleType,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set a time period schedule via cloud API (generic helper).
+
+        The cloud API uses separate hour/minute parameters (not packed Modbus
+        format). Period 0 uses unsuffixed names, periods 1-2 use _1/_2 suffixes.
+
+        Args:
+            inverter_sn: Inverter serial number
+            schedule_type: Which schedule to set
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+        """
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+        for name, value, upper in [
+            ("start_hour", start_hour, 23),
+            ("start_minute", start_minute, 59),
+            ("end_hour", end_hour, 23),
+            ("end_minute", end_minute, 59),
+        ]:
+            if not 0 <= value <= upper:
+                raise ValueError(f"{name} must be 0-{upper}, got {value}")
+
+        prefix = SCHEDULE_CONFIGS[schedule_type].cloud_prefix
+        suffix = "" if period == 0 else f"_{period}"
+
+        await self.write_parameter(
+            inverter_sn,
+            f"{prefix}_START_HOUR{suffix}",
+            str(start_hour),
+            client_type=client_type,
+        )
+        await self.write_parameter(
+            inverter_sn,
+            f"{prefix}_START_MINUTE{suffix}",
+            str(start_minute),
+            client_type=client_type,
+        )
+        await self.write_parameter(
+            inverter_sn,
+            f"{prefix}_END_HOUR{suffix}",
+            str(end_hour),
+            client_type=client_type,
+        )
+        return await self.write_parameter(
+            inverter_sn,
+            f"{prefix}_END_MINUTE{suffix}",
+            str(end_minute),
+            client_type=client_type,
+        )
+
+    async def _get_schedule(
+        self,
+        inverter_sn: str,
+        schedule_type: ScheduleType,
+        period: int,
+    ) -> dict[str, int]:
+        """Read a time period schedule via cloud API (generic helper).
+
+        Args:
+            inverter_sn: Inverter serial number
+            schedule_type: Which schedule to read
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+        """
+        if period not in (0, 1, 2):
+            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+
+        prefix = SCHEDULE_CONFIGS[schedule_type].cloud_prefix
+        suffix = "" if period == 0 else f"_{period}"
+        params = await self.read_device_parameters_ranges(inverter_sn)
+
+        return {
+            "start_hour": int(params.get(f"{prefix}_START_HOUR{suffix}", 0)),
+            "start_minute": int(params.get(f"{prefix}_START_MINUTE{suffix}", 0)),
+            "end_hour": int(params.get(f"{prefix}_END_HOUR{suffix}", 0)),
+            "end_minute": int(params.get(f"{prefix}_END_MINUTE{suffix}", 0)),
+        }
+
+    # ============================================================================
     # AC Charge Schedule Controls (Cloud API)
     # ============================================================================
 
@@ -1075,9 +1184,6 @@ class ControlEndpoints(BaseEndpoint):
         client_type: str = "WEB",
     ) -> SuccessResponse:
         """Set AC charge time period schedule via cloud API.
-
-        The cloud API uses separate hour/minute parameters (not packed Modbus
-        format). Period 0 uses unsuffixed names, periods 1-2 use _1/_2 suffixes.
 
         Args:
             inverter_sn: Inverter serial number
@@ -1095,47 +1201,19 @@ class ControlEndpoints(BaseEndpoint):
             ValueError: If period, hour, or minute is out of range
 
         Example:
-            >>> # Set period 0: 11pm to 7am
             >>> await client.control.set_ac_charge_schedule(
             ...     "1234567890", 0, 23, 0, 7, 0
             ... )
         """
-        if period not in (0, 1, 2):
-            raise ValueError(f"period must be 0, 1, or 2, got {period}")
-        for name, value, upper in [
-            ("start_hour", start_hour, 23),
-            ("start_minute", start_minute, 59),
-            ("end_hour", end_hour, 23),
-            ("end_minute", end_minute, 59),
-        ]:
-            if not 0 <= value <= upper:
-                raise ValueError(f"{name} must be 0-{upper}, got {value}")
-
-        suffix = "" if period == 0 else f"_{period}"
-
-        await self.write_parameter(
+        return await self._set_schedule(
             inverter_sn,
-            f"HOLD_AC_CHARGE_START_HOUR{suffix}",
-            str(start_hour),
-            client_type=client_type,
-        )
-        await self.write_parameter(
-            inverter_sn,
-            f"HOLD_AC_CHARGE_START_MINUTE{suffix}",
-            str(start_minute),
-            client_type=client_type,
-        )
-        await self.write_parameter(
-            inverter_sn,
-            f"HOLD_AC_CHARGE_END_HOUR{suffix}",
-            str(end_hour),
-            client_type=client_type,
-        )
-        return await self.write_parameter(
-            inverter_sn,
-            f"HOLD_AC_CHARGE_END_MINUTE{suffix}",
-            str(end_minute),
-            client_type=client_type,
+            ScheduleType.AC_CHARGE,
+            period,
+            start_hour,
+            start_minute,
+            end_hour,
+            end_minute,
+            client_type,
         )
 
     async def get_ac_charge_schedule(
@@ -1160,18 +1238,155 @@ class ControlEndpoints(BaseEndpoint):
             >>> schedule
             {'start_hour': 23, 'start_minute': 0, 'end_hour': 7, 'end_minute': 0}
         """
-        if period not in (0, 1, 2):
-            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+        return await self._get_schedule(
+            inverter_sn, ScheduleType.AC_CHARGE, period
+        )
 
-        suffix = "" if period == 0 else f"_{period}"
-        params = await self.read_device_parameters_ranges(inverter_sn)
+    # ============================================================================
+    # Forced Charge Schedule Controls (Cloud API)
+    # ============================================================================
 
-        return {
-            "start_hour": int(params.get(f"HOLD_AC_CHARGE_START_HOUR{suffix}", 0)),
-            "start_minute": int(params.get(f"HOLD_AC_CHARGE_START_MINUTE{suffix}", 0)),
-            "end_hour": int(params.get(f"HOLD_AC_CHARGE_END_HOUR{suffix}", 0)),
-            "end_minute": int(params.get(f"HOLD_AC_CHARGE_END_MINUTE{suffix}", 0)),
-        }
+    async def set_forced_charge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set forced charge (PV charge priority) time period schedule via cloud API.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+
+        Example:
+            >>> await client.control.set_forced_charge_schedule(
+            ...     "1234567890", 0, 8, 0, 16, 0
+            ... )
+        """
+        return await self._set_schedule(
+            inverter_sn,
+            ScheduleType.FORCED_CHARGE,
+            period,
+            start_hour,
+            start_minute,
+            end_hour,
+            end_minute,
+            client_type,
+        )
+
+    async def get_forced_charge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+    ) -> dict[str, int]:
+        """Read forced charge (PV charge priority) time period schedule via cloud API.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+
+        Example:
+            >>> schedule = await client.control.get_forced_charge_schedule(
+            ...     "1234567890", 0
+            ... )
+        """
+        return await self._get_schedule(
+            inverter_sn, ScheduleType.FORCED_CHARGE, period
+        )
+
+    # ============================================================================
+    # Forced Discharge Schedule Controls (Cloud API)
+    # ============================================================================
+
+    async def set_forced_discharge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set forced discharge time period schedule via cloud API.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+
+        Example:
+            >>> await client.control.set_forced_discharge_schedule(
+            ...     "1234567890", 0, 16, 0, 21, 0
+            ... )
+        """
+        return await self._set_schedule(
+            inverter_sn,
+            ScheduleType.FORCED_DISCHARGE,
+            period,
+            start_hour,
+            start_minute,
+            end_hour,
+            end_minute,
+            client_type,
+        )
+
+    async def get_forced_discharge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+    ) -> dict[str, int]:
+        """Read forced discharge time period schedule via cloud API.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+
+        Example:
+            >>> schedule = await client.control.get_forced_discharge_schedule(
+            ...     "1234567890", 0
+            ... )
+        """
+        return await self._get_schedule(
+            inverter_sn, ScheduleType.FORCED_DISCHARGE, period
+        )
 
     # ============================================================================
     # AC Charge Type Controls (Cloud API)

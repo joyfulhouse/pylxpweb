@@ -295,19 +295,17 @@ PARAMETER_SCALING: dict[str, ScaleFactor] = {
     "HOLD_EPS_FREQ_SET": ScaleFactor.SCALE_100,
     # Power Parameters (direct Watts or percentage)
     "HOLD_AC_CHARGE_POWER_CMD": ScaleFactor.SCALE_NONE,  # Watts
-    "HOLD_DISCHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # Percentage (0-100)
+    "HOLD_FORCED_CHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # Percentage (0-100)
+    "HOLD_FORCED_DISCHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # Percentage (0-100)
     "HOLD_FEED_IN_GRID_POWER_PERCENT": ScaleFactor.SCALE_NONE,  # Percentage
     # SOC Parameters (percentage, no scaling)
     "HOLD_AC_CHARGE_SOC_LIMIT": ScaleFactor.SCALE_NONE,
+    "HOLD_FORCED_CHG_SOC_LIMIT": ScaleFactor.SCALE_NONE,
+    "HOLD_FORCED_DISCHG_SOC_LIMIT": ScaleFactor.SCALE_NONE,
     "HOLD_DISCHG_CUT_OFF_SOC_EOD": ScaleFactor.SCALE_NONE,
     "HOLD_SOC_LOW_LIMIT_EPS_DISCHG": ScaleFactor.SCALE_NONE,
     "HOLD_AC_CHARGE_START_BATTERY_SOC": ScaleFactor.SCALE_NONE,
     "HOLD_AC_CHARGE_END_BATTERY_SOC": ScaleFactor.SCALE_NONE,
-    # Time Parameters (no scaling - hours/minutes)
-    "HOLD_AC_CHARGE_START_HOUR_1": ScaleFactor.SCALE_NONE,
-    "HOLD_AC_CHARGE_START_MIN_1": ScaleFactor.SCALE_NONE,
-    "HOLD_AC_CHARGE_END_HOUR_1": ScaleFactor.SCALE_NONE,
-    "HOLD_AC_CHARGE_END_MIN_1": ScaleFactor.SCALE_NONE,
 }
 
 

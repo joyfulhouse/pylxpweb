@@ -118,16 +118,10 @@ from .registers import (
     # GridBOSS parameters
     GRIDBOSS_PARAMETERS,
     GRIDBOSS_STATS,
-    HOLD_AC_CHARGE_ENABLE_1,
-    HOLD_AC_CHARGE_ENABLE_2,
-    HOLD_AC_CHARGE_END_HOUR_1,
-    HOLD_AC_CHARGE_END_MIN_1,
     HOLD_AC_CHARGE_END_VOLTAGE,
     # AC charge parameters
     HOLD_AC_CHARGE_POWER_CMD,
     HOLD_AC_CHARGE_SOC_LIMIT,
-    HOLD_AC_CHARGE_START_HOUR_1,
-    HOLD_AC_CHARGE_START_MIN_1,
     HOLD_AC_CHARGE_START_SOC,
     # AC Charge SOC/Voltage thresholds
     HOLD_AC_CHARGE_START_VOLTAGE,
@@ -147,13 +141,24 @@ from .registers import (
     HOLD_BAUD_RATE,
     HOLD_DAY,
     HOLD_DISCHG_CUT_OFF_SOC_EOD,
-    HOLD_DISCHG_ENABLE_1,
-    HOLD_DISCHG_END_HOUR_1,
-    HOLD_DISCHG_END_MIN_1,
-    # Discharge parameters
-    HOLD_DISCHG_POWER_CMD,
-    HOLD_DISCHG_START_HOUR_1,
-    HOLD_DISCHG_START_MIN_1,
+    HOLD_FORCED_CHARGE_TIME_0_END,
+    HOLD_FORCED_CHARGE_TIME_0_START,
+    HOLD_FORCED_CHARGE_TIME_1_END,
+    HOLD_FORCED_CHARGE_TIME_1_START,
+    HOLD_FORCED_CHARGE_TIME_2_END,
+    HOLD_FORCED_CHARGE_TIME_2_START,
+    # Forced charge parameters (regs 74-81, formerly mislabeled as HOLD_DISCHG_*)
+    HOLD_FORCED_CHG_POWER_CMD,
+    HOLD_FORCED_CHG_SOC_LIMIT,
+    HOLD_FORCED_DISCHARGE_TIME_0_END,
+    HOLD_FORCED_DISCHARGE_TIME_0_START,
+    HOLD_FORCED_DISCHARGE_TIME_1_END,
+    HOLD_FORCED_DISCHARGE_TIME_1_START,
+    HOLD_FORCED_DISCHARGE_TIME_2_END,
+    HOLD_FORCED_DISCHARGE_TIME_2_START,
+    # Forced discharge parameters (regs 82-89)
+    HOLD_FORCED_DISCHG_POWER_CMD,
+    HOLD_FORCED_DISCHG_SOC_LIMIT,
     HOLD_GRID_FREQ_HIGH_1,
     HOLD_GRID_FREQ_LOW_1,
     # Grid protection parameters
@@ -184,7 +189,7 @@ from .registers import (
     INPUT_BMS_CURRENT,
     INPUT_BMS_CYCLE_COUNT,
     INPUT_BMS_DISCHG_CUT_VOLT,
-    # BMS registers (renamed in v0.4.x for Yippy's documentation)
+    # BMS registers
     INPUT_BMS_FAULT_CODE,
     INPUT_BMS_MAX_CELL_TEMP,
     INPUT_BMS_MAX_CELL_VOLT,
@@ -231,7 +236,7 @@ from .registers import (
     INPUT_REGISTER_GROUPS,
     INPUT_RUNNING_TIME,
     INPUT_S_EPS,
-    INPUT_SOC_SOH,  # Packed: SOC (low byte) + SOH (high byte)
+    INPUT_SOC_SOH,
     # Input registers (runtime data)
     INPUT_STATUS,
     INPUT_T_BAT,
@@ -262,10 +267,14 @@ from .registers import (
     REGISTER_STATS,
     # Verified register mappings
     REGISTER_TO_PARAM_KEYS,
+    # Schedule infrastructure
+    SCHEDULE_CONFIGS,
     # Model-specific parameters
     SNA_PARAMETERS,
     # Web parameter mappings
     WEB_PARAM_TO_HOLD_REGISTER,
+    ScheduleConfig,
+    ScheduleType,
     get_func_en_bit,
     # Bit manipulation functions
     get_func_en_bit_mask,
@@ -349,24 +358,30 @@ __all__ = [
     "FUNC_EN_2_BIT_SPORADIC_CHARGE",
     "HOLD_AC_CHARGE_POWER_CMD",
     "HOLD_AC_CHARGE_SOC_LIMIT",
-    "HOLD_AC_CHARGE_START_HOUR_1",
-    "HOLD_AC_CHARGE_START_MIN_1",
-    "HOLD_AC_CHARGE_END_HOUR_1",
-    "HOLD_AC_CHARGE_END_MIN_1",
-    "HOLD_AC_CHARGE_ENABLE_1",
-    "HOLD_AC_CHARGE_ENABLE_2",
     "HOLD_AC_CHARGE_TIME_0_START",
     "HOLD_AC_CHARGE_TIME_0_END",
     "HOLD_AC_CHARGE_TIME_1_START",
     "HOLD_AC_CHARGE_TIME_1_END",
     "HOLD_AC_CHARGE_TIME_2_START",
     "HOLD_AC_CHARGE_TIME_2_END",
-    "HOLD_DISCHG_POWER_CMD",
-    "HOLD_DISCHG_START_HOUR_1",
-    "HOLD_DISCHG_START_MIN_1",
-    "HOLD_DISCHG_END_HOUR_1",
-    "HOLD_DISCHG_END_MIN_1",
-    "HOLD_DISCHG_ENABLE_1",
+    # Forced charge parameters (regs 74-81)
+    "HOLD_FORCED_CHG_POWER_CMD",
+    "HOLD_FORCED_CHG_SOC_LIMIT",
+    "HOLD_FORCED_CHARGE_TIME_0_START",
+    "HOLD_FORCED_CHARGE_TIME_0_END",
+    "HOLD_FORCED_CHARGE_TIME_1_START",
+    "HOLD_FORCED_CHARGE_TIME_1_END",
+    "HOLD_FORCED_CHARGE_TIME_2_START",
+    "HOLD_FORCED_CHARGE_TIME_2_END",
+    # Forced discharge parameters (regs 82-89)
+    "HOLD_FORCED_DISCHG_POWER_CMD",
+    "HOLD_FORCED_DISCHG_SOC_LIMIT",
+    "HOLD_FORCED_DISCHARGE_TIME_0_START",
+    "HOLD_FORCED_DISCHARGE_TIME_0_END",
+    "HOLD_FORCED_DISCHARGE_TIME_1_START",
+    "HOLD_FORCED_DISCHARGE_TIME_1_END",
+    "HOLD_FORCED_DISCHARGE_TIME_2_START",
+    "HOLD_FORCED_DISCHARGE_TIME_2_END",
     "HOLD_BAT_VOLT_MAX_CHG",
     "HOLD_BAT_VOLT_MIN_CHG",
     "HOLD_BAT_VOLT_MAX_DISCHG",
@@ -490,6 +505,10 @@ __all__ = [
     # Family-specific parameter mappings
     "get_register_to_param_mapping",
     "get_param_to_register_mapping",
+    # Schedule infrastructure
+    "ScheduleType",
+    "ScheduleConfig",
+    "SCHEDULE_CONFIGS",
     # Parameter aliases
     "PARAM_ALIASES",
     "PARAM_ALIASES_REVERSE",
