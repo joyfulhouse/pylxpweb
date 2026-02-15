@@ -1380,14 +1380,15 @@ class MidboxRuntimeData:
             if sp is not None and sp > 2:
                 _LOGGER.debug("MID canary: smart_port_%d_status=%d > 2", i, sp)
                 return True
-        # Grid voltage: 0V is valid (grid down), but values above 300V per
-        # leg indicate register corruption.  A raw 0xFFFF/10 = 6553.5V.
+        # Grid voltage: 0V is valid (grid down), but nonzero values below
+        # 50V or above 300V indicate register corruption.  Corrupt reads
+        # typically produce 0.1-0.3V (partial register) or 6553.5V (0xFFFF/10).
         for label, v in (
             ("grid_l1_voltage", self.grid_l1_voltage),
             ("grid_l2_voltage", self.grid_l2_voltage),
         ):
-            if v is not None and v > 300:
-                _LOGGER.debug("MID canary: %s=%.1f > 300V", label, v)
+            if v is not None and ((0 < v < 50) or v > 300):
+                _LOGGER.debug("MID canary: %s=%.1f outside valid range", label, v)
                 return True
         # Per-leg power bounds: only checked when system power is known.
         # GridBOSS per-leg max = system_total / 2 (split-phase), so

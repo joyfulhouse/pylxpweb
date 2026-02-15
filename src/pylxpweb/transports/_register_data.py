@@ -391,6 +391,9 @@ class RegisterDataMixin(_DataMixinBase):
         # Smart port mode is stored as a bit-packed value in holding register 20
         # (2 bits per port, LSB-first: bits 0-1 = port 1, bits 2-3 = port 2, etc.)
         # Values: 0 = off, 1 = smart_load, 2 = ac_couple
+        # Delay before switching from input (FC 04) to holding (FC 03) registers —
+        # WiFi dongles need time between function code changes to avoid corrupt reads.
+        await asyncio.sleep(self._inter_register_delay)
         smart_port_mode_reg: int | None = None
         try:
             holding_vals = await self._read_holding_registers(20, 1)
