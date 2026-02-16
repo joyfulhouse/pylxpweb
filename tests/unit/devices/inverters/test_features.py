@@ -398,6 +398,17 @@ class TestInverterFeatures:
         assert features.parallel_support is True
         assert features.eu_grid_compliance is True
 
+    def test_from_device_type_code_lxp_lb_split_phase(self) -> None:
+        """LXP-LB (device_type_code=44) should default to split-phase, not three-phase."""
+        features = InverterFeatures.from_device_type_code(44)
+
+        assert features.device_type_code == 44
+        assert features.model_family == InverterFamily.LXP
+        assert features.grid_type == GridType.SPLIT_PHASE
+        assert features.split_phase is True
+        assert features.three_phase_capable is False
+        assert features.parallel_support is True
+
     def test_from_device_type_code_unknown(self) -> None:
         """Test creating features from unknown device type code."""
         features = InverterFeatures.from_device_type_code(9999)

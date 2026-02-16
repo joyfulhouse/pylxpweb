@@ -525,7 +525,12 @@ class InverterFeatures:
             # EG4 inverters in US markets use split-phase (120V/240V)
             features.grid_type = GridType.SPLIT_PHASE
         elif family == InverterFamily.LXP:
-            features.grid_type = GridType.SINGLE_PHASE  # Can also be three-phase
+            if device_type_code == DEVICE_TYPE_CODE_LXP_LB:  # 44 - Americas
+                features.grid_type = GridType.SPLIT_PHASE
+                features.split_phase = True
+                features.three_phase_capable = False
+            else:
+                features.grid_type = GridType.SINGLE_PHASE
 
         return features
 
