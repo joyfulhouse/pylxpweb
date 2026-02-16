@@ -1075,7 +1075,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         ha_sensor_key="eps_voltage_l1",
         scale=ScaleFactor.DIV_10,
         unit="V",
-        models=EG4,
+        models=ALL,
         description="EPS L1-N voltage (~120V leg). 3-phase: S-phase gen voltage.",
     ),
     RegisterDefinition(
@@ -1085,7 +1085,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         ha_sensor_key="eps_voltage_l2",
         scale=ScaleFactor.DIV_10,
         unit="V",
-        models=EG4,
+        models=ALL,
         description="EPS L2-N voltage (~120V leg). 3-phase: T-phase gen voltage.",
     ),
     RegisterDefinition(
@@ -1094,7 +1094,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         cloud_api_field="pEpsL1N",
         ha_sensor_key=None,
         unit="W",
-        models=EG4,
+        models=ALL,
         description="EPS L1N active power. 3-phase: S-phase off-grid active.",
     ),
     RegisterDefinition(
@@ -1103,7 +1103,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         cloud_api_field="pEpsL2N",
         ha_sensor_key=None,
         unit="W",
-        models=EG4,
+        models=ALL,
         description="EPS L2N active power. 3-phase: T-phase off-grid active.",
     ),
     RegisterDefinition(
@@ -1112,7 +1112,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         cloud_api_field=None,
         ha_sensor_key=None,
         unit="VA",
-        models=EG4,
+        models=ALL,
         description="EPS L1N apparent power.",
     ),
     RegisterDefinition(
@@ -1121,7 +1121,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         cloud_api_field=None,
         ha_sensor_key=None,
         unit="VA",
-        models=EG4,
+        models=ALL,
         description="EPS L2N apparent power.",
     ),
     # =========================================================================
@@ -1184,7 +1184,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         description="Inverter RMS current, T/L3 phase (LXP three-phase only).",
     ),
     # =========================================================================
-    # US SPLIT-PHASE GRID VOLTAGES (regs 193-196) — EG4 only
+    # US SPLIT-PHASE GRID VOLTAGES (regs 193-196) — all models
     # =========================================================================
     RegisterDefinition(
         address=193,
@@ -1193,7 +1193,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         ha_sensor_key="grid_voltage_l1",
         scale=ScaleFactor.DIV_10,
         unit="V",
-        models=EG4,
+        models=ALL,
         description="Grid L1-N voltage (~120V, US split-phase).",
     ),
     RegisterDefinition(
@@ -1203,7 +1203,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         ha_sensor_key="grid_voltage_l2",
         scale=ScaleFactor.DIV_10,
         unit="V",
-        models=EG4,
+        models=ALL,
         description="Grid L2-N voltage (~120V, US split-phase).",
     ),
     # =========================================================================
