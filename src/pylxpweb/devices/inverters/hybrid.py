@@ -315,9 +315,7 @@ class HybridInverter(GenericInverter):
         await self.write_parameters({end_reg: pack_time(end_hour, end_minute)})
         return True
 
-    async def _get_schedule(
-        self, schedule_type: ScheduleType, period: int
-    ) -> dict[str, int]:
+    async def _get_schedule(self, schedule_type: ScheduleType, period: int) -> dict[str, int]:
         """Read a time period schedule via Modbus (generic helper).
 
         Args:

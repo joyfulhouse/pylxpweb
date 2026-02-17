@@ -1238,9 +1238,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> schedule
             {'start_hour': 23, 'start_minute': 0, 'end_hour': 7, 'end_minute': 0}
         """
-        return await self._get_schedule(
-            inverter_sn, ScheduleType.AC_CHARGE, period
-        )
+        return await self._get_schedule(inverter_sn, ScheduleType.AC_CHARGE, period)
 
     # ============================================================================
     # Forced Charge Schedule Controls (Cloud API)
@@ -1311,9 +1309,7 @@ class ControlEndpoints(BaseEndpoint):
             ...     "1234567890", 0
             ... )
         """
-        return await self._get_schedule(
-            inverter_sn, ScheduleType.FORCED_CHARGE, period
-        )
+        return await self._get_schedule(inverter_sn, ScheduleType.FORCED_CHARGE, period)
 
     # ============================================================================
     # Forced Discharge Schedule Controls (Cloud API)
@@ -1384,9 +1380,7 @@ class ControlEndpoints(BaseEndpoint):
             ...     "1234567890", 0
             ... )
         """
-        return await self._get_schedule(
-            inverter_sn, ScheduleType.FORCED_DISCHARGE, period
-        )
+        return await self._get_schedule(inverter_sn, ScheduleType.FORCED_DISCHARGE, period)
 
     # ============================================================================
     # AC Charge Type Controls (Cloud API)

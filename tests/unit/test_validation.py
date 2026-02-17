@@ -62,9 +62,7 @@ class TestValidateEnergyMonotonicity:
         assert count == SELF_HEAL_THRESHOLD
 
         # And again — still rejecting
-        result, count = validate_energy_monotonicity(
-            prev, curr, count, "test_dev"
-        )
+        result, count = validate_energy_monotonicity(prev, curr, count, "test_dev")
         assert result == "reject"
         assert count == SELF_HEAL_THRESHOLD + 1
 
