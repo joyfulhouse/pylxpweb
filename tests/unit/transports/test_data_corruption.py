@@ -196,6 +196,41 @@ class TestBatteryBankDataCorruption:
         data = BatteryBankData(soc=85, soh=95, batteries=[])
         assert data.is_corrupt() is False
 
+    def test_battery_count_above_20_is_corrupt(self) -> None:
+        """is_corrupt() returns True when battery_count exceeds physical maximum."""
+        data = BatteryBankData(soc=85, soh=95, battery_count=5421)
+        assert data.is_corrupt() is True
+
+    def test_battery_count_at_boundary_not_corrupt(self) -> None:
+        """is_corrupt() returns False for battery_count at upper bound (20)."""
+        data = BatteryBankData(soc=85, soh=95, battery_count=20)
+        assert data.is_corrupt() is False
+
+    def test_battery_count_none_not_corrupt(self) -> None:
+        """is_corrupt() returns False when battery_count is None."""
+        data = BatteryBankData(soc=85, soh=95, battery_count=None)
+        assert data.is_corrupt() is False
+
+    def test_battery_current_above_500_is_corrupt(self) -> None:
+        """is_corrupt() returns True when abs(current) exceeds 500A."""
+        data = BatteryBankData(soc=85, soh=95, current=2996.0)
+        assert data.is_corrupt() is True
+
+    def test_battery_current_negative_above_500_is_corrupt(self) -> None:
+        """is_corrupt() returns True for large negative current (discharging)."""
+        data = BatteryBankData(soc=85, soh=95, current=-600.0)
+        assert data.is_corrupt() is True
+
+    def test_battery_current_at_boundary_not_corrupt(self) -> None:
+        """is_corrupt() returns False for current at 500A boundary."""
+        data = BatteryBankData(soc=85, soh=95, current=500.0)
+        assert data.is_corrupt() is False
+
+    def test_battery_current_none_not_corrupt(self) -> None:
+        """is_corrupt() returns False when current is None."""
+        data = BatteryBankData(soc=85, soh=95, current=None)
+        assert data.is_corrupt() is False
+
 
 class TestMidboxRuntimeDataCorruption:
     """Corruption detection for MidboxRuntimeData."""

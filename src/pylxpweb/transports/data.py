@@ -225,10 +225,10 @@ class InverterRuntimeData:
                 are skipped (rated power not yet known).
         """
         if self._raw_soc is not None and self._raw_soc > 100:
-            _LOGGER.debug("Canary: raw_soc=%d > 100", self._raw_soc)
+            _LOGGER.warning("Canary: raw_soc=%d > 100", self._raw_soc)
             return True
         if self._raw_soh is not None and self._raw_soh > 100:
-            _LOGGER.debug("Canary: raw_soh=%d > 100", self._raw_soh)
+            _LOGGER.warning("Canary: raw_soh=%d > 100", self._raw_soh)
             return True
         # Allow frequency=0 (off-grid/EPS mode) and None (not read yet).
         # Wide 30-90 Hz band: corrupt reads produce wildly wrong values (e.g.
@@ -238,7 +238,7 @@ class InverterRuntimeData:
             and self.grid_frequency > 0
             and (self.grid_frequency < 30 or self.grid_frequency > 90)
         ):
-            _LOGGER.debug("Canary: grid_frequency=%.1f outside 30-90", self.grid_frequency)
+            _LOGGER.warning("Canary: grid_frequency=%.1f outside 30-90", self.grid_frequency)
             return True
         # Power bounds: only checked when rated power is known (max_power_watts > 0).
         # Corrupt 16-bit reads produce 0xFFFF = 65535W, which exceeds 2x rated
@@ -252,7 +252,7 @@ class InverterRuntimeData:
                 ("eps_power", self.eps_power),
             ):
                 if val is not None and abs(val) > max_power_watts:
-                    _LOGGER.debug(
+                    _LOGGER.warning(
                         "Canary: %s=%.0f exceeds max %.0fW",
                         label,
                         val,
@@ -657,10 +657,18 @@ class BatteryData:
         Batteries with voltage=0 (no CAN data) are NOT corrupt — just absent.
         """
         if self._raw_soc > 100:
-            _LOGGER.debug("Battery %d canary: raw_soc=%d > 100", self.battery_index, self._raw_soc)
+            _LOGGER.warning(
+                "Battery %d canary: raw_soc=%d > 100",
+                self.battery_index,
+                self._raw_soc,
+            )
             return True
         if self._raw_soh > 100:
-            _LOGGER.debug("Battery %d canary: raw_soh=%d > 100", self.battery_index, self._raw_soh)
+            _LOGGER.warning(
+                "Battery %d canary: raw_soh=%d > 100",
+                self.battery_index,
+                self._raw_soh,
+            )
             return True
         if self.voltage > 100.0:
             _LOGGER.debug(
@@ -937,15 +945,28 @@ class BatteryBankData:
     def is_corrupt(self) -> bool:
         """Check if battery bank data contains physically impossible values.
 
-        Returns True if aggregate SoC/SoH > 100 or any *present* individual
-        battery is corrupt.  Batteries with voltage=0 (no CAN bus data) are
-        skipped — they have no real data to validate.
+        Returns True if aggregate SoC/SoH > 100, battery count exceeds
+        physical maximum, current is impossibly high, or any *present*
+        individual battery is corrupt.  Batteries with voltage=0 (no CAN
+        bus data) are skipped — they have no real data to validate.
         """
         if self._raw_soc is not None and self._raw_soc > 100:
-            _LOGGER.debug("Bank canary: raw_soc=%d > 100", self._raw_soc)
+            _LOGGER.warning("Bank canary: raw_soc=%d > 100", self._raw_soc)
             return True
         if self._raw_soh is not None and self._raw_soh > 100:
-            _LOGGER.debug("Bank canary: raw_soh=%d > 100", self._raw_soh)
+            _LOGGER.warning("Bank canary: raw_soh=%d > 100", self._raw_soh)
+            return True
+        # Battery count: register 96 can return garbage (e.g. 5421) on
+        # Modbus desync.  Physical max is BATTERY_MAX_COUNT (5 slots).
+        # Use a generous upper bound of 20 to allow for future hardware.
+        if self.battery_count is not None and self.battery_count > 20:
+            _LOGGER.warning("Bank canary: battery_count=%d > 20", self.battery_count)
+            return True
+        # Battery current: 500A is well beyond any residential battery
+        # system (5 batteries * 100A max each).  Corrupt reads produce
+        # values like 2996A from register desync.
+        if self.current is not None and abs(self.current) > 500:
+            _LOGGER.warning("Bank canary: current=%.1f exceeds 500A", self.current)
             return True
         # Only cascade to batteries that actually have CAN bus data.
         # Ghost batteries (voltage=0, soc=0) from 5002+ register failures
@@ -1366,7 +1387,7 @@ class MidboxRuntimeData:
             and self.grid_frequency > 0
             and (self.grid_frequency < 30 or self.grid_frequency > 90)
         ):
-            _LOGGER.debug("MID canary: grid_frequency=%.1f outside 30-90", self.grid_frequency)
+            _LOGGER.warning("MID canary: grid_frequency=%.1f outside 30-90", self.grid_frequency)
             return True
         for i, sp in enumerate(
             (
@@ -1378,7 +1399,7 @@ class MidboxRuntimeData:
             start=1,
         ):
             if sp is not None and sp > 2:
-                _LOGGER.debug("MID canary: smart_port_%d_status=%d > 2", i, sp)
+                _LOGGER.warning("MID canary: smart_port_%d_status=%d > 2", i, sp)
                 return True
         # Grid voltage: 0V is valid (grid down), but nonzero values below
         # 50V or above 300V indicate register corruption.  Corrupt reads
@@ -1388,7 +1409,7 @@ class MidboxRuntimeData:
             ("grid_l2_voltage", self.grid_l2_voltage),
         ):
             if v is not None and ((0 < v < 50) or v > 300):
-                _LOGGER.debug("MID canary: %s=%.1f outside valid range", label, v)
+                _LOGGER.warning("MID canary: %s=%.1f outside valid range", label, v)
                 return True
         # Per-leg power bounds: only checked when system power is known.
         # GridBOSS per-leg max = system_total / 2 (split-phase), so
@@ -1403,7 +1424,7 @@ class MidboxRuntimeData:
                 ("ups_l2_power", self.ups_l2_power),
             ):
                 if val is not None and abs(val) > max_power_watts:
-                    _LOGGER.debug(
+                    _LOGGER.warning(
                         "MID canary: %s=%.0f exceeds max %.0fW",
                         label,
                         val,

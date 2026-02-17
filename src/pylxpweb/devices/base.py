@@ -149,7 +149,12 @@ class BaseDevice(ABC):
     ) -> bool:
         """Check whether new lifetime energy values pass monotonicity validation.
 
-        Short-circuits to ``True`` when ``validate_data`` is disabled.
+        Always active — lifetime kWh counters physically cannot decrease,
+        so a decrease is always corruption regardless of the validate_data
+        toggle.  The validate_data flag controls canary-based is_corrupt()
+        checks which can have edge-case false positives; monotonicity
+        cannot false-positive.
+
         Updates ``_energy_reject_count`` as a side-effect.
 
         Args:
@@ -159,8 +164,6 @@ class BaseDevice(ABC):
         Returns:
             True if the data should be accepted, False if it should be rejected.
         """
-        if not self.validate_data:
-            return True
         result, self._energy_reject_count = validate_energy_monotonicity(
             prev_values,
             curr_values,
