@@ -671,7 +671,7 @@ class BatteryData:
             )
             return True
         if self.voltage > 100.0:
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "Battery %d canary: voltage=%.1f > 100V",
                 self.battery_index,
                 self.voltage,
