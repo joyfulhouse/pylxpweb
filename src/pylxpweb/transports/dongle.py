@@ -678,7 +678,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         expected_serial = self._serial.encode("ascii").ljust(10, b"\x00")[:10]
         if response_serial != expected_serial:
             resp_serial_str = response_serial.decode("ascii", errors="replace").rstrip("\x00")
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "Response serial mismatch: expected %s, got %s — likely a misrouted cloud response",
                 self._serial,
                 resp_serial_str,
@@ -691,7 +691,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         if expected_func is not None:
             response_base_func = modbus_func & 0x7F
             if response_base_func != expected_func:
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "Response function mismatch: expected 0x%02x, got 0x%02x — "
                     "likely a misrouted cloud response",
                     expected_func,
@@ -706,7 +706,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         if expected_register is not None:
             response_register = struct.unpack("<H", data_frame[12:14])[0]
             if response_register != expected_register:
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "Response register mismatch: expected %d, got %d — "
                     "likely a misrouted cloud response",
                     expected_register,
