@@ -9,6 +9,7 @@ import pytest
 
 from pylxpweb.transports.dongle import (
     DEFAULT_PORT,
+    MODBUS_READ_HOLDING,
     MODBUS_READ_INPUT,
     MODBUS_WRITE_SINGLE,
     PACKET_PREFIX,
@@ -257,6 +258,56 @@ class TestDonglePacketBuilding:
         assert packet[7] == TCP_FUNC_TRANSLATED
 
 
+def _build_mock_response(
+    inverter_serial: str = "CE12345678",
+    dongle_serial: str = "BA12345678",
+    modbus_func: int = MODBUS_READ_INPUT,
+    start_register: int = 0,
+    register_values: list[int] | None = None,
+    exception_code: int | None = None,
+) -> bytes:
+    """Build a complete mock dongle response packet for testing.
+
+    Args:
+        inverter_serial: Inverter serial in the response data frame.
+        dongle_serial: Dongle serial in the packet header.
+        modbus_func: Modbus function code in the response.
+        start_register: Starting register address in the response.
+        register_values: Register values to include.  Defaults to [100, 200].
+        exception_code: If set, builds an exception response (short frame
+            with only the exception code byte after the start register).
+
+    Returns:
+        Complete response packet bytes.
+    """
+    inverter_bytes = inverter_serial.encode("ascii").ljust(10, b"\x00")[:10]
+
+    data_frame = bytes([0x00, modbus_func]) + inverter_bytes
+    data_frame += struct.pack("<H", start_register)
+
+    if exception_code is not None:
+        data_frame += bytes([exception_code])
+    else:
+        if register_values is None:
+            register_values = [100, 200]
+        byte_count = len(register_values) * 2
+        data_frame += bytes([byte_count])
+        for val in register_values:
+            data_frame += struct.pack("<H", val)
+
+    crc = compute_crc16(data_frame)
+
+    response = PACKET_PREFIX
+    response += struct.pack("<H", PROTOCOL_VERSION)
+    response += struct.pack("<H", 14 + len(data_frame) + 2)
+    response += bytes([0x01, TCP_FUNC_TRANSLATED])
+    response += dongle_serial.encode("ascii").ljust(10, b"\x00")[:10]
+    response += struct.pack("<H", len(data_frame) + 2)
+    response += data_frame
+    response += struct.pack("<H", crc)
+    return response
+
+
 class TestDongleResponseParsing:
     """Tests for response parsing."""
 
@@ -268,10 +319,8 @@ class TestDongleResponseParsing:
             inverter_serial="CE12345678",
         )
 
-        with pytest.raises(TransportReadError) as exc_info:
+        with pytest.raises(TransportReadError, match="too short"):
             transport._parse_response(b"\xa1\x1a\x01\x00")
-
-        assert "too short" in str(exc_info.value)
 
     def test_parse_response_invalid_prefix(self) -> None:
         """Test parsing a response with invalid prefix."""
@@ -281,13 +330,10 @@ class TestDongleResponseParsing:
             inverter_serial="CE12345678",
         )
 
-        # Build a response with wrong prefix
         response = b"\x00\x00" + b"\x00" * 30
 
-        with pytest.raises(TransportReadError) as exc_info:
+        with pytest.raises(TransportReadError, match="No valid packet found"):
             transport._parse_response(response)
-
-        assert "No valid packet found in response" in str(exc_info.value)
 
     def test_parse_valid_response(self) -> None:
         """Test parsing a valid response."""
@@ -297,32 +343,10 @@ class TestDongleResponseParsing:
             inverter_serial="CE12345678",
         )
 
-        # Build a mock valid response
-        # Header: prefix(2)+ver(2)+frame_len(2)+addr(1)+tcp_func(1)+dongle(10)+data_len(2)
-        # Data frame format:
-        #   action(1) + modbus_func(1) + inverter_serial(10) + start_reg(2) + byte_count(1) + data
-        # Little-endian: 100 = 0x64 = [0x64, 0x00], 200 = 0xC8 = [0xC8, 0x00]
-        data_frame = bytes([0x00, 0x04])  # action=0 (success), modbus_func=4 (read input)
-        data_frame += b"CE12345678"  # inverter serial (10 bytes)
-        data_frame += struct.pack("<H", 0)  # start register
-        data_frame += bytes([0x04])  # byte_count = 4 (2 registers × 2 bytes)
-        data_frame += bytes([0x64, 0x00, 0xC8, 0x00])  # 2 registers: 100, 200 (LE)
-        crc = compute_crc16(data_frame)
-
-        response = PACKET_PREFIX
-        response += struct.pack("<H", PROTOCOL_VERSION)
-        response += struct.pack("<H", 14 + len(data_frame) + 2)  # frame length
-        response += bytes([0x01, TCP_FUNC_TRANSLATED])
-        response += b"BA12345678"
-        response += struct.pack("<H", len(data_frame) + 2)  # data length with CRC
-        response += data_frame
-        response += struct.pack("<H", crc)
-
+        response = _build_mock_response(register_values=[100, 200])
         registers = transport._parse_response(response)
 
-        assert len(registers) == 2
-        assert registers[0] == 100
-        assert registers[1] == 200
+        assert registers == [100, 200]
 
     def test_parse_modbus_exception(self) -> None:
         """Test parsing a Modbus exception response."""
@@ -332,27 +356,105 @@ class TestDongleResponseParsing:
             inverter_serial="CE12345678",
         )
 
-        # Build a Modbus exception response (function code with high bit set)
-        # Data: action(1) + modbus_func(1) + serial(10) + start_reg(2) + exception_code(1)
-        data_frame = bytes([0x00, 0x84])  # action=0, func=0x84 (exception for 0x04)
-        data_frame += b"CE12345678"  # inverter serial (10 bytes)
-        data_frame += struct.pack("<H", 0)  # start register
-        data_frame += bytes([0x02])  # exception code 2
-        crc = compute_crc16(data_frame)
+        response = _build_mock_response(modbus_func=0x84, exception_code=2)
 
-        response = PACKET_PREFIX
-        response += struct.pack("<H", PROTOCOL_VERSION)
-        response += struct.pack("<H", 14 + len(data_frame) + 2)
-        response += bytes([0x01, TCP_FUNC_TRANSLATED])
-        response += b"BA12345678"
-        response += struct.pack("<H", len(data_frame) + 2)
-        response += data_frame
-        response += struct.pack("<H", crc)
-
-        with pytest.raises(TransportReadError) as exc_info:
+        with pytest.raises(TransportReadError, match="Modbus exception"):
             transport._parse_response(response)
 
-        assert "Modbus exception" in str(exc_info.value)
+
+class TestDongleResponseValidation:
+    """Tests for cross-request response validation (serial/func/register match)."""
+
+    def _make_transport(self) -> DongleTransport:
+        return DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+
+    def test_serial_mismatch_rejected(self) -> None:
+        """Response with wrong inverter serial is rejected."""
+        transport = self._make_transport()
+        response = _build_mock_response(inverter_serial="XX99999999")
+
+        with pytest.raises(TransportReadError, match="serial mismatch"):
+            transport._parse_response(response)
+
+    def test_serial_always_checked(self) -> None:
+        """Serial is validated even when expected_func/expected_register are None."""
+        transport = self._make_transport()
+        response = _build_mock_response(inverter_serial="XX99999999")
+
+        with pytest.raises(TransportReadError, match="serial mismatch"):
+            transport._parse_response(response, expected_func=None, expected_register=None)
+
+    def test_function_code_mismatch_rejected(self) -> None:
+        """Response with wrong function code (holding vs input) is rejected."""
+        transport = self._make_transport()
+        # Response says holding read (0x03) but we expected input read (0x04)
+        response = _build_mock_response(modbus_func=MODBUS_READ_HOLDING)
+
+        with pytest.raises(TransportReadError, match="function mismatch"):
+            transport._parse_response(
+                response, expected_func=MODBUS_READ_INPUT, expected_register=0
+            )
+
+    def test_register_mismatch_rejected(self) -> None:
+        """Response for wrong starting register is rejected."""
+        transport = self._make_transport()
+        # Response is for register 80 but we expected register 0
+        response = _build_mock_response(start_register=80)
+
+        with pytest.raises(TransportReadError, match="register mismatch"):
+            transport._parse_response(
+                response, expected_func=MODBUS_READ_INPUT, expected_register=0
+            )
+
+    def test_all_matching_accepted(self) -> None:
+        """Response matching serial, func, and register is accepted."""
+        transport = self._make_transport()
+        response = _build_mock_response(
+            modbus_func=MODBUS_READ_INPUT,
+            start_register=32,
+            register_values=[500, 600, 700],
+        )
+
+        registers = transport._parse_response(
+            response, expected_func=MODBUS_READ_INPUT, expected_register=32
+        )
+
+        assert registers == [500, 600, 700]
+
+    def test_exception_func_matches_base(self) -> None:
+        """Exception response (0x84) matches expected func (0x04) via masking."""
+        transport = self._make_transport()
+        response = _build_mock_response(modbus_func=0x84, exception_code=2)
+
+        # Should pass serial+func validation but raise Modbus exception
+        with pytest.raises(TransportReadError, match="Modbus exception"):
+            transport._parse_response(
+                response, expected_func=MODBUS_READ_INPUT, expected_register=0
+            )
+
+    def test_exception_func_mismatch_rejected(self) -> None:
+        """Exception for wrong func (0x83) rejected when expecting 0x04."""
+        transport = self._make_transport()
+        response = _build_mock_response(modbus_func=0x83, exception_code=2)
+
+        # Should fail on function mismatch (0x03 != 0x04)
+        with pytest.raises(TransportReadError, match="function mismatch"):
+            transport._parse_response(
+                response, expected_func=MODBUS_READ_INPUT, expected_register=0
+            )
+
+    def test_no_validation_when_not_specified(self) -> None:
+        """Without expected_func/expected_register, only serial is checked."""
+        transport = self._make_transport()
+        # Correct serial but "wrong" func/register — should pass since not checked
+        response = _build_mock_response(modbus_func=MODBUS_READ_HOLDING, start_register=99)
+
+        registers = transport._parse_response(response)
+        assert registers == [100, 200]
 
 
 class TestDongleRegisterOperations:

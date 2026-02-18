@@ -451,12 +451,19 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self,
         packet: bytes,
         max_retries: int = 2,
+        expected_func: int | None = None,
+        expected_register: int | None = None,
     ) -> list[int]:
         """Send a packet and receive response with retry logic.
 
         Args:
             packet: Packet bytes to send
             max_retries: Number of retry attempts for empty responses
+            expected_func: Expected Modbus function code (0x03, 0x04, 0x06, 0x10).
+                When provided, rejects responses with a different function code.
+                Handles exception responses (high bit set) by masking to base code.
+            expected_register: Expected starting register address.
+                When provided, rejects responses for a different register range.
 
         Returns:
             List of register values from response
@@ -508,8 +515,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                             "Try increasing timeout or check dongle firmware version."
                         )
 
-                    # Parse response
-                    return self._parse_response(response)
+                    # Parse response with cross-request validation
+                    return self._parse_response(response, expected_func, expected_register)
 
                 except TimeoutError as err:
                     _LOGGER.error("Timeout waiting for dongle response")
@@ -570,20 +577,33 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             )
         return idx
 
-    def _parse_response(self, response: bytes) -> list[int]:
-        """Parse a dongle response packet.
+    def _parse_response(
+        self,
+        response: bytes,
+        expected_func: int | None = None,
+        expected_register: int | None = None,
+    ) -> list[int]:
+        """Parse a dongle response packet with cross-request validation.
 
-        Handles cases where there may be junk data before the actual response,
-        such as unsolicited heartbeat packets from the dongle.
+        Validates that the response matches the original request by checking
+        the inverter serial, function code, and starting register address.
+        This prevents accepting misrouted responses from the cloud server
+        that pass through the WiFi dongle.
 
         Args:
             response: Raw response bytes
+            expected_func: Expected Modbus function code (e.g., 0x04 for
+                input register read).  When provided, rejects responses
+                with a different base function code.
+            expected_register: Expected starting register address.  When
+                provided, rejects responses for a different register range.
 
         Returns:
             List of register values
 
         Raises:
-            TransportReadError: If response is invalid
+            TransportReadError: If response is invalid or doesn't match
+                the original request (serial/function/register mismatch).
         """
         # Find the packet start (handle junk data before the response)
         packet_start = self._find_packet_start(response)
@@ -647,6 +667,56 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
         modbus_func = data_frame[1]
 
+        # --- Cross-request validation ---
+        # The WiFi dongle proxies between the cloud server and the inverter.
+        # Responses meant for the cloud can be misrouted to us.  These have
+        # valid CRC but wrong serial/function/register.  Reject them so the
+        # retry logic can resend and get the correct response.
+
+        # 1. Inverter serial must match (always checked)
+        response_serial = data_frame[2:12]
+        expected_serial = self._serial.encode("ascii").ljust(10, b"\x00")[:10]
+        if response_serial != expected_serial:
+            resp_serial_str = response_serial.decode("ascii", errors="replace").rstrip("\x00")
+            _LOGGER.warning(
+                "Response serial mismatch: expected %s, got %s — likely a misrouted cloud response",
+                self._serial,
+                resp_serial_str,
+            )
+            raise TransportReadError(
+                f"Response serial mismatch: expected {self._serial}, got {resp_serial_str}"
+            )
+
+        # 2. Function code must match (mask high bit for exception responses)
+        if expected_func is not None:
+            response_base_func = modbus_func & 0x7F
+            if response_base_func != expected_func:
+                _LOGGER.warning(
+                    "Response function mismatch: expected 0x%02x, got 0x%02x — "
+                    "likely a misrouted cloud response",
+                    expected_func,
+                    modbus_func,
+                )
+                raise TransportReadError(
+                    f"Response function mismatch: expected 0x{expected_func:02x}, "
+                    f"got 0x{modbus_func:02x}"
+                )
+
+        # 3. Start register must match
+        if expected_register is not None:
+            response_register = struct.unpack("<H", data_frame[12:14])[0]
+            if response_register != expected_register:
+                _LOGGER.warning(
+                    "Response register mismatch: expected %d, got %d — "
+                    "likely a misrouted cloud response",
+                    expected_register,
+                    response_register,
+                )
+                raise TransportReadError(
+                    f"Response register mismatch: expected {expected_register}, "
+                    f"got {response_register}"
+                )
+
         # Check for Modbus exception (function code with high bit set)
         if modbus_func & 0x80:
             exception_code = data_frame[14] if len(data_frame) > 14 else 0
@@ -694,7 +764,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             register_count=min(count, 40),
         )
 
-        return await self._send_receive(packet)
+        return await self._send_receive(
+            packet,
+            expected_func=MODBUS_READ_INPUT,
+            expected_register=address,
+        )
 
     async def _read_holding_registers(
         self,
@@ -721,7 +795,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             register_count=min(count, 40),
         )
 
-        return await self._send_receive(packet)
+        return await self._send_receive(
+            packet,
+            expected_func=MODBUS_READ_HOLDING,
+            expected_register=address,
+        )
 
     async def _write_holding_registers(
         self,
@@ -741,25 +819,20 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             TransportWriteError: If write fails
             TransportTimeoutError: If operation times out
         """
-        if len(values) == 1:
-            # Single register write
-            packet = self._build_packet(
-                tcp_func=TCP_FUNC_TRANSLATED,
-                modbus_func=MODBUS_WRITE_SINGLE,
-                start_register=address,
-                values=values,
-            )
-        else:
-            # Multiple register write
-            packet = self._build_packet(
-                tcp_func=TCP_FUNC_TRANSLATED,
-                modbus_func=MODBUS_WRITE_MULTI,
-                start_register=address,
-                values=values,
-            )
+        modbus_func = MODBUS_WRITE_SINGLE if len(values) == 1 else MODBUS_WRITE_MULTI
+        packet = self._build_packet(
+            tcp_func=TCP_FUNC_TRANSLATED,
+            modbus_func=modbus_func,
+            start_register=address,
+            values=values,
+        )
 
         try:
-            await self._send_receive(packet)
+            await self._send_receive(
+                packet,
+                expected_func=modbus_func,
+                expected_register=address,
+            )
             return True
         except TransportReadError as err:
             raise TransportWriteError(str(err)) from err
