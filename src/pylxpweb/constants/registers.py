@@ -70,6 +70,15 @@ FUNC_EN_BIT_SET_TO_STANDBY = 9  # 0=Standby, 1=Power On
 FUNC_EN_BIT_FORCED_DISCHG_EN = 10  # Forced discharge enable
 FUNC_EN_BIT_FORCED_CHG_EN = 11  # Force charge enable
 
+# System Function Register (Address 110) - Bit Field
+FUNC_SYS_REGISTER = 110
+FUNC_SYS_BIT_CHARGE_LAST = 4  # Charge last: charge battery after loads satisfied
+
+# Extended Function Enable Register (Address 179) - Bit Field
+FUNC_EXT_REGISTER = 179
+FUNC_EXT_BIT_BAT_CHARGE_CONTROL = 9  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
+FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL = 10  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
+
 # Extended Function Enable Register 2 (Address 233) - Bit Field
 FUNC_EN_2_REGISTER = 233
 FUNC_EN_2_BIT_SPORADIC_CHARGE = 12  # Sporadic charge enable (confirmed via Modbus)
@@ -149,14 +158,36 @@ HOLD_FORCED_DISCHARGE_TIME_2_START = 88  # Period 2 start
 HOLD_FORCED_DISCHARGE_TIME_2_END = 89  # Period 2 end
 
 # Battery Protection Parameters
-HOLD_BAT_VOLT_MAX_CHG = 99  # Battery max charge voltage (V, /100)
-HOLD_BAT_VOLT_MIN_CHG = 100  # Battery min charge voltage (V, /100)
-HOLD_BAT_VOLT_MAX_DISCHG = 101  # Battery max discharge voltage (V, /100)
-HOLD_BAT_VOLT_MIN_DISCHG = 102  # Battery min discharge voltage (V, /100)
+HOLD_BAT_VOLT_MAX_CHG = 99  # Battery max charge voltage (V, ×10 decivolts)
+# NOTE: Reg 100 was previously mapped as HOLD_BAT_VOLT_MIN_CHG ("battery min charge voltage")
+# but live Modbus testing (2026-02-18) confirmed it is the off-grid discharge cutoff voltage
+# (matching API name HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT). Same mismapping pattern as 101/102.
+# Off-grid discharge cutoff voltage (V, ×10 decivolts, confirmed 2026-02-18)
+HOLD_OFF_GRID_EOD_VOLTAGE = 100
+# Deprecated alias — not actually "min charge voltage"
+HOLD_BAT_VOLT_MIN_CHG = HOLD_OFF_GRID_EOD_VOLTAGE
+# NOTE: Regs 101/102 were previously mapped as voltage params (HOLD_BAT_VOLT_MAX/MIN_DISCHG)
+# but live Modbus testing (2026-02-18) confirmed they are charge/discharge current limits
+# in raw amps (no scaling). The API also returns them as HOLD_LEAD_ACID_CHARGE/DISCHARGE_RATE.
+HOLD_LEAD_ACID_CHARGE_RATE = 101  # Battery charge current limit (A, confirmed 2026-02-18)
+HOLD_LEAD_ACID_DISCHARGE_RATE = 102  # Battery discharge current limit (A, confirmed 2026-02-18)
+# deprecated aliases — actually charge/discharge current, not voltage
+HOLD_BAT_VOLT_MAX_DISCHG = HOLD_LEAD_ACID_CHARGE_RATE
+HOLD_BAT_VOLT_MIN_DISCHG = HOLD_LEAD_ACID_DISCHARGE_RATE
 HOLD_MAX_CHG_CURR = 103  # Max charge current (A, /10)
 HOLD_MAX_DISCHG_CURR = 104  # Max discharge current (A, /10)
 HOLD_DISCHG_CUT_OFF_SOC_EOD = 105  # On-grid discharge cutoff SOC (10-90%)
 HOLD_SOC_LOW_LIMIT_EPS_DISCHG = 125  # Off-grid SOC low limit (0-100%) - verified 2026-01-27
+
+# On-Grid Discharge Cutoff Voltage
+HOLD_ON_GRID_EOD_VOLTAGE = 169  # On-grid discharge cutoff voltage (V, ×10, confirmed 2026-02-18)
+
+# Discharge Start Threshold (W, confirmed 2026-02-18)
+HOLD_P_TO_USER_START_DISCHG = 116  # Start discharge when import exceeds this
+
+# System Charge Limits (regs 227-228)
+HOLD_SYSTEM_CHARGE_SOC_LIMIT = 227  # System charge SOC limit (0-100%, verified 2026-01-27)
+HOLD_SYSTEM_CHARGE_VOLT_LIMIT = 228  # System charge voltage limit (V, ×10, confirmed 2026-02-18)
 
 # Grid Protection Parameters
 HOLD_GRID_VOLT_HIGH_1 = 25  # Grid voltage high limit 1 (V, /10)
@@ -444,8 +475,9 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     70: ["HOLD_AC_CHARGE_START_HOUR_1", "HOLD_AC_CHARGE_START_MINUTE_1"],
     # Battery protection
     100: ["HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT"],
-    101: ["HOLD_LEAD_ACID_CHARGE_RATE"],  # Battery charge current limit (A)
-    102: ["HOLD_LEAD_ACID_DISCHARGE_RATE"],  # Battery discharge current limit (A)
+    # Battery charge/discharge current limits (A, confirmed 2026-02-18)
+    101: ["HOLD_LEAD_ACID_CHARGE_RATE"],
+    102: ["HOLD_LEAD_ACID_DISCHARGE_RATE"],
     # SOC limits
     105: ["HOLD_DISCHG_CUT_OFF_SOC_EOD"],  # On-grid discharge cutoff SOC (10-90%)
     # System functions (Register 110: 14 bit fields, verified)
@@ -481,9 +513,10 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     190: ["HOLD_P2"],
     # Register 179: Extended function enable bit field (verified via Modbus probe 2026-02-13)
     # API returns 16 FUNC_* params for this register (alphabetical, NOT bit order).
-    # Only bit 7 (FUNC_GRID_PEAK_SHAVING) confirmed via live toggle test.
+    # Bit 7 (FUNC_GRID_PEAK_SHAVING) confirmed via live toggle test.
+    # Bits 9,10 (FUNC_BAT_CHARGE/DISCHARGE_CONTROL) confirmed 2026-02-18 (SOC↔Voltage).
     # Other known params: FUNC_ACTIVE_POWER_LIMIT_MODE, FUNC_AC_COUPLING_FUNCTION,
-    # FUNC_BAT_CHARGE_CONTROL, FUNC_BAT_DISCHARGE_CONTROL, FUNC_CT_DIRECTION_REVERSED,
+    # FUNC_CT_DIRECTION_REVERSED,
     # FUNC_GEN_PEAK_SHAVING, FUNC_ON_GRID_ALWAYS_ON, FUNC_PV_ARC, FUNC_PV_ARC_FAULT_CLEAR,
     # FUNC_PV_SELL_TO_GRID_EN, FUNC_RSD_DISABLE, FUNC_SMART_LOAD_ENABLE,
     # FUNC_TOTAL_LOAD_COMPENSATION_EN, FUNC_TRIP_TIME_UNIT, FUNC_WATT_VOLT_EN
@@ -497,8 +530,8 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "FUNC_179_BIT6",  # Bit 6: unknown (set on FlexBOSS21)
         "FUNC_GRID_PEAK_SHAVING",  # Bit 7: Grid peak shaving (confirmed)
         "FUNC_179_BIT8",  # Bit 8: unknown
-        "FUNC_179_BIT9",  # Bit 9: unknown
-        "FUNC_179_BIT10",  # Bit 10: unknown
+        "FUNC_BAT_CHARGE_CONTROL",  # Bit 9: 0=SOC, 1=Voltage (confirmed 2026-02-18)
+        "FUNC_BAT_DISCHARGE_CONTROL",  # Bit 10: 0=SOC, 1=Voltage (confirmed 2026-02-18)
         "FUNC_179_BIT11",  # Bit 11: unknown
         "FUNC_179_BIT12",  # Bit 12: unknown
         "FUNC_179_BIT13",  # Bit 13: unknown
@@ -507,6 +540,8 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     ],
     # System charge limit (verified via live testing 2026-01-27)
     227: ["HOLD_SYSTEM_CHARGE_SOC_LIMIT"],
+    # System charge voltage limit (V, ×10, confirmed 2026-02-18)
+    228: ["HOLD_SYSTEM_CHARGE_VOLT_LIMIT"],
     # Grid peak shaving power (2 registers, 32-bit value in kW)
     231: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER"],
     # Register 233: Extended function enable 2 bit field (verified via Modbus probe 2026-02-13)
