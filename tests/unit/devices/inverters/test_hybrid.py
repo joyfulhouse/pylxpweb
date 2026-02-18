@@ -8,6 +8,7 @@ import pytest
 
 from pylxpweb import LuxpowerClient
 from pylxpweb.devices.inverters.hybrid import HybridInverter
+from pylxpweb.exceptions import LuxpowerDeviceError
 
 
 @pytest.fixture
@@ -1093,3 +1094,292 @@ class TestSporadicChargeOperations:
         # Should clear bit 12 while preserving bit 1 (2)
         mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {233: 2})
         assert result is True
+
+
+class TestModbusOnlyChargeDischargeOperations:
+    """Test Modbus-only convenience operations added for charge/discharge settings."""
+
+    @pytest.mark.asyncio
+    async def test_get_off_grid_cutoff_voltage(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=415)
+
+        result = await inverter.get_off_grid_cutoff_voltage()
+
+        inverter.read_transport_register.assert_awaited_once_with(100)
+        assert result == 41.5
+
+    @pytest.mark.asyncio
+    async def test_set_off_grid_cutoff_voltage(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        result = await inverter.set_off_grid_cutoff_voltage(42.0)
+
+        inverter.write_transport_register.assert_awaited_once_with(100, 420)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_charge_last_enabled(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=16)  # bit 4
+
+        result = await inverter.get_charge_last()
+
+        inverter.read_transport_register.assert_awaited_once_with(110)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_charge_last_preserves_other_bits(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=3)
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        result = await inverter.set_charge_last(True)
+
+        inverter.read_transport_register.assert_awaited_once_with(110)
+        inverter.write_transport_register.assert_awaited_once_with(110, 19)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_battery_charge_control_voltage_mode(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=512)  # bit 9
+
+        result = await inverter.get_battery_charge_control()
+
+        inverter.read_transport_register.assert_awaited_once_with(179)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_battery_discharge_control_preserves_charge_bit(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=512)
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        result = await inverter.set_battery_discharge_control(voltage_mode=True)
+
+        inverter.read_transport_register.assert_awaited_once_with(179)
+        inverter.write_transport_register.assert_awaited_once_with(179, 1536)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_charge_current_limit(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=249)
+
+        result = await inverter.get_charge_current_limit()
+
+        inverter.read_transport_register.assert_awaited_once_with(101)
+        assert result == 249
+
+    @pytest.mark.asyncio
+    async def test_set_discharge_current_limit(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        result = await inverter.set_discharge_current_limit(140)
+
+        inverter.write_transport_register.assert_awaited_once_with(102, 140)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_charge_current_limit_rejects_negative(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="current_amps must be non-negative"):
+            await inverter.set_charge_current_limit(-1)
+
+    @pytest.mark.asyncio
+    async def test_get_system_charge_soc_limit(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=98)
+
+        result = await inverter.get_system_charge_soc_limit()
+
+        inverter.read_transport_register.assert_awaited_once_with(227)
+        assert result == 98
+
+    @pytest.mark.asyncio
+    async def test_set_system_charge_soc_limit_allows_101(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        result = await inverter.set_system_charge_soc_limit(101)
+
+        inverter.write_transport_register.assert_awaited_once_with(227, 101)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_system_charge_soc_limit_rejects_out_of_range(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="soc_percent must be 0-101"):
+            await inverter.set_system_charge_soc_limit(102)
+
+        with pytest.raises(ValueError, match="soc_percent must be 0-101"):
+            await inverter.set_system_charge_soc_limit(-1)
+
+    @pytest.mark.asyncio
+    async def test_get_system_charge_volt_limit(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=580)
+
+        result = await inverter.get_system_charge_volt_limit()
+
+        inverter.read_transport_register.assert_awaited_once_with(228)
+        assert result == 58.0
+
+    @pytest.mark.asyncio
+    async def test_set_system_charge_volt_limit_rejects_zero(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="voltage must be positive"):
+            await inverter.set_system_charge_volt_limit(0)
+
+    @pytest.mark.asyncio
+    async def test_get_on_grid_cutoff_soc(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=20)
+
+        result = await inverter.get_on_grid_cutoff_soc()
+
+        inverter.read_transport_register.assert_awaited_once_with(105)
+        assert result == 20
+
+    @pytest.mark.asyncio
+    async def test_set_off_grid_cutoff_soc(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        result = await inverter.set_off_grid_cutoff_soc(20)
+
+        inverter.write_transport_register.assert_awaited_once_with(125, 20)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_on_grid_cutoff_soc_rejects_out_of_range(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="soc_percent must be 10-90"):
+            await inverter.set_on_grid_cutoff_soc(9)
+
+        with pytest.raises(ValueError, match="soc_percent must be 10-90"):
+            await inverter.set_on_grid_cutoff_soc(91)
+
+    @pytest.mark.asyncio
+    async def test_get_on_grid_cutoff_voltage(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=400)
+
+        result = await inverter.get_on_grid_cutoff_voltage()
+
+        inverter.read_transport_register.assert_awaited_once_with(169)
+        assert result == 40.0
+
+    @pytest.mark.asyncio
+    async def test_set_on_grid_cutoff_voltage(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        result = await inverter.set_on_grid_cutoff_voltage(42.0)
+
+        inverter.write_transport_register.assert_awaited_once_with(169, 420)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_get_start_discharge_power(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.read_transport_register = AsyncMock(return_value=100)
+
+        result = await inverter.get_start_discharge_power()
+
+        inverter.read_transport_register.assert_awaited_once_with(116)
+        assert result == 100
+
+    @pytest.mark.asyncio
+    async def test_set_start_discharge_power_rejects_negative(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="watts must be non-negative"):
+            await inverter.set_start_discharge_power(-1)
+
+    @pytest.mark.asyncio
+    async def test_modbus_only_getter_raises_without_transport(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(LuxpowerDeviceError, match="requires transport mode"):
+            await inverter.get_off_grid_cutoff_voltage()
+
+    @pytest.mark.asyncio
+    async def test_modbus_only_setter_raises_without_transport(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(LuxpowerDeviceError, match="requires transport mode"):
+            await inverter.set_off_grid_cutoff_voltage(42.0)
