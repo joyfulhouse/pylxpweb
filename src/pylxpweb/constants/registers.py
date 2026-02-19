@@ -472,7 +472,13 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # AC Charge registers
     66: ["HOLD_AC_CHARGE_POWER_CMD"],  # AC charge power in 100W units (0-150 = 0.0-15.0 kW)
     67: ["HOLD_AC_CHARGE_SOC_LIMIT"],
-    70: ["HOLD_AC_CHARGE_START_HOUR_1", "HOLD_AC_CHARGE_START_MINUTE_1"],
+    # AC charge schedule period-1 fields (validated against local Modbus entities)
+    68: ["HOLD_AC_CHARGE_START_HOUR_1"],
+    69: ["HOLD_AC_CHARGE_START_MINUTE_1"],
+    70: ["HOLD_AC_CHARGE_END_HOUR_1"],
+    71: ["HOLD_AC_CHARGE_END_MINUTE_1"],
+    72: ["HOLD_AC_CHARGE_ENABLE_1"],
+    73: ["HOLD_AC_CHARGE_ENABLE_2"],
     # Battery protection
     100: ["HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT"],
     # Battery charge/discharge current limits (A, confirmed 2026-02-18)
@@ -509,6 +515,8 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # Additional verified registers
     125: ["HOLD_SOC_LOW_LIMIT_EPS_DISCHG"],  # Off-grid SOC limit (verified 2026-01-27)
     150: ["HOLD_EQUALIZATION_PERIOD"],
+    158: ["HOLD_AC_CHARGE_START_BATTERY_VOLTAGE"],
+    159: ["HOLD_AC_CHARGE_END_BATTERY_VOLTAGE"],
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
     190: ["HOLD_P2"],
     # Register 179: Extended function enable bit field (verified via Modbus probe 2026-02-13)
@@ -1294,11 +1302,16 @@ def get_func_en_bit(value: int, bit_number: int) -> bool:
 PARAM_ALIASES: dict[str, str] = {
     # Register 15 naming difference
     "HOLD_MODBUS_ADDRESS": "HOLD_COM_ADDR",  # SNA → PV_SERIES canonical name
+    # Legacy AC charge voltage aliases
+    "HOLD_AC_CHARGE_START_VOLTAGE": "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE",
+    "HOLD_AC_CHARGE_END_VOLTAGE": "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE",
 }
 
 # Reverse alias mapping (canonical → alternatives)
 PARAM_ALIASES_REVERSE: dict[str, list[str]] = {
     "HOLD_COM_ADDR": ["HOLD_MODBUS_ADDRESS"],
+    "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE": ["HOLD_AC_CHARGE_START_VOLTAGE"],
+    "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE": ["HOLD_AC_CHARGE_END_VOLTAGE"],
 }
 
 
