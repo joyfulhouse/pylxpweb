@@ -10,6 +10,7 @@ This module provides the HybridInverter class for hybrid inverters that support:
 from __future__ import annotations
 
 from pylxpweb.constants import ScheduleType
+from pylxpweb.exceptions import LuxpowerDeviceError
 
 from .generic import GenericInverter
 
@@ -66,6 +67,30 @@ class HybridInverter(GenericInverter):
         current_value = params.get(f"reg_{register}", 0)
         new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
         return await self.write_parameters({register: new_value})
+
+    async def _read_modbus_register(self, register: int) -> int:
+        """Read a single register via transport-only Modbus path."""
+        value = await self.read_transport_register(register)
+        if value is None:
+            raise LuxpowerDeviceError(
+                f"Register {register} read requires transport mode and a successful Modbus read"
+            )
+        return int(value)
+
+    async def _write_modbus_register(self, register: int, value: int) -> bool:
+        """Write a single register via transport-only Modbus path."""
+        success = await self.write_transport_register(register, value)
+        if not success:
+            raise LuxpowerDeviceError(
+                f"Register {register} write requires transport mode and a successful Modbus write"
+            )
+        return True
+
+    async def _set_modbus_register_bit(self, register: int, bit: int, enabled: bool) -> bool:
+        """Read-modify-write a single bit via transport-only Modbus path."""
+        current_value = await self._read_modbus_register(register)
+        new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
+        return await self._write_modbus_register(register, new_value)
 
     # ============================================================================
     # Hybrid-Specific Control Operations
@@ -712,6 +737,510 @@ class HybridInverter(GenericInverter):
         return await self._set_register_bit(
             FUNC_EN_2_REGISTER, FUNC_EN_2_BIT_SPORADIC_CHARGE, enabled
         )
+
+    # ============================================================================
+    # Charge Last Mode Operations
+    # ============================================================================
+    # Register 110 bit 4: charge battery only after loads are satisfied.
+    # Mapped in inverter_holding.py as "charge_last" (FUNC_CHARGE_LAST).
+
+    async def get_charge_last(self) -> bool:
+        """Get charge last mode.
+
+        When enabled, the inverter charges the battery only after house
+        loads are satisfied (PV surplus goes to battery).
+
+        Returns:
+            True if charge last is enabled
+
+        Example:
+            >>> await inverter.get_charge_last()
+            False
+        """
+        from pylxpweb.constants import FUNC_SYS_BIT_CHARGE_LAST, FUNC_SYS_REGISTER
+
+        raw = await self._read_modbus_register(FUNC_SYS_REGISTER)
+        return bool(raw & (1 << FUNC_SYS_BIT_CHARGE_LAST))
+
+    async def set_charge_last(self, enabled: bool) -> bool:
+        """Enable or disable charge last mode.
+
+        Args:
+            enabled: True to charge battery only after loads are satisfied
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_charge_last(True)
+            True
+        """
+        from pylxpweb.constants import FUNC_SYS_BIT_CHARGE_LAST, FUNC_SYS_REGISTER
+
+        return await self._set_modbus_register_bit(
+            FUNC_SYS_REGISTER, FUNC_SYS_BIT_CHARGE_LAST, enabled
+        )
+
+    # ============================================================================
+    # Battery Charge/Discharge Control Mode Operations
+    # ============================================================================
+    # Controls whether battery charge/discharge limits are based on SOC or Voltage.
+    # Register 179 bits 9 and 10, confirmed via live toggle 2026-02-18.
+
+    async def get_battery_charge_control(self) -> bool:
+        """Get battery charge control mode.
+
+        Returns:
+            False = SOC mode, True = Voltage mode
+
+        Example:
+            >>> is_voltage = await inverter.get_battery_charge_control()
+            >>> is_voltage
+            False  # SOC mode
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_BAT_CHARGE_CONTROL, FUNC_EXT_REGISTER
+
+        raw = await self._read_modbus_register(FUNC_EXT_REGISTER)
+        return bool(raw & (1 << FUNC_EXT_BIT_BAT_CHARGE_CONTROL))
+
+    async def set_battery_charge_control(self, voltage_mode: bool) -> bool:
+        """Set battery charge control mode.
+
+        Args:
+            voltage_mode: True for Voltage mode, False for SOC mode
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_battery_charge_control(voltage_mode=True)
+            True
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_BAT_CHARGE_CONTROL, FUNC_EXT_REGISTER
+
+        return await self._set_modbus_register_bit(
+            FUNC_EXT_REGISTER, FUNC_EXT_BIT_BAT_CHARGE_CONTROL, voltage_mode
+        )
+
+    async def get_battery_discharge_control(self) -> bool:
+        """Get battery discharge control mode.
+
+        Returns:
+            False = SOC mode, True = Voltage mode
+
+        Example:
+            >>> is_voltage = await inverter.get_battery_discharge_control()
+            >>> is_voltage
+            False  # SOC mode
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL, FUNC_EXT_REGISTER
+
+        raw = await self._read_modbus_register(FUNC_EXT_REGISTER)
+        return bool(raw & (1 << FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL))
+
+    async def set_battery_discharge_control(self, voltage_mode: bool) -> bool:
+        """Set battery discharge control mode.
+
+        Args:
+            voltage_mode: True for Voltage mode, False for SOC mode
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_battery_discharge_control(voltage_mode=True)
+            True
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL, FUNC_EXT_REGISTER
+
+        return await self._set_modbus_register_bit(
+            FUNC_EXT_REGISTER, FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL, voltage_mode
+        )
+
+    # ============================================================================
+    # Battery Charge/Discharge Current Limit Operations (Modbus)
+    # ============================================================================
+    # Register 101: charge current limit in amps (no scaling)
+    # Register 102: discharge current limit in amps (no scaling)
+    # Confirmed via live Modbus testing 2026-02-18 on FlexBOSS21.
+
+    async def get_charge_current_limit(self) -> int:
+        """Get battery charge current limit via Modbus.
+
+        Returns:
+            Charge current limit in amps
+
+        Example:
+            >>> amps = await inverter.get_charge_current_limit()
+            >>> amps
+            249
+        """
+        from pylxpweb.constants import HOLD_LEAD_ACID_CHARGE_RATE
+
+        return await self._read_modbus_register(HOLD_LEAD_ACID_CHARGE_RATE)
+
+    async def set_charge_current_limit(self, current_amps: int) -> bool:
+        """Set battery charge current limit via Modbus.
+
+        Args:
+            current_amps: Charge current limit in amps (0-250 for FlexBOSS21)
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_charge_current_limit(140)
+            True
+        """
+        from pylxpweb.constants import HOLD_LEAD_ACID_CHARGE_RATE
+
+        if current_amps < 0:
+            raise ValueError(f"current_amps must be non-negative, got {current_amps}")
+        return await self._write_modbus_register(HOLD_LEAD_ACID_CHARGE_RATE, current_amps)
+
+    async def get_discharge_current_limit(self) -> int:
+        """Get battery discharge current limit via Modbus.
+
+        Returns:
+            Discharge current limit in amps
+
+        Example:
+            >>> amps = await inverter.get_discharge_current_limit()
+            >>> amps
+            249
+        """
+        from pylxpweb.constants import HOLD_LEAD_ACID_DISCHARGE_RATE
+
+        return await self._read_modbus_register(HOLD_LEAD_ACID_DISCHARGE_RATE)
+
+    async def set_discharge_current_limit(self, current_amps: int) -> bool:
+        """Set battery discharge current limit via Modbus.
+
+        Args:
+            current_amps: Discharge current limit in amps (0-250 for FlexBOSS21)
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_discharge_current_limit(140)
+            True
+        """
+        from pylxpweb.constants import HOLD_LEAD_ACID_DISCHARGE_RATE
+
+        if current_amps < 0:
+            raise ValueError(f"current_amps must be non-negative, got {current_amps}")
+        return await self._write_modbus_register(HOLD_LEAD_ACID_DISCHARGE_RATE, current_amps)
+
+    # ============================================================================
+    # System Charge SOC Limit Operations (Modbus)
+    # ============================================================================
+    # Register 227: system charge SOC limit (0-100%, or 101 for top balancing)
+    # Verified via live testing 2026-01-27 on FlexBOSS21.
+    # Active when battery charge control is in SOC mode (reg 179 bit 9 = 0).
+
+    async def get_system_charge_soc_limit(self) -> int:
+        """Get system charge SOC limit via Modbus.
+
+        Returns:
+            SOC limit percentage (0-100, or 101 for top balancing)
+
+        Example:
+            >>> soc = await inverter.get_system_charge_soc_limit()
+            >>> soc
+            98
+        """
+        from pylxpweb.constants import HOLD_SYSTEM_CHARGE_SOC_LIMIT
+
+        return await self._read_modbus_register(HOLD_SYSTEM_CHARGE_SOC_LIMIT)
+
+    async def set_system_charge_soc_limit(self, soc_percent: int) -> bool:
+        """Set system charge SOC limit via Modbus.
+
+        Args:
+            soc_percent: SOC limit (0-100, or 101 for top balancing)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If soc_percent is out of range
+
+        Example:
+            >>> await inverter.set_system_charge_soc_limit(98)
+            True
+        """
+        from pylxpweb.constants import HOLD_SYSTEM_CHARGE_SOC_LIMIT
+
+        if not 0 <= soc_percent <= 101:
+            raise ValueError(f"soc_percent must be 0-101, got {soc_percent}")
+        return await self._write_modbus_register(HOLD_SYSTEM_CHARGE_SOC_LIMIT, soc_percent)
+
+    # ============================================================================
+    # System Charge Voltage Limit Operations (Modbus)
+    # ============================================================================
+    # Register 228: system charge voltage limit in decivolts (×10)
+    # Confirmed via live Modbus testing 2026-02-18 on FlexBOSS21.
+    # Active when battery charge control is in Voltage mode (reg 179 bit 9).
+
+    async def get_system_charge_volt_limit(self) -> float:
+        """Get system charge voltage limit via Modbus.
+
+        Returns:
+            Voltage limit in volts (e.g. 58.0)
+
+        Example:
+            >>> volts = await inverter.get_system_charge_volt_limit()
+            >>> volts
+            58.0
+        """
+        from pylxpweb.constants import HOLD_SYSTEM_CHARGE_VOLT_LIMIT
+
+        raw = await self._read_modbus_register(HOLD_SYSTEM_CHARGE_VOLT_LIMIT)
+        return raw / 10.0
+
+    async def set_system_charge_volt_limit(self, voltage: float) -> bool:
+        """Set system charge voltage limit via Modbus.
+
+        Args:
+            voltage: Voltage limit in volts (e.g. 58.0). Stored as ×10
+                     integer (580). Only whole and half-volt values
+                     are representable.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_system_charge_volt_limit(58.0)
+            True
+        """
+        from pylxpweb.constants import HOLD_SYSTEM_CHARGE_VOLT_LIMIT
+
+        raw = int(round(voltage * 10))
+        if raw <= 0:
+            raise ValueError(f"voltage must be positive, got {voltage}")
+        return await self._write_modbus_register(HOLD_SYSTEM_CHARGE_VOLT_LIMIT, raw)
+
+    # ============================================================================
+    # Discharge Cutoff SOC Operations (Modbus)
+    # ============================================================================
+    # Register 105: on-grid discharge cutoff SOC (verified)
+    # Register 125: off-grid (EPS) discharge cutoff SOC (verified 2026-01-27)
+
+    async def get_on_grid_cutoff_soc(self) -> int:
+        """Get on-grid discharge cutoff SOC via Modbus.
+
+        The inverter stops discharging the battery when SOC drops to
+        this level while grid-connected.
+
+        Returns:
+            Cutoff SOC percentage (10-90)
+
+        Example:
+            >>> soc = await inverter.get_on_grid_cutoff_soc()
+            >>> soc
+            20
+        """
+        from pylxpweb.constants import HOLD_DISCHG_CUT_OFF_SOC_EOD
+
+        return await self._read_modbus_register(HOLD_DISCHG_CUT_OFF_SOC_EOD)
+
+    async def set_on_grid_cutoff_soc(self, soc_percent: int) -> bool:
+        """Set on-grid discharge cutoff SOC via Modbus.
+
+        Args:
+            soc_percent: Cutoff SOC percentage (10-90)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If soc_percent is out of range
+
+        Example:
+            >>> await inverter.set_on_grid_cutoff_soc(20)
+            True
+        """
+        from pylxpweb.constants import HOLD_DISCHG_CUT_OFF_SOC_EOD
+
+        if not 10 <= soc_percent <= 90:
+            raise ValueError(f"soc_percent must be 10-90, got {soc_percent}")
+        return await self._write_modbus_register(HOLD_DISCHG_CUT_OFF_SOC_EOD, soc_percent)
+
+    async def get_off_grid_cutoff_soc(self) -> int:
+        """Get off-grid (EPS) discharge cutoff SOC via Modbus.
+
+        The inverter stops discharging the battery when SOC drops to
+        this level while in off-grid/EPS mode.
+
+        Returns:
+            Cutoff SOC percentage (0-100)
+
+        Example:
+            >>> soc = await inverter.get_off_grid_cutoff_soc()
+            >>> soc
+            20
+        """
+        from pylxpweb.constants import HOLD_SOC_LOW_LIMIT_EPS_DISCHG
+
+        return await self._read_modbus_register(HOLD_SOC_LOW_LIMIT_EPS_DISCHG)
+
+    async def set_off_grid_cutoff_soc(self, soc_percent: int) -> bool:
+        """Set off-grid (EPS) discharge cutoff SOC via Modbus.
+
+        Args:
+            soc_percent: Cutoff SOC percentage (0-100)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If soc_percent is out of range
+
+        Example:
+            >>> await inverter.set_off_grid_cutoff_soc(20)
+            True
+        """
+        from pylxpweb.constants import HOLD_SOC_LOW_LIMIT_EPS_DISCHG
+
+        if not 0 <= soc_percent <= 100:
+            raise ValueError(f"soc_percent must be 0-100, got {soc_percent}")
+        return await self._write_modbus_register(HOLD_SOC_LOW_LIMIT_EPS_DISCHG, soc_percent)
+
+    # ============================================================================
+    # On-Grid Discharge Cutoff Voltage Operations (Modbus)
+    # ============================================================================
+    # Register 169: on-grid discharge cutoff voltage in decivolts (×10)
+    # Confirmed via live Modbus testing 2026-02-18 on FlexBOSS21.
+
+    async def get_on_grid_cutoff_voltage(self) -> float:
+        """Get on-grid discharge cutoff voltage via Modbus.
+
+        The inverter stops discharging the battery when its voltage
+        drops to this level while grid-connected.
+
+        Returns:
+            Cutoff voltage in volts (e.g. 40.0)
+
+        Example:
+            >>> volts = await inverter.get_on_grid_cutoff_voltage()
+            >>> volts
+            40.0
+        """
+        from pylxpweb.constants import HOLD_ON_GRID_EOD_VOLTAGE
+
+        raw = await self._read_modbus_register(HOLD_ON_GRID_EOD_VOLTAGE)
+        return raw / 10.0
+
+    async def set_on_grid_cutoff_voltage(self, voltage: float) -> bool:
+        """Set on-grid discharge cutoff voltage via Modbus.
+
+        Args:
+            voltage: Cutoff voltage in volts (e.g. 40.0). Stored as ×10.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_on_grid_cutoff_voltage(40.0)
+            True
+        """
+        from pylxpweb.constants import HOLD_ON_GRID_EOD_VOLTAGE
+
+        raw = int(round(voltage * 10))
+        if raw <= 0:
+            raise ValueError(f"voltage must be positive, got {voltage}")
+        return await self._write_modbus_register(HOLD_ON_GRID_EOD_VOLTAGE, raw)
+
+    # ============================================================================
+    # Off-Grid Discharge Cutoff Voltage Operations (Modbus)
+    # ============================================================================
+    # Register 100: off-grid discharge cutoff voltage in decivolts (×10)
+    # API name: HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT
+    # Previously mislabeled as HOLD_BAT_VOLT_MIN_CHG ("battery min charge voltage").
+    # Confirmed via live Modbus testing 2026-02-18 on FlexBOSS21.
+
+    async def get_off_grid_cutoff_voltage(self) -> float:
+        """Get off-grid (EPS) discharge cutoff voltage via Modbus.
+
+        The inverter stops discharging the battery when its voltage
+        drops to this level while in off-grid/EPS mode.
+
+        Returns:
+            Cutoff voltage in volts (e.g. 40.0)
+
+        Example:
+            >>> volts = await inverter.get_off_grid_cutoff_voltage()
+            >>> volts
+            40.0
+        """
+        from pylxpweb.constants import HOLD_OFF_GRID_EOD_VOLTAGE
+
+        raw = await self._read_modbus_register(HOLD_OFF_GRID_EOD_VOLTAGE)
+        return raw / 10.0
+
+    async def set_off_grid_cutoff_voltage(self, voltage: float) -> bool:
+        """Set off-grid (EPS) discharge cutoff voltage via Modbus.
+
+        Args:
+            voltage: Cutoff voltage in volts (e.g. 40.0). Stored as ×10.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_off_grid_cutoff_voltage(40.0)
+            True
+        """
+        from pylxpweb.constants import HOLD_OFF_GRID_EOD_VOLTAGE
+
+        raw = int(round(voltage * 10))
+        if raw <= 0:
+            raise ValueError(f"voltage must be positive, got {voltage}")
+        return await self._write_modbus_register(HOLD_OFF_GRID_EOD_VOLTAGE, raw)
+
+    # ============================================================================
+    # Discharge Start Threshold Operations (Modbus)
+    # ============================================================================
+    # Register 116: start battery discharge when grid import exceeds this wattage.
+    # Confirmed via live Modbus testing 2026-02-18 on FlexBOSS21.
+
+    async def get_start_discharge_power(self) -> int:
+        """Get discharge start threshold (P_import) via Modbus.
+
+        The inverter starts discharging the battery when grid import
+        power exceeds this threshold.
+
+        Returns:
+            Threshold in watts
+
+        Example:
+            >>> watts = await inverter.get_start_discharge_power()
+            >>> watts
+            100
+        """
+        from pylxpweb.constants import HOLD_P_TO_USER_START_DISCHG
+
+        return await self._read_modbus_register(HOLD_P_TO_USER_START_DISCHG)
+
+    async def set_start_discharge_power(self, watts: int) -> bool:
+        """Set discharge start threshold (P_import) via Modbus.
+
+        Args:
+            watts: Start discharging when grid import exceeds this (W)
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_start_discharge_power(100)
+            True
+        """
+        from pylxpweb.constants import HOLD_P_TO_USER_START_DISCHG
+
+        if watts < 0:
+            raise ValueError(f"watts must be non-negative, got {watts}")
+        return await self._write_modbus_register(HOLD_P_TO_USER_START_DISCHG, watts)
 
     # TODO: Charge priority schedule (regs 76-81) and forced discharge schedule
     # (regs 82-89) are not yet implemented. The existing HOLD_DISCHG_* constants
