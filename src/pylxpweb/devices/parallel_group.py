@@ -131,20 +131,46 @@ class ParallelGroup:
 
         from pylxpweb.models import EnergyInfo as EnergyInfoModel
 
+        today_yield = _sum_field("pv_energy_today")
+        today_charge = _sum_field("charge_energy_today")
+        today_discharge = _sum_field("discharge_energy_today")
+        today_import = _sum_field("grid_import_today")
+        today_export = _sum_field("grid_export_today")
+
+        total_yield = _sum_field("pv_energy_total")
+        total_charge = _sum_field("charge_energy_total")
+        total_discharge = _sum_field("discharge_energy_total")
+        total_import = _sum_field("grid_import_total")
+        total_export = _sum_field("grid_export_total")
+
+        # Usage via energy balance.  The transport field ``load_energy_today``
+        # is mapped to AC-charge rectifier energy (register 32, Erec_day),
+        # NOT household consumption.  Energy balance is the correct formula:
+        #   usage = yield + discharge + import - charge - export
+        # See: eg4_web_monitor issue #163
+        today_usage = (
+            today_yield + today_discharge + today_import
+            - today_charge - today_export
+        )
+        total_usage = (
+            total_yield + total_discharge + total_import
+            - total_charge - total_export
+        )
+
         return EnergyInfoModel(
             success=True,
-            todayYielding=_sum_field("pv_energy_today"),
-            todayCharging=_sum_field("charge_energy_today"),
-            todayDischarging=_sum_field("discharge_energy_today"),
-            todayImport=_sum_field("grid_import_today"),
-            todayExport=_sum_field("grid_export_today"),
-            todayUsage=_sum_field("load_energy_today"),
-            totalYielding=_sum_field("pv_energy_total"),
-            totalCharging=_sum_field("charge_energy_total"),
-            totalDischarging=_sum_field("discharge_energy_total"),
-            totalImport=_sum_field("grid_import_total"),
-            totalExport=_sum_field("grid_export_total"),
-            totalUsage=_sum_field("load_energy_total"),
+            todayYielding=today_yield,
+            todayCharging=today_charge,
+            todayDischarging=today_discharge,
+            todayImport=today_import,
+            todayExport=today_export,
+            todayUsage=today_usage,
+            totalYielding=total_yield,
+            totalCharging=total_charge,
+            totalDischarging=total_discharge,
+            totalImport=total_import,
+            totalExport=total_export,
+            totalUsage=total_usage,
         )
 
     async def _fetch_energy_data(self, serial_number: str) -> None:

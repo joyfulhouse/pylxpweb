@@ -288,6 +288,132 @@ class TestParallelGroupCombinedEnergy:
         assert result["lifetime_kwh"] == 1000.0
 
 
+class TestComputeEnergyFromInvertersUsesEnergyBalance:
+    """Test _compute_energy_from_inverters uses energy balance for consumption.
+
+    Issue #163: todayUsage/totalUsage were computed by summing load_energy_today
+    and load_energy_total which are actually mapped to AC charge rectifier energy
+    (register 32/48-49).  The correct approach is energy balance:
+        usage = yield + discharge + import - charge - export
+    """
+
+    def _make_transport_energy(
+        self,
+        *,
+        pv: float = 0.0,
+        charge: float = 0.0,
+        discharge: float = 0.0,
+        grid_import: float = 0.0,
+        grid_export: float = 0.0,
+        load: float = 999.0,
+    ) -> Mock:
+        """Create mock transport energy with given values (kWh).
+
+        The ``load`` field is deliberately set to a sentinel value (999.0)
+        so the test can verify it is NOT used in the computation.
+        """
+        energy = Mock()
+        energy.pv_energy_today = pv
+        energy.charge_energy_today = charge
+        energy.discharge_energy_today = discharge
+        energy.grid_import_today = grid_import
+        energy.grid_export_today = grid_export
+        energy.load_energy_today = load  # Should NOT be used
+
+        energy.pv_energy_total = pv * 100
+        energy.charge_energy_total = charge * 100
+        energy.discharge_energy_total = discharge * 100
+        energy.grid_import_total = grid_import * 100
+        energy.grid_export_total = grid_export * 100
+        energy.load_energy_total = load * 100  # Should NOT be used
+        return energy
+
+    def test_usage_computed_from_energy_balance(
+        self, mock_client: LuxpowerClient, mock_station: Mock
+    ) -> None:
+        """todayUsage and totalUsage equal yield+discharge+import-charge-export."""
+        group = ParallelGroup(
+            client=mock_client,
+            station=mock_station,
+            name="A",
+            first_device_serial="INV001",
+        )
+
+        inv = Mock()
+        inv.serial_number = "INV001"
+        inv._transport_energy = self._make_transport_energy(
+            pv=30.0, charge=5.0, discharge=10.0, grid_import=20.0, grid_export=8.0,
+            load=999.0,  # sentinel — must NOT appear in result
+        )
+        group.inverters = [inv]
+
+        result = group._compute_energy_from_inverters()
+
+        # Energy balance: 30 + 10 + 20 - 5 - 8 = 47 kWh
+        # Result is in raw API units (0.1 kWh) → 470
+        expected_today = 470
+        expected_total = 47000  # lifetime = today * 100 in our mock
+
+        assert result.todayUsage == expected_today
+        assert result.totalUsage == expected_total
+
+    def test_usage_sums_across_multiple_inverters(
+        self, mock_client: LuxpowerClient, mock_station: Mock
+    ) -> None:
+        """Energy balance is computed per-inverter then summed."""
+        group = ParallelGroup(
+            client=mock_client,
+            station=mock_station,
+            name="A",
+            first_device_serial="INV001",
+        )
+
+        inv1 = Mock()
+        inv1.serial_number = "INV001"
+        inv1._transport_energy = self._make_transport_energy(
+            pv=20.0, charge=3.0, discharge=5.0, grid_import=10.0, grid_export=4.0,
+        )
+        inv2 = Mock()
+        inv2.serial_number = "INV002"
+        inv2._transport_energy = self._make_transport_energy(
+            pv=15.0, charge=2.0, discharge=8.0, grid_import=12.0, grid_export=6.0,
+        )
+        group.inverters = [inv1, inv2]
+
+        result = group._compute_energy_from_inverters()
+
+        # inv1 balance: 20+5+10-3-4 = 28
+        # inv2 balance: 15+8+12-2-6 = 27
+        # Total = 55 kWh → 550 raw units
+        assert result.todayUsage == 550
+        assert result.totalUsage == 55000
+
+    def test_load_energy_fields_not_used(
+        self, mock_client: LuxpowerClient, mock_station: Mock
+    ) -> None:
+        """Verify load_energy_today/total are ignored (they map to AC charge)."""
+        group = ParallelGroup(
+            client=mock_client,
+            station=mock_station,
+            name="A",
+            first_device_serial="INV001",
+        )
+
+        inv = Mock()
+        inv.serial_number = "INV001"
+        inv._transport_energy = self._make_transport_energy(
+            pv=10.0, charge=2.0, discharge=3.0, grid_import=5.0, grid_export=1.0,
+            load=777.0,  # If this were used, todayUsage would be 7770
+        )
+        group.inverters = [inv]
+
+        result = group._compute_energy_from_inverters()
+
+        # Energy balance: 10+3+5-2-1 = 15 kWh → 150 raw
+        assert result.todayUsage == 150
+        assert result.todayUsage != 7770  # Confirm load field NOT used
+
+
 class TestParallelGroupFactory:
     """Test parallel group factory methods."""
 
