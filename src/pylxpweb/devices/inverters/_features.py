@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from pylxpweb.constants import (
     DEVICE_TYPE_CODE_FLEXBOSS,
@@ -34,7 +34,7 @@ _DEPRECATED_FAMILY_NAMES: dict[str, str] = {
 }
 
 
-class InverterFamily(str, Enum):
+class InverterFamily(StrEnum):
     """Inverter model family classification.
 
     Each family has distinct hardware capabilities and parameter sets.
@@ -73,7 +73,7 @@ class InverterFamily(str, Enum):
     LXP_LV = "LXP"  # Deprecated since v0.8.0: use LXP (same register maps)
 
 
-class GridType(str, Enum):
+class GridType(StrEnum):
     """Grid configuration type."""
 
     # Split-phase (US residential: 120V/240V)

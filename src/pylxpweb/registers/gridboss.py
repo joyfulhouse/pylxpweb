@@ -32,7 +32,7 @@ These are read in separate Modbus operations so there is no conflict in practice
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from pylxpweb.registers.inverter_input import ScaleFactor
 
@@ -41,7 +41,7 @@ from pylxpweb.registers.inverter_input import ScaleFactor
 # =============================================================================
 
 
-class GridBossCategory(str, Enum):
+class GridBossCategory(StrEnum):
     """Category for GridBOSS/MID device registers."""
 
     VOLTAGE = "voltage"

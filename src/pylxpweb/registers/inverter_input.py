@@ -20,7 +20,7 @@ EG4 18KPV documentation shows separate regs but actual hardware uses packed form
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 
 # ---------------------------------------------------------------------------
 # Model sets for the `models` field on RegisterDefinition
@@ -39,7 +39,7 @@ class ScaleFactor(int, Enum):
     DIV_1000 = 1000
 
 
-class RegisterCategory(str, Enum):
+class RegisterCategory(StrEnum):
     """Logical grouping for read scheduling and entity creation."""
 
     RUNTIME = "runtime"
