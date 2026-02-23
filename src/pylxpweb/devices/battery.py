@@ -78,6 +78,9 @@ class Battery(BaseDevice):
         self._battery_index = battery_data.batIndex
         self._data: BatteryModule = battery_data
         self._transport_data = None  # Only set via from_transport_data()
+        # Override BaseDevice.serial_number with the actual battery serial
+        # so Battery shares the same attribute name as BatteryData.
+        self.serial_number = battery_data.batterySn
         self._is_transport_data = False  # Using BatteryModule (HTTP API)
 
     @classmethod
@@ -567,6 +570,56 @@ class Battery(BaseDevice):
             Notice information string, or None if not available.
         """
         return self._data.noticeInfo
+
+    # ========== BatteryData-compatible aliases ==========
+    # These properties allow Battery (device) objects to be used
+    # interchangeably with BatteryData (transport) objects in shared
+    # mapping functions like _build_individual_battery_mapping().
+
+    @property
+    def max_cell_temperature(self) -> float:
+        """Alias for :attr:`max_cell_temp` (BatteryData compatibility)."""
+        return self.max_cell_temp
+
+    @property
+    def min_cell_temperature(self) -> float:
+        """Alias for :attr:`min_cell_temp` (BatteryData compatibility)."""
+        return self.min_cell_temp
+
+    @property
+    def max_cell_num_temp(self) -> int | None:
+        """Alias for :attr:`max_cell_temp_num` (BatteryData compatibility)."""
+        return self.max_cell_temp_num
+
+    @property
+    def min_cell_num_temp(self) -> int | None:
+        """Alias for :attr:`min_cell_temp_num` (BatteryData compatibility)."""
+        return self.min_cell_temp_num
+
+    @property
+    def max_cell_num_voltage(self) -> int | None:
+        """Alias for :attr:`max_cell_voltage_num` (BatteryData compatibility)."""
+        return self.max_cell_voltage_num
+
+    @property
+    def min_cell_num_voltage(self) -> int | None:
+        """Alias for :attr:`min_cell_voltage_num` (BatteryData compatibility)."""
+        return self.min_cell_voltage_num
+
+    @property
+    def remaining_capacity(self) -> int:
+        """Alias for :attr:`current_remain_capacity` (BatteryData compatibility)."""
+        return self.current_remain_capacity
+
+    @property
+    def max_capacity(self) -> int:
+        """Alias for :attr:`current_full_capacity` (BatteryData compatibility)."""
+        return self.current_full_capacity
+
+    @property
+    def charge_current_limit(self) -> float | None:
+        """Alias for :attr:`charge_max_current` (BatteryData compatibility)."""
+        return self.charge_max_current
 
     async def refresh(self) -> None:
         """Refresh battery data.
