@@ -143,6 +143,76 @@ class TestBatteryDataCorruption:
         assert data._raw_soc == 144
         assert data.soc == 100
 
+    # --- Cell voltage canary checks (issue #166) ---
+
+    def test_max_cell_voltage_above_5v_is_corrupt(self) -> None:
+        """is_corrupt() returns True when max_cell_voltage > 5.0V (0xFFFF/1000 = 65.535V)."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, max_cell_voltage=65.535)
+        assert data.is_corrupt() is True
+
+    def test_min_cell_voltage_above_5v_is_corrupt(self) -> None:
+        """is_corrupt() returns True when min_cell_voltage > 5.0V."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, min_cell_voltage=65.535)
+        assert data.is_corrupt() is True
+
+    def test_max_cell_voltage_below_1v_nonzero_is_corrupt(self) -> None:
+        """is_corrupt() returns True when max_cell_voltage is nonzero but < 1.0V (partial register)."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, max_cell_voltage=0.3)
+        assert data.is_corrupt() is True
+
+    def test_min_cell_voltage_below_1v_nonzero_is_corrupt(self) -> None:
+        """is_corrupt() returns True when min_cell_voltage is nonzero but < 1.0V."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, min_cell_voltage=0.1)
+        assert data.is_corrupt() is True
+
+    def test_cell_voltage_zero_not_corrupt(self) -> None:
+        """is_corrupt() returns False when cell voltage is 0.0 (no data / absent)."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, max_cell_voltage=0.0, min_cell_voltage=0.0)
+        assert data.is_corrupt() is False
+
+    def test_cell_voltage_normal_lfp_not_corrupt(self) -> None:
+        """is_corrupt() returns False for typical LFP cell voltages (3.2-3.4V)."""
+        data = BatteryData(
+            soc=50, soh=90, voltage=52.0,
+            max_cell_voltage=3.365, min_cell_voltage=3.310,
+        )
+        assert data.is_corrupt() is False
+
+    def test_cell_voltage_at_upper_bound_not_corrupt(self) -> None:
+        """is_corrupt() returns False for cell voltage at 5.0V (boundary)."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, max_cell_voltage=5.0)
+        assert data.is_corrupt() is False
+
+    def test_cell_voltage_at_lower_bound_not_corrupt(self) -> None:
+        """is_corrupt() returns False for cell voltage at 1.0V (boundary)."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, min_cell_voltage=1.0)
+        assert data.is_corrupt() is False
+
+    def test_min_cell_exceeds_max_cell_is_corrupt(self) -> None:
+        """is_corrupt() returns True when min_cell_voltage > max_cell_voltage (inversion)."""
+        data = BatteryData(
+            soc=50, soh=90, voltage=52.0,
+            max_cell_voltage=3.300, min_cell_voltage=3.400,
+        )
+        assert data.is_corrupt() is True
+
+    def test_min_equals_max_cell_not_corrupt(self) -> None:
+        """is_corrupt() returns False when min_cell_voltage == max_cell_voltage (perfectly balanced)."""
+        data = BatteryData(
+            soc=50, soh=90, voltage=52.0,
+            max_cell_voltage=3.350, min_cell_voltage=3.350,
+        )
+        assert data.is_corrupt() is False
+
+    def test_cell_inversion_check_skipped_when_zero(self) -> None:
+        """Inversion check skipped when either cell voltage is 0 (no data)."""
+        data = BatteryData(
+            soc=50, soh=90, voltage=52.0,
+            max_cell_voltage=0.0, min_cell_voltage=3.300,
+        )
+        # max=0 means no data, so inversion check should not fire
+        assert data.is_corrupt() is False
+
 
 class TestBatteryBankDataCorruption:
     """Corruption detection for BatteryBankData."""

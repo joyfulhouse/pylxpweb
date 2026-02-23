@@ -677,6 +677,35 @@ class BatteryData:
                 self.voltage,
             )
             return True
+        # Cell voltage bounds: LFP cells operate 2.5-3.65V, generous range
+        # 1.0-5.0V.  Zero means no data (valid).  Corrupt reads produce
+        # 65.535V (0xFFFF/1000) or sub-1V partial register values.
+        for label, v in (
+            ("max_cell_voltage", self.max_cell_voltage),
+            ("min_cell_voltage", self.min_cell_voltage),
+        ):
+            if v > 0 and (v < 1.0 or v > 5.0):
+                _LOGGER.warning(
+                    "Battery %d canary: %s=%.3f outside 1.0-5.0V",
+                    self.battery_index,
+                    label,
+                    v,
+                )
+                return True
+        # Inversion: min_cell_voltage must not exceed max_cell_voltage.
+        # Skip when either is 0.0 (no data from BMS).
+        if (
+            self.max_cell_voltage > 0
+            and self.min_cell_voltage > 0
+            and self.min_cell_voltage > self.max_cell_voltage
+        ):
+            _LOGGER.warning(
+                "Battery %d canary: min_cell_voltage=%.3f > max_cell_voltage=%.3f",
+                self.battery_index,
+                self.min_cell_voltage,
+                self.max_cell_voltage,
+            )
+            return True
         return False
 
     @property
