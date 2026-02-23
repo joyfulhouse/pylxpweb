@@ -669,3 +669,74 @@ class TestReadAllInputData:
             # Should succeed despite bms_data failure
             assert runtime is not None
             assert energy is not None
+
+    @pytest.mark.asyncio
+    async def test_read_all_preserves_partial_battery_data(self) -> None:
+        """Chunk failure at battery slot 4 preserves data from slots 0-3.
+
+        Regression test for #165: 18kPV firmware returns Illegal Data Address
+        at register 5122 (slot 4) but slots 0-3 read fine.  Previously, the
+        single try/except around the entire while loop discarded all partial
+        data.
+        """
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+            mock_client.close = MagicMock()
+
+            # Build registers: battery_count=5 triggers 5×30=150 regs in chunks of 40
+            registers = [0] * 197
+            registers[4] = 530  # Battery voltage
+            registers[5] = (100 << 8) | 85  # SOC/SOH
+            registers[96] = 5  # Battery count = 5
+
+            read_addresses: list[int] = []
+
+            async def mock_read_partial(
+                address: int, count: int, **kwargs: int
+            ) -> MagicMock:
+                read_addresses.append(address)
+                # Fail at chunk starting at 5122 (slot 4)
+                if address == 5122:
+                    resp = MagicMock()
+                    resp.isError.return_value = True
+                    resp.__str__ = lambda self: (
+                        "ExceptionResponse(dev_id=1, function_code=132, exception_code=3)"
+                    )
+                    return resp
+                resp = MagicMock()
+                resp.isError.return_value = False
+                if address < 200:
+                    resp.registers = registers[address : address + count]
+                else:
+                    # Battery slot data: populate status header (offset 0) = 0xC003
+                    vals = [0] * count
+                    vals[0] = 0xC003  # Connected battery header
+                    resp.registers = vals
+                return resp
+
+            mock_client.read_input_registers = mock_read_partial
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+            runtime, energy, battery = await transport.read_all_input_data()
+
+            # Runtime/energy still valid
+            assert runtime is not None
+            assert energy is not None
+
+            # Battery bank should exist with partial individual data
+            assert battery is not None
+
+            # Should have read 5002, 5042, 5082, then failed at 5122 — no 5162
+            battery_reads = [a for a in read_addresses if a >= 5000]
+            assert 5002 in battery_reads
+            assert 5042 in battery_reads
+            assert 5082 in battery_reads
+            assert 5122 in battery_reads  # attempted but failed
+            assert 5162 not in battery_reads  # never attempted

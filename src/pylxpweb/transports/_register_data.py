@@ -258,28 +258,38 @@ class RegisterDataMixin(_DataMixinBase):
             batteries_to_read = min(battery_count, BATTERY_MAX_COUNT)
             total_registers = batteries_to_read * BATTERY_REGISTER_COUNT
 
-            try:
-                current_addr = BATTERY_BASE_ADDRESS
-                remaining = total_registers
+            current_addr = BATTERY_BASE_ADDRESS
+            remaining = total_registers
 
-                while remaining > 0:
-                    chunk_size = min(remaining, 40)
+            while remaining > 0:
+                chunk_size = min(remaining, 40)
+                try:
                     values = await self._read_input_registers(current_addr, chunk_size)
-                    individual_registers.update(self._registers_from_values(current_addr, values))
-                    current_addr += chunk_size
-                    remaining -= chunk_size
+                except Exception as e:
+                    _LOGGER.warning(
+                        "Failed to read battery registers at %d: %s",
+                        current_addr,
+                        e,
+                    )
+                    # Stop reading further — contiguous address space means
+                    # later chunks will also fail.  Keep partial data.
+                    break
+                individual_registers.update(
+                    self._registers_from_values(current_addr, values)
+                )
+                current_addr += chunk_size
+                remaining -= chunk_size
 
+            if individual_registers:
                 _LOGGER.debug(
-                    "Read individual battery data for %d batteries from registers %d-%d",
-                    batteries_to_read,
+                    "Read individual battery data for registers %d-%d (%d of %d requested)",
                     BATTERY_BASE_ADDRESS,
                     current_addr - 1,
+                    len(individual_registers),
+                    total_registers,
                 )
-            except Exception as e:
-                _LOGGER.warning(
-                    "Failed to read individual battery registers (5000+): %s",
-                    e,
-                )
+            else:
+                # First chunk failed — no usable data at all.
                 individual_registers = None
 
         result = BatteryBankData.from_modbus_registers(
@@ -344,18 +354,26 @@ class RegisterDataMixin(_DataMixinBase):
             batteries_to_read = min(battery_count, BATTERY_MAX_COUNT)
             total_registers = batteries_to_read * BATTERY_REGISTER_COUNT
 
-            try:
-                current_addr = BATTERY_BASE_ADDRESS
-                remaining = total_registers
+            current_addr = BATTERY_BASE_ADDRESS
+            remaining = total_registers
 
-                while remaining > 0:
-                    chunk_size = min(remaining, 40)
+            while remaining > 0:
+                chunk_size = min(remaining, 40)
+                try:
                     values = await self._read_input_registers(current_addr, chunk_size)
-                    individual_registers.update(self._registers_from_values(current_addr, values))
-                    current_addr += chunk_size
-                    remaining -= chunk_size
-            except Exception as e:
-                _LOGGER.warning("Failed to read individual battery registers: %s", e)
+                except Exception:
+                    _LOGGER.warning(
+                        "Failed to read battery registers at %d, keeping partial data",
+                        current_addr,
+                    )
+                    break
+                individual_registers.update(
+                    self._registers_from_values(current_addr, values)
+                )
+                current_addr += chunk_size
+                remaining -= chunk_size
+
+            if not individual_registers:
                 individual_registers = None
 
         battery = BatteryBankData.from_modbus_registers(
