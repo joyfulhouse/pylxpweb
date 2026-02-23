@@ -23,7 +23,7 @@ field in BatteryModule).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from pylxpweb.registers.inverter_input import ScaleFactor
 
@@ -46,7 +46,7 @@ BATTERY_MAX_COUNT: int = 5
 # =============================================================================
 
 
-class BatteryCategory(str, Enum):
+class BatteryCategory(StrEnum):
     """Category for individual battery registers."""
 
     STATE = "state"

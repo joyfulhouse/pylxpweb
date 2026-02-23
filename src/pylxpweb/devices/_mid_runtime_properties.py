@@ -21,7 +21,7 @@ per-phase properties so the access logic is handled in one place.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from pylxpweb.models import MidboxRuntime
@@ -62,32 +62,28 @@ class MIDRuntimePropertiesMixin:
         supporting hybrid mode where holding register data (parameters)
         may not be loaded yet while HTTP data is already available.
         """
-        val: float | None
         tr = self._transport_runtime
         if tr is not None:
-            val = getattr(tr, transport_attr, None)
+            val = cast("float | None", getattr(tr, transport_attr, None))
             if val is not None:
                 return val
         if self._runtime is None:
             return None
-        val = getattr(self._runtime.midboxData, http_attr, None)
-        return val
+        return cast("float | None", getattr(self._runtime.midboxData, http_attr, None))
 
     def _raw_int(self, transport_attr: str, http_attr: str) -> int | None:
         """Get an integer value that has the same scale in both modes.
 
         Falls through to HTTP data when the transport value is None.
         """
-        val: int | None
         tr = self._transport_runtime
         if tr is not None:
-            val = getattr(tr, transport_attr, None)
+            val = cast("int | None", getattr(tr, transport_attr, None))
             if val is not None:
                 return val
         if self._runtime is None:
             return None
-        val = getattr(self._runtime.midboxData, http_attr, None)
-        return val
+        return cast("int | None", getattr(self._runtime.midboxData, http_attr, None))
 
     # ===========================================
     # Smart Port Power Helper

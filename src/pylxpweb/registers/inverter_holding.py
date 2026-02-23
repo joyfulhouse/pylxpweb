@@ -28,12 +28,12 @@ from documentation and follow the same HOLD_* naming convention.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from pylxpweb.registers.inverter_input import ALL, ScaleFactor
 
 
-class HoldingCategory(str, Enum):
+class HoldingCategory(StrEnum):
     """Logical grouping for holding register parameters."""
 
     SYSTEM = "system"

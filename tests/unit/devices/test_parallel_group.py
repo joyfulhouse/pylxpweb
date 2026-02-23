@@ -342,7 +342,11 @@ class TestComputeEnergyFromInvertersUsesEnergyBalance:
         inv = Mock()
         inv.serial_number = "INV001"
         inv._transport_energy = self._make_transport_energy(
-            pv=30.0, charge=5.0, discharge=10.0, grid_import=20.0, grid_export=8.0,
+            pv=30.0,
+            charge=5.0,
+            discharge=10.0,
+            grid_import=20.0,
+            grid_export=8.0,
             load=999.0,  # sentinel — must NOT appear in result
         )
         group.inverters = [inv]
@@ -371,12 +375,20 @@ class TestComputeEnergyFromInvertersUsesEnergyBalance:
         inv1 = Mock()
         inv1.serial_number = "INV001"
         inv1._transport_energy = self._make_transport_energy(
-            pv=20.0, charge=3.0, discharge=5.0, grid_import=10.0, grid_export=4.0,
+            pv=20.0,
+            charge=3.0,
+            discharge=5.0,
+            grid_import=10.0,
+            grid_export=4.0,
         )
         inv2 = Mock()
         inv2.serial_number = "INV002"
         inv2._transport_energy = self._make_transport_energy(
-            pv=15.0, charge=2.0, discharge=8.0, grid_import=12.0, grid_export=6.0,
+            pv=15.0,
+            charge=2.0,
+            discharge=8.0,
+            grid_import=12.0,
+            grid_export=6.0,
         )
         group.inverters = [inv1, inv2]
 
@@ -402,7 +414,11 @@ class TestComputeEnergyFromInvertersUsesEnergyBalance:
         inv = Mock()
         inv.serial_number = "INV001"
         inv._transport_energy = self._make_transport_energy(
-            pv=10.0, charge=2.0, discharge=3.0, grid_import=5.0, grid_export=1.0,
+            pv=10.0,
+            charge=2.0,
+            discharge=3.0,
+            grid_import=5.0,
+            grid_export=1.0,
             load=777.0,  # If this were used, todayUsage would be 7770
         )
         group.inverters = [inv]

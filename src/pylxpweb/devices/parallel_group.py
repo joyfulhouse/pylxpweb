@@ -148,14 +148,8 @@ class ParallelGroup:
         # NOT household consumption.  Energy balance is the correct formula:
         #   usage = yield + discharge + import - charge - export
         # See: eg4_web_monitor issue #163
-        today_usage = (
-            today_yield + today_discharge + today_import
-            - today_charge - today_export
-        )
-        total_usage = (
-            total_yield + total_discharge + total_import
-            - total_charge - total_export
-        )
+        today_usage = today_yield + today_discharge + today_import - today_charge - today_export
+        total_usage = total_yield + total_discharge + total_import - total_charge - total_export
 
         return EnergyInfoModel(
             success=True,

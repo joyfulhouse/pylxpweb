@@ -6,13 +6,13 @@ Field names match the API response format for easier parsing.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_serializer
 
 
-class OperatingMode(str, Enum):
+class OperatingMode(StrEnum):
     """Inverter operating modes.
 
     These are the two valid operating states for an inverter:
@@ -54,7 +54,7 @@ def _obfuscate_coordinate(coord: str | float) -> str:
         return "***"
 
 
-class BatteryType(str, Enum):
+class BatteryType(StrEnum):
     """Battery type enumeration."""
 
     LITHIUM = "LITHIUM"
@@ -62,7 +62,7 @@ class BatteryType(str, Enum):
     NO_BATTERY = "NO_BATTERY"
 
 
-class UserRole(str, Enum):
+class UserRole(StrEnum):
     """User role enumeration."""
 
     VIEWER = "VIEWER"
@@ -1051,7 +1051,7 @@ def energy_to_kwh(value: int) -> float:
 # Firmware Update Models
 
 
-class UpdateStatus(str, Enum):
+class UpdateStatus(StrEnum):
     """Firmware update status enumeration."""
 
     READY = "READY"
@@ -1061,7 +1061,7 @@ class UpdateStatus(str, Enum):
     FAILED = "FAILED"
 
 
-class UpdateEligibilityMessage(str, Enum):
+class UpdateEligibilityMessage(StrEnum):
     """Update eligibility status messages."""
 
     ALLOW_TO_UPDATE = "allowToUpdate"

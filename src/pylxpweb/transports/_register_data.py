@@ -274,9 +274,7 @@ class RegisterDataMixin(_DataMixinBase):
                     # Stop reading further — contiguous address space means
                     # later chunks will also fail.  Keep partial data.
                     break
-                individual_registers.update(
-                    self._registers_from_values(current_addr, values)
-                )
+                individual_registers.update(self._registers_from_values(current_addr, values))
                 current_addr += chunk_size
                 remaining -= chunk_size
 
@@ -367,9 +365,7 @@ class RegisterDataMixin(_DataMixinBase):
                         current_addr,
                     )
                     break
-                individual_registers.update(
-                    self._registers_from_values(current_addr, values)
-                )
+                individual_registers.update(self._registers_from_values(current_addr, values))
                 current_addr += chunk_size
                 remaining -= chunk_size
 

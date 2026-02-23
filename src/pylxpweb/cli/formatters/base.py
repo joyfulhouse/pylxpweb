@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from pylxpweb.cli.collectors.base import CollectionResult, ComparisonResult
 
 
-class OutputFormat(str, Enum):
+class OutputFormat(StrEnum):
     """Available output formats."""
 
     JSON = "json"

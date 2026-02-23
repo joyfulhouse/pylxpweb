@@ -26,14 +26,14 @@ Example:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
 
 
-class TransportType(str, Enum):
+class TransportType(StrEnum):
     """Types of local transports supported for hybrid mode.
 
     These transports can be attached to HTTP-discovered devices to enable

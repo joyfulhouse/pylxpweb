@@ -697,9 +697,7 @@ class TestReadAllInputData:
 
             read_addresses: list[int] = []
 
-            async def mock_read_partial(
-                address: int, count: int, **kwargs: int
-            ) -> MagicMock:
+            async def mock_read_partial(address: int, count: int, **kwargs: int) -> MagicMock:
                 read_addresses.append(address)
                 # Fail at chunk starting at 5122 (slot 4)
                 if address == 5122:

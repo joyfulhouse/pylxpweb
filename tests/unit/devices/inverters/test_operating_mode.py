@@ -258,8 +258,8 @@ class TestOperatingModeEnum:
 
     def test_operating_mode_string_representation(self):
         """Test OperatingMode string representation."""
-        assert str(OperatingMode.NORMAL) == "OperatingMode.NORMAL"
-        assert str(OperatingMode.STANDBY) == "OperatingMode.STANDBY"
+        assert str(OperatingMode.NORMAL) == "normal"
+        assert str(OperatingMode.STANDBY) == "standby"
 
     def test_operating_mode_comparison(self):
         """Test OperatingMode comparison."""
