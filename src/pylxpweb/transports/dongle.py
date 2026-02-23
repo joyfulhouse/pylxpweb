@@ -456,6 +456,10 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     ) -> list[int]:
         """Send a packet and receive response with retry logic.
 
+        Auto-reconnects if the TCP connection was lost (e.g. dongle reboot,
+        network glitch).  The reconnect happens once per call; if the fresh
+        connection also fails the error propagates normally.
+
         Args:
             packet: Packet bytes to send
             max_retries: Number of retry attempts for empty responses
@@ -471,8 +475,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         Raises:
             TransportReadError: If send/receive fails after retries
             TransportTimeoutError: If operation times out
+            TransportConnectionError: If reconnection also fails
         """
-        self._ensure_connected()
+        if not self._connected:
+            _LOGGER.info(
+                "Dongle %s:%s disconnected, attempting reconnect",
+                self._host,
+                self._port,
+            )
+            await self.connect()
 
         if self._writer is None or self._reader is None:
             raise TransportConnectionError("Socket not initialized")

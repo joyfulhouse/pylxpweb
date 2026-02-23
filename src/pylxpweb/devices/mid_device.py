@@ -235,13 +235,13 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
             LuxpowerConnectionError,
             LuxpowerDeviceError,
         ) as err:
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "Failed to fetch MID device runtime for %s: %s",
                 self.serial_number,
                 err,
             )
         except Exception as err:
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "Failed to fetch MID device runtime for %s: %s",
                 self.serial_number,
                 err,

@@ -474,10 +474,11 @@ class TestDongleRegisterOperations:
 
     @pytest.mark.asyncio
     async def test_read_runtime_not_connected(self) -> None:
-        """Test reading runtime data when not connected raises TransportReadError.
+        """Test reading runtime when disconnected triggers auto-reconnect.
 
-        Note: read_runtime catches the connection error and wraps it in TransportReadError
-        to provide context about which register group failed.
+        When the dongle is not connected, _send_receive attempts to reconnect.
+        If reconnection also fails (e.g. unreachable host), the error propagates
+        as a TransportReadError wrapping the connection failure.
         """
         transport = DongleTransport(
             host="192.168.1.100",
@@ -488,7 +489,53 @@ class TestDongleRegisterOperations:
         with pytest.raises(TransportReadError) as exc_info:
             await transport.read_runtime()
 
-        assert "not connected" in str(exc_info.value).lower()
+        error_msg = str(exc_info.value).lower()
+        assert "timeout" in error_msg or "failed" in error_msg
+
+    @pytest.mark.asyncio
+    async def test_auto_reconnect_after_disconnect(self) -> None:
+        """Test that _send_receive auto-reconnects after connection drops.
+
+        Simulates a dropped connection (OSError during read) followed by
+        a successful reconnect on the next call.
+        """
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        # Simulate an established connection
+        transport._connected = True
+        transport._reader = AsyncMock()
+        transport._writer = AsyncMock()
+        transport._writer.close = MagicMock()
+
+        # First call: OSError tears down the connection
+        transport._reader.read = AsyncMock(side_effect=OSError("Connection reset"))
+        with pytest.raises(TransportReadError, match="Socket error"):
+            await transport._send_receive(b"\x00" * 10)
+
+        assert not transport._connected
+
+        # Next call: should attempt reconnect (not just raise "not connected")
+        # Mock connect to succeed and set up fresh reader/writer
+        async def mock_connect() -> None:
+            transport._connected = True
+            transport._reader = AsyncMock()
+            transport._writer = AsyncMock()
+            transport._writer.close = MagicMock()
+            # Return a valid response on read
+            transport._reader.read = AsyncMock(return_value=b"")
+
+        transport.connect = AsyncMock(side_effect=mock_connect)
+
+        # This should call connect(), not raise TransportConnectionError
+        with pytest.raises(TransportReadError):
+            # Will fail with empty response after reconnect, but the point
+            # is that connect() was called
+            await transport._send_receive(b"\x00" * 10)
+
+        transport.connect.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_write_parameters(self) -> None:
