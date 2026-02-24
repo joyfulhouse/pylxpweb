@@ -121,6 +121,106 @@ class RegisterDataMixin(_DataMixinBase):
         """Build address-to-value dict from a contiguous register read."""
         return {start + offset: value for offset, value in enumerate(values)}
 
+    async def _read_individual_battery_registers(
+        self,
+        battery_count: int,
+    ) -> dict[int, int] | None:
+        """Read individual battery slot registers with adaptive slot ceiling.
+
+        After the first failure at a battery slot address (e.g. ExceptionResponse
+        code 3 = Illegal Data Address), the ceiling is remembered and subsequent
+        polls skip unreadable slots.  This saves ~2.5s per poll on firmware that
+        implements fewer slots than ``battery_count`` reports.
+
+        The ceiling resets when the transport reconnects (new instance).
+
+        Args:
+            battery_count: Value from register 96 (total batteries reported).
+
+        Returns:
+            Dict of address→value for successfully read registers, or *None*
+            if the first chunk failed (no usable data).
+        """
+        ceiling: int = getattr(self, "_battery_slot_ceiling", BATTERY_MAX_COUNT)
+        batteries_to_read = min(battery_count, ceiling)
+
+        if batteries_to_read <= 0:
+            return None
+
+        total_registers = batteries_to_read * BATTERY_REGISTER_COUNT
+        _LOGGER.debug(
+            "[%s] Reading %d battery slots (battery_count=%d, ceiling=%d)",
+            self._serial,
+            batteries_to_read,
+            battery_count,
+            ceiling,
+        )
+
+        individual_registers: dict[int, int] = {}
+        current_addr = BATTERY_BASE_ADDRESS
+        remaining = total_registers
+
+        while remaining > 0:
+            chunk_size = min(remaining, 40)
+            try:
+                values = await self._read_input_registers(current_addr, chunk_size)
+            except Exception:
+                _LOGGER.warning(
+                    "[%s] Failed to read battery registers at %d, keeping partial data",
+                    self._serial,
+                    current_addr,
+                )
+                new_ceiling = (current_addr - BATTERY_BASE_ADDRESS) // BATTERY_REGISTER_COUNT
+                if new_ceiling < ceiling:
+                    self._battery_slot_ceiling = new_ceiling
+                    _LOGGER.info(
+                        "[%s] Battery slot ceiling lowered from %d to %d (address %d unreadable)",
+                        self._serial,
+                        ceiling,
+                        new_ceiling,
+                        current_addr,
+                    )
+                break
+            individual_registers.update(self._registers_from_values(current_addr, values))
+            current_addr += chunk_size
+            remaining -= chunk_size
+
+        return individual_registers if individual_registers else None
+
+    def _log_battery_slot_debug(
+        self,
+        individual_registers: dict[int, int],
+        battery_count: int,
+    ) -> None:
+        """Log per-slot status/voltage/serial for round-robin debugging (#165)."""
+        ceiling: int = getattr(self, "_battery_slot_ceiling", BATTERY_MAX_COUNT)
+        slots_to_log = min(battery_count, ceiling)
+        for slot_idx in range(slots_to_log):
+            slot_base = BATTERY_BASE_ADDRESS + (slot_idx * BATTERY_REGISTER_COUNT)
+            status = individual_registers.get(slot_base, 0)
+            voltage_raw = individual_registers.get(slot_base + 6, 0)
+
+            # Serial: 7 registers at offset 17-23, 2 ASCII chars per word
+            serial_chars: list[str] = []
+            for reg_offset in range(7):
+                raw_word = individual_registers.get(slot_base + 17 + reg_offset, 0)
+                lo_byte = raw_word & 0xFF
+                hi_byte = (raw_word >> 8) & 0xFF
+                if lo_byte > 0:
+                    serial_chars.append(chr(lo_byte))
+                if hi_byte > 0:
+                    serial_chars.append(chr(hi_byte))
+            slot_serial = "".join(serial_chars).strip("\x00")
+
+            _LOGGER.debug(
+                "[%s] Slot %d: status=0x%04X voltage_raw=%d serial=%r",
+                self._serial,
+                slot_idx,
+                status,
+                voltage_raw,
+                slot_serial or "(empty)",
+            )
+
     # ------------------------------------------------------------------
     # Register group reading
     # ------------------------------------------------------------------
@@ -261,74 +361,12 @@ class RegisterDataMixin(_DataMixinBase):
         )
 
         if include_individual and battery_count > 0:
-            individual_registers = {}
-            batteries_to_read = min(battery_count, BATTERY_MAX_COUNT)
-            total_registers = batteries_to_read * BATTERY_REGISTER_COUNT
-            _LOGGER.debug(
-                "[%s] Reading %d battery slots (battery_count=%d, capped at %d)",
-                self._serial,
-                batteries_to_read,
+            individual_registers = await self._read_individual_battery_registers(
                 battery_count,
-                BATTERY_MAX_COUNT,
             )
 
-            current_addr = BATTERY_BASE_ADDRESS
-            remaining = total_registers
-
-            while remaining > 0:
-                chunk_size = min(remaining, 40)
-                try:
-                    values = await self._read_input_registers(current_addr, chunk_size)
-                except Exception as e:
-                    _LOGGER.warning(
-                        "Failed to read battery registers at %d: %s",
-                        current_addr,
-                        e,
-                    )
-                    # Stop reading further — contiguous address space means
-                    # later chunks will also fail.  Keep partial data.
-                    break
-                individual_registers.update(self._registers_from_values(current_addr, values))
-                current_addr += chunk_size
-                remaining -= chunk_size
-
-            if individual_registers:
-                _LOGGER.debug(
-                    "Read individual battery data for registers %d-%d (%d of %d requested)",
-                    BATTERY_BASE_ADDRESS,
-                    current_addr - 1,
-                    len(individual_registers),
-                    total_registers,
-                )
-            else:
-                # First chunk failed — no usable data at all.
-                individual_registers = None
-
-        # Log per-slot status header for round-robin debugging (#165)
         if individual_registers:
-            for slot_idx in range(min(battery_count, BATTERY_MAX_COUNT)):
-                slot_base = BATTERY_BASE_ADDRESS + (slot_idx * BATTERY_REGISTER_COUNT)
-                status = individual_registers.get(slot_base, 0)
-                voltage_raw = individual_registers.get(slot_base + 6, 0)
-                # Serial: 7 registers at offset 17-23, 2 ASCII chars each
-                serial_chars: list[str] = []
-                for sr in range(7):
-                    raw_word = individual_registers.get(slot_base + 17 + sr, 0)
-                    lo = raw_word & 0xFF
-                    hi = (raw_word >> 8) & 0xFF
-                    if lo > 0:
-                        serial_chars.append(chr(lo))
-                    if hi > 0:
-                        serial_chars.append(chr(hi))
-                slot_serial = "".join(serial_chars).strip("\x00")
-                _LOGGER.debug(
-                    "[%s] Slot %d: status=0x%04X voltage_raw=%d serial=%r",
-                    self._serial,
-                    slot_idx,
-                    status,
-                    voltage_raw,
-                    slot_serial or "(empty)",
-                )
+            self._log_battery_slot_debug(individual_registers, battery_count)
 
         result = BatteryBankData.from_modbus_registers(
             all_registers,
@@ -388,7 +426,6 @@ class RegisterDataMixin(_DataMixinBase):
 
         # Read individual battery registers (5000+) if present
         battery_count = input_registers.get(96, 0)
-        individual_registers: dict[int, int] | None = None
 
         _LOGGER.debug(
             "[%s] combined path: battery_count (reg 96) = %d",
@@ -396,62 +433,14 @@ class RegisterDataMixin(_DataMixinBase):
             battery_count,
         )
 
+        individual_registers: dict[int, int] | None = None
         if battery_count > 0:
-            individual_registers = {}
-            batteries_to_read = min(battery_count, BATTERY_MAX_COUNT)
-            total_registers = batteries_to_read * BATTERY_REGISTER_COUNT
-            _LOGGER.debug(
-                "[%s] Reading %d battery slots (battery_count=%d, capped at %d)",
-                self._serial,
-                batteries_to_read,
+            individual_registers = await self._read_individual_battery_registers(
                 battery_count,
-                BATTERY_MAX_COUNT,
             )
 
-            current_addr = BATTERY_BASE_ADDRESS
-            remaining = total_registers
-
-            while remaining > 0:
-                chunk_size = min(remaining, 40)
-                try:
-                    values = await self._read_input_registers(current_addr, chunk_size)
-                except Exception:
-                    _LOGGER.warning(
-                        "Failed to read battery registers at %d, keeping partial data",
-                        current_addr,
-                    )
-                    break
-                individual_registers.update(self._registers_from_values(current_addr, values))
-                current_addr += chunk_size
-                remaining -= chunk_size
-
-            if not individual_registers:
-                individual_registers = None
-
-        # Log per-slot status for round-robin debugging (#165)
         if individual_registers:
-            for slot_idx in range(min(battery_count, BATTERY_MAX_COUNT)):
-                slot_base = BATTERY_BASE_ADDRESS + (slot_idx * BATTERY_REGISTER_COUNT)
-                status = individual_registers.get(slot_base, 0)
-                voltage_raw = individual_registers.get(slot_base + 6, 0)
-                serial_chars: list[str] = []
-                for sr in range(7):
-                    raw_word = individual_registers.get(slot_base + 17 + sr, 0)
-                    lo = raw_word & 0xFF
-                    hi = (raw_word >> 8) & 0xFF
-                    if lo > 0:
-                        serial_chars.append(chr(lo))
-                    if hi > 0:
-                        serial_chars.append(chr(hi))
-                slot_serial = "".join(serial_chars).strip("\x00")
-                _LOGGER.debug(
-                    "[%s] Slot %d: status=0x%04X voltage_raw=%d serial=%r",
-                    self._serial,
-                    slot_idx,
-                    status,
-                    voltage_raw,
-                    slot_serial or "(empty)",
-                )
+            self._log_battery_slot_debug(individual_registers, battery_count)
 
         battery = BatteryBankData.from_modbus_registers(
             input_registers,

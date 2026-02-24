@@ -986,7 +986,7 @@ class BatteryBankData:
             _LOGGER.warning("Bank canary: raw_soh=%d > 100", self._raw_soh)
             return True
         # Battery count: register 96 can return garbage (e.g. 5421) on
-        # Modbus desync.  Physical max is BATTERY_MAX_COUNT (5 slots).
+        # Modbus desync.  Physical max is BATTERY_MAX_COUNT (4 slots).
         # Use a generous upper bound of 20 to allow for future hardware.
         if self.battery_count is not None and self.battery_count > 20:
             _LOGGER.warning("Bank canary: battery_count=%d > 20", self.battery_count)

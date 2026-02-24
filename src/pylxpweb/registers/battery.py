@@ -5,8 +5,8 @@ Cross-validated against Web API getBatteryInfo response.
 
 Individual battery data uses INPUT registers (function code 0x04) in an
 extended address range starting at base address 5002. Each battery module
-occupies a contiguous block of 30 registers, and up to 5 slots are
-supported (addresses 5002–5151).
+occupies a contiguous block of 30 registers, and up to 4 slots are
+supported (addresses 5002–5121).
 
 Absolute address for a field:
     addr = BATTERY_BASE_ADDRESS + (battery_index * BATTERY_REGISTER_COUNT) + offset
@@ -37,8 +37,14 @@ BATTERY_BASE_ADDRESS: int = 5002
 BATTERY_REGISTER_COUNT: int = 30
 """Number of registers per battery module."""
 
-BATTERY_MAX_COUNT: int = 5
-"""Maximum number of battery slots (addresses 5002–5151)."""
+BATTERY_MAX_COUNT: int = 4
+"""Maximum number of battery register slots (addresses 5002–5121).
+
+The 18kPV firmware implements exactly 4 CAN-mapped battery register slots.
+Slot 4 (address 5122+) returns ExceptionResponse code 3 (Illegal Data
+Address).  Batteries rotate through these 4 slots via round-robin when
+more than 4 physical modules are connected.
+"""
 
 
 # =============================================================================

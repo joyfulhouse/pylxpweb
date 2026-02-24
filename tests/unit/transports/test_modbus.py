@@ -689,18 +689,18 @@ class TestReadAllInputData:
             mock_client.connect = AsyncMock(return_value=True)
             mock_client.close = MagicMock()
 
-            # Build registers: battery_count=5 triggers 5×30=150 regs in chunks of 40
+            # battery_count=4 triggers 4x30=120 regs in chunks of 40
             registers = [0] * 197
             registers[4] = 530  # Battery voltage
             registers[5] = (100 << 8) | 85  # SOC/SOH
-            registers[96] = 5  # Battery count = 5
+            registers[96] = 4  # Battery count = 4
 
             read_addresses: list[int] = []
 
             async def mock_read_partial(address: int, count: int, **kwargs: int) -> MagicMock:
                 read_addresses.append(address)
-                # Fail at chunk starting at 5122 (slot 4)
-                if address == 5122:
+                # Fail at 5082: first 2 chunks (80 regs) OK, third fails
+                if address == 5082:
                     resp = MagicMock()
                     resp.isError.return_value = True
                     resp.__str__ = lambda self: (
@@ -731,10 +731,125 @@ class TestReadAllInputData:
             # Battery bank should exist with partial individual data
             assert battery is not None
 
-            # Should have read 5002, 5042, 5082, then failed at 5122 — no 5162
+            # Should have read 5002, 5042, then failed at 5082
             battery_reads = [a for a in read_addresses if a >= 5000]
             assert 5002 in battery_reads
             assert 5042 in battery_reads
-            assert 5082 in battery_reads
-            assert 5122 in battery_reads  # attempted but failed
-            assert 5162 not in battery_reads  # never attempted
+            assert 5082 in battery_reads  # attempted but failed
+            assert 5122 not in battery_reads  # never attempted (beyond MAX_COUNT)
+
+
+class TestAdaptiveBatterySlotCeiling:
+    """Tests for the adaptive slot ceiling that skips unreadable battery addresses.
+
+    When battery register reads fail at a slot boundary with ExceptionResponse
+    code 3 (Illegal Data Address), the transport remembers the ceiling and
+    skips those addresses on subsequent polls.  (#165)
+    """
+
+    @pytest.mark.asyncio
+    async def test_ceiling_set_after_first_failure(self) -> None:
+        """Slot ceiling is set after the first read failure."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+            mock_client.close = MagicMock()
+
+            async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
+                # Chunks at 5002(40), 5042(40) succeed; 5082(40) fails
+                if address >= 5082:
+                    raise TransportReadError(
+                        f"Modbus read error at address {address}: "
+                        "ExceptionResponse(exception_code=3)"
+                    )
+                resp = MagicMock()
+                resp.isError.return_value = False
+                resp.registers = [0] * count
+                return resp
+
+            mock_client.read_input_registers = mock_read
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+
+            # battery_count=12 capped at 4 (MAX_COUNT), reads 120 regs in
+            # 3 chunks.  Fail at 5082 -> ceiling = (5082-5002)//30 = 2.
+            result = await transport._read_individual_battery_registers(12)
+            assert result is not None
+            assert transport._battery_slot_ceiling == 2
+
+    @pytest.mark.asyncio
+    async def test_ceiling_prevents_retry_on_subsequent_polls(self) -> None:
+        """After ceiling is set, unreadable addresses are not attempted."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+            mock_client.close = MagicMock()
+
+            read_addresses: list[int] = []
+
+            async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
+                read_addresses.append(address)
+                if address >= 5082:
+                    raise TransportReadError(f"Illegal data address {address}")
+                resp = MagicMock()
+                resp.isError.return_value = False
+                resp.registers = [0] * count
+                return resp
+
+            mock_client.read_input_registers = mock_read
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+
+            # First call: ceiling lowered to 2 (fails at 5082)
+            await transport._read_individual_battery_registers(12)
+            first_call_addrs = list(read_addresses)
+
+            # Second call: ceiling=2 means only 60 regs, should not reach 5082
+            read_addresses.clear()
+            await transport._read_individual_battery_registers(12)
+            second_call_addrs = list(read_addresses)
+
+            assert 5082 in first_call_addrs
+            assert 5082 not in second_call_addrs
+            assert 5002 in second_call_addrs
+
+    @pytest.mark.asyncio
+    async def test_ceiling_does_not_lower_below_zero(self) -> None:
+        """If the very first chunk fails, ceiling goes to 0 and returns None."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+            mock_client.close = MagicMock()
+
+            async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
+                raise TransportReadError("Total failure")
+
+            mock_client.read_input_registers = mock_read
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+
+            result = await transport._read_individual_battery_registers(4)
+            assert result is None
+            assert transport._battery_slot_ceiling == 0
+
+            # Subsequent call with ceiling=0 returns None immediately
+            result2 = await transport._read_individual_battery_registers(4)
+            assert result2 is None

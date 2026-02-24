@@ -20,10 +20,10 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 async def main():
     """Verify new register mappings."""
+    from pylxpweb.transports.register_maps import PV_SERIES_RUNTIME_MAP
     from pymodbus.client import AsyncModbusTcpClient
 
     from pylxpweb.transports.data import InverterRuntimeData
-    from pylxpweb.transports.register_maps import PV_SERIES_RUNTIME_MAP
 
     host = os.getenv("MODBUS_IP", "172.16.40.98")
     port = int(os.getenv("MODBUS_PORT", "502"))
