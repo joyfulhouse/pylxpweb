@@ -187,3 +187,31 @@ class TestDecodeBmsCode:
         """Unknown warning code should use hex formatting."""
         result = decode_bms_code(0x10, BMS_WARNING_CODES)
         assert result == "Unknown code: 0x10"
+
+
+class TestFaultRegisterSensorKeys:
+    """Verify fault/warning registers have ha_sensor_key for HA diagnostics."""
+
+    def test_fault_code_has_sensor_key(self) -> None:
+        from pylxpweb.registers.inverter_input import BY_NAME
+
+        reg = BY_NAME["fault_code"]
+        assert reg.ha_sensor_key == "fault_code"
+
+    def test_warning_code_has_sensor_key(self) -> None:
+        from pylxpweb.registers.inverter_input import BY_NAME
+
+        reg = BY_NAME["warning_code"]
+        assert reg.ha_sensor_key == "warning_code"
+
+    def test_bms_fault_code_has_sensor_key(self) -> None:
+        from pylxpweb.registers.inverter_input import BY_NAME
+
+        reg = BY_NAME["bms_fault_code"]
+        assert reg.ha_sensor_key == "bms_fault_code"
+
+    def test_bms_warning_code_has_sensor_key(self) -> None:
+        from pylxpweb.registers.inverter_input import BY_NAME
+
+        reg = BY_NAME["bms_warning_code"]
+        assert reg.ha_sensor_key == "bms_warning_code"
