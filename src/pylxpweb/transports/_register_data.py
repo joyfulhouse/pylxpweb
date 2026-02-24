@@ -192,13 +192,38 @@ class RegisterDataMixin(_DataMixinBase):
         individual_registers: dict[int, int],
         battery_count: int,
     ) -> None:
-        """Log per-slot status/voltage/serial for round-robin debugging (#165)."""
+        """Log per-slot status/voltage/serial for round-robin debugging (#165).
+
+        Includes header registers 5000-5001 (if previously read) and offset 24
+        per slot, which appears to encode the battery position index.
+        """
         ceiling: int = getattr(self, "_battery_slot_ceiling", BATTERY_MAX_COUNT)
         slots_to_log = min(battery_count, ceiling)
+
+        # Log header registers 5000-5001 if available (read by
+        # _read_battery_header_registers).  These are consistently zero on
+        # 3-battery systems but may hold rotation metadata on larger arrays.
+        header_regs: dict[int, int] | None = getattr(self, "_battery_header_registers", None)
+        if header_regs is not None:
+            _LOGGER.debug(
+                "[%s] Battery header: reg5000=%d (0x%04X) reg5001=%d (0x%04X) battery_count=%d",
+                self._serial,
+                header_regs.get(5000, -1),
+                header_regs.get(5000, 0),
+                header_regs.get(5001, -1),
+                header_regs.get(5001, 0),
+                battery_count,
+            )
+
         for slot_idx in range(slots_to_log):
             slot_base = BATTERY_BASE_ADDRESS + (slot_idx * BATTERY_REGISTER_COUNT)
             status = individual_registers.get(slot_base, 0)
             voltage_raw = individual_registers.get(slot_base + 6, 0)
+
+            # Offset 24: appears to encode battery position index in high byte
+            # (0x0100=pos1, 0x0200=pos2, etc.).  May change during round-robin
+            # rotation on systems with >4 batteries.
+            reserved_24 = individual_registers.get(slot_base + 24, 0)
 
             # Serial: 7 registers at offset 17-23, 2 ASCII chars per word
             serial_chars: list[str] = []
@@ -213,13 +238,39 @@ class RegisterDataMixin(_DataMixinBase):
             slot_serial = "".join(serial_chars).strip("\x00")
 
             _LOGGER.debug(
-                "[%s] Slot %d: status=0x%04X voltage_raw=%d serial=%r",
+                "[%s] Slot %d: status=0x%04X voltage_raw=%d serial=%r offset24=0x%04X (%d)",
                 self._serial,
                 slot_idx,
                 status,
                 voltage_raw,
                 slot_serial or "(empty)",
+                reserved_24,
+                reserved_24,
             )
+
+    async def _read_battery_header_registers(self) -> None:
+        """Read registers 5000-5001 for round-robin rotation debugging (#165).
+
+        These two registers sit before the per-battery blocks at 5002+.
+        On systems tested with 3 batteries they are consistently zero.
+        On larger arrays (>4 batteries) they may hold a rotation counter
+        or other CAN bus metadata useful for diagnosing round-robin issues.
+
+        Results are stored on ``self._battery_header_registers`` and logged
+        by ``_log_battery_slot_debug()``.  Reading failures are non-fatal.
+        """
+        try:
+            values = await self._read_input_registers(5000, 2)
+            self._battery_header_registers: dict[int, int] = {
+                5000: values[0],
+                5001: values[1],
+            }
+        except Exception:
+            _LOGGER.debug(
+                "[%s] Failed to read battery header registers 5000-5001 (non-fatal)",
+                self._serial,
+            )
+            self._battery_header_registers = {}
 
     # ------------------------------------------------------------------
     # Register group reading
@@ -361,6 +412,7 @@ class RegisterDataMixin(_DataMixinBase):
         )
 
         if include_individual and battery_count > 0:
+            await self._read_battery_header_registers()
             individual_registers = await self._read_individual_battery_registers(
                 battery_count,
             )
@@ -435,6 +487,7 @@ class RegisterDataMixin(_DataMixinBase):
 
         individual_registers: dict[int, int] | None = None
         if battery_count > 0:
+            await self._read_battery_header_registers()
             individual_registers = await self._read_individual_battery_registers(
                 battery_count,
             )
