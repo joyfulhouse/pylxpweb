@@ -215,3 +215,37 @@ class TestFaultRegisterSensorKeys:
 
         reg = BY_NAME["bms_warning_code"]
         assert reg.ha_sensor_key == "bms_warning_code"
+
+
+class TestInverterRuntimeDataFaultProperties:
+    """Test fault/warning message properties on InverterRuntimeData."""
+
+    def test_fault_messages_no_fault(self) -> None:
+        from pylxpweb.transports.data import InverterRuntimeData
+
+        data = InverterRuntimeData(fault_code=0)
+        assert data.fault_messages == []
+
+    def test_fault_messages_single(self) -> None:
+        from pylxpweb.transports.data import InverterRuntimeData
+
+        data = InverterRuntimeData(fault_code=(1 << 21))
+        assert data.fault_messages == ["PV overvoltage"]
+
+    def test_fault_messages_none_value(self) -> None:
+        from pylxpweb.transports.data import InverterRuntimeData
+
+        data = InverterRuntimeData(fault_code=None)
+        assert data.fault_messages == []
+
+    def test_warning_messages_multiple(self) -> None:
+        from pylxpweb.transports.data import InverterRuntimeData
+
+        data = InverterRuntimeData(warning_code=(1 << 0) | (1 << 9))
+        assert len(data.warning_messages) == 2
+
+    def test_warning_messages_none_value(self) -> None:
+        from pylxpweb.transports.data import InverterRuntimeData
+
+        data = InverterRuntimeData(warning_code=None)
+        assert data.warning_messages == []

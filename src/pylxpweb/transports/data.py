@@ -261,6 +261,24 @@ class InverterRuntimeData:
                     return True
         return False
 
+    @property
+    def fault_messages(self) -> list[str]:
+        """Active inverter fault descriptions decoded from bitfield."""
+        from pylxpweb.constants.fault_codes import INVERTER_FAULT_CODES, decode_fault_bits
+
+        if self.fault_code is None or self.fault_code == 0:
+            return []
+        return decode_fault_bits(self.fault_code, INVERTER_FAULT_CODES)
+
+    @property
+    def warning_messages(self) -> list[str]:
+        """Active inverter warning descriptions decoded from bitfield."""
+        from pylxpweb.constants.fault_codes import INVERTER_WARNING_CODES, decode_fault_bits
+
+        if self.warning_code is None or self.warning_code == 0:
+            return []
+        return decode_fault_bits(self.warning_code, INVERTER_WARNING_CODES)
+
     @classmethod
     def from_http_response(cls, runtime: InverterRuntime) -> InverterRuntimeData:
         """Create from HTTP API InverterRuntime response.
