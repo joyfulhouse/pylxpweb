@@ -50,8 +50,9 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Register group constants (unified across Modbus and Dongle transports)
 # ---------------------------------------------------------------------------
-# Based on the 40-register-per-call hardware limit shared by both pymodbus
-# and the WiFi dongle protocol.
+# Based on the 40-register-per-call convention for pymodbus/dongle protocol.
+# Battery registers use a single atomic read (up to 120 regs) to avoid
+# round-robin rotation issues on systems with >4 batteries (#170).
 #
 # Source: EG4-18KPV-12LV Modbus Protocol + eg4-modbus-monitor + Yippy's BMS docs
 
@@ -125,13 +126,16 @@ class RegisterDataMixin(_DataMixinBase):
         self,
         battery_count: int,
     ) -> dict[int, int] | None:
-        """Read individual battery slot registers with adaptive slot ceiling.
+        """Read all individual battery slot registers in a single atomic read.
 
-        After the first failure at a battery slot address (e.g. ExceptionResponse
-        code 3 = Illegal Data Address), the ceiling is remembered and subsequent
-        polls skip unreadable slots.  This saves ~2.5s per poll on firmware that
-        implements fewer slots than ``battery_count`` reports.
+        All 4 slots (120 registers) are read in one Modbus FC 04 call starting
+        at ``BATTERY_BASE_ADDRESS`` (5002).  This fits within the Modbus PDU
+        limit of 125 registers and ensures firmware round-robin rotation cannot
+        change slot contents between reads — fixing serial truncation on systems
+        with >4 batteries (#170).
 
+        An adaptive ceiling tracks read failures: if the full range is
+        unreadable the ceiling is lowered so future polls skip unreadable slots.
         The ceiling resets when the transport reconnects (new instance).
 
         Args:
@@ -139,7 +143,7 @@ class RegisterDataMixin(_DataMixinBase):
 
         Returns:
             Dict of address→value for successfully read registers, or *None*
-            if the first chunk failed (no usable data).
+            if the read failed (no usable data).
         """
         ceiling: int = getattr(self, "_battery_slot_ceiling", BATTERY_MAX_COUNT)
         batteries_to_read = min(battery_count, ceiling)
@@ -149,43 +153,33 @@ class RegisterDataMixin(_DataMixinBase):
 
         total_registers = batteries_to_read * BATTERY_REGISTER_COUNT
         _LOGGER.debug(
-            "[%s] Reading %d battery slots (battery_count=%d, ceiling=%d)",
+            "[%s] Reading %d battery slots (%d regs) in single read (battery_count=%d, ceiling=%d)",
             self._serial,
             batteries_to_read,
+            total_registers,
             battery_count,
             ceiling,
         )
 
-        individual_registers: dict[int, int] = {}
-        current_addr = BATTERY_BASE_ADDRESS
-        remaining = total_registers
-
-        while remaining > 0:
-            chunk_size = min(remaining, 40)
-            try:
-                values = await self._read_input_registers(current_addr, chunk_size)
-            except Exception:
-                _LOGGER.warning(
-                    "[%s] Failed to read battery registers at %d, keeping partial data",
+        try:
+            values = await self._read_input_registers(BATTERY_BASE_ADDRESS, total_registers)
+        except Exception:
+            _LOGGER.warning(
+                "[%s] Failed to read battery registers %d-%d",
+                self._serial,
+                BATTERY_BASE_ADDRESS,
+                BATTERY_BASE_ADDRESS + total_registers - 1,
+            )
+            if ceiling > 0:
+                self._battery_slot_ceiling = 0
+                _LOGGER.info(
+                    "[%s] Battery slot ceiling lowered from %d to 0",
                     self._serial,
-                    current_addr,
+                    ceiling,
                 )
-                new_ceiling = (current_addr - BATTERY_BASE_ADDRESS) // BATTERY_REGISTER_COUNT
-                if new_ceiling < ceiling:
-                    self._battery_slot_ceiling = new_ceiling
-                    _LOGGER.info(
-                        "[%s] Battery slot ceiling lowered from %d to %d (address %d unreadable)",
-                        self._serial,
-                        ceiling,
-                        new_ceiling,
-                        current_addr,
-                    )
-                break
-            individual_registers.update(self._registers_from_values(current_addr, values))
-            current_addr += chunk_size
-            remaining -= chunk_size
+            return None
 
-        return individual_registers if individual_registers else None
+        return self._registers_from_values(BATTERY_BASE_ADDRESS, values)
 
     def _log_battery_slot_debug(
         self,

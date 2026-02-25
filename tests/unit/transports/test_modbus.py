@@ -671,13 +671,12 @@ class TestReadAllInputData:
             assert energy is not None
 
     @pytest.mark.asyncio
-    async def test_read_all_preserves_partial_battery_data(self) -> None:
-        """Chunk failure at battery slot 4 preserves data from slots 0-3.
+    async def test_read_all_battery_single_atomic_read(self) -> None:
+        """Battery registers are read in a single atomic Modbus call.
 
-        Regression test for #165: 18kPV firmware returns Illegal Data Address
-        at register 5122 (slot 4) but slots 0-3 read fine.  Previously, the
-        single try/except around the entire while loop discarded all partial
-        data.
+        Since v0.9.13 (#170), all battery slots are read in one FC 04 call
+        (up to 120 regs) to prevent round-robin rotation from changing slot
+        contents between reads.
         """
         transport = ModbusTransport(
             host="192.168.1.100",
@@ -689,7 +688,6 @@ class TestReadAllInputData:
             mock_client.connect = AsyncMock(return_value=True)
             mock_client.close = MagicMock()
 
-            # battery_count=4 triggers 4x30=120 regs in chunks of 40
             registers = [0] * 197
             registers[4] = 530  # Battery voltage
             registers[5] = (100 << 8) | 85  # SOC/SOH
@@ -697,28 +695,28 @@ class TestReadAllInputData:
 
             read_addresses: list[int] = []
 
-            async def mock_read_partial(address: int, count: int, **kwargs: int) -> MagicMock:
+            async def mock_read_atomic(address: int, count: int, **kwargs: int) -> MagicMock:
                 read_addresses.append(address)
-                # Fail at 5082: first 2 chunks (80 regs) OK, third fails
-                if address == 5082:
-                    resp = MagicMock()
-                    resp.isError.return_value = True
-                    resp.__str__ = lambda self: (
-                        "ExceptionResponse(dev_id=1, function_code=132, exception_code=3)"
-                    )
-                    return resp
                 resp = MagicMock()
                 resp.isError.return_value = False
                 if address < 200:
                     resp.registers = registers[address : address + count]
-                else:
-                    # Battery slot data: populate status header (offset 0) = 0xC003
+                elif address == 5000:
+                    # Header registers
+                    resp.registers = [0] * count
+                elif address == 5002:
+                    # Single atomic read of all 120 battery regs
+                    assert count == 120, f"Expected atomic read of 120 regs, got {count}"
                     vals = [0] * count
-                    vals[0] = 0xC003  # Connected battery header
+                    # Populate status header for each slot
+                    for slot in range(4):
+                        vals[slot * 30] = 0xC003
                     resp.registers = vals
+                else:
+                    resp.registers = [0] * count
                 return resp
 
-            mock_client.read_input_registers = mock_read_partial
+            mock_client.read_input_registers = mock_read_atomic
             mock_client_class.return_value = mock_client
 
             await transport.connect()
@@ -728,28 +726,30 @@ class TestReadAllInputData:
             assert runtime is not None
             assert energy is not None
 
-            # Battery bank should exist with partial individual data
+            # Battery bank should exist
             assert battery is not None
 
-            # Should have read 5002, 5042, then failed at 5082
+            # Should have exactly one read at 5002 (atomic), plus header at 5000
             battery_reads = [a for a in read_addresses if a >= 5000]
-            assert 5002 in battery_reads
-            assert 5042 in battery_reads
-            assert 5082 in battery_reads  # attempted but failed
-            assert 5122 not in battery_reads  # never attempted (beyond MAX_COUNT)
+            assert 5000 in battery_reads  # header read
+            assert 5002 in battery_reads  # single atomic read
+            # No chunked reads at 5042, 5082, etc.
+            assert 5042 not in battery_reads
+            assert 5082 not in battery_reads
 
 
 class TestAdaptiveBatterySlotCeiling:
-    """Tests for the adaptive slot ceiling that skips unreadable battery addresses.
+    """Tests for the adaptive slot ceiling with atomic battery reads.
 
-    When battery register reads fail at a slot boundary with ExceptionResponse
-    code 3 (Illegal Data Address), the transport remembers the ceiling and
-    skips those addresses on subsequent polls.  (#165)
+    Since v0.9.13 (#170), all battery slots are read in a single atomic
+    Modbus FC 04 call.  If the read fails, the ceiling drops to 0 so
+    subsequent polls skip battery registers entirely.  The ceiling
+    resets when the transport reconnects.
     """
 
     @pytest.mark.asyncio
-    async def test_ceiling_set_after_first_failure(self) -> None:
-        """Slot ceiling is set after the first read failure."""
+    async def test_ceiling_drops_to_zero_on_failure(self) -> None:
+        """Atomic read failure sets ceiling to 0 and returns None."""
         transport = ModbusTransport(
             host="192.168.1.100",
             serial="CE12345678",
@@ -761,8 +761,7 @@ class TestAdaptiveBatterySlotCeiling:
             mock_client.close = MagicMock()
 
             async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
-                # Chunks at 5002(40), 5042(40) succeed; 5082(40) fails
-                if address >= 5082:
+                if address >= 5002:
                     raise TransportReadError(
                         f"Modbus read error at address {address}: "
                         "ExceptionResponse(exception_code=3)"
@@ -777,15 +776,15 @@ class TestAdaptiveBatterySlotCeiling:
 
             await transport.connect()
 
-            # battery_count=12 capped at 4 (MAX_COUNT), reads 120 regs in
-            # 3 chunks.  Fail at 5082 -> ceiling = (5082-5002)//30 = 2.
+            # battery_count=12 capped at 4 (MAX_COUNT), single read of
+            # 120 regs fails -> ceiling drops to 0
             result = await transport._read_individual_battery_registers(12)
-            assert result is not None
-            assert transport._battery_slot_ceiling == 2
+            assert result is None
+            assert transport._battery_slot_ceiling == 0
 
     @pytest.mark.asyncio
     async def test_ceiling_prevents_retry_on_subsequent_polls(self) -> None:
-        """After ceiling is set, unreadable addresses are not attempted."""
+        """After ceiling drops to 0, battery reads are skipped entirely."""
         transport = ModbusTransport(
             host="192.168.1.100",
             serial="CE12345678",
@@ -800,7 +799,7 @@ class TestAdaptiveBatterySlotCeiling:
 
             async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
                 read_addresses.append(address)
-                if address >= 5082:
+                if address >= 5002:
                     raise TransportReadError(f"Illegal data address {address}")
                 resp = MagicMock()
                 resp.isError.return_value = False
@@ -812,22 +811,20 @@ class TestAdaptiveBatterySlotCeiling:
 
             await transport.connect()
 
-            # First call: ceiling lowered to 2 (fails at 5082)
+            # First call: fails, ceiling drops to 0
             await transport._read_individual_battery_registers(12)
             first_call_addrs = list(read_addresses)
 
-            # Second call: ceiling=2 means only 60 regs, should not reach 5082
+            # Second call: ceiling=0, returns None immediately without reading
             read_addresses.clear()
-            await transport._read_individual_battery_registers(12)
-            second_call_addrs = list(read_addresses)
-
-            assert 5082 in first_call_addrs
-            assert 5082 not in second_call_addrs
-            assert 5002 in second_call_addrs
+            result = await transport._read_individual_battery_registers(12)
+            assert result is None
+            assert len(read_addresses) == 0  # no reads attempted
+            assert 5002 in first_call_addrs  # first call did attempt
 
     @pytest.mark.asyncio
-    async def test_ceiling_does_not_lower_below_zero(self) -> None:
-        """If the very first chunk fails, ceiling goes to 0 and returns None."""
+    async def test_successful_atomic_read(self) -> None:
+        """Successful atomic read returns all 120 registers."""
         transport = ModbusTransport(
             host="192.168.1.100",
             serial="CE12345678",
@@ -838,8 +835,19 @@ class TestAdaptiveBatterySlotCeiling:
             mock_client.connect = AsyncMock(return_value=True)
             mock_client.close = MagicMock()
 
+            read_addresses: list[int] = []
+
             async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
-                raise TransportReadError("Total failure")
+                read_addresses.append(address)
+                resp = MagicMock()
+                resp.isError.return_value = False
+                vals = [0] * count
+                if address == 5002:
+                    # Populate status header for each of 4 slots
+                    for slot in range(4):
+                        vals[slot * 30] = 0xC003
+                resp.registers = vals
+                return resp
 
             mock_client.read_input_registers = mock_read
             mock_client_class.return_value = mock_client
@@ -847,9 +855,8 @@ class TestAdaptiveBatterySlotCeiling:
             await transport.connect()
 
             result = await transport._read_individual_battery_registers(4)
-            assert result is None
-            assert transport._battery_slot_ceiling == 0
-
-            # Subsequent call with ceiling=0 returns None immediately
-            result2 = await transport._read_individual_battery_registers(4)
-            assert result2 is None
+            assert result is not None
+            assert len(result) == 120  # 4 slots * 30 regs
+            # Only one battery read at 5002 (atomic)
+            battery_reads = [a for a in read_addresses if a >= 5002]
+            assert battery_reads == [5002]
