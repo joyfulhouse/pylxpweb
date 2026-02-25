@@ -562,7 +562,7 @@ def _parse_battery_slot(
 
     # Serial: 7 regs at offset 17-23
     serial_chars: list[str] = []
-    for reg_off in range(7):
+    for reg_off in range(8):
         raw_word = bat_regs.get(slot_base + 17 + reg_off, 0)
         lo = raw_word & 0xFF
         hi = (raw_word >> 8) & 0xFF
