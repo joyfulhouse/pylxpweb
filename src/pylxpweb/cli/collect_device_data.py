@@ -127,6 +127,100 @@ def sanitize_output(data: dict[str, Any], serial_map: dict[str, str]) -> dict[st
     return result
 
 
+async def collect_api_responses(
+    client: LuxpowerClient,
+    serial_num: str,
+    device_type: str,
+) -> dict[str, Any]:
+    """Fetch raw cloud API responses for a device.
+
+    Each endpoint is called independently so partial results are returned
+    even if some endpoints fail (e.g. GridBOSS has no battery info).
+    """
+    results: dict[str, Any] = {}
+
+    # Battery info
+    try:
+        battery = await client.api.devices.get_battery_info(serial_num)
+        results["battery_info"] = battery.model_dump()
+    except Exception:
+        results["battery_info"] = None
+
+    # Runtime
+    try:
+        runtime = await client.api.devices.get_inverter_runtime(serial_num)
+        results["runtime"] = runtime.model_dump()
+    except Exception:
+        results["runtime"] = None
+
+    # Energy
+    try:
+        energy = await client.api.devices.get_inverter_energy(serial_num)
+        results["energy"] = energy.model_dump()
+    except Exception:
+        results["energy"] = None
+
+    # MID/GridBOSS runtime (only attempt for GridBOSS devices)
+    device_lower = device_type.lower()
+    if "gridboss" in device_lower or "grid boss" in device_lower or "mid" in device_lower:
+        try:
+            midbox = await client.api.devices.get_midbox_runtime(serial_num)
+            results["midbox_runtime"] = midbox.model_dump()
+        except Exception:
+            results["midbox_runtime"] = None
+    else:
+        results["midbox_runtime"] = None
+
+    return results
+
+
+def sanitize_api_responses(
+    data: dict[str, Any],
+    serial_map: dict[str, str],
+) -> dict[str, Any]:
+    """Sanitize sensitive data in API response structure.
+
+    Walks all string values and replaces known serials and plant-related fields.
+    """
+    import copy
+
+    result = copy.deepcopy(data)
+    _sanitize_recursive(result, serial_map)
+    return result
+
+
+# Keys in API responses that contain plant/station names
+_PLANT_NAME_KEYS = {"plantName", "plant_name", "stationName", "station_name"}
+
+# Keys in API responses that contain plant/station IDs
+_PLANT_ID_KEYS = {"plantId", "plant_id", "stationId", "station_id"}
+
+
+def _sanitize_recursive(obj: Any, serial_map: dict[str, str]) -> None:
+    """Recursively sanitize dicts and lists in-place."""
+    if isinstance(obj, dict):
+        for key in list(obj.keys()):
+            val = obj[key]
+            if isinstance(val, str):
+                # Replace known serials
+                if val in serial_map:
+                    obj[key] = serial_map[val]
+                # Sanitize serial-like keys
+                elif key in ("serialNum", "serial_num", "serialNumber", "sn"):
+                    obj[key] = serial_map.get(val, sanitize_serial(val))
+                # Sanitize plant names
+                elif key in _PLANT_NAME_KEYS:
+                    obj[key] = sanitize_plant_name(val)
+            elif isinstance(val, (int, float)) and key in _PLANT_ID_KEYS:
+                obj[key] = 0
+            elif isinstance(val, (dict, list)):
+                _sanitize_recursive(val, serial_map)
+    elif isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, (dict, list)):
+                _sanitize_recursive(item, serial_map)
+
+
 def merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
     """Merge overlapping register ranges into consolidated ranges."""
     if not ranges:
@@ -441,7 +535,8 @@ async def collect_single_device(
     output_dir: Path,
     sanitize: bool = False,
     serial_map: dict[str, str] | None = None,
-) -> tuple[Path, Path] | None:
+    include_api: bool = True,
+) -> tuple[Path, ...] | None:
     """Collect data from a single device."""
     if serial_map is None:
         serial_map = {}
@@ -527,18 +622,49 @@ async def collect_single_device(
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(markdown_content)
 
+    # Collect cloud API responses
+    api_path: Path | None = None
+    if include_api:
+        print("    Collecting cloud API responses...")
+        try:
+            api_data = await collect_api_responses(client, serial_num, device_type)
+            api_output: dict[str, Any] = {
+                "metadata": {
+                    "timestamp": datetime.now().astimezone().isoformat(),
+                    "serial_num": serial_num,
+                    "device_type": device_type,
+                    "pylxpweb_version": __version__,
+                },
+                **api_data,
+            }
+
+            if sanitize:
+                api_output["metadata"]["serial_num"] = serial_map.get(
+                    serial_num, sanitize_serial(serial_num)
+                )
+                api_output = sanitize_api_responses(api_output, serial_map)
+
+            api_path = output_dir / f"{base_name}_api_responses.json"
+            print(f"    Writing {api_path.name}...")
+            with open(api_path, "w", encoding="utf-8") as f:
+                json.dump(api_output, f, indent=2, default=str)
+        except Exception as e:
+            print(f"    Warning: Failed to collect API responses: {e}")
+
+    if api_path:
+        return json_path, md_path, api_path
     return json_path, md_path
 
 
 def create_zip_archive(
-    created_files: list[tuple[Path, Path]],
+    created_files: list[tuple[Path, ...]],
     output_dir: Path,
     sanitize: bool = False,
 ) -> Path:
     """Create a zip archive of all generated files.
 
     Args:
-        created_files: List of (json_path, md_path) tuples
+        created_files: List of file path tuples (json, md, and optionally api_responses)
         output_dir: Directory where zip should be created
         sanitize: Whether files were sanitized (affects filename)
 
@@ -551,10 +677,9 @@ def create_zip_archive(
     zip_path = output_dir / zip_name
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for json_path, md_path in created_files:
-            # Add files with just their filename (no directory structure)
-            zf.write(json_path, json_path.name)
-            zf.write(md_path, md_path.name)
+        for file_paths in created_files:
+            for file_path in file_paths:
+                zf.write(file_path, file_path.name)
 
     return zip_path
 
@@ -638,7 +763,7 @@ def generate_issue_url(
 
 def print_upload_instructions(
     devices: list[dict[str, Any]],
-    created_files: list[tuple[Path, Path]],
+    created_files: list[tuple[Path, ...]],
     zip_path: Path | None = None,
     sanitized: bool = False,
 ) -> None:
@@ -670,9 +795,9 @@ def print_upload_instructions(
         print(f"   {GITHUB_ISSUES_URL}")
         print()
         print("Attach these files:")
-        for json_path, md_path in created_files:
-            print(f"   - {json_path.name}")
-            print(f"   - {md_path.name}")
+        for file_paths in created_files:
+            for file_path in file_paths:
+                print(f"   - {file_path.name}")
 
     print()
     print("-" * 70)
@@ -693,6 +818,7 @@ async def main_async(args: argparse.Namespace) -> int:
     password = args.password
     base_url = args.base_url or "https://monitor.eg4electronics.com"
     sanitize = args.sanitize
+    include_api = not args.no_api
 
     # Create output directory
     output_dir = Path(args.output_dir) if args.output_dir else Path.cwd()
@@ -708,6 +834,8 @@ async def main_async(args: argparse.Namespace) -> int:
     print(f"Output Directory: {output_dir.absolute()}")
     if sanitize:
         print("Sanitization: ENABLED (serial numbers and locations will be masked)")
+    if not include_api:
+        print("API Collection: DISABLED (--no-api)")
     print()
 
     try:
@@ -742,7 +870,7 @@ async def main_async(args: argparse.Namespace) -> int:
             print()
 
             # Collect data from each device
-            created_files: list[tuple[Path, Path]] = []
+            created_files: list[tuple[Path, ...]] = []
             for i, device in enumerate(devices, 1):
                 display_serial = (
                     serial_map.get(device["serial_num"], device["serial_num"])
@@ -760,6 +888,7 @@ async def main_async(args: argparse.Namespace) -> int:
                     output_dir,
                     sanitize=sanitize,
                     serial_map=serial_map,
+                    include_api=include_api,
                 )
 
                 if result:
@@ -787,9 +916,9 @@ async def main_async(args: argparse.Namespace) -> int:
             print(f"    >>> {zip_path.name} <<<")
             print()
             print("  Individual files (included in zip):")
-            for json_path, md_path in created_files:
-                print(f"    - {json_path.name}")
-                print(f"    - {md_path.name}")
+            for file_paths in created_files:
+                for file_path in file_paths:
+                    print(f"    - {file_path.name}")
 
             # Print upload instructions with pre-filled issue link
             print_upload_instructions(devices, created_files, zip_path, sanitize)
@@ -864,6 +993,11 @@ For detailed instructions: https://github.com/joyfulhouse/pylxpweb/blob/main/doc
         "-S",
         action="store_true",
         help="Sanitize sensitive data (serial numbers, plant names, locations) in output files",
+    )
+    parser.add_argument(
+        "--no-api",
+        action="store_true",
+        help="Skip cloud API response collection (battery, runtime, energy)",
     )
 
     args = parser.parse_args()
