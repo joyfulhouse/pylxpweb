@@ -759,7 +759,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
         Args:
             address: Starting register address
-            count: Number of registers to read (max 40)
+            count: Number of registers to read
 
         Returns:
             List of register values
@@ -772,7 +772,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             tcp_func=TCP_FUNC_TRANSLATED,
             modbus_func=MODBUS_READ_INPUT,
             start_register=address,
-            register_count=min(count, 40),
+            register_count=count,
         )
 
         return await self._send_receive(
@@ -790,7 +790,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
         Args:
             address: Starting register address
-            count: Number of registers to read (max 40)
+            count: Number of registers to read
 
         Returns:
             List of register values
@@ -803,7 +803,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             tcp_func=TCP_FUNC_TRANSLATED,
             modbus_func=MODBUS_READ_HOLDING,
             start_register=address,
-            register_count=min(count, 40),
+            register_count=count,
         )
 
         return await self._send_receive(
