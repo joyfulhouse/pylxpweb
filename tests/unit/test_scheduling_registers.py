@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pylxpweb.registers.inverter_holding import HoldingCategory
 from pylxpweb.registers.scheduling import (
     DAYS,
     SCHEDULE_BY_ADDRESS,
@@ -60,8 +61,6 @@ class TestScheduleRegisterGeneration:
             assert reg.writable is True
 
     def test_all_schedule_category(self) -> None:
-        from pylxpweb.registers.inverter_holding import HoldingCategory
-
         for reg in SCHEDULE_REGISTERS:
             assert reg.category == HoldingCategory.SCHEDULE
 

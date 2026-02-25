@@ -8,6 +8,7 @@ from pylxpweb.registers.inverter_input import (
     RegisterCategory,
     ScaleFactor,
 )
+from pylxpweb.transports.data import InverterRuntimeData
 
 
 class TestPV456Registers:
@@ -120,37 +121,25 @@ class TestPV456DataModelFields:
     """Test that InverterRuntimeData has PV4-6 fields."""
 
     def test_pv4_voltage_field(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(pv4_voltage=300.0)
         assert data.pv4_voltage == 300.0
 
     def test_pv5_voltage_field(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(pv5_voltage=310.0)
         assert data.pv5_voltage == 310.0
 
     def test_pv6_voltage_field(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(pv6_voltage=320.0)
         assert data.pv6_voltage == 320.0
 
     def test_pv4_power_field(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(pv4_power=2400.0)
         assert data.pv4_power == 2400.0
 
     def test_pv5_power_field(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(pv5_power=2500.0)
         assert data.pv5_power == 2500.0
 
     def test_pv6_power_field(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(pv6_power=2600.0)
         assert data.pv6_power == 2600.0

@@ -32,14 +32,14 @@ class TestReg179Bitfield:
         reg = BY_NAME["battery_charge_control"]
         assert reg.address == 179
         assert reg.bit_position == 9
-        assert reg.api_param_key == "FUNC_BAT_CHG_CONTROL"
+        assert reg.api_param_key == "FUNC_BAT_CHARGE_CONTROL"
         assert reg.ha_entity_key == "battery_charge_control"
 
     def test_battery_discharge_control_bit10(self) -> None:
         reg = BY_NAME["battery_discharge_control"]
         assert reg.address == 179
         assert reg.bit_position == 10
-        assert reg.api_param_key == "FUNC_BAT_DISCHG_CONTROL"
+        assert reg.api_param_key == "FUNC_BAT_DISCHARGE_CONTROL"
         assert reg.ha_entity_key == "battery_discharge_control"
 
     def test_ac_coupling_bit11(self) -> None:
@@ -69,8 +69,8 @@ class TestReg179Bitfield:
     def test_api_key_lookups(self) -> None:
         for key in (
             "FUNC_AC_CT_DIRECTION",
-            "FUNC_BAT_CHG_CONTROL",
-            "FUNC_BAT_DISCHG_CONTROL",
+            "FUNC_BAT_CHARGE_CONTROL",
+            "FUNC_BAT_DISCHARGE_CONTROL",
             "FUNC_AC_COUPLING",
             "FUNC_SMART_LOAD_EN",
         ):

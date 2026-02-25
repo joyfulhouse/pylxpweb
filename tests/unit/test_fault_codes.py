@@ -10,6 +10,8 @@ from pylxpweb.constants.fault_codes import (
     decode_bms_code,
     decode_fault_bits,
 )
+from pylxpweb.registers.inverter_input import BY_NAME
+from pylxpweb.transports.data import InverterRuntimeData
 
 
 class TestInverterFaultCodes:
@@ -193,60 +195,38 @@ class TestFaultRegisterSensorKeys:
     """Verify fault/warning registers have ha_sensor_key for HA diagnostics."""
 
     def test_fault_code_has_sensor_key(self) -> None:
-        from pylxpweb.registers.inverter_input import BY_NAME
-
-        reg = BY_NAME["fault_code"]
-        assert reg.ha_sensor_key == "fault_code"
+        assert BY_NAME["fault_code"].ha_sensor_key == "fault_code"
 
     def test_warning_code_has_sensor_key(self) -> None:
-        from pylxpweb.registers.inverter_input import BY_NAME
-
-        reg = BY_NAME["warning_code"]
-        assert reg.ha_sensor_key == "warning_code"
+        assert BY_NAME["warning_code"].ha_sensor_key == "warning_code"
 
     def test_bms_fault_code_has_sensor_key(self) -> None:
-        from pylxpweb.registers.inverter_input import BY_NAME
-
-        reg = BY_NAME["bms_fault_code"]
-        assert reg.ha_sensor_key == "bms_fault_code"
+        assert BY_NAME["bms_fault_code"].ha_sensor_key == "bms_fault_code"
 
     def test_bms_warning_code_has_sensor_key(self) -> None:
-        from pylxpweb.registers.inverter_input import BY_NAME
-
-        reg = BY_NAME["bms_warning_code"]
-        assert reg.ha_sensor_key == "bms_warning_code"
+        assert BY_NAME["bms_warning_code"].ha_sensor_key == "bms_warning_code"
 
 
 class TestInverterRuntimeDataFaultProperties:
     """Test fault/warning message properties on InverterRuntimeData."""
 
     def test_fault_messages_no_fault(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(fault_code=0)
         assert data.fault_messages == []
 
     def test_fault_messages_single(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(fault_code=(1 << 21))
         assert data.fault_messages == ["PV overvoltage"]
 
     def test_fault_messages_none_value(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(fault_code=None)
         assert data.fault_messages == []
 
     def test_warning_messages_multiple(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(warning_code=(1 << 0) | (1 << 9))
         assert len(data.warning_messages) == 2
 
     def test_warning_messages_none_value(self) -> None:
-        from pylxpweb.transports.data import InverterRuntimeData
-
         data = InverterRuntimeData(warning_code=None)
         assert data.warning_messages == []
 
