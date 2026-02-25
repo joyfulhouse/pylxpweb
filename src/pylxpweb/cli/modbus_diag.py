@@ -20,9 +20,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from pylxpweb import __version__
 
@@ -66,7 +67,11 @@ Examples:
       Override auto-detected serial number
 
   pylxpweb-modbus-diag --host 192.168.1.100 --battery-probe
-      Read battery registers (5000+) with 3-6 slot variations to detect rotation
+      Probe battery registers (5000+) to detect round-robin rotation
+
+  pylxpweb-modbus-diag --host 192.168.1.100 --battery-probe \\
+      --battery-iterations 60 --battery-delay 0.5
+      Fast sub-second probe (60 reads at 0.5s) for timing analysis
 """,
     )
 
@@ -165,7 +170,20 @@ Examples:
         "--battery-delay",
         type=float,
         default=1.0,
-        help="Delay in seconds between battery read iterations (default: 1.0)",
+        help=(
+            "Delay in seconds between battery read iterations (default: 1.0 "
+            "for Modbus TCP, 15.0 for dongle). Sub-second values (e.g. 0.2) "
+            "supported for timing analysis."
+        ),
+    )
+    battery_group.add_argument(
+        "--battery-iterations",
+        type=int,
+        default=None,
+        help=(
+            "Number of probe iterations (default: auto from battery_count). "
+            "Use 30-60 for timing analysis, 100+ for statistical confidence."
+        ),
     )
 
     # Output options
@@ -548,10 +566,14 @@ async def _read_input_regs(
 def _parse_battery_slot(
     bat_regs: dict[int, int],
     slot_base: int,
-) -> tuple[str, str]:
-    """Parse one battery slot and return (detail_line, serial).
+) -> tuple[str, str, int, str]:
+    """Parse one battery slot.
 
-    Returns a formatted detail string and the decoded serial (may be empty).
+    Returns:
+        detail: Formatted summary string for console/file output.
+        serial: Decoded serial number (empty string if slot is empty).
+        pos: Battery position byte (0-based index from offset 24).
+        full_dump: Hex dump of all 30 registers for detailed analysis.
     """
     status = bat_regs.get(slot_base, 0)
     voltage_raw = bat_regs.get(slot_base + 6, 0)
@@ -560,9 +582,9 @@ def _parse_battery_slot(
     soh = (soc_soh >> 8) & 0xFF
     offset24 = bat_regs.get(slot_base + 24, 0)
 
-    # Serial: 7 regs at offset 17-23
+    # Serial: 8 regs at offset 17-24 (up to 16 ASCII chars, null-terminated)
     serial_chars: list[str] = []
-    for reg_off in range(7):
+    for reg_off in range(8):
         raw_word = bat_regs.get(slot_base + 17 + reg_off, 0)
         lo = raw_word & 0xFF
         hi = (raw_word >> 8) & 0xFF
@@ -573,7 +595,9 @@ def _parse_battery_slot(
     slot_serial = "".join(serial_chars).strip()
 
     # Raw words for serial regs (for debugging truncation)
-    serial_raw = " ".join(f"0x{bat_regs.get(slot_base + 17 + i, 0):04X}" for i in range(7))
+    serial_raw = " ".join(
+        f"0x{bat_regs.get(slot_base + 17 + i, 0):04X}" for i in range(8)
+    )
 
     status_str = f"0x{status:04X}" if status else "empty"
     voltage = voltage_raw / 100.0
@@ -586,7 +610,13 @@ def _parse_battery_slot(
         f"serial={slot_serial or '(empty)'!r} "
         f"raw=[{serial_raw}]"
     )
-    return detail, slot_serial
+
+    # Full 30-register hex dump for detailed analysis
+    full_dump = " ".join(
+        f"0x{bat_regs.get(slot_base + i, 0):04X}" for i in range(30)
+    )
+
+    return detail, slot_serial, pos_byte, full_dump
 
 
 async def _run_battery_probe_iterations(
@@ -595,8 +625,8 @@ async def _run_battery_probe_iterations(
     delay: float,
     lines: list[str],
     all_serials: set[str],
-) -> None:
-    """Read all 4 battery slots (120 registers) repeatedly.
+) -> list[dict[str, object]]:
+    """Read all 4 battery slots (120 registers) repeatedly with timing.
 
     Always reads 120 registers (4 × 30) in a single atomic Modbus FC 04 call
     starting at register 5002.  This is the maximum that fits within the 125-
@@ -608,6 +638,9 @@ async def _run_battery_probe_iterations(
         delay: Delay in seconds between iterations
         lines: Output lines buffer
         all_serials: Set to accumulate unique serials seen
+
+    Returns:
+        List of iteration records for rotation analysis.
     """
     bat_header_start = 5000
     bat_header_count = 2
@@ -615,18 +648,33 @@ async def _run_battery_probe_iterations(
     num_slots = 4
     bat_total = num_slots * 30  # 120 registers
 
-    print(f"\n  --- 4-slot atomic read: {iterations} iterations, {delay}s delay ---")
+    est_time = iterations * delay
+    print(
+        f"\n  --- 4-slot atomic read: {iterations} iterations, "
+        f"{delay}s delay (~{est_time:.0f}s) ---"
+    )
     lines.append("")
     lines.append(f"=== 4-slot atomic read × {iterations} iterations ===")
     lines.append(f"  Registers: 5000-{bat_base + bat_total - 1}")
+    lines.append(f"  Delay: {delay}s between reads")
     lines.append("")
 
     prev_header: tuple[int, int] | None = None
+    start_time = time.monotonic()
+    prev_time = start_time
+    iteration_records: list[dict[str, object]] = []
 
     for iteration in range(iterations):
+        now = time.monotonic()
+        elapsed = now - start_time
+        delta = now - prev_time if iteration > 0 else 0.0
+        prev_time = now
+
         # Read header regs 5000-5001
         try:
-            header_vals = await _read_input_regs(collector, bat_header_start, bat_header_count)
+            header_vals = await _read_input_regs(
+                collector, bat_header_start, bat_header_count
+            )
             header_0 = header_vals[0]
             header_1 = header_vals[1]
         except Exception:
@@ -634,7 +682,9 @@ async def _run_battery_probe_iterations(
             header_1 = -1
 
         # Detect header changes
-        header_changed = prev_header is not None and (header_0, header_1) != prev_header
+        header_changed = (
+            prev_header is not None and (header_0, header_1) != prev_header
+        )
         prev_header = (header_0, header_1)
         change_marker = " *** HEADER CHANGED ***" if header_changed else ""
 
@@ -647,23 +697,49 @@ async def _run_battery_probe_iterations(
             for offset, val in enumerate(vals):
                 bat_regs[bat_base + offset] = val
         except Exception as e:
-            lines.append(f"  [iter {iteration}] Read failed at reg {bat_base}: {e}")
+            lines.append(
+                f"  [iter {iteration}] t={elapsed:7.2f}s "
+                f"Read failed at reg {bat_base}: {e}"
+            )
+            print(
+                f"  [{iteration:3d}] t={elapsed:6.1f}s "
+                f"Δ={delta:5.2f}s  READ FAILED: {e}"
+            )
+            iteration_records.append({
+                "index": iteration,
+                "elapsed": elapsed,
+                "delta": delta,
+                "page_key": (),
+                "serials": [],
+                "header": (header_0, header_1),
+                "empty": True,
+                "failed": True,
+            })
+            if iteration < iterations - 1:
+                await asyncio.sleep(delay)
             continue
 
         # Parse each slot
         slot_details: list[str] = []
         slot_serials: list[str] = []
+        slot_full_dumps: list[str] = []
+        slot_positions: list[int] = []
         for slot_idx in range(num_slots):
             slot_base = bat_base + (slot_idx * 30)
-            detail, slot_serial = _parse_battery_slot(bat_regs, slot_base)
+            detail, slot_serial, pos, full_dump = _parse_battery_slot(
+                bat_regs, slot_base
+            )
             slot_details.append(f"slot{slot_idx}: {detail}")
             slot_serials.append(slot_serial or "(empty)")
+            slot_full_dumps.append(full_dump)
             if slot_serial:
                 all_serials.add(slot_serial)
+                slot_positions.append(pos)
 
-        # Full detail line: header as both hex and decimal
+        # Full detail line with timestamp
         header_detail = (
             f"[{iteration:3d}] "
+            f"t={elapsed:7.2f}s Δ={delta:5.2f}s "
             f"r5000=0x{header_0:04X}({header_0}) "
             f"r5001=0x{header_1:04X}({header_1})"
             f"{change_marker}"
@@ -671,26 +747,202 @@ async def _run_battery_probe_iterations(
         line = f"{header_detail} | " + " | ".join(slot_details)
         lines.append(line)
 
+        # Full 30-register dump per slot (file only, for reserved field analysis)
+        for slot_idx, dump in enumerate(slot_full_dumps):
+            lines.append(f"  slot{slot_idx} regs[0-29]: {dump}")
+
         # Console output (abbreviated)
         serial_summary = " | ".join(slot_serials)
         marker = " <<< CHANGED" if header_changed else ""
         print(
-            f"  [{iteration:3d}] r5000={header_0:5d} r5001={header_1:5d}  {serial_summary}{marker}"
+            f"  [{iteration:3d}] t={elapsed:6.1f}s "
+            f"Δ={delta:5.2f}s "
+            f"r5000={header_0:5d} r5001={header_1:5d}  "
+            f"{serial_summary}{marker}"
         )
+
+        # Record for rotation analysis
+        page_key = tuple(sorted(slot_positions)) if slot_positions else ()
+        iteration_records.append({
+            "index": iteration,
+            "elapsed": elapsed,
+            "delta": delta,
+            "page_key": page_key,
+            "serials": [s for s in slot_serials if s != "(empty)"],
+            "header": (header_0, header_1),
+            "empty": not slot_positions,
+            "failed": False,
+        })
 
         if iteration < iterations - 1:
             await asyncio.sleep(delay)
+
+    return iteration_records
+
+
+def _analyze_rotation(
+    records: list[dict[str, object]],
+    lines: list[str],
+) -> None:
+    """Analyze round-robin rotation pattern from probe iteration records.
+
+    Appends analysis results to *lines* and prints a summary to console.
+    """
+    from collections import Counter
+
+    valid = [r for r in records if not r["failed"] and not r["empty"]]
+    total = len(records)
+
+    lines.append("")
+    lines.append("=" * 70)
+    lines.append("ROTATION ANALYSIS")
+    lines.append("=" * 70)
+
+    if not valid:
+        msg = "No valid reads to analyze."
+        lines.append(msg)
+        print(f"\n  {msg}")
+        return
+
+    # --- Page frequency ---
+    page_counts: Counter[tuple[int, ...]] = Counter()
+    for r in valid:
+        page_counts[r["page_key"]] += 1  # type: ignore[index]
+
+    lines.append(f"\nPage frequency ({len(valid)} valid reads):")
+    print(f"\n  Page frequency ({len(valid)} valid reads):")
+    for page_key, count in page_counts.most_common():
+        pct = count / len(valid) * 100
+        pos_str = ",".join(str(p) for p in page_key)  # type: ignore[union-attr]
+        line = f"  pos=[{pos_str}]: {count} reads ({pct:.0f}%)"
+        lines.append(line)
+        print(f"  {line}")
+
+    # --- Page transitions ---
+    # Each entry: (from_page, to_page, elapsed_seconds)
+    transitions: list[tuple[tuple[int, ...], tuple[int, ...], float]] = []
+    prev_page: tuple[int, ...] | None = None
+    for r in records:
+        if r["failed"]:
+            continue
+        current = cast(tuple[int, ...], r["page_key"])
+        if prev_page is not None and current != prev_page and current:
+            transitions.append((prev_page, current, cast(float, r["elapsed"])))
+        if current:  # don't update prev on empty reads
+            prev_page = current
+
+    lines.append(f"\nPage transitions: {len(transitions)}")
+    print(f"\n  Page transitions: {len(transitions)}")
+    for from_page, to_page, t_elapsed in transitions:
+        from_str = (
+            ",".join(str(p) for p in from_page) if from_page else "empty"
+        )
+        to_str = ",".join(str(p) for p in to_page)
+        line = f"  t={t_elapsed:7.2f}s: pos=[{from_str}] -> pos=[{to_str}]"
+        lines.append(line)
+        print(f"  {line}")
+
+    # --- Rotation period estimate ---
+    if len(transitions) >= 2:
+        intervals = [
+            transitions[i][2] - transitions[i - 1][2]
+            for i in range(1, len(transitions))
+        ]
+        avg_interval = sum(intervals) / len(intervals)
+        min_interval = min(intervals)
+        max_interval = max(intervals)
+
+        unique_pages = len(page_counts)
+        full_cycle = avg_interval * unique_pages
+
+        lines.append(f"\nRotation timing ({len(intervals)} intervals):")
+        lines.append(f"  Mean between transitions: {avg_interval:.2f}s")
+        lines.append(f"  Min: {min_interval:.2f}s")
+        lines.append(f"  Max: {max_interval:.2f}s")
+        lines.append(
+            f"  Estimated full cycle ({unique_pages} pages): ~{full_cycle:.1f}s"
+        )
+
+        print(f"\n  Rotation timing ({len(intervals)} intervals):")
+        print(f"    Mean between transitions: {avg_interval:.2f}s")
+        print(f"    Min:  {min_interval:.2f}s  Max: {max_interval:.2f}s")
+        print(
+            f"    Estimated full cycle ({unique_pages} pages): ~{full_cycle:.1f}s"
+        )
+    elif len(transitions) == 1:
+        t_elapsed_single = transitions[0][2]
+        msg = (
+            f"Only 1 transition at t={t_elapsed_single:.2f}s "
+            f"— need more iterations"
+        )
+        lines.append(f"\n{msg}")
+        print(f"\n  {msg}")
+    else:
+        msg = "No transitions observed — page may be static or need longer run"
+        lines.append(f"\n{msg}")
+        print(f"\n  {msg}")
+
+    # --- Consecutive page hold times ---
+    if valid:
+        hold_times: dict[tuple[int, ...], list[float]] = {}
+        run_start_elapsed = cast(float, valid[0]["elapsed"])
+        run_page = cast(tuple[int, ...], valid[0]["page_key"])
+        for r in valid[1:]:
+            current_page = cast(tuple[int, ...], r["page_key"])
+            if current_page != run_page:
+                duration = cast(float, r["elapsed"]) - run_start_elapsed
+                hold_times.setdefault(run_page, []).append(duration)
+                run_start_elapsed = cast(float, r["elapsed"])
+                run_page = current_page
+        # Don't count the last run (still in progress when probe ended)
+
+        if hold_times:
+            lines.append("\nPage hold durations (consecutive valid reads):")
+            print("\n  Page hold durations:")
+            for page_key in sorted(hold_times):
+                durations = hold_times[page_key]
+                pos_str = ",".join(str(p) for p in page_key)
+                if len(durations) == 1:
+                    line = f"  pos=[{pos_str}]: {durations[0]:.2f}s (1 run)"
+                else:
+                    avg_d = sum(durations) / len(durations)
+                    line = (
+                        f"  pos=[{pos_str}]: "
+                        f"avg={avg_d:.2f}s "
+                        f"min={min(durations):.2f}s "
+                        f"max={max(durations):.2f}s "
+                        f"({len(durations)} runs)"
+                    )
+                lines.append(line)
+                print(f"  {line}")
+
+    # --- Read reliability ---
+    empty_count = sum(1 for r in records if r["empty"] and not r["failed"])
+    failed_count = sum(1 for r in records if r["failed"])
+
+    lines.append("\nRead reliability:")
+    lines.append(f"  Valid: {len(valid)}/{total} ({len(valid) / total * 100:.0f}%)")
+    print(f"\n  Read reliability: {len(valid)}/{total} valid")
+    if empty_count:
+        lines.append(
+            f"  Empty: {empty_count}/{total} ({empty_count / total * 100:.0f}%)"
+        )
+        print(f"    Empty: {empty_count}")
+    if failed_count:
+        lines.append(
+            f"  Failed: {failed_count}/{total} ({failed_count / total * 100:.0f}%)"
+        )
+        print(f"    Failed: {failed_count}")
 
 
 async def run_battery_probe(args: argparse.Namespace) -> int:
     """Read battery registers (5000+) repeatedly to detect round-robin rotation.
 
     Always reads all 4 battery slots (120 registers) in a single atomic
-    Modbus FC 04 call.  The number of iterations is adaptive:
+    Modbus FC 04 call.  The number of iterations is adaptive unless overridden
+    via ``--battery-iterations``::
 
-        iterations = ceil(battery_count / 4) * 3
-
-    This ensures enough reads to observe a full rotation (if one exists).
+        default iterations = ceil(battery_count / 4) * 3
 
     Output is saved to a text file for attaching to GitHub issues.
     """
@@ -752,13 +1004,25 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
         print(f"  battery_count (reg 96): {battery_count}")
     except Exception:
         battery_count = 12  # sensible default for probing
-        print(f"  ⚠ Could not read reg 96 (battery_count), assuming {battery_count}")
+        print(
+            f"  ⚠ Could not read reg 96 (battery_count), assuming {battery_count}"
+        )
+
+    # Determine iteration count
+    user_iterations: int | None = getattr(args, "battery_iterations", None)
+    if user_iterations is not None:
+        iterations = user_iterations
+        print(f"  Iterations: {iterations} (user-specified)")
+    else:
+        iterations = max(math.ceil(battery_count / 4) * 3, 6)
+        print(f"  Iterations: {iterations} (auto: ceil({battery_count}/4)*3)")
 
     # Collect results
     lines: list[str] = []
     lines.append(f"Battery Round-Robin Probe — {serial}")
     lines.append(f"battery_count (reg 96): {battery_count}")
     lines.append(f"Delay between reads: {delay}s")
+    lines.append(f"Iterations: {iterations}")
     lines.append(f"pylxpweb version: {__version__}")
 
     all_serials_seen: set[str] = set()
@@ -766,8 +1030,7 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
     # Always read 4 slots (120 regs) — the maximum that fits in a single
     # Modbus FC 04 call (PDU limit = 125 regs).  Iterations scaled to
     # battery_count so we observe a full rotation.
-    iterations = max(math.ceil(battery_count / 4) * 3, 6)
-    await _run_battery_probe_iterations(
+    iteration_records = await _run_battery_probe_iterations(
         collector=collector,
         iterations=iterations,
         delay=delay,
@@ -777,7 +1040,7 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
 
     await collector.disconnect()
 
-    # Summary
+    # Serial summary
     lines.append("")
     lines.append(f"Unique serials seen: {len(all_serials_seen)}")
     for s in sorted(all_serials_seen):
@@ -787,6 +1050,9 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
     print(f"  Unique serials seen: {len(all_serials_seen)}")
     for s in sorted(all_serials_seen):
         print(f"    - {s}")
+
+    # Rotation analysis
+    _analyze_rotation(iteration_records, lines)
 
     # Save to file
     output_dir = Path(args.output_dir)
