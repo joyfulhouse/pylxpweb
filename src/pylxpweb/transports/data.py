@@ -87,6 +87,12 @@ class InverterRuntimeData:
     pv3_voltage: float | None = None  # V
     pv3_current: float | None = None  # A
     pv3_power: float | None = None  # W
+    pv4_voltage: float | None = None  # V (V23 extended)
+    pv4_power: float | None = None  # W (V23 extended)
+    pv5_voltage: float | None = None  # V (V23 extended)
+    pv5_power: float | None = None  # W (V23 extended)
+    pv6_voltage: float | None = None  # V (V23 extended)
+    pv6_power: float | None = None  # W (V23 extended)
     pv_total_power: float | None = None  # W
 
     # Battery
