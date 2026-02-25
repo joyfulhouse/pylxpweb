@@ -249,3 +249,35 @@ class TestInverterRuntimeDataFaultProperties:
 
         data = InverterRuntimeData(warning_code=None)
         assert data.warning_messages == []
+
+
+class TestPackageExports:
+    """Test new symbols are accessible from package-level imports."""
+
+    def test_fault_codes_from_constants(self) -> None:
+        from pylxpweb.constants.fault_codes import (
+            BMS_FAULT_CODES,
+            INVERTER_FAULT_CODES,
+            decode_bms_code,
+            decode_fault_bits,
+        )
+
+        assert len(INVERTER_FAULT_CODES) > 0
+        assert len(BMS_FAULT_CODES) > 0
+        assert callable(decode_fault_bits)
+        assert callable(decode_bms_code)
+
+    def test_scheduling_from_registers(self) -> None:
+        from pylxpweb.registers import (
+            SCHEDULE_BY_ADDRESS,
+            SCHEDULE_BY_API_KEY,
+            SCHEDULE_BY_NAME,
+            SCHEDULE_REGISTERS,
+            ScheduleTypeConfig,
+        )
+
+        assert len(SCHEDULE_REGISTERS) == 224
+        assert len(SCHEDULE_BY_ADDRESS) == 224
+        assert len(SCHEDULE_BY_NAME) == 224
+        assert len(SCHEDULE_BY_API_KEY) == 224
+        assert ScheduleTypeConfig is not None

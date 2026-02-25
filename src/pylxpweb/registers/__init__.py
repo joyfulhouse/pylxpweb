@@ -117,6 +117,14 @@ from pylxpweb.registers.inverter_input import (
     registers_for_model,
     sensor_keys_for_model,
 )
+from pylxpweb.registers.scheduling import (
+    SCHEDULE_BY_ADDRESS,
+    SCHEDULE_BY_API_KEY,
+    SCHEDULE_BY_NAME,
+    SCHEDULE_REGISTERS,
+    SCHEDULE_TYPES,
+    ScheduleTypeConfig,
+)
 
 __all__ = [
     # Shared types
@@ -180,4 +188,11 @@ __all__ = [
     "energy_registers",
     "gridboss_all_ha_sensor_keys",
     "runtime_registers",
+    # Scheduling registers
+    "SCHEDULE_BY_ADDRESS",
+    "SCHEDULE_BY_API_KEY",
+    "SCHEDULE_BY_NAME",
+    "SCHEDULE_REGISTERS",
+    "SCHEDULE_TYPES",
+    "ScheduleTypeConfig",
 ]
