@@ -265,8 +265,8 @@ async def main() -> None:
         regs = {80 + i: v for i, v in enumerate(result.values)}
 
         # From register_maps.py:
-        # bms_charge_current_limit = reg 81, scale /100
-        # bms_discharge_current_limit = reg 82, scale /100
+        # bms_charge_current_limit = reg 81, scale /10
+        # bms_discharge_current_limit = reg 82, scale /10
         # bms_charge_voltage_ref = reg 83, scale /10
         # bms_discharge_cutoff = reg 84, scale /10
         # battery_parallel_num = reg 96

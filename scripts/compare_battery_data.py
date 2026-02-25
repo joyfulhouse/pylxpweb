@@ -59,8 +59,8 @@ async def read_modbus_battery_data() -> dict:
         result = await client.read_input_registers(address=80, count=33, device_id=1)
         if not result.isError():
             regs = {80 + i: v for i, v in enumerate(result.registers)}
-            data["charge_current_limit"] = regs.get(81, 0) / 100.0  # scale /100
-            data["discharge_current_limit"] = regs.get(82, 0) / 100.0
+            data["charge_current_limit"] = regs.get(81, 0) / 10.0  # scale /10
+            data["discharge_current_limit"] = regs.get(82, 0) / 10.0
             data["charge_voltage_ref"] = regs.get(83, 0) / 10.0  # scale /10
             data["discharge_cutoff"] = regs.get(84, 0) / 10.0
             data["battery_count"] = regs.get(96, 0)
@@ -182,7 +182,7 @@ async def read_web_api_battery_data() -> dict:
                     "cycle_count": batt.cycleCnt,
                     "remain_capacity_ah": batt.currentRemainCapacity,
                     "full_capacity_ah": batt.currentFullCapacity,
-                    "charge_current_limit": batt.batChargeMaxCur / 100.0 if batt.batChargeMaxCur else 0,
+                    "charge_current_limit": batt.batChargeMaxCur / 10.0 if batt.batChargeMaxCur else 0,
                     "charge_voltage_ref": batt.batChargeVoltRef / 10.0 if batt.batChargeVoltRef else 0,
                 }
                 data["batteries"].append(battery_data)

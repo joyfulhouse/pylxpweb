@@ -128,8 +128,8 @@ class BatteryRegisterDefinition:
 #   0    │ status_header              │ —      │ no     │ —    │ —
 #   1    │ full_capacity_ah           │ —      │ no     │ Ah   │ currentFullCapacity
 #   2    │ charge_voltage_ref         │ ÷10    │ no     │ V    │ batChargeVoltRef
-#   3    │ charge_current_limit       │ ÷100   │ no     │ A    │ batChargeMaxCur
-#   4    │ discharge_current_limit    │ ÷100   │ no     │ A    │ —
+#   3    │ charge_current_limit       │ ÷10    │ no     │ A    │ batChargeMaxCur
+#   4    │ discharge_current_limit    │ ÷10    │ no     │ A    │ —
 #   5    │ discharge_voltage_cutoff   │ ÷10    │ no     │ V    │ —
 #   6    │ voltage                    │ ÷100   │ no     │ V    │ totalVoltage
 #   7    │ current                    │ ÷10    │ yes    │ A    │ current
@@ -185,18 +185,18 @@ BATTERY_REGISTERS: tuple[BatteryRegisterDefinition, ...] = (
         canonical_name="battery_charge_current_limit",
         cloud_api_field="batChargeMaxCur",
         ha_sensor_key="battery_max_charge_current",
-        scale=ScaleFactor.DIV_100,
+        scale=ScaleFactor.DIV_10,
         unit="A",
         category=BatteryCategory.LIMITS,
-        description="BMS maximum charge current limit.",
+        description="BMS maximum charge current limit (0.1A units, matches input reg 81).",
     ),
     BatteryRegisterDefinition(
         offset=4,
         canonical_name="battery_discharge_current_limit",
-        scale=ScaleFactor.DIV_100,
+        scale=ScaleFactor.DIV_10,
         unit="A",
         category=BatteryCategory.LIMITS,
-        description="BMS maximum discharge current limit.",
+        description="BMS maximum discharge current limit (0.1A units, matches input reg 82).",
     ),
     BatteryRegisterDefinition(
         offset=5,
