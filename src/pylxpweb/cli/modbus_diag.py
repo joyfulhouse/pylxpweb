@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 from pylxpweb import __version__
 
 if TYPE_CHECKING:
-    from pylxpweb.cli.collectors import ModbusCollector
+    from pylxpweb.cli.collectors import DongleCollector, ModbusCollector
 
 # Default register ranges based on known mappings
 DEFAULT_INPUT_RANGES = [
@@ -534,7 +534,7 @@ async def run_collection(args: argparse.Namespace) -> int:
 
 
 async def _read_input_regs(
-    collector: ModbusCollector,
+    collector: ModbusCollector | DongleCollector,
     start: int,
     count: int,
 ) -> list[int]:
@@ -590,7 +590,7 @@ def _parse_battery_slot(
 
 
 async def _run_probe_experiment(
-    collector: ModbusCollector,
+    collector: ModbusCollector | DongleCollector,
     label: str,
     num_slots: int,
     iterations: int,
@@ -701,21 +701,41 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
     """
     import math
 
-    from pylxpweb.cli.collectors import ModbusCollector
+    from pylxpweb.cli.collectors import DongleCollector, ModbusCollector
 
     delay: float = args.battery_delay
+    transport_type: str = args.transport
 
     print(f"\n{'=' * 70}")
     print("  Battery Round-Robin Probe")
     print(f"{'=' * 70}")
     print(f"  Host: {args.host}:{args.port}")
+    print(f"  Transport: {transport_type}")
     print(f"  Delay: {delay}s between reads")
     print(f"{'=' * 70}")
 
-    collector = ModbusCollector(
-        host=args.host,
-        port=args.port,
-    )
+    # Create the appropriate collector
+    collector: ModbusCollector | DongleCollector
+    if transport_type == "dongle":
+        dongle_serial = getattr(args, "dongle_serial", None) or ""
+        if not dongle_serial:
+            print("  ✗ --dongle-serial is required for dongle transport")
+            print(
+                "    Usage: pylxpweb-modbus-diag --host <IP> --transport dongle "
+                "--dongle-serial <SERIAL> --battery-probe"
+            )
+            return 1
+        collector = DongleCollector(
+            host=args.host,
+            dongle_serial=dongle_serial,
+            inverter_serial=args.serial or "",
+            port=args.port,
+        )
+    else:
+        collector = ModbusCollector(
+            host=args.host,
+            port=args.port,
+        )
 
     try:
         await collector.connect()
