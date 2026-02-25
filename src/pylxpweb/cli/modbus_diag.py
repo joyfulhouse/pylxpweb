@@ -698,8 +698,12 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
 
     from pylxpweb.cli.collectors import DongleCollector, ModbusCollector
 
-    delay: float = args.battery_delay
     transport_type: str = args.transport
+    # Dongle transport needs longer delays — the WiFi serial bridge can't
+    # handle back-to-back requests.  Default to 15s for dongle, 1s for TCP.
+    delay: float = args.battery_delay
+    if delay == 1.0 and transport_type == "dongle":
+        delay = 15.0
 
     print(f"\n{'=' * 70}")
     print("  Battery Round-Robin Probe")
