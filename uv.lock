@@ -1087,7 +1087,7 @@ wheels = [
 
 [[package]]
 name = "pylxpweb"
-version = "0.9.10"
+version = "0.9.13"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

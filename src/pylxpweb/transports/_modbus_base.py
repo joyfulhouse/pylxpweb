@@ -133,7 +133,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
 
         Args:
             address: Starting register address
-            count: Number of registers to read (max 40)
+            count: Number of registers to read (max 125 per Modbus FC 03/04 spec)
             input_registers: True for input registers (FC4), False for holding (FC3)
 
         Returns:
@@ -162,7 +162,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     )
                     result = await read_fn(
                         address=address,
-                        count=min(count, 40),
+                        count=count,
                         device_id=self._unit_id,
                     )
 

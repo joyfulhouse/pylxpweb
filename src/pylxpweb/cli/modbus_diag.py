@@ -638,21 +638,17 @@ async def _run_probe_experiment(
         prev_header = (header_0, header_1)
         change_marker = " *** HEADER CHANGED ***" if header_changed else ""
 
-        # Read all battery slots in chunks of 40
+        # Read all battery slots in a single atomic read (up to 120 regs fits
+        # within the Modbus FC 04 limit of 125).  Atomic read prevents firmware
+        # round-robin rotation from changing slot contents between reads (#170).
         bat_regs: dict[int, int] = {}
-        current = bat_base
-        remaining = bat_total
-        while remaining > 0:
-            chunk = min(remaining, 40)
-            try:
-                vals = await _read_input_regs(collector, current, chunk)
-                for offset, val in enumerate(vals):
-                    bat_regs[current + offset] = val
-                current += chunk
-                remaining -= chunk
-            except Exception as e:
-                lines.append(f"  [iter {iteration}] Read failed at reg {current}: {e}")
-                break
+        try:
+            vals = await _read_input_regs(collector, bat_base, bat_total)
+            for offset, val in enumerate(vals):
+                bat_regs[bat_base + offset] = val
+        except Exception as e:
+            lines.append(f"  [iter {iteration}] Read failed at reg {bat_base}: {e}")
+            continue
 
         # Parse each slot
         slot_details: list[str] = []
