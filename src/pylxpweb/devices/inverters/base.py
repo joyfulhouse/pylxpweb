@@ -42,7 +42,6 @@ _LOGGER = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
     from pylxpweb.models import EnergyInfo, InverterRuntime
-    from pylxpweb.transports.data import BatteryBankData
     from pylxpweb.transports.protocol import InverterTransport
 
 
@@ -135,11 +134,6 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         self._battery_cache_time: datetime | None = None
         self._battery_cache_ttl = timedelta(seconds=30)  # 30-second TTL for battery
         self._battery_cache_lock = asyncio.Lock()
-
-        # Known battery serials for corruption detection (Layer 2).
-        # Once a battery serial is seen at a given index, any change indicates
-        # register corruption (battery serials don't change between reads).
-        self._known_battery_serials: dict[int, str] = {}
 
         # ===== Firmware Update Cache =====
         # Initialize firmware update detection (from FirmwareUpdateMixin)
@@ -644,10 +638,6 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                                 self.serial_number,
                             )
                             return
-                        if self.validate_data and not self._validate_battery_serials(
-                            transport_battery
-                        ):
-                            return
                         self._transport_battery = transport_battery
                         # Supplement with cloud metadata (battery type, model)
                         await self._fetch_battery_metadata()
@@ -717,19 +707,16 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 self._transport_energy = energy
                 self._energy_cache_time = datetime.now()
             if battery is not None:
-                # Accept battery data only if it passes all validation checks.
-                # Corrupt or serial-drifted battery data is silently skipped,
-                # preserving the previous cache while still accepting runtime + energy.
+                # Accept battery data only if it passes canary checks.
+                # Corrupt battery data is silently skipped, preserving the
+                # previous cache while still accepting runtime + energy.
                 battery_valid = True
-                if self.validate_data:
-                    if battery.is_corrupt():
-                        _LOGGER.warning(
-                            "Corrupt battery in combined read for %s",
-                            self.serial_number,
-                        )
-                        battery_valid = False
-                    elif not self._validate_battery_serials(battery):
-                        battery_valid = False
+                if self.validate_data and battery.is_corrupt():
+                    _LOGGER.warning(
+                        "Corrupt battery in combined read for %s",
+                        self.serial_number,
+                    )
+                    battery_valid = False
                 if battery_valid:
                     self._transport_battery = battery
                     self._battery_cache_time = datetime.now()
@@ -737,33 +724,6 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     self._apply_battery_metadata()
         except Exception as err:
             _LOGGER.debug("Combined input read failed for %s: %s", self.serial_number, err)
-
-    def _validate_battery_serials(self, bank: BatteryBankData) -> bool:
-        """Check if any known battery serial has changed (indicates corruption).
-
-        Once a battery serial is observed at a given index, any change is
-        treated as register corruption since serials never change between reads.
-
-        Args:
-            bank: BatteryBankData with individual battery objects.
-
-        Returns:
-            True if all serials match (or are new), False if drift detected.
-        """
-        for bat in bank.batteries:
-            known = self._known_battery_serials.get(bat.battery_index)
-            if known is not None and bat.serial_number and bat.serial_number != known:
-                _LOGGER.warning(
-                    "Battery %d serial changed %s -> %s for %s (likely corrupt)",
-                    bat.battery_index,
-                    known,
-                    bat.serial_number,
-                    self.serial_number,
-                )
-                return False
-            if bat.serial_number and known is None:
-                self._known_battery_serials[bat.battery_index] = bat.serial_number
-        return True
 
     async def _fetch_battery_metadata(self) -> None:
         """Fetch battery metadata from cloud API if stale or missing.

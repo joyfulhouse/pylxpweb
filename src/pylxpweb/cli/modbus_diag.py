@@ -589,21 +589,21 @@ def _parse_battery_slot(
     return detail, slot_serial
 
 
-async def _run_probe_experiment(
+async def _run_battery_probe_iterations(
     collector: ModbusCollector | DongleCollector,
-    label: str,
-    num_slots: int,
     iterations: int,
     delay: float,
     lines: list[str],
     all_serials: set[str],
 ) -> None:
-    """Run one battery probe experiment (read N slots for M iterations).
+    """Read all 4 battery slots (120 registers) repeatedly.
+
+    Always reads 120 registers (4 × 30) in a single atomic Modbus FC 04 call
+    starting at register 5002.  This is the maximum that fits within the 125-
+    register PDU limit and matches production behaviour in ``_register_data.py``.
 
     Args:
-        collector: Connected ModbusCollector
-        label: Human-readable experiment label
-        num_slots: Number of battery slots to read (e.g. 4 or 6)
+        collector: Connected ModbusCollector or DongleCollector
         iterations: Number of read iterations
         delay: Delay in seconds between iterations
         lines: Output lines buffer
@@ -612,12 +612,12 @@ async def _run_probe_experiment(
     bat_header_start = 5000
     bat_header_count = 2
     bat_base = 5002
-    bat_slot_count = 30
-    bat_total = num_slots * bat_slot_count
+    num_slots = 4
+    bat_total = num_slots * 30  # 120 registers
 
-    print(f"\n  --- {label}: {num_slots} slots, {iterations} iterations ---")
+    print(f"\n  --- 4-slot atomic read: {iterations} iterations, {delay}s delay ---")
     lines.append("")
-    lines.append(f"=== {label}: {num_slots} slots × {iterations} iterations ===")
+    lines.append(f"=== 4-slot atomic read × {iterations} iterations ===")
     lines.append(f"  Registers: 5000-{bat_base + bat_total - 1}")
     lines.append("")
 
@@ -638,7 +638,7 @@ async def _run_probe_experiment(
         prev_header = (header_0, header_1)
         change_marker = " *** HEADER CHANGED ***" if header_changed else ""
 
-        # Read all battery slots in a single atomic read (up to 120 regs fits
+        # Read all 4 battery slots in a single atomic read (120 regs fits
         # within the Modbus FC 04 limit of 125).  Atomic read prevents firmware
         # round-robin rotation from changing slot contents between reads (#170).
         bat_regs: dict[int, int] = {}
@@ -654,7 +654,7 @@ async def _run_probe_experiment(
         slot_details: list[str] = []
         slot_serials: list[str] = []
         for slot_idx in range(num_slots):
-            slot_base = bat_base + (slot_idx * bat_slot_count)
+            slot_base = bat_base + (slot_idx * 30)
             detail, slot_serial = _parse_battery_slot(bat_regs, slot_base)
             slot_details.append(f"slot{slot_idx}: {detail}")
             slot_serials.append(slot_serial or "(empty)")
@@ -685,11 +685,10 @@ async def _run_probe_experiment(
 async def run_battery_probe(args: argparse.Namespace) -> int:
     """Read battery registers (5000+) repeatedly to detect round-robin rotation.
 
-    Runs multiple experiments varying the number of slots read (3-6) to
-    understand how the inverter firmware exposes batteries.  For each slot
-    count, the number of iterations is adaptive:
+    Always reads all 4 battery slots (120 registers) in a single atomic
+    Modbus FC 04 call.  The number of iterations is adaptive:
 
-        iterations = ceil(battery_count / num_slots) * 3
+        iterations = ceil(battery_count / 4) * 3
 
     This ensures enough reads to observe a full rotation (if one exists).
 
@@ -760,32 +759,28 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
 
     all_serials_seen: set[str] = set()
 
-    # Slot variations: 3, 4, 5, 6
-    # For each, iterations = ceil(battery_count / slots) * 3
-    slot_variations = [3, 4, 5, 6]
-
-    for exp_num, num_slots in enumerate(slot_variations, start=1):
-        exp_iters = max(math.ceil(battery_count / num_slots) * 3, 6)
-        await _run_probe_experiment(
-            collector=collector,
-            label=f"Experiment {exp_num}: {num_slots}-slot read",
-            num_slots=num_slots,
-            iterations=exp_iters,
-            delay=delay,
-            lines=lines,
-            all_serials=all_serials_seen,
-        )
+    # Always read 4 slots (120 regs) — the maximum that fits in a single
+    # Modbus FC 04 call (PDU limit = 125 regs).  Iterations scaled to
+    # battery_count so we observe a full rotation.
+    iterations = max(math.ceil(battery_count / 4) * 3, 6)
+    await _run_battery_probe_iterations(
+        collector=collector,
+        iterations=iterations,
+        delay=delay,
+        lines=lines,
+        all_serials=all_serials_seen,
+    )
 
     await collector.disconnect()
 
     # Summary
     lines.append("")
-    lines.append(f"Unique serials seen across all experiments: {len(all_serials_seen)}")
+    lines.append(f"Unique serials seen: {len(all_serials_seen)}")
     for s in sorted(all_serials_seen):
         lines.append(f"  - {s}")
 
     print(f"\n{'=' * 70}")
-    print(f"  Unique serials seen (all experiments): {len(all_serials_seen)}")
+    print(f"  Unique serials seen: {len(all_serials_seen)}")
     for s in sorted(all_serials_seen):
         print(f"    - {s}")
 
