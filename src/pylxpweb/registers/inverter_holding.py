@@ -1604,6 +1604,59 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         category=HoldingCategory.FUNCTION,
         description="On-grid always on.",
     ),
+    # =========================================================================
+    # EXTENDED FUNCTION ENABLE 5 (reg 233) — partial bitfield
+    # =========================================================================
+    HoldingRegisterDefinition(
+        address=233,
+        bit_position=0,
+        canonical_name="quick_charge_start_enable",
+        api_param_key="FUNC_QUICK_CHG_START_EN",
+        category=HoldingCategory.FUNCTION,
+        description="Quick charge start enable.",
+    ),
+    HoldingRegisterDefinition(
+        address=233,
+        bit_position=1,
+        canonical_name="battery_backup_enable",
+        api_param_key="FUNC_BATT_BACKUP_EN",
+        category=HoldingCategory.FUNCTION,
+        description="Battery backup enable.",
+    ),
+    HoldingRegisterDefinition(
+        address=233,
+        bit_position=2,
+        canonical_name="maintenance_enable",
+        api_param_key="FUNC_MAINTENANCE_EN",
+        category=HoldingCategory.FUNCTION,
+        description="Maintenance mode enable.",
+    ),
+    HoldingRegisterDefinition(
+        address=233,
+        bit_position=3,
+        canonical_name="weekly_schedule_enable",
+        api_param_key="FUNC_ENERTEK_WORKING_MODE",
+        ha_entity_key="weekly_schedule",
+        category=HoldingCategory.FUNCTION,
+        description="7-day scheduling mode (0=daily regs 68-89, 1=weekly regs 500-723).",
+    ),
+    HoldingRegisterDefinition(
+        address=233,
+        bit_position=10,
+        canonical_name="over_freq_fast_stop",
+        api_param_key="FUNC_OVER_FREQ_FSTOP",
+        category=HoldingCategory.FUNCTION,
+        description="Over-frequency fast stop enable.",
+    ),
+    HoldingRegisterDefinition(
+        address=233,
+        bit_position=12,
+        canonical_name="sporadic_charge_enable",
+        api_param_key="FUNC_SPORADIC_CHARGE",
+        ha_entity_key="sporadic_charge",
+        category=HoldingCategory.FUNCTION,
+        description="Sporadic charge enable.",
+    ),
 )
 
 
