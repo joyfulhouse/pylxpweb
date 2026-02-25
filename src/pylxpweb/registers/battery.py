@@ -142,8 +142,8 @@ class BatteryRegisterDefinition:
 #  14    │ max_cell_num_v (lo) / min_cell_num_v (hi) │ — │ — │ — │ packed
 #  15    │ max_cell_num_t (lo) / min_cell_num_t (hi) │ — │ — │ — │ packed
 #  16    │ firmware_version           │ —      │ no     │ —    │ fwVersionText
-# 17-23  │ serial_number (ASCII)      │ —      │ no     │ —    │ batterySn
-# 24-29  │ reserved                   │ —      │ —      │ —    │ —
+# 17-24  │ serial_number (ASCII)      │ —      │ no     │ —    │ batterySn
+# 25-29  │ reserved                   │ —      │ —      │ —    │ —
 
 BATTERY_REGISTERS: tuple[BatteryRegisterDefinition, ...] = (
     # =========================================================================
@@ -367,8 +367,8 @@ BATTERY_REGISTERS: tuple[BatteryRegisterDefinition, ...] = (
         cloud_api_field="batterySn",
         ha_sensor_key="battery_serial_number",
         category=BatteryCategory.IDENTITY,
-        description="Serial number. 7 registers (offsets 17-23), 2 ASCII chars each.",
-        packed="ascii_7reg",
+        description="Serial number. 8 regs (offsets 17-24), 2 ASCII chars each.",
+        packed="ascii_8reg",
     ),
 )
 

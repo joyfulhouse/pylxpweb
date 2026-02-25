@@ -106,7 +106,7 @@ def read_battery_serial(
     *,
     base_address: int,
     start_offset: int = 17,
-    count: int = 7,
+    count: int = 8,
 ) -> str:
     """Read serial number from consecutive 16-bit registers (2 ASCII chars each)."""
     chars: list[str] = []
