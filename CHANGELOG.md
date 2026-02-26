@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.17] - 2026-02-26
+
+### Added
+
+- **Battery round-robin accumulator** ([#170](https://github.com/joyfulhouse/pylxpweb/issues/170)): Systems with >4 batteries expose 4 register slots that rotate across refresh cycles. The accumulator merges slot data using the `pos` field (register offset 24, high byte) as canonical battery identity, building a complete virtual register map over `ceil(battery_count/4)` polls. All batteries populate and downstream `BatteryBankData` sees the full bank.
+- **`BatteryData.last_seen` timestamp**: Per-battery staleness tracking — records when each battery's registers were last physically read from the inverter. Non-accumulated reads (≤4 batteries) stamp `datetime.now()` on all batteries.
+- **Cloud API response collection**: `pylxpweb-collect` gains `--no-api` flag (default: on) that fetches raw JSON from `getBatteryInfo`, `getInverterRuntime`, `getInverterEnergy`, and `getMidboxRuntime` alongside the existing register scan — enables cloud-vs-local data comparison.
+
+### Fixed
+
+- **GridBOSS CT ghost voltage** ([#162](https://github.com/joyfulhouse/eg4_web_monitor/issues/162)): Raised MID grid voltage canary floor from 0V to 5V. Disconnected grid/gen CT inputs produce ~0.5-1.5V leakage from electromagnetic coupling, which is physically normal but was being rejected as corruption.
+
 ## [0.9.0] - 2026-02-10
 
 ### Changed
