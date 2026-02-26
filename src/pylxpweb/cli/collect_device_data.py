@@ -127,49 +127,65 @@ def sanitize_output(data: dict[str, Any], serial_map: dict[str, str]) -> dict[st
     return result
 
 
+async def _fetch_raw_endpoint(
+    client: LuxpowerClient,
+    endpoint: str,
+    serial_num: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Fetch raw JSON from an API endpoint, bypassing Pydantic validation.
+
+    Returns (raw_dict, None) on success, or (None, error_string) on failure.
+    Bypasses model_validate() so we always capture the full API response,
+    even for device types with schemas our Pydantic models don't cover
+    (e.g. GridBOSS runtime vs InverterRuntime).
+    """
+    try:
+        await client._ensure_authenticated()
+        response = await client._request(
+            "POST",
+            endpoint,
+            data={"serialNum": serial_num},
+        )
+        return (response, None)
+    except Exception as exc:
+        return (None, f"{type(exc).__name__}: {exc}")
+
+
+# API endpoint paths for the collect tool
+_API_ENDPOINTS: dict[str, str] = {
+    "battery_info": "/WManage/api/battery/getBatteryInfo",
+    "runtime": "/WManage/api/inverter/getInverterRuntime",
+    "energy": "/WManage/api/inverter/getInverterEnergyInfo",
+    "midbox_runtime": "/WManage/api/midbox/getMidboxRuntime",
+}
+
+
 async def collect_api_responses(
     client: LuxpowerClient,
     serial_num: str,
-    device_type: str,
 ) -> dict[str, Any]:
     """Fetch raw cloud API responses for a device.
 
-    Each endpoint is called independently so partial results are returned
-    even if some endpoints fail (e.g. GridBOSS has no battery info).
+    Uses raw HTTP calls (bypassing Pydantic validation) so the full API
+    response is always captured regardless of device type.  Each endpoint
+    is called independently so partial results are returned even if some
+    endpoints fail.  Errors are recorded per-endpoint so failures are
+    never silent.
     """
     results: dict[str, Any] = {}
+    errors: dict[str, str] = {}
 
-    # Battery info
-    try:
-        battery = await client.api.devices.get_battery_info(serial_num)
-        results["battery_info"] = battery.model_dump()
-    except Exception:
-        results["battery_info"] = None
+    for name, endpoint in _API_ENDPOINTS.items():
+        data, err = await _fetch_raw_endpoint(client, endpoint, serial_num)
+        results[name] = data
+        if err:
+            errors[name] = err
+            print(f"      {name}: FAILED ({err})")
+        else:
+            print(f"      {name}: OK")
 
-    # Runtime
-    try:
-        runtime = await client.api.devices.get_inverter_runtime(serial_num)
-        results["runtime"] = runtime.model_dump()
-    except Exception:
-        results["runtime"] = None
-
-    # Energy
-    try:
-        energy = await client.api.devices.get_inverter_energy(serial_num)
-        results["energy"] = energy.model_dump()
-    except Exception:
-        results["energy"] = None
-
-    # MID/GridBOSS runtime (only attempt for GridBOSS devices)
-    device_lower = device_type.lower()
-    if "gridboss" in device_lower or "grid boss" in device_lower or "mid" in device_lower:
-        try:
-            midbox = await client.api.devices.get_midbox_runtime(serial_num)
-            results["midbox_runtime"] = midbox.model_dump()
-        except Exception:
-            results["midbox_runtime"] = None
-    else:
-        results["midbox_runtime"] = None
+    if errors:
+        results["_errors"] = errors
 
     return results
 
@@ -627,7 +643,7 @@ async def collect_single_device(
     if include_api:
         print("    Collecting cloud API responses...")
         try:
-            api_data = await collect_api_responses(client, serial_num, device_type)
+            api_data = await collect_api_responses(client, serial_num)
             api_output: dict[str, Any] = {
                 "metadata": {
                     "timestamp": datetime.now().astimezone().isoformat(),
