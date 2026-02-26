@@ -368,6 +368,52 @@ class TestMidboxRuntimeDataCorruption:
         data = MidboxRuntimeData()
         assert data.is_corrupt() is False
 
+    # --- Grid voltage canary checks (#162: ghost voltage tolerance) ---
+
+    def test_grid_voltage_zero_not_corrupt(self) -> None:
+        """is_corrupt() returns False when grid voltage is 0V (grid down)."""
+        data = MidboxRuntimeData(grid_l1_voltage=0.0, grid_l2_voltage=0.0)
+        assert data.is_corrupt() is False
+
+    def test_ghost_voltage_not_corrupt(self) -> None:
+        """is_corrupt() returns False for ghost/leakage voltage on disconnected CTs (#162).
+
+        Disconnected grid/gen CT inputs produce ~0.5-1.5V from electromagnetic
+        coupling.  These are physically real and should not trigger rejection.
+        """
+        data = MidboxRuntimeData(grid_l1_voltage=0.8, grid_l2_voltage=0.7)
+        assert data.is_corrupt() is False
+
+    def test_ghost_voltage_up_to_5v_not_corrupt(self) -> None:
+        """is_corrupt() tolerates ghost voltages up to 5V (generous margin)."""
+        data = MidboxRuntimeData(grid_l1_voltage=4.9, grid_l2_voltage=5.0)
+        assert data.is_corrupt() is False
+
+    def test_grid_voltage_mid_range_is_corrupt(self) -> None:
+        """is_corrupt() returns True for voltage in impossible 5-50V range."""
+        data = MidboxRuntimeData(grid_l1_voltage=25.0)
+        assert data.is_corrupt() is True
+
+    def test_grid_l2_voltage_mid_range_is_corrupt(self) -> None:
+        """is_corrupt() detects corruption on L2 voltage."""
+        data = MidboxRuntimeData(grid_l2_voltage=40.0)
+        assert data.is_corrupt() is True
+
+    def test_grid_voltage_above_300_is_corrupt(self) -> None:
+        """is_corrupt() returns True for voltage > 300V (0xFFFF/10 = 6553.5V)."""
+        data = MidboxRuntimeData(grid_l1_voltage=6553.5)
+        assert data.is_corrupt() is True
+
+    def test_grid_voltage_normal_120v_not_corrupt(self) -> None:
+        """is_corrupt() returns False for normal US split-phase voltage."""
+        data = MidboxRuntimeData(grid_l1_voltage=120.5, grid_l2_voltage=121.0)
+        assert data.is_corrupt() is False
+
+    def test_grid_voltage_normal_240v_not_corrupt(self) -> None:
+        """is_corrupt() returns False for normal 240V (non-US or L-L)."""
+        data = MidboxRuntimeData(grid_l1_voltage=240.0, grid_l2_voltage=241.0)
+        assert data.is_corrupt() is False
+
 
 class TestInverterPowerCanary:
     """Power canary checks for InverterRuntimeData.

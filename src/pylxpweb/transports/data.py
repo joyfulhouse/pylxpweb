@@ -1217,15 +1217,17 @@ class BatteryBankData:
         if max_capacity is not None and battery_soc is not None:
             current_capacity = round(max_capacity * battery_soc / 100)
 
-        # Parse individual battery data if extended registers provided
+        # Parse individual battery data if extended registers provided.
+        # When round-robin accumulation is active (>4 batteries), the register
+        # map contains virtual addresses keyed by pos (not slot index), so we
+        # iterate up to battery_count instead of capping at BATTERY_MAX_COUNT.
         batteries: list[BatteryData] = []
         if individual_battery_registers:
             if battery_count is not None and battery_count > 0:
                 count_to_use = battery_count
             else:
                 count_to_use = BATTERY_MAX_COUNT
-            max_to_check = min(count_to_use, BATTERY_MAX_COUNT)
-            for idx in range(max_to_check):
+            for idx in range(count_to_use):
                 battery_data = BatteryData.from_modbus_registers(
                     battery_index=idx,
                     registers=individual_battery_registers,
@@ -1454,14 +1456,15 @@ class MidboxRuntimeData:
             if sp is not None and sp > 2:
                 _LOGGER.warning("MID canary: smart_port_%d_status=%d > 2", i, sp)
                 return True
-        # Grid voltage: 0V is valid (grid down), but nonzero values below
-        # 50V or above 300V indicate register corruption.  Corrupt reads
-        # typically produce 0.1-0.3V (partial register) or 6553.5V (0xFFFF/10).
+        # Grid voltage: 0V is valid (grid down) and ghost/leakage voltages
+        # up to ~2V are normal on disconnected CT inputs (#162).  Values
+        # between 5-50V or above 300V indicate register corruption.
+        # Corrupt reads produce 6553.5V (0xFFFF/10) or mid-range garbage.
         for label, v in (
             ("grid_l1_voltage", self.grid_l1_voltage),
             ("grid_l2_voltage", self.grid_l2_voltage),
         ):
-            if v is not None and ((0 < v < 50) or v > 300):
+            if v is not None and ((5 < v < 50) or v > 300):
                 _LOGGER.warning("MID canary: %s=%.1f outside valid range", label, v)
                 return True
         # Per-leg power bounds: only checked when system power is known.
