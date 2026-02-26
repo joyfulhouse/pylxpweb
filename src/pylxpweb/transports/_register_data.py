@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from pylxpweb.registers import (
@@ -126,23 +127,34 @@ class RegisterDataMixin(_DataMixinBase):
         self,
         battery_count: int,
     ) -> dict[int, int] | None:
-        """Read all individual battery slot registers in a single atomic read.
+        """Read battery slots atomically and accumulate across round-robin cycles.
 
         All 4 slots (120 registers) are read in one Modbus FC 04 call starting
         at ``BATTERY_BASE_ADDRESS`` (5002).  This fits within the Modbus PDU
         limit of 125 registers and ensures firmware round-robin rotation cannot
-        change slot contents between reads — fixing serial truncation on systems
-        with >4 batteries (#170).
+        change slot contents between reads (#170).
 
-        An adaptive ceiling tracks read failures: if the atomic read fails,
-        the ceiling drops to 0 so future polls skip battery registers entirely.
-        The ceiling resets when the transport reconnects (new instance).
+        **Round-robin accumulation** (systems with >4 batteries):
+
+        Firmware rotates batteries through 4 register slots.  Each read sees
+        one "page" of 4 batteries.  The ``pos`` field at register offset 24
+        (high byte) identifies which physical battery occupies each slot.
+
+        This method maintains ``_battery_accumulator`` — a dict mapping
+        ``pos`` to that battery's 30-register block (rebased to slot-0
+        addresses).  Each cycle merges new slot data by ``pos``, and the
+        merged accumulator is returned as a single virtual register map
+        where battery at ``pos=N`` is addressed as
+        ``BATTERY_BASE_ADDRESS + N * BATTERY_REGISTER_COUNT + offset``.
+
+        Over ``ceil(battery_count / 4)`` refresh cycles, all batteries
+        populate and downstream ``BatteryBankData`` sees the full bank.
 
         Args:
             battery_count: Value from register 96 (total batteries reported).
 
         Returns:
-            Dict of address→value for successfully read registers, or *None*
+            Dict of address→value for all accumulated batteries, or *None*
             if the read failed (no usable data).
         """
         ceiling: int = getattr(self, "_battery_slot_ceiling", BATTERY_MAX_COUNT)
@@ -178,7 +190,100 @@ class RegisterDataMixin(_DataMixinBase):
             )
             return None
 
-        return self._registers_from_values(BATTERY_BASE_ADDRESS, values)
+        raw_registers = self._registers_from_values(BATTERY_BASE_ADDRESS, values)
+
+        # --- Round-robin accumulation ---
+        # Only accumulate when battery_count > BATTERY_MAX_COUNT (round-robin active).
+        if battery_count <= BATTERY_MAX_COUNT:
+            return raw_registers
+
+        accumulator: dict[int, dict[int, int]] = getattr(self, "_battery_accumulator", {})
+        prev_battery_count: int = getattr(self, "_accumulator_battery_count", 0)
+
+        last_seen: dict[int, datetime] = getattr(self, "_battery_last_seen", {})
+
+        # Clear accumulator if battery_count changed (battery added/removed)
+        if prev_battery_count != battery_count:
+            if accumulator:
+                _LOGGER.info(
+                    "[%s] battery_count changed %d→%d, clearing accumulator",
+                    self._serial,
+                    prev_battery_count,
+                    battery_count,
+                )
+            accumulator = {}
+            last_seen = {}
+        self._accumulator_battery_count = battery_count
+
+        now = datetime.now()
+
+        for slot_idx in range(batteries_to_read):
+            slot_base = BATTERY_BASE_ADDRESS + (slot_idx * BATTERY_REGISTER_COUNT)
+            status = raw_registers.get(slot_base, 0)
+            if not status:
+                continue  # Empty slot — skip
+
+            # Extract pos from offset 24 (high byte = battery position, 0-based)
+            raw_24 = raw_registers.get(slot_base + 24, 0)
+            pos = (raw_24 >> 8) & 0xFF
+
+            # Sanity-check pos against battery_count
+            if pos >= battery_count:
+                _LOGGER.debug(
+                    "[%s] Slot %d pos=%d exceeds battery_count=%d, skipping",
+                    self._serial,
+                    slot_idx,
+                    pos,
+                    battery_count,
+                )
+                continue
+
+            # Extract this slot's 30-register block (using slot-local offsets 0-29)
+            slot_regs: dict[int, int] = {}
+            for offset in range(BATTERY_REGISTER_COUNT):
+                addr = slot_base + offset
+                if addr in raw_registers:
+                    slot_regs[offset] = raw_registers[addr]
+
+            accumulator[pos] = slot_regs
+            last_seen[pos] = now
+
+        self._battery_accumulator = accumulator
+        self._battery_last_seen = last_seen
+
+        positions = sorted(accumulator.keys())
+        _LOGGER.debug(
+            "[%s] Battery accumulator: %d/%d positions populated %s",
+            self._serial,
+            len(accumulator),
+            battery_count,
+            positions,
+        )
+
+        # Build merged register map: remap each pos's block to virtual addresses
+        merged: dict[int, int] = {}
+        for pos, slot_regs in accumulator.items():
+            virtual_base = BATTERY_BASE_ADDRESS + (pos * BATTERY_REGISTER_COUNT)
+            for offset, value in slot_regs.items():
+                merged[virtual_base + offset] = value
+
+        return merged
+
+    def _stamp_battery_last_seen(self, battery: BatteryBankData | None) -> None:
+        """Stamp ``last_seen`` on each battery from accumulator timestamps.
+
+        For non-accumulated reads (battery_count <= 4), all batteries are
+        fresh — stamped with ``datetime.now()``.  For accumulated reads,
+        each battery gets the timestamp from ``_battery_last_seen[pos]``.
+        """
+        if battery is None or not battery.batteries:
+            return
+
+        last_seen: dict[int, datetime] = getattr(self, "_battery_last_seen", {})
+        now = datetime.now()
+
+        for b in battery.batteries:
+            b.last_seen = last_seen.get(b.battery_index, now)
 
     def _log_battery_slot_debug(
         self,
@@ -189,9 +294,12 @@ class RegisterDataMixin(_DataMixinBase):
 
         Includes header registers 5000-5001 (if previously read) and offset 24
         per slot, which appears to encode the battery position index.
+
+        When round-robin accumulation is active (battery_count > 4), the
+        register map may contain virtual addresses beyond slot 3, so we
+        iterate up to battery_count.
         """
-        ceiling: int = getattr(self, "_battery_slot_ceiling", BATTERY_MAX_COUNT)
-        slots_to_log = min(battery_count, ceiling)
+        slots_to_log = battery_count
 
         # Log header registers 5000-5001 if available (read by
         # _read_battery_header_registers).  These are consistently zero on
@@ -231,7 +339,7 @@ class RegisterDataMixin(_DataMixinBase):
             slot_serial = "".join(serial_chars).strip("\x00")
 
             _LOGGER.debug(
-                "[%s] Slot %d: status=0x%04X voltage_raw=%d serial=%r offset24=0x%04X (%d)",
+                "[%s] Pos %d: status=0x%04X voltage_raw=%d serial=%r offset24=0x%04X (%d)",
                 self._serial,
                 slot_idx,
                 status,
@@ -417,6 +525,7 @@ class RegisterDataMixin(_DataMixinBase):
             all_registers,
             individual_registers,
         )
+        self._stamp_battery_last_seen(result)
 
         if result is None:
             _LOGGER.debug("Battery voltage below threshold, assuming no battery present")
@@ -492,6 +601,7 @@ class RegisterDataMixin(_DataMixinBase):
             input_registers,
             individual_registers,
         )
+        self._stamp_battery_last_seen(battery)
 
         return runtime, energy, battery
 

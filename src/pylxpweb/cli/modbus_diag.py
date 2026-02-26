@@ -595,9 +595,7 @@ def _parse_battery_slot(
     slot_serial = "".join(serial_chars).strip()
 
     # Raw words for serial regs (for debugging truncation)
-    serial_raw = " ".join(
-        f"0x{bat_regs.get(slot_base + 17 + i, 0):04X}" for i in range(8)
-    )
+    serial_raw = " ".join(f"0x{bat_regs.get(slot_base + 17 + i, 0):04X}" for i in range(8))
 
     status_str = f"0x{status:04X}" if status else "empty"
     voltage = voltage_raw / 100.0
@@ -612,9 +610,7 @@ def _parse_battery_slot(
     )
 
     # Full 30-register hex dump for detailed analysis
-    full_dump = " ".join(
-        f"0x{bat_regs.get(slot_base + i, 0):04X}" for i in range(30)
-    )
+    full_dump = " ".join(f"0x{bat_regs.get(slot_base + i, 0):04X}" for i in range(30))
 
     return detail, slot_serial, pos_byte, full_dump
 
@@ -672,9 +668,7 @@ async def _run_battery_probe_iterations(
 
         # Read header regs 5000-5001
         try:
-            header_vals = await _read_input_regs(
-                collector, bat_header_start, bat_header_count
-            )
+            header_vals = await _read_input_regs(collector, bat_header_start, bat_header_count)
             header_0 = header_vals[0]
             header_1 = header_vals[1]
         except Exception:
@@ -682,9 +676,7 @@ async def _run_battery_probe_iterations(
             header_1 = -1
 
         # Detect header changes
-        header_changed = (
-            prev_header is not None and (header_0, header_1) != prev_header
-        )
+        header_changed = prev_header is not None and (header_0, header_1) != prev_header
         prev_header = (header_0, header_1)
         change_marker = " *** HEADER CHANGED ***" if header_changed else ""
 
@@ -698,23 +690,21 @@ async def _run_battery_probe_iterations(
                 bat_regs[bat_base + offset] = val
         except Exception as e:
             lines.append(
-                f"  [iter {iteration}] t={elapsed:7.2f}s "
-                f"Read failed at reg {bat_base}: {e}"
+                f"  [iter {iteration}] t={elapsed:7.2f}s Read failed at reg {bat_base}: {e}"
             )
-            print(
-                f"  [{iteration:3d}] t={elapsed:6.1f}s "
-                f"Δ={delta:5.2f}s  READ FAILED: {e}"
+            print(f"  [{iteration:3d}] t={elapsed:6.1f}s Δ={delta:5.2f}s  READ FAILED: {e}")
+            iteration_records.append(
+                {
+                    "index": iteration,
+                    "elapsed": elapsed,
+                    "delta": delta,
+                    "page_key": (),
+                    "serials": [],
+                    "header": (header_0, header_1),
+                    "empty": True,
+                    "failed": True,
+                }
             )
-            iteration_records.append({
-                "index": iteration,
-                "elapsed": elapsed,
-                "delta": delta,
-                "page_key": (),
-                "serials": [],
-                "header": (header_0, header_1),
-                "empty": True,
-                "failed": True,
-            })
             if iteration < iterations - 1:
                 await asyncio.sleep(delay)
             continue
@@ -726,9 +716,7 @@ async def _run_battery_probe_iterations(
         slot_positions: list[int] = []
         for slot_idx in range(num_slots):
             slot_base = bat_base + (slot_idx * 30)
-            detail, slot_serial, pos, full_dump = _parse_battery_slot(
-                bat_regs, slot_base
-            )
+            detail, slot_serial, pos, full_dump = _parse_battery_slot(bat_regs, slot_base)
             slot_details.append(f"slot{slot_idx}: {detail}")
             slot_serials.append(slot_serial or "(empty)")
             slot_full_dumps.append(full_dump)
@@ -763,16 +751,18 @@ async def _run_battery_probe_iterations(
 
         # Record for rotation analysis
         page_key = tuple(sorted(slot_positions)) if slot_positions else ()
-        iteration_records.append({
-            "index": iteration,
-            "elapsed": elapsed,
-            "delta": delta,
-            "page_key": page_key,
-            "serials": [s for s in slot_serials if s != "(empty)"],
-            "header": (header_0, header_1),
-            "empty": not slot_positions,
-            "failed": False,
-        })
+        iteration_records.append(
+            {
+                "index": iteration,
+                "elapsed": elapsed,
+                "delta": delta,
+                "page_key": page_key,
+                "serials": [s for s in slot_serials if s != "(empty)"],
+                "header": (header_0, header_1),
+                "empty": not slot_positions,
+                "failed": False,
+            }
+        )
 
         if iteration < iterations - 1:
             await asyncio.sleep(delay)
@@ -834,9 +824,7 @@ def _analyze_rotation(
     lines.append(f"\nPage transitions: {len(transitions)}")
     print(f"\n  Page transitions: {len(transitions)}")
     for from_page, to_page, t_elapsed in transitions:
-        from_str = (
-            ",".join(str(p) for p in from_page) if from_page else "empty"
-        )
+        from_str = ",".join(str(p) for p in from_page) if from_page else "empty"
         to_str = ",".join(str(p) for p in to_page)
         line = f"  t={t_elapsed:7.2f}s: pos=[{from_str}] -> pos=[{to_str}]"
         lines.append(line)
@@ -844,10 +832,7 @@ def _analyze_rotation(
 
     # --- Rotation period estimate ---
     if len(transitions) >= 2:
-        intervals = [
-            transitions[i][2] - transitions[i - 1][2]
-            for i in range(1, len(transitions))
-        ]
+        intervals = [transitions[i][2] - transitions[i - 1][2] for i in range(1, len(transitions))]
         avg_interval = sum(intervals) / len(intervals)
         min_interval = min(intervals)
         max_interval = max(intervals)
@@ -859,22 +844,15 @@ def _analyze_rotation(
         lines.append(f"  Mean between transitions: {avg_interval:.2f}s")
         lines.append(f"  Min: {min_interval:.2f}s")
         lines.append(f"  Max: {max_interval:.2f}s")
-        lines.append(
-            f"  Estimated full cycle ({unique_pages} pages): ~{full_cycle:.1f}s"
-        )
+        lines.append(f"  Estimated full cycle ({unique_pages} pages): ~{full_cycle:.1f}s")
 
         print(f"\n  Rotation timing ({len(intervals)} intervals):")
         print(f"    Mean between transitions: {avg_interval:.2f}s")
         print(f"    Min:  {min_interval:.2f}s  Max: {max_interval:.2f}s")
-        print(
-            f"    Estimated full cycle ({unique_pages} pages): ~{full_cycle:.1f}s"
-        )
+        print(f"    Estimated full cycle ({unique_pages} pages): ~{full_cycle:.1f}s")
     elif len(transitions) == 1:
         t_elapsed_single = transitions[0][2]
-        msg = (
-            f"Only 1 transition at t={t_elapsed_single:.2f}s "
-            f"— need more iterations"
-        )
+        msg = f"Only 1 transition at t={t_elapsed_single:.2f}s — need more iterations"
         lines.append(f"\n{msg}")
         print(f"\n  {msg}")
     else:
@@ -924,14 +902,10 @@ def _analyze_rotation(
     lines.append(f"  Valid: {len(valid)}/{total} ({len(valid) / total * 100:.0f}%)")
     print(f"\n  Read reliability: {len(valid)}/{total} valid")
     if empty_count:
-        lines.append(
-            f"  Empty: {empty_count}/{total} ({empty_count / total * 100:.0f}%)"
-        )
+        lines.append(f"  Empty: {empty_count}/{total} ({empty_count / total * 100:.0f}%)")
         print(f"    Empty: {empty_count}")
     if failed_count:
-        lines.append(
-            f"  Failed: {failed_count}/{total} ({failed_count / total * 100:.0f}%)"
-        )
+        lines.append(f"  Failed: {failed_count}/{total} ({failed_count / total * 100:.0f}%)")
         print(f"    Failed: {failed_count}")
 
 
@@ -1004,9 +978,7 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
         print(f"  battery_count (reg 96): {battery_count}")
     except Exception:
         battery_count = 12  # sensible default for probing
-        print(
-            f"  ⚠ Could not read reg 96 (battery_count), assuming {battery_count}"
-        )
+        print(f"  ⚠ Could not read reg 96 (battery_count), assuming {battery_count}")
 
     # Determine iteration count
     user_iterations: int | None = getattr(args, "battery_iterations", None)

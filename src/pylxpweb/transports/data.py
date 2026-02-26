@@ -659,6 +659,9 @@ class BatteryData:
     fault_code: int = 0
     warning_code: int = 0
 
+    # Staleness tracking (round-robin accumulator sets this)
+    last_seen: datetime | None = None  # When this battery's data was last read
+
     # Pre-clamp raw values for corruption detection (populated by __post_init__)
     _raw_soc: int = field(default=0, repr=False)
     _raw_soh: int = field(default=100, repr=False)
