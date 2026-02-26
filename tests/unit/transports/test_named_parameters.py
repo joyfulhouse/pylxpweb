@@ -158,6 +158,16 @@ class TestWriteNamedParametersModbus:
         mock_modbus_transport.write_parameters.assert_called_once_with({21: 0x00})
 
     @pytest.mark.asyncio
+    async def test_write_named_parameters_pv_start_voltage(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test writing HOLD_START_PV_VOLT writes register 22 as scalar."""
+        result = await mock_modbus_transport.write_named_parameters({"HOLD_START_PV_VOLT": 1500})
+
+        assert result is True
+        mock_modbus_transport.write_parameters.assert_called_once_with({22: 1500})
+
+    @pytest.mark.asyncio
     async def test_write_named_parameters_unknown_raises(
         self, mock_modbus_transport: ModbusTransport
     ) -> None:
@@ -429,6 +439,13 @@ class TestRegisterMappingFunctions:
         # Check a known parameter
         assert mapping.get("HOLD_AC_CHARGE_POWER_CMD") == 66
         assert mapping.get("FUNC_EPS_EN") == 21
+
+    def test_get_param_to_register_mapping_includes_pv_start_voltage(self) -> None:
+        """Test HOLD_START_PV_VOLT maps to register 22."""
+        from pylxpweb.constants.registers import get_param_to_register_mapping
+
+        mapping = get_param_to_register_mapping()
+        assert mapping.get("HOLD_START_PV_VOLT") == 22
 
     def test_get_param_to_register_mapping_with_family(self) -> None:
         """Test get_param_to_register_mapping accepts family parameter."""

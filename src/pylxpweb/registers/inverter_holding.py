@@ -307,99 +307,11 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         category=HoldingCategory.FUNCTION,
         description="Feed-in (export) to grid enable.",
     ),
-    # =========================================================================
-    # LSP FUNCTION BITFIELD — Register 22 (11 bits, verified 9/11)
-    # =========================================================================
-    # Note: Register 22 also carries the PV start voltage as a value.
-    # These bits may overlay voltage bits on some firmware versions.
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=0,
-        canonical_name="lsp_standby",
-        api_param_key="FUNC_LSP_SET_TO_STANDBY",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP standby mode enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=1,
-        canonical_name="lsp_isolation_enable",
-        api_param_key="FUNC_LSP_ISO_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP isolation detection enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=2,
-        canonical_name="lsp_fan_check_enable",
-        api_param_key="FUNC_LSP_FAN_CHECK_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP fan check enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=3,
-        canonical_name="lsp_whole_day_schedule_enable",
-        api_param_key="FUNC_LSP_WHOLE_DAY_SCHEDULE_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP whole-day time-of-use schedule enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=4,
-        canonical_name="lsp_lcd_remote_discharge_enable",
-        api_param_key="FUNC_LSP_LCD_REMOTE_DIS_CHG_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP LCD remote discharge control enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=5,
-        canonical_name="lsp_self_consumption_enable",
-        api_param_key="FUNC_LSP_SELF_CONSUMPTION_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP self-consumption mode enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=6,
-        canonical_name="lsp_ac_charge_enable",
-        api_param_key="FUNC_LSP_AC_CHARGE",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP AC charge enable (separate from FUNC_AC_CHARGE in reg 21).",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=7,
-        canonical_name="lsp_battery_activation_enable",
-        api_param_key="FUNC_LSP_BAT_ACTIVATION_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP battery activation enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=8,
-        canonical_name="lsp_bypass_mode_enable",
-        api_param_key="FUNC_LSP_BYPASS_MODE_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP bypass mode enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=9,
-        canonical_name="lsp_bypass_enable",
-        api_param_key="FUNC_LSP_BYPASS_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP bypass enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=22,
-        bit_position=10,
-        canonical_name="lsp_charge_priority_enable",
-        api_param_key="FUNC_LSP_CHARGE_PRIORITY_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="LSP charge priority enable.",
-    ),
+    # NOTE: Register 22 was previously mapped as 11 FUNC_LSP_* bit fields.
+    # Live Modbus reads confirm reg 22 is a scalar PV start voltage (decivolts).
+    # The cloud API returns FUNC_LSP_* by reinterpreting reg 22 bits server-side;
+    # those are NOT real Modbus bit fields for local reads/writes.
+    # The scalar HoldingRegisterDefinition for reg 22 is above (pv_start_voltage).
     # =========================================================================
     # GRID CONNECTION TIMING (regs 23-24)
     # =========================================================================

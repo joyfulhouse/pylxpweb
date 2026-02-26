@@ -433,21 +433,12 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "FUNC_DCI_EN",  # Bit 14
         "FUNC_FEED_IN_GRID_EN",  # Bit 15
     ],
-    # Register 22: LSP function bit field (verified 9/11 match)
-    # Note: HTTP also returns HOLD_START_PV_VOLT from this register (value ÷10)
-    22: [
-        "FUNC_LSP_SET_TO_STANDBY",  # Bit 0
-        "FUNC_LSP_ISO_EN",  # Bit 1
-        "FUNC_LSP_FAN_CHECK_EN",  # Bit 2
-        "FUNC_LSP_WHOLE_DAY_SCHEDULE_EN",  # Bit 3
-        "FUNC_LSP_LCD_REMOTE_DIS_CHG_EN",  # Bit 4
-        "FUNC_LSP_SELF_CONSUMPTION_EN",  # Bit 5
-        "FUNC_LSP_AC_CHARGE",  # Bit 6
-        "FUNC_LSP_BAT_ACTIVATION_EN",  # Bit 7
-        "FUNC_LSP_BYPASS_MODE_EN",  # Bit 8
-        "FUNC_LSP_BYPASS_EN",  # Bit 9
-        "FUNC_LSP_CHARGE_PRIORITY_EN",  # Bit 10
-    ],
+    # Register 22: PV start voltage (scalar, 0.1V units)
+    # lxp_modbus ref: bits 0-14 = StartPVVolt, bit 15 = FeedInGridEn (but on EG4
+    # hardware FeedInGridEn is register 21 bit 15, confirmed via live Modbus read).
+    # Cloud API returns FUNC_LSP_* by reinterpreting this register's bits server-side;
+    # those are NOT real Modbus bit fields for local writes.
+    22: ["HOLD_START_PV_VOLT"],
     23: ["HOLD_CONNECT_TIME"],
     24: ["HOLD_RECONNECT_TIME"],
     25: ["HOLD_GRID_VOLT_CONN_LOW"],
