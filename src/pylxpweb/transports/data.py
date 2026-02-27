@@ -1072,9 +1072,16 @@ class BatteryBankData:
 
     @property
     def min_soh(self) -> int | None:
-        """Minimum SOH across all batteries."""
+        """Minimum SOH across all batteries.
+
+        Falls back to bank-level SOH (input register 5 high byte) when
+        individual battery data is not available from CAN bus registers.
+        """
         vals = [b.soh for b in self.batteries if b.soh is not None]
-        return min(vals) if vals else None
+        if vals:
+            return min(vals)
+        # Fallback to bank-level BMS SOH when individual batteries absent
+        return self.soh
 
     @property
     def soc_delta(self) -> int | None:
