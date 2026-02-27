@@ -194,7 +194,7 @@ class TestInverterModelInfo:
 
         assert model.raw_value == 0x99A85
         assert model.power_rating == 4  # bits 5-7 of low byte 0x85
-        assert model.get_model_name(44) == "LXP-LB-6K"
+        assert model.get_model_name(44) == "LXP-LB-10K"
 
     def test_from_registers_zero_values(self) -> None:
         """Test from_registers with zero registers."""
@@ -307,12 +307,12 @@ class TestInverterModelInfo:
         """Test model name detection for LXP-LB Series (device type 44)."""
         # Non-US version (us_version=False by default)
         model = InverterModelInfo(power_rating=4)
-        # powerRating=4 maps to 6kW in legacy mapping
-        assert model.get_model_name(DEVICE_TYPE_CODE_LXP_LB) == "LXP-LB-6K"
+        # powerRating=4 confirmed as 10kW from real LXP-US 8-10K device data
+        assert model.get_model_name(DEVICE_TYPE_CODE_LXP_LB) == "LXP-LB-10K"
 
         # US version
         model_us = InverterModelInfo(power_rating=4, us_version=True)
-        assert model_us.get_model_name(DEVICE_TYPE_CODE_LXP_LB) == "LXP-LB-US-6K"
+        assert model_us.get_model_name(DEVICE_TYPE_CODE_LXP_LB) == "LXP-LB-US-10K"
 
     def test_get_power_rating_kw_unknown_code_returns_zero(self) -> None:
         """Test that unknown power rating codes return 0."""

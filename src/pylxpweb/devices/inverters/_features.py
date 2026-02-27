@@ -380,6 +380,7 @@ class InverterModelInfo:
             - EG4 Off-Grid (DEVICE_TYPE_CODE_SNA=54): 6=12kW, 8=18kW
             - PV Series (DEVICE_TYPE_CODE_PV_SERIES=2092): 2=12kW, 6=18kW
             - FlexBOSS (DEVICE_TYPE_CODE_FLEXBOSS=10284): 8=21kW, 9=18kW
+            - LXP-LB (DEVICE_TYPE_CODE_LXP_LB=44): 4=10kW
         """
         # EG4 PV Series (12KPV, 18KPV)
         if device_type_code == DEVICE_TYPE_CODE_PV_SERIES:
@@ -390,6 +391,12 @@ class InverterModelInfo:
         if device_type_code == DEVICE_TYPE_CODE_FLEXBOSS:
             flexboss_rating_map = {8: 21, 9: 18}
             return flexboss_rating_map.get(self.power_rating, 0)
+
+        # LXP-LB Series (LXP-US 8-10K, LXP-LB-BR)
+        # power_rating=4 confirmed as 10kW from real device data (HOLD_MODEL=0x99A85)
+        if device_type_code == DEVICE_TYPE_CODE_LXP_LB:
+            lxp_lb_rating_map = {4: 10}
+            return lxp_lb_rating_map.get(self.power_rating, 0)
 
         # EG4 Off-Grid Series (SNA) and others - use default mapping
         return self.power_rating_kw
