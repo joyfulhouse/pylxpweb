@@ -147,13 +147,17 @@ class BatteryRegisterDefinition:
 
 BATTERY_REGISTERS: tuple[BatteryRegisterDefinition, ...] = (
     # =========================================================================
-    # STATUS (offset 0) — 0xC003 = connected
+    # STATUS (offset 0) — upper byte 0xC0 = connected; lower byte = battery count
     # =========================================================================
     BatteryRegisterDefinition(
         offset=0,
         canonical_name="battery_status_header",
         category=BatteryCategory.IDENTITY,
-        description="Status header. 0xC003 = connected, 0 = slot empty.",
+        description=(
+            "Status header. Upper byte 0xC0 = BMS connected; lower byte = total "
+            "batteries in the parallel group (e.g. 0xC003 = 3 batteries, "
+            "0xC004 = 4 batteries). Any non-zero value means slot is occupied."
+        ),
     ),
     # =========================================================================
     # CAPACITY (offset 1)
