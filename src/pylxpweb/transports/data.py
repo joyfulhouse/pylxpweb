@@ -985,6 +985,13 @@ class BatteryBankData:
     max_capacity: float | None = None  # Ah
     current_capacity: float | None = None  # Ah
 
+    # BMS settings (Modbus input registers 80-84)
+    bms_battery_type: int | None = None  # Battery type/brand code (reg 80)
+    bms_charge_current_limit: float | None = None  # A (max charge current, reg 81)
+    bms_discharge_current_limit: float | None = None  # A (max discharge current, reg 82)
+    bms_charge_voltage_ref: float | None = None  # V (charge voltage reference, reg 83)
+    bms_discharge_cutoff: float | None = None  # V (discharge cutoff voltage, reg 84)
+
     # Cell data (from BMS, Modbus registers 101-106)
     # Source: Yippy's documentation - https://github.com/joyfulhouse/pylxpweb/issues/97
     max_cell_voltage: float | None = None  # V (highest cell voltage)
@@ -992,6 +999,9 @@ class BatteryBankData:
     max_cell_temperature: float | None = None  # °C (highest cell temp)
     min_cell_temperature: float | None = None  # °C (lowest cell temp)
     cycle_count: int | None = None  # Charge/discharge cycle count
+
+    # Inverter battery voltage sample (reg 107)
+    battery_voltage_inv_sample: float | None = None  # V
 
     # Status
     status: str | None = None  # "Idle", "Charging", "StandBy", "Discharging"
@@ -1222,6 +1232,15 @@ class BatteryBankData:
         bms_warning_code = read_raw(input_registers, BY_NAME["bms_warning_code"])
         battery_count = read_raw(input_registers, BY_NAME["battery_parallel_count"])
 
+        # BMS settings (regs 80-84)
+        bms_battery_type = read_raw(input_registers, BY_NAME["bms_battery_type"])
+        bms_charge_current_limit = read_scaled(input_registers, BY_NAME["bms_charge_current_limit"])
+        bms_discharge_current_limit = read_scaled(
+            input_registers, BY_NAME["bms_discharge_current_limit"]
+        )
+        bms_charge_voltage_ref = read_scaled(input_registers, BY_NAME["bms_charge_voltage_ref"])
+        bms_discharge_cutoff = read_scaled(input_registers, BY_NAME["bms_discharge_cutoff"])
+
         # Derive battery status from charge/discharge power
         battery_status: str | None = None
         if discharge_power is not None and discharge_power > 0:
@@ -1237,6 +1256,7 @@ class BatteryBankData:
         max_cell_temp = read_scaled(input_registers, BY_NAME["bms_max_cell_temperature"])
         min_cell_temp = read_scaled(input_registers, BY_NAME["bms_min_cell_temperature"])
         cycle_count = read_raw(input_registers, BY_NAME["bms_cycle_count"])
+        bat_volt_inv_sample = read_scaled(input_registers, BY_NAME["battery_voltage_inv_sample"])
         max_capacity = read_scaled(input_registers, BY_NAME["battery_capacity_ah"])
 
         # Compute current capacity from max_capacity and SOC
@@ -1288,11 +1308,17 @@ class BatteryBankData:
             fault_code=bms_fault_code,
             warning_code=bms_warning_code,
             battery_count=actual_battery_count,
+            bms_battery_type=bms_battery_type,
+            bms_charge_current_limit=bms_charge_current_limit,
+            bms_discharge_current_limit=bms_discharge_current_limit,
+            bms_charge_voltage_ref=bms_charge_voltage_ref,
+            bms_discharge_cutoff=bms_discharge_cutoff,
             max_cell_voltage=max_cell_voltage,
             min_cell_voltage=min_cell_voltage,
             max_cell_temperature=max_cell_temp,
             min_cell_temperature=min_cell_temp,
             cycle_count=cycle_count,
+            battery_voltage_inv_sample=bat_volt_inv_sample,
             batteries=batteries,
         )
 
