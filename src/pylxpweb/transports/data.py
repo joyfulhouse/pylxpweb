@@ -491,6 +491,23 @@ class InverterEnergyData:
     generator_energy_today: float | None = None  # kWh
     generator_energy_total: float | None = None  # kWh
 
+    def daily_energy_values(self) -> dict[str, float | None]:
+        """Return all daily energy fields as a dict for bounds validation.
+
+        Only includes ``*_today`` fields (not per-string or lifetime totals).
+        Daily counters reset at midnight and can legitimately decrease.
+        """
+        return {
+            "pv_energy_today": self.pv_energy_today,
+            "charge_energy_today": self.charge_energy_today,
+            "discharge_energy_today": self.discharge_energy_today,
+            "grid_import_today": self.grid_import_today,
+            "grid_export_today": self.grid_export_today,
+            "load_energy_today": self.load_energy_today,
+            "inverter_energy_today": self.inverter_energy_today,
+            "eps_energy_today": self.eps_energy_today,
+        }
+
     def lifetime_energy_values(self) -> dict[str, float | None]:
         """Return all lifetime energy fields as a dict for monotonicity validation.
 
@@ -1423,6 +1440,14 @@ class MidboxRuntimeData:
     smart_load_3_energy_total_l2: float | None = None  # eSmartLoad3TotalL2
     smart_load_4_energy_total_l1: float | None = None  # eSmartLoad4TotalL1
     smart_load_4_energy_total_l2: float | None = None  # eSmartLoad4TotalL2
+
+    def daily_energy_values(self) -> dict[str, float | None]:
+        """Return all daily energy fields as a dict for bounds validation.
+
+        Auto-discovers fields matching ``*_energy_today_*``.
+        Daily counters reset at midnight and can legitimately decrease.
+        """
+        return {f.name: getattr(self, f.name) for f in fields(self) if "energy_today" in f.name}
 
     def lifetime_energy_values(self) -> dict[str, float | None]:
         """Return all lifetime energy fields as a dict for monotonicity validation.

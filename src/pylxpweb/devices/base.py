@@ -11,7 +11,11 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from pylxpweb.validation import MAX_ENERGY_DELTA, validate_energy_monotonicity
+from pylxpweb.validation import (
+    MAX_ENERGY_DELTA,
+    validate_daily_energy_bounds,
+    validate_energy_monotonicity,
+)
 
 from .models import DeviceInfo, Entity
 
@@ -101,6 +105,11 @@ class BaseDevice(ABC):
         # (2x margin) to catch 0xFFFF (65535W) corrupt register reads.
         self._max_power_watts: float = 0.0
 
+        # Rated power (kW) for daily energy bounds validation.  Set by
+        # detect_features() (inverters) or set_max_system_power() (MID).
+        # Zero means unknown — validation falls back to DEFAULT_RATED_POWER_KW.
+        self._rated_power_kw: float = 0.0
+
     @property
     def model(self) -> str:
         """Get device model name.
@@ -172,6 +181,27 @@ class BaseDevice(ABC):
             max_delta=self._max_energy_delta,
         )
         return result != "reject"
+
+    def _is_daily_energy_valid(
+        self,
+        curr_values: dict[str, float | None],
+        prev_values: dict[str, float | None] | None,
+        elapsed_seconds: float | None,
+    ) -> bool:
+        """Check whether daily energy values are within plausible bounds.
+
+        Delegates to :func:`~pylxpweb.validation.validate_daily_energy_bounds`
+        which applies an absolute cap and, when previous data exists, a
+        tighter time-based delta check.  Always active (not gated by
+        ``validate_data`` toggle).
+        """
+        return validate_daily_energy_bounds(
+            curr_values=curr_values,
+            device_id=self.serial_number,
+            rated_power_kw=self._rated_power_kw,
+            elapsed_seconds=elapsed_seconds,
+            prev_values=prev_values,
+        )
 
     @abstractmethod
     async def refresh(self) -> None:

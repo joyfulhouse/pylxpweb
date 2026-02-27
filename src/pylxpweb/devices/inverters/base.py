@@ -564,18 +564,21 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     )
                     self._runtime = runtime_data
                     self._runtime_cache_time = datetime.now()
-            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
-                # Keep existing cached data on API/connection errors
-                _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
-                # Preserve existing cached data
             except Exception as err:
-                # Catch transport errors as well
+                # Keep existing cached data on API/connection/transport errors
                 _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
+
+    def _energy_elapsed_seconds(self) -> float | None:
+        """Seconds since last successful energy cache, or None at startup."""
+        if self._energy_cache_time is None:
+            return None
+        return (datetime.now() - self._energy_cache_time).total_seconds()
 
     async def _fetch_energy(self) -> None:
         """Fetch energy data with caching.
 
         Uses transport if available, otherwise falls back to HTTP API.
+        Validates both lifetime monotonicity and daily energy bounds.
         """
         async with self._energy_cache_lock:
             try:
@@ -593,6 +596,17 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                         transport_data.lifetime_energy_values(),
                     ):
                         return  # keep cached energy data
+                    prev_daily = (
+                        self._transport_energy.daily_energy_values()
+                        if self._transport_energy is not None
+                        else None
+                    )
+                    if not self._is_daily_energy_valid(
+                        transport_data.daily_energy_values(),
+                        prev_daily,
+                        self._energy_elapsed_seconds(),
+                    ):
+                        return  # keep cached energy data
                     self._transport_energy = transport_data
                     self._energy_cache_time = datetime.now()
                 else:
@@ -600,21 +614,28 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     energy_data = await self._client.api.devices.get_inverter_energy(
                         self.serial_number
                     )
-                    if self._energy is not None:
-                        prev = InverterEnergyData.from_http_response(self._energy)
-                        curr = InverterEnergyData.from_http_response(energy_data)
-                        if not self._is_energy_valid(
-                            prev.lifetime_energy_values(),
-                            curr.lifetime_energy_values(),
-                        ):
-                            return  # keep cached energy data
+                    curr = InverterEnergyData.from_http_response(energy_data)
+                    prev = (
+                        InverterEnergyData.from_http_response(self._energy)
+                        if self._energy is not None
+                        else None
+                    )
+                    if prev is not None and not self._is_energy_valid(
+                        prev.lifetime_energy_values(),
+                        curr.lifetime_energy_values(),
+                    ):
+                        return  # keep cached energy data
+                    prev_daily = prev.daily_energy_values() if prev is not None else None
+                    if not self._is_daily_energy_valid(
+                        curr.daily_energy_values(),
+                        prev_daily,
+                        self._energy_elapsed_seconds(),
+                    ):
+                        return  # keep cached energy data
                     self._energy = energy_data
                     self._energy_cache_time = datetime.now()
-            except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
-                # Keep existing cached data on API/connection errors
-                _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
             except Exception as err:
-                # Catch transport errors as well
+                # Keep existing cached data on API/connection/transport errors
                 _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
 
     async def _fetch_battery(self) -> None:
@@ -703,6 +724,17 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 self._transport_energy.lifetime_energy_values(),
                 energy.lifetime_energy_values(),
             )
+            if energy_valid:
+                prev_daily = (
+                    self._transport_energy.daily_energy_values()
+                    if self._transport_energy is not None
+                    else None
+                )
+                energy_valid = self._is_daily_energy_valid(
+                    energy.daily_energy_values(),
+                    prev_daily,
+                    self._energy_elapsed_seconds(),
+                )
             if energy_valid:
                 self._transport_energy = energy
                 self._energy_cache_time = datetime.now()
@@ -2684,6 +2716,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # Compute dynamic thresholds from rated power.
         rated_kw = self._features.model_info.get_power_rating_kw(device_type_code)
         if rated_kw > 0:
+            self._rated_power_kw = rated_kw
             self._max_energy_delta = rated_kw * 1.5  # 50% margin (kWh)
             self._max_power_watts = rated_kw * 2000  # 2x margin (watts)
 

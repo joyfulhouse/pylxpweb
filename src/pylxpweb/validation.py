@@ -1,19 +1,17 @@
-"""Energy monotonicity validation for lifetime energy counters.
+"""Energy validation for pylxpweb device data.
 
-Detects corrupt lifetime kWh values using bidirectional spike detection
-with counter-based self-healing.  Used internally by device ``refresh()``
-methods so that corrupt data is rejected before it reaches any consumer.
+Two validation layers:
 
-Validation checks:
-- **Upward spike**: A jump larger than the device's ``max_delta`` (computed
-  as ``rated_power_kw * 1.5``) is rejected.  Catches corrupt register reads
-  like 25K -> 202M.
-- **Downward drop**: Any decrease in a lifetime counter violates
-  monotonicity and is rejected.
-- **Self-healing**: After ``SELF_HEAL_THRESHOLD`` consecutive rejections of
-  the *same* direction (downward only), accept the new value as a baseline
-  reset — but only if it exceeds ``MIN_LIFETIME_KWH`` (to avoid accepting
-  obviously wrong near-zero values).
+1. **Lifetime monotonicity** — detects corrupt lifetime kWh counters using
+   bidirectional spike detection with counter-based self-healing.
+
+2. **Daily energy bounds** — detects corrupt daily kWh values by computing
+   the maximum plausible increase from elapsed time and rated device power.
+   Daily values can legitimately decrease (midnight reset), so only upward
+   spikes are checked.
+
+Both are used internally by device ``refresh()`` methods so that corrupt
+data is rejected before it reaches any consumer.
 """
 
 from __future__ import annotations
@@ -119,3 +117,108 @@ def validate_energy_monotonicity(
 
     # All keys passed — reset counter.
     return "valid", 0
+
+
+# ============================================================================
+# Daily energy bounds validation
+# ============================================================================
+
+# Margin factor applied to rated power when computing max plausible daily
+# energy increase.  2x allows for measurement jitter and slight over-rating
+# without accepting obviously corrupt values (e.g. 6549 kWh in 30 seconds).
+DAILY_ENERGY_MARGIN = 2.0
+
+# Fallback rated power (kW) when device rating is unknown.  Conservative
+# upper bound — covers the largest residential inverter systems.
+DEFAULT_RATED_POWER_KW = 108.0
+
+# Maximum hours used for elapsed-time calculation.  Caps the window at 24h
+# so that very long outages don't produce absurdly large bounds.
+MAX_ELAPSED_HOURS = 24.0
+
+
+def validate_daily_energy_bounds(
+    curr_values: dict[str, float | None],
+    device_id: str,
+    rated_power_kw: float = 0.0,
+    elapsed_seconds: float | None = None,
+    prev_values: dict[str, float | None] | None = None,
+) -> bool:
+    """Validate daily energy values against physically plausible bounds.
+
+    Two checks are applied in order:
+
+    1. **Absolute cap** (always) — no daily counter can exceed
+       ``rated_power * 24h * margin``.  Catches first-read corruption
+       when no previous data exists.
+    2. **Time-based delta** (when ``prev_values`` provided) — an increase
+       larger than ``rated_power * elapsed_hours * margin`` is rejected.
+       Decreases are allowed (legitimate midnight resets).
+
+    Args:
+        curr_values: Current daily energy dict (key -> kWh).
+        device_id: Device identifier for logging.
+        rated_power_kw: Device rated power in kW.  Zero means unknown,
+            in which case ``DEFAULT_RATED_POWER_KW`` is used.
+        elapsed_seconds: Seconds since last successful energy read.
+            ``None`` when no previous timestamp exists (startup), which
+            falls back to the absolute cap only.
+        prev_values: Previous cycle's daily energy dict.  ``None`` on
+            first read (only absolute cap is applied).
+
+    Returns:
+        True if all daily values are plausible, False if any should be
+        rejected.
+    """
+    power = rated_power_kw if rated_power_kw > 0 else DEFAULT_RATED_POWER_KW
+    abs_cap = power * MAX_ELAPSED_HOURS * DAILY_ENERGY_MARGIN
+
+    # Compute time-based delta bound when we have elapsed time.
+    # Cap at MAX_ELAPSED_HOURS so long outages don't weaken the bound.
+    delta_bound: float | None = None
+    if elapsed_seconds is not None and prev_values is not None:
+        elapsed_hours = min(elapsed_seconds / 3600.0, MAX_ELAPSED_HOURS)
+        delta_bound = power * elapsed_hours * DAILY_ENERGY_MARGIN
+
+    for key, curr in curr_values.items():
+        if curr is None:
+            continue
+
+        # Check 1: absolute cap — always applied
+        if curr > abs_cap:
+            _LOGGER.warning(
+                "%s daily energy rejected: %s = %.1f kWh exceeds "
+                "absolute cap %.0f kWh (%.0f kW × %dh × %.0fx)",
+                device_id,
+                key,
+                curr,
+                abs_cap,
+                power,
+                int(MAX_ELAPSED_HOURS),
+                DAILY_ENERGY_MARGIN,
+            )
+            return False
+
+        # Check 2: time-based delta — only when we have previous data
+        if delta_bound is not None and prev_values is not None:
+            prev = prev_values.get(key)
+            if prev is not None and curr > prev:
+                delta = curr - prev
+                if delta > delta_bound:
+                    _LOGGER.warning(
+                        "%s daily energy spike rejected: %s jumped "
+                        "%.1f -> %.1f (delta %.1f > %.1f max, "
+                        "%.0f kW × %.1fs elapsed × %.0fx margin)",
+                        device_id,
+                        key,
+                        prev,
+                        curr,
+                        delta,
+                        delta_bound,
+                        power,
+                        elapsed_seconds,
+                        DAILY_ENERGY_MARGIN,
+                    )
+                    return False
+
+    return True

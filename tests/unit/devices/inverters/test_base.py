@@ -210,6 +210,8 @@ class TestCombinedTransportRefresh:
 
         mock_runtime = Mock(spec=InverterRuntimeData)
         mock_energy = Mock(spec=InverterEnergyData)
+        mock_energy.lifetime_energy_values.return_value = {}
+        mock_energy.daily_energy_values.return_value = {}
         mock_battery = Mock(spec=BatteryBankData)
         mock_battery.battery_count = 2
 

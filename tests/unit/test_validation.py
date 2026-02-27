@@ -1,11 +1,15 @@
-"""Tests for energy monotonicity validation."""
+"""Tests for energy validation (monotonicity + daily bounds)."""
 
 from __future__ import annotations
 
 from pylxpweb.validation import (
+    DAILY_ENERGY_MARGIN,
+    DEFAULT_RATED_POWER_KW,
+    MAX_ELAPSED_HOURS,
     MAX_ENERGY_DELTA,
     MIN_LIFETIME_KWH,
     SELF_HEAL_THRESHOLD,
+    validate_daily_energy_bounds,
     validate_energy_monotonicity,
 )
 
@@ -123,3 +127,157 @@ class TestValidateEnergyMonotonicity:
         )
         assert result == "self_healed"
         assert count == 0
+
+
+class TestValidateDailyEnergyBounds:
+    """Test validate_daily_energy_bounds function."""
+
+    # -- Absolute cap (no previous data, startup scenario) --
+
+    def test_startup_normal_value_accepted(self) -> None:
+        """First read with plausible daily value passes."""
+        curr = {"charge_energy_today": 8.8}
+        assert validate_daily_energy_bounds(curr, "test_dev", rated_power_kw=18.0)
+
+    def test_startup_corrupt_value_rejected(self) -> None:
+        """First read with impossibly high daily value is rejected."""
+        # 6549.2 kWh for an 18kW inverter → exceeds 18 * 24 * 2 = 864
+        curr = {"charge_energy_today": 6549.2}
+        assert not validate_daily_energy_bounds(curr, "test_dev", rated_power_kw=18.0)
+
+    def test_startup_at_absolute_cap_accepted(self) -> None:
+        """Value exactly at absolute cap passes."""
+        cap = 18.0 * MAX_ELAPSED_HOURS * DAILY_ENERGY_MARGIN
+        curr = {"charge_energy_today": cap}
+        assert validate_daily_energy_bounds(curr, "test_dev", rated_power_kw=18.0)
+
+    def test_startup_just_over_absolute_cap_rejected(self) -> None:
+        """Value just over absolute cap is rejected."""
+        cap = 18.0 * MAX_ELAPSED_HOURS * DAILY_ENERGY_MARGIN
+        curr = {"charge_energy_today": cap + 0.1}
+        assert not validate_daily_energy_bounds(curr, "test_dev", rated_power_kw=18.0)
+
+    def test_startup_unknown_rated_power_uses_default(self) -> None:
+        """Unknown rated power falls back to DEFAULT_RATED_POWER_KW."""
+        cap = DEFAULT_RATED_POWER_KW * MAX_ELAPSED_HOURS * DAILY_ENERGY_MARGIN
+        curr = {"charge_energy_today": cap}
+        assert validate_daily_energy_bounds(curr, "test_dev", rated_power_kw=0.0)
+
+    def test_startup_none_values_skipped(self) -> None:
+        """None values in current data are ignored."""
+        curr: dict[str, float | None] = {"charge_energy_today": None}
+        assert validate_daily_energy_bounds(curr, "test_dev", rated_power_kw=18.0)
+
+    # -- Time-based delta (normal operation) --
+
+    def test_normal_poll_plausible_increase_accepted(self) -> None:
+        """Normal 30s poll with small increase passes."""
+        prev = {"charge_energy_today": 5.0}
+        curr = {"charge_energy_today": 5.1}
+        assert validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=30.0, prev_values=prev,
+        )
+
+    def test_normal_poll_corrupt_spike_rejected(self) -> None:
+        """30s poll with 6549.2 kWh spike is rejected."""
+        prev = {"charge_energy_today": 0.0}
+        curr = {"charge_energy_today": 6549.2}
+        assert not validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=30.0, prev_values=prev,
+        )
+
+    def test_normal_poll_exact_delta_bound_accepted(self) -> None:
+        """Increase exactly at time-based delta bound passes."""
+        # 18kW * (30s / 3600) * 2.0 = 0.3 kWh
+        delta = 18.0 * (30.0 / 3600.0) * DAILY_ENERGY_MARGIN
+        prev = {"charge_energy_today": 5.0}
+        curr = {"charge_energy_today": 5.0 + delta}
+        assert validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=30.0, prev_values=prev,
+        )
+
+    def test_normal_poll_just_over_delta_rejected(self) -> None:
+        """Increase just over time-based delta bound is rejected."""
+        delta = 18.0 * (30.0 / 3600.0) * DAILY_ENERGY_MARGIN
+        prev = {"charge_energy_today": 5.0}
+        curr = {"charge_energy_today": 5.0 + delta + 0.01}
+        assert not validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=30.0, prev_values=prev,
+        )
+
+    # -- Midnight reset (decrease is allowed) --
+
+    def test_midnight_reset_decrease_accepted(self) -> None:
+        """Daily counter decreasing (midnight reset) is allowed."""
+        prev = {"charge_energy_today": 12.9}
+        curr = {"charge_energy_today": 0.0}
+        assert validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=60.0, prev_values=prev,
+        )
+
+    def test_midnight_reset_to_small_value_accepted(self) -> None:
+        """Reset + some accumulation in new day is allowed."""
+        prev = {"charge_energy_today": 12.9}
+        curr = {"charge_energy_today": 3.0}
+        assert validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=3600.0, prev_values=prev,
+        )
+
+    # -- Long outage recovery --
+
+    def test_long_outage_elapsed_capped_at_24h(self) -> None:
+        """72-hour outage: elapsed capped at 24h, so bound = rated * 24 * margin."""
+        prev = {"charge_energy_today": 0.0}
+        curr = {"charge_energy_today": 400.0}
+        # 72 hours elapsed but capped to 24h → max = 18 * 24 * 2 = 864
+        assert validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=72 * 3600, prev_values=prev,
+        )
+
+    def test_long_outage_corrupt_value_still_rejected(self) -> None:
+        """Even after 72h outage, 6549.2 exceeds abs cap and is rejected."""
+        prev = {"charge_energy_today": 0.0}
+        curr = {"charge_energy_today": 6549.2}
+        assert not validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=72 * 3600, prev_values=prev,
+        )
+
+    # -- No elapsed time (cache_time was None) --
+
+    def test_no_elapsed_time_with_prev_only_checks_absolute(self) -> None:
+        """When elapsed_seconds is None, only absolute cap applies."""
+        prev = {"charge_energy_today": 0.0}
+        curr = {"charge_energy_today": 400.0}
+        # No elapsed → no delta check, but 400 < 864 abs cap → pass
+        assert validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=None, prev_values=prev,
+        )
+
+    # -- Multiple keys: one bad key rejects all --
+
+    def test_multiple_keys_one_corrupt_rejects_all(self) -> None:
+        """If any daily key is corrupt, entire read is rejected."""
+        prev = {"charge_energy_today": 5.0, "discharge_energy_today": 3.0}
+        curr = {"charge_energy_today": 5.1, "discharge_energy_today": 6000.0}
+        assert not validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=30.0, prev_values=prev,
+        )
+
+    def test_multiple_keys_all_valid_accepted(self) -> None:
+        """All keys plausible → accepted."""
+        prev = {"charge_energy_today": 5.0, "discharge_energy_today": 3.0}
+        curr = {"charge_energy_today": 5.1, "discharge_energy_today": 3.1}
+        assert validate_daily_energy_bounds(
+            curr, "test_dev", rated_power_kw=18.0,
+            elapsed_seconds=30.0, prev_values=prev,
+        )

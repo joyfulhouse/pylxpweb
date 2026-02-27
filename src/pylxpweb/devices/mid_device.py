@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from pylxpweb.constants import DEVICE_TYPE_CODE_GRIDBOSS
-from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
+from pylxpweb.exceptions import LuxpowerDeviceError
 
 from ._firmware_update_mixin import FirmwareUpdateMixin
 from ._mid_runtime_properties import MIDRuntimePropertiesMixin
@@ -69,6 +69,9 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         self._runtime: MidboxRuntime | None = None
         self._transport_runtime: MidboxRuntimeData | None = None
 
+        # Timestamp of last accepted runtime data (for daily energy bounds).
+        self._runtime_cache_time: datetime | None = None
+
         # Max power for the system behind this GridBOSS (kW).
         # Set by the coordinator once inverter count and ratings are known.
         self._max_system_power_kw: float = 0.0
@@ -88,6 +91,7 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         """
         self._max_system_power_kw = total_kw
         if total_kw > 0:
+            self._rated_power_kw = total_kw
             self._max_energy_delta = total_kw * 1.5
             self._max_power_watts = total_kw * 2000
             _LOGGER.debug(
@@ -181,6 +185,41 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
 
         return mid_device
 
+    def _runtime_elapsed_seconds(self) -> float | None:
+        """Seconds since last successful runtime cache, or None at startup."""
+        if self._runtime_cache_time is None:
+            return None
+        return (datetime.now() - self._runtime_cache_time).total_seconds()
+
+    def _validate_runtime_energy(self, new_runtime: MidboxRuntimeData) -> bool:
+        """Validate lifetime and daily energy in a new runtime read.
+
+        Checks lifetime monotonicity first, then daily bounds.  Both must
+        pass for the new data to be accepted.
+
+        Args:
+            new_runtime: Freshly-read MidboxRuntimeData to validate.
+
+        Returns:
+            True if the data should be accepted, False if it should be
+            rejected (caller keeps cached data).
+        """
+        if self._transport_runtime is not None and not self._is_energy_valid(
+            self._transport_runtime.lifetime_energy_values(),
+            new_runtime.lifetime_energy_values(),
+        ):
+            return False
+        prev_daily = (
+            self._transport_runtime.daily_energy_values()
+            if self._transport_runtime is not None
+            else None
+        )
+        return self._is_daily_energy_valid(
+            new_runtime.daily_energy_values(),
+            prev_daily,
+            self._runtime_elapsed_seconds(),
+        )
+
     async def refresh(self) -> None:
         """Refresh MID device runtime data from API or transport.
 
@@ -200,13 +239,12 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
                         self.serial_number,
                     )
                     return
-                if self._transport_runtime is not None and not self._is_energy_valid(
-                    self._transport_runtime.lifetime_energy_values(),
-                    runtime_data.lifetime_energy_values(),
-                ):
+                if not self._validate_runtime_energy(runtime_data):
                     return  # keep cached runtime
+                now = datetime.now()
                 self._transport_runtime = runtime_data
-                self._last_refresh = datetime.now()
+                self._runtime_cache_time = now
+                self._last_refresh = now
                 _LOGGER.debug(
                     "Refreshed MID device %s via transport",
                     self.serial_number,
@@ -218,28 +256,17 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
                     self.serial_number
                 )
                 new_runtime = MidboxRuntimeData.from_http_response(self._runtime.midboxData)
-                if self._transport_runtime is not None and not self._is_energy_valid(
-                    self._transport_runtime.lifetime_energy_values(),
-                    new_runtime.lifetime_energy_values(),
-                ):
+                if not self._validate_runtime_energy(new_runtime):
                     return  # keep cached runtime
+                now = datetime.now()
                 self._transport_runtime = new_runtime
-                self._last_refresh = datetime.now()
+                self._runtime_cache_time = now
+                self._last_refresh = now
             else:
                 _LOGGER.warning(
                     "No transport or client available for MID device %s",
                     self.serial_number,
                 )
-        except (
-            LuxpowerAPIError,
-            LuxpowerConnectionError,
-            LuxpowerDeviceError,
-        ) as err:
-            _LOGGER.warning(
-                "Failed to fetch MID device runtime for %s: %s",
-                self.serial_number,
-                err,
-            )
         except Exception as err:
             _LOGGER.warning(
                 "Failed to fetch MID device runtime for %s: %s",
