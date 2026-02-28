@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from pylxpweb.devices.mid_device import MIDDevice
-from pylxpweb.models import MidboxData, MidboxRuntime
+from pylxpweb.models import MidboxData, MidboxDeviceData, MidboxRuntime
 from pylxpweb.transports.data import MidboxRuntimeData
 
 
@@ -797,112 +797,109 @@ class TestSumEnergyHelper:
 
 
 class TestIsOffGridProperty:
-    """Test is_off_grid property with transport runtime."""
+    """Test is_off_grid property with all detection paths.
+
+    Detection order:
+    1. Transport off_grid field (from HTTP deviceData.isOffGrid)
+    2. Modbus fallback: grid_frequency=0 AND grid_voltage<5V
+    3. HTTP-only fallback: MidboxRuntime.deviceData.isOffGrid
+    """
 
     @pytest.fixture
-    def mid_device_off_grid(self) -> MIDDevice:
-        """Create MID device with isOffGrid=True in transport runtime."""
-        mock_client = MagicMock()
-
-        mid_device = MIDDevice(
-            client=mock_client,
+    def mid_device(self) -> MIDDevice:
+        """Create a bare MID device with no runtime data."""
+        return MIDDevice(
+            client=MagicMock(),
             serial_number="4524850115",
             model="GridBOSS",
         )
 
-        # Use MagicMock to allow arbitrary attribute access (isOffGrid)
-        runtime = MagicMock()
-        runtime.isOffGrid = True
+    def test_off_grid_true_from_transport_field(self, mid_device):
+        """Path 1: off_grid=True in transport runtime (HTTP-sourced)."""
+        mid_device._runtime = None
+        mid_device._transport_runtime = MidboxRuntimeData(off_grid=True)
+        assert mid_device.is_off_grid is True
 
-        _apply_runtime(mid_device, runtime)
-        return mid_device
+    def test_off_grid_false_from_transport_field(self, mid_device):
+        """Path 1: off_grid=False in transport runtime (HTTP-sourced)."""
+        mid_device._runtime = None
+        mid_device._transport_runtime = MidboxRuntimeData(off_grid=False)
+        assert mid_device.is_off_grid is False
 
-    @pytest.fixture
-    def mid_device_on_grid(self) -> MIDDevice:
-        """Create MID device with isOffGrid=False in transport runtime."""
-        mock_client = MagicMock()
-
-        mid_device = MIDDevice(
-            client=mock_client,
-            serial_number="4524850115",
-            model="GridBOSS",
+    def test_off_grid_modbus_fallback_grid_down(self, mid_device):
+        """Path 2: Modbus fallback — grid_frequency=0, grid_voltage=0 → off-grid."""
+        mid_device._runtime = None
+        mid_device._transport_runtime = MidboxRuntimeData(
+            grid_frequency=0.0,
+            grid_voltage=0.0,
         )
+        assert mid_device.is_off_grid is True
 
-        runtime = MagicMock()
-        runtime.isOffGrid = False
-
-        _apply_runtime(mid_device, runtime)
-        return mid_device
-
-    def test_is_off_grid_true_when_transport_runtime_true(self, mid_device_off_grid):
-        """Verify is_off_grid returns True when transport runtime has isOffGrid=True."""
-        assert mid_device_off_grid.is_off_grid is True
-
-    def test_is_off_grid_false_when_transport_runtime_false(self, mid_device_on_grid):
-        """Verify is_off_grid returns False when transport runtime has isOffGrid=False."""
-        assert mid_device_on_grid.is_off_grid is False
-
-    def test_is_off_grid_false_when_runtime_none(self, mid_device_without_runtime):
-        """Verify is_off_grid returns False when runtime is None."""
-        assert mid_device_without_runtime.is_off_grid is False
-
-    def test_is_off_grid_false_when_attribute_missing(self):
-        """Verify is_off_grid returns False when isOffGrid attribute doesn't exist."""
-        mock_client = MagicMock()
-
-        mid_device = MIDDevice(
-            client=mock_client,
-            serial_number="4524850115",
-            model="GridBOSS",
+    def test_off_grid_modbus_fallback_grid_present(self, mid_device):
+        """Path 2: Modbus fallback — grid_frequency=60, grid_voltage=242 → on-grid."""
+        mid_device._runtime = None
+        mid_device._transport_runtime = MidboxRuntimeData(
+            grid_frequency=60.0,
+            grid_voltage=242.0,
         )
+        assert mid_device.is_off_grid is False
 
-        midbox_data = MidboxData.model_construct(
-            status=1,
-            serverTime="2025-11-22 10:30:00",
-            deviceTime="2025-11-22 10:30:05",
-            gridRmsVolt=2420,
-            upsRmsVolt=2400,
-            genRmsVolt=0,
-            gridL1RmsVolt=1210,
-            gridL2RmsVolt=1210,
-            upsL1RmsVolt=1200,
-            upsL2RmsVolt=1200,
-            genL1RmsVolt=0,
-            genL2RmsVolt=0,
-            gridL1RmsCurr=0,
-            gridL2RmsCurr=0,
-            loadL1RmsCurr=0,
-            loadL2RmsCurr=0,
-            genL1RmsCurr=0,
-            genL2RmsCurr=0,
-            upsL1RmsCurr=0,
-            upsL2RmsCurr=0,
-            gridL1ActivePower=0,
-            gridL2ActivePower=0,
-            loadL1ActivePower=0,
-            loadL2ActivePower=0,
-            genL1ActivePower=0,
-            genL2ActivePower=0,
-            upsL1ActivePower=0,
-            upsL2ActivePower=0,
-            hybridPower=0,
-            gridFreq=6000,
-            smartPort1Status=0,
-            smartPort2Status=0,
-            smartPort3Status=0,
-            smartPort4Status=0,
+    def test_off_grid_modbus_fallback_ghost_voltage(self, mid_device):
+        """Path 2: grid_frequency=0 but voltage=3V (ghost/leakage) → off-grid."""
+        mid_device._runtime = None
+        mid_device._transport_runtime = MidboxRuntimeData(
+            grid_frequency=0.0,
+            grid_voltage=3.0,
         )
+        assert mid_device.is_off_grid is True
 
-        runtime = MidboxRuntime.model_construct(
-            midboxData=midbox_data,
+    def test_off_grid_modbus_fallback_freq_zero_voltage_high(self, mid_device):
+        """Path 2: grid_frequency=0 but voltage=120V → NOT off-grid (voltage too high)."""
+        mid_device._runtime = None
+        mid_device._transport_runtime = MidboxRuntimeData(
+            grid_frequency=0.0,
+            grid_voltage=120.0,
+        )
+        assert mid_device.is_off_grid is False
+
+    def test_off_grid_modbus_fallback_none_fields(self, mid_device):
+        """Path 2: Modbus data with None fields → defaults to False."""
+        mid_device._runtime = None
+        mid_device._transport_runtime = MidboxRuntimeData()
+        assert mid_device.is_off_grid is False
+
+    def test_off_grid_http_fallback_device_data_true(self, mid_device):
+        """Path 3: HTTP-only — MidboxRuntime.deviceData.isOffGrid=True."""
+        mid_device._transport_runtime = None
+        mid_device._runtime = MidboxRuntime.model_construct(
+            midboxData=MidboxData.model_construct(),
+            fwCode="v1.0.0",
+            deviceData=MidboxDeviceData(isOffGrid=True),
+        )
+        assert mid_device.is_off_grid is True
+
+    def test_off_grid_http_fallback_device_data_false(self, mid_device):
+        """Path 3: HTTP-only — MidboxRuntime.deviceData.isOffGrid=False."""
+        mid_device._transport_runtime = None
+        mid_device._runtime = MidboxRuntime.model_construct(
+            midboxData=MidboxData.model_construct(),
+            fwCode="v1.0.0",
+            deviceData=MidboxDeviceData(isOffGrid=False),
+        )
+        assert mid_device.is_off_grid is False
+
+    def test_off_grid_http_fallback_no_device_data(self, mid_device):
+        """Path 3: HTTP-only — no deviceData field → defaults to False."""
+        mid_device._transport_runtime = None
+        mid_device._runtime = MidboxRuntime.model_construct(
+            midboxData=MidboxData.model_construct(),
             fwCode="v1.0.0",
         )
-        # Don't add isOffGrid attribute - simulating missing field
-
-        _apply_runtime(mid_device, runtime)
-
-        # Should gracefully return False with getattr default
         assert mid_device.is_off_grid is False
+
+    def test_is_off_grid_false_when_runtime_none(self, mid_device_without_runtime):
+        """Verify is_off_grid returns False when both runtime and transport are None."""
+        assert mid_device_without_runtime.is_off_grid is False
 
 
 class TestACCouplePowerLocalMode:
@@ -1108,3 +1105,145 @@ class TestFrequencyPropertiesExtended:
     def test_generator_frequency_returns_default_when_none(self, mid_device_without_runtime):
         """Verify generator frequency returns None when runtime is None."""
         assert mid_device_without_runtime.generator_frequency is None
+
+
+class TestComputedHybridPower:
+    """Test MidboxRuntimeData.computed_hybrid_power formula.
+
+    Live-validated: hybridPower = ups_power - grid_power + smart_load_total_power
+    """
+
+    def test_computed_with_ac_couple_negative_smart_load(self):
+        """AC couple scenario: smart_load_total is negative (power flowing in).
+
+        Live validation (3 samples, diff=0):
+        2565 - 582 + (-1152) = 831 → ups=2565, grid=582, smart=-1152
+        """
+        data = MidboxRuntimeData(
+            ups_l1_power=1300.0,
+            ups_l2_power=1265.0,  # ups_power = 2565
+            grid_l1_power=300.0,
+            grid_l2_power=282.0,  # grid_power = 582
+            # AC couple ports feeding power IN → negative smart load total
+            smart_load_1_l1_power=-600.0,
+            smart_load_1_l2_power=-552.0,
+            smart_load_2_l1_power=0.0,
+            smart_load_2_l2_power=0.0,
+            smart_load_3_l1_power=0.0,
+            smart_load_3_l2_power=0.0,
+            smart_load_4_l1_power=0.0,
+            smart_load_4_l2_power=0.0,
+        )
+        # 2565 - 582 + (-1152) = 831
+        assert data.computed_hybrid_power == 831.0
+
+    def test_computed_with_zero_smart_load(self):
+        """No AC couple: smart_load_total=0 → ups - grid."""
+        data = MidboxRuntimeData(
+            ups_l1_power=1000.0,
+            ups_l2_power=1000.0,  # ups_power = 2000
+            grid_l1_power=500.0,
+            grid_l2_power=500.0,  # grid_power = 1000
+            smart_load_1_l1_power=0.0,
+            smart_load_1_l2_power=0.0,
+            smart_load_2_l1_power=0.0,
+            smart_load_2_l2_power=0.0,
+            smart_load_3_l1_power=0.0,
+            smart_load_3_l2_power=0.0,
+            smart_load_4_l1_power=0.0,
+            smart_load_4_l2_power=0.0,
+        )
+        assert data.computed_hybrid_power == 1000.0
+
+    def test_computed_returns_http_value_when_nonzero(self):
+        """When hybrid_power field is non-None/non-zero, return it directly."""
+        data = MidboxRuntimeData(
+            hybrid_power=7400.0,
+            ups_l1_power=1000.0,
+            ups_l2_power=1000.0,
+            grid_l1_power=500.0,
+            grid_l2_power=500.0,
+        )
+        assert data.computed_hybrid_power == 7400.0
+
+    def test_computed_returns_none_when_ups_unavailable(self):
+        """No UPS power → returns None."""
+        data = MidboxRuntimeData(
+            grid_l1_power=500.0,
+            grid_l2_power=500.0,
+        )
+        assert data.computed_hybrid_power is None
+
+    def test_computed_with_none_grid_defaults_to_zero(self):
+        """Grid power unavailable → treated as 0."""
+        data = MidboxRuntimeData(
+            ups_l1_power=1000.0,
+            ups_l2_power=500.0,
+            smart_load_1_l1_power=0.0,
+            smart_load_1_l2_power=0.0,
+            smart_load_2_l1_power=0.0,
+            smart_load_2_l2_power=0.0,
+            smart_load_3_l1_power=0.0,
+            smart_load_3_l2_power=0.0,
+            smart_load_4_l1_power=0.0,
+            smart_load_4_l2_power=0.0,
+        )
+        assert data.computed_hybrid_power == 1500.0
+
+    def test_computed_with_none_smart_load_defaults_to_zero(self):
+        """Smart load unavailable → treated as 0."""
+        data = MidboxRuntimeData(
+            ups_l1_power=1000.0,
+            ups_l2_power=500.0,
+            grid_l1_power=200.0,
+            grid_l2_power=200.0,
+        )
+        # ups=1500, grid=400, smart=None→0 → 1100
+        assert data.computed_hybrid_power == 1100.0
+
+
+class TestHybridPowerProperty:
+    """Test MIDDevice.hybrid_power property routing."""
+
+    @pytest.fixture
+    def mid_device(self) -> MIDDevice:
+        """Create a bare MID device with no runtime data."""
+        return MIDDevice(
+            client=MagicMock(),
+            serial_number="4524850115",
+            model="GridBOSS",
+        )
+
+    def test_hybrid_power_from_transport_computed(self, mid_device):
+        """Transport path: uses computed_hybrid_power (ups - grid + smart)."""
+        mid_device._runtime = None
+        mid_device._transport_runtime = MidboxRuntimeData(
+            ups_l1_power=1300.0,
+            ups_l2_power=1265.0,
+            grid_l1_power=300.0,
+            grid_l2_power=282.0,
+            smart_load_1_l1_power=-600.0,
+            smart_load_1_l2_power=-552.0,
+            smart_load_2_l1_power=0.0,
+            smart_load_2_l2_power=0.0,
+            smart_load_3_l1_power=0.0,
+            smart_load_3_l2_power=0.0,
+            smart_load_4_l1_power=0.0,
+            smart_load_4_l2_power=0.0,
+        )
+        assert mid_device.hybrid_power == 831.0
+
+    def test_hybrid_power_from_http_fallback(self, mid_device):
+        """HTTP-only path: reads hybridPower from midboxData."""
+        mid_device._transport_runtime = None
+        mid_device._runtime = MidboxRuntime.model_construct(
+            midboxData=MidboxData.model_construct(hybridPower=5000),
+            fwCode="v1.0.0",
+        )
+        assert mid_device.hybrid_power == 5000
+
+    def test_hybrid_power_none_when_no_data(self, mid_device):
+        """No transport or runtime → returns None."""
+        mid_device._transport_runtime = None
+        mid_device._runtime = None
+        assert mid_device.hybrid_power is None

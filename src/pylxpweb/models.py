@@ -939,6 +939,17 @@ class MidboxData(BaseModel):
     eSmartLoad4TotalL2: int | None = None
 
 
+class MidboxDeviceData(BaseModel):
+    """Subset of deviceData from getMidboxRuntime — primary inverter summary.
+
+    The getMidboxRuntime response includes a ``deviceData`` dict with ~45 keys
+    representing the primary inverter's status.  We only extract the fields
+    needed by MID device properties.
+    """
+
+    isOffGrid: bool | None = None
+
+
 class MidboxRuntime(BaseModel):
     """GridBOSS/MID device runtime response."""
 
@@ -946,6 +957,7 @@ class MidboxRuntime(BaseModel):
     serialNum: str
     fwCode: str
     midboxData: MidboxData
+    deviceData: MidboxDeviceData | None = None
 
 
 # Parameter Control Models

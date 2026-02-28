@@ -256,6 +256,9 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
                     self.serial_number
                 )
                 new_runtime = MidboxRuntimeData.from_http_response(self._runtime.midboxData)
+                # Extract isOffGrid from deviceData (primary inverter's data)
+                if self._runtime.deviceData is not None:
+                    new_runtime.off_grid = self._runtime.deviceData.isOffGrid
                 if not self._validate_runtime_energy(new_runtime):
                     return  # keep cached runtime
                 now = datetime.now()

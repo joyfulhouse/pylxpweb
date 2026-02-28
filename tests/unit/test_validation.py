@@ -175,8 +175,11 @@ class TestValidateDailyEnergyBounds:
         prev = {"charge_energy_today": 5.0}
         curr = {"charge_energy_today": 5.1}
         assert validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=30.0, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=30.0,
+            prev_values=prev,
         )
 
     def test_normal_poll_corrupt_spike_rejected(self) -> None:
@@ -184,8 +187,11 @@ class TestValidateDailyEnergyBounds:
         prev = {"charge_energy_today": 0.0}
         curr = {"charge_energy_today": 6549.2}
         assert not validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=30.0, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=30.0,
+            prev_values=prev,
         )
 
     def test_normal_poll_exact_delta_bound_accepted(self) -> None:
@@ -195,8 +201,11 @@ class TestValidateDailyEnergyBounds:
         prev = {"charge_energy_today": 5.0}
         curr = {"charge_energy_today": 5.0 + delta}
         assert validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=30.0, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=30.0,
+            prev_values=prev,
         )
 
     def test_normal_poll_just_over_delta_rejected(self) -> None:
@@ -205,8 +214,11 @@ class TestValidateDailyEnergyBounds:
         prev = {"charge_energy_today": 5.0}
         curr = {"charge_energy_today": 5.0 + delta + 0.01}
         assert not validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=30.0, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=30.0,
+            prev_values=prev,
         )
 
     # -- Midnight reset (decrease is allowed) --
@@ -216,8 +228,11 @@ class TestValidateDailyEnergyBounds:
         prev = {"charge_energy_today": 12.9}
         curr = {"charge_energy_today": 0.0}
         assert validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=60.0, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=60.0,
+            prev_values=prev,
         )
 
     def test_midnight_reset_to_small_value_accepted(self) -> None:
@@ -225,8 +240,11 @@ class TestValidateDailyEnergyBounds:
         prev = {"charge_energy_today": 12.9}
         curr = {"charge_energy_today": 3.0}
         assert validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=3600.0, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=3600.0,
+            prev_values=prev,
         )
 
     # -- Long outage recovery --
@@ -237,8 +255,11 @@ class TestValidateDailyEnergyBounds:
         curr = {"charge_energy_today": 400.0}
         # 72 hours elapsed but capped to 24h → max = 18 * 24 * 2 = 864
         assert validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=72 * 3600, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=72 * 3600,
+            prev_values=prev,
         )
 
     def test_long_outage_corrupt_value_still_rejected(self) -> None:
@@ -246,8 +267,11 @@ class TestValidateDailyEnergyBounds:
         prev = {"charge_energy_today": 0.0}
         curr = {"charge_energy_today": 6549.2}
         assert not validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=72 * 3600, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=72 * 3600,
+            prev_values=prev,
         )
 
     # -- No elapsed time (cache_time was None) --
@@ -258,8 +282,11 @@ class TestValidateDailyEnergyBounds:
         curr = {"charge_energy_today": 400.0}
         # No elapsed → no delta check, but 400 < 864 abs cap → pass
         assert validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=None, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=None,
+            prev_values=prev,
         )
 
     # -- Multiple keys: one bad key rejects all --
@@ -269,8 +296,11 @@ class TestValidateDailyEnergyBounds:
         prev = {"charge_energy_today": 5.0, "discharge_energy_today": 3.0}
         curr = {"charge_energy_today": 5.1, "discharge_energy_today": 6000.0}
         assert not validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=30.0, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=30.0,
+            prev_values=prev,
         )
 
     def test_multiple_keys_all_valid_accepted(self) -> None:
@@ -278,6 +308,9 @@ class TestValidateDailyEnergyBounds:
         prev = {"charge_energy_today": 5.0, "discharge_energy_today": 3.0}
         curr = {"charge_energy_today": 5.1, "discharge_energy_today": 3.1}
         assert validate_daily_energy_bounds(
-            curr, "test_dev", rated_power_kw=18.0,
-            elapsed_seconds=30.0, prev_values=prev,
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=30.0,
+            prev_values=prev,
         )

@@ -1405,6 +1405,13 @@ class MidboxRuntimeData:
     smart_port_4_status: int | None = None  # smartPort4Status
 
     # -------------------------------------------------------------------------
+    # System Status
+    # HTTP: deviceData.isOffGrid (NOT in midboxData — separate dict)
+    # Modbus: no confirmed register; fallback uses grid_freq=0 + grid_voltage<5
+    # -------------------------------------------------------------------------
+    off_grid: bool | None = None
+
+    # -------------------------------------------------------------------------
     # Frequency (Hz)
     # -------------------------------------------------------------------------
     phase_lock_freq: float | None = None  # phaseLockFreq
@@ -1602,15 +1609,15 @@ class MidboxRuntimeData:
     def computed_hybrid_power(self) -> float | None:
         """Computed hybrid power when not available from registers.
 
-        For Modbus/dongle reads, hybrid_power is not available in registers.
-        The web API computes it as: ups_power - grid_power
+        Live-validated formula (3 samples, diff=0):
+            hybridPower = ups_power - grid_power + smart_load_total_power
 
-        This represents the total AC power flowing through the hybrid
-        inverter system. When exporting (grid_power negative), hybrid_power
-        equals UPS power plus export power.
+        smart_load_total_power is signed: negative when ports in AC couple
+        mode are feeding power into the system from external inverters.
 
-        Falls back to ups_power alone if grid_power is unavailable (grid
-        power registers are often zero via Modbus/dongle).
+        Returns the HTTP-sourced hybrid_power when non-None/non-zero (cloud
+        path already has the correct value), otherwise computes from
+        component values (Modbus/dongle path).
 
         Returns None if UPS power is unavailable.
         """
@@ -1619,7 +1626,8 @@ class MidboxRuntimeData:
         if self.ups_power is None:
             return None
         grid = self.grid_power if self.grid_power is not None else 0.0
-        return self.ups_power - grid
+        smart = self.smart_load_total_power if self.smart_load_total_power is not None else 0.0
+        return self.ups_power - grid + smart
 
     @classmethod
     def from_http_response(cls, midbox_data: MidboxData) -> MidboxRuntimeData:

@@ -317,8 +317,18 @@ class MIDRuntimePropertiesMixin:
 
     @property
     def hybrid_power(self) -> float | None:
-        """Get hybrid system power in watts."""
-        return self._raw_float("hybrid_power", "hybridPower")
+        """Get hybrid system power in watts.
+
+        Transport path uses computed_hybrid_power (ups - grid + smart_load_total)
+        because no Modbus register exists for hybrid_power.  HTTP-only path
+        reads hybridPower directly from the API response.
+        """
+        tr = self._transport_runtime
+        if tr is not None:
+            return tr.computed_hybrid_power
+        if self._runtime is None:
+            return None
+        return cast("float | None", getattr(self._runtime.midboxData, "hybridPower", None))
 
     # ===========================================
     # Frequency Properties
@@ -542,10 +552,33 @@ class MIDRuntimePropertiesMixin:
 
     @property
     def is_off_grid(self) -> bool:
-        """Check if the system is operating in off-grid/EPS mode."""
+        """Check if the system is operating in off-grid/EPS mode.
+
+        Detection order:
+        1. Transport ``off_grid`` field (set from HTTP deviceData.isOffGrid)
+        2. Modbus fallback: grid_frequency=0 AND grid_voltage<5V = off-grid.
+           UPS voltage is NOT a valid signal — UPS CTs always show voltage
+           when loads are running, even on-grid.
+        3. HTTP-only fallback (no transport): read from MidboxRuntime.deviceData
+        """
+        tr = self._transport_runtime
+        if tr is not None:
+            if tr.off_grid is not None:
+                return tr.off_grid
+            # Modbus fallback: grid frequency=0 AND grid voltage near-zero
+            return (
+                tr.grid_frequency is not None
+                and tr.grid_frequency == 0.0
+                and tr.grid_voltage is not None
+                and tr.grid_voltage < 5.0
+            )
         if self._runtime is None:
             return False
-        return bool(getattr(self._runtime, "isOffGrid", False))
+        # HTTP-only fallback: read from MidboxRuntime.deviceData
+        dd = self._runtime.deviceData
+        if dd is not None:
+            return bool(dd.isOffGrid)
+        return False
 
     # ===========================================
     # Energy Properties - Per-Phase
