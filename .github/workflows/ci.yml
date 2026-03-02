@@ -71,14 +71,14 @@ jobs:
           fail_ci_if_error: false
 
       - name: Upload coverage HTML
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-html
           path: htmlcov/
           retention-days: 30
 
       - name: Upload pytest results
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: pytest-results
@@ -134,7 +134,7 @@ jobs:
             --tb=short
 
       - name: Upload integration test results
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: integration-test-results
