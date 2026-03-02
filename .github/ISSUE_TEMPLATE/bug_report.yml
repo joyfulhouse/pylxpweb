@@ -1,0 +1,92 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill out all fields so we can investigate quickly.
+
+  - type: input
+    id: pylxpweb_version
+    attributes:
+      label: pylxpweb Version
+      description: "Run `pip show pylxpweb` or check your pyproject.toml"
+      placeholder: "0.9.22"
+    validations:
+      required: true
+
+  - type: input
+    id: python_version
+    attributes:
+      label: Python Version
+      description: "Run `python --version`"
+      placeholder: "3.13.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport_type
+    attributes:
+      label: Transport Type
+      options:
+        - Modbus TCP
+        - WiFi Dongle
+        - HTTP (Cloud API)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: device_model
+    attributes:
+      label: Device Model(s)
+      multiple: true
+      options:
+        - FlexBOSS 21
+        - FlexBOSS 18
+        - 18kPV
+        - 12kPV
+        - 6000XP
+        - 12000XP
+        - GridBOSS
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: Clear description of what happened vs. what you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Numbered steps or minimal code example to reproduce the issue.
+      placeholder: |
+        1. Create client with...
+        2. Call method...
+        3. See error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Traceback
+      description: |
+        Relevant error output or traceback.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots to help explain the problem.
+    validations:
+      required: false
