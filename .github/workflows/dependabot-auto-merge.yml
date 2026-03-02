@@ -1,5 +1,5 @@
-# Dependabot Auto-Merge: approve and merge all Dependabot PRs.
-# CI must pass before merge completes (--auto flag waits for checks).
+# Dependabot Auto-Merge: approve and merge patch/minor Dependabot PRs.
+# Major version bumps require manual review.
 # Security note: `html_url` is used via env var (not interpolated in shell).
 # The `pull_request_target` trigger is safe here because we only run
 # `gh pr` commands against the PR URL — no checkout of untrusted code.
@@ -24,14 +24,24 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      - name: Auto-approve
+      - name: Auto-approve minor and patch updates
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr review --approve "$PR_URL"
 
-      - name: Enable auto-merge
+      - name: Enable auto-merge for minor and patch updates
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr merge --auto --squash "$PR_URL"
+
+      - name: Comment on major updates
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "$PR_URL" --body "This is a **major** version update. Manual review required before merging."
