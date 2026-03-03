@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Self
 
 from pymodbus.client import AsyncModbusTcpClient
 
@@ -43,6 +44,11 @@ class BatteryModbusTransport:
 
     Connects to an RS485-to-TCP bridge that sits on the battery daisy
     chain. Each battery has its own Modbus unit ID.
+
+    Supports async context manager for automatic connection management::
+
+        async with BatteryModbusTransport(host="10.100.3.27") as bus:
+            data = await bus.read_all()
 
     Args:
         host: Bridge IP address (e.g., "10.100.3.27").
@@ -80,6 +86,20 @@ class BatteryModbusTransport:
     def is_connected(self) -> bool:
         """Check if transport is connected to the RS485 bridge."""
         return self._connected
+
+    async def __aenter__(self) -> Self:
+        """Enter async context manager, connecting the transport."""
+        await self.connect()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        """Exit async context manager, disconnecting the transport."""
+        await self.disconnect()
 
     async def connect(self) -> None:
         """Establish Modbus TCP connection to the RS485 bridge."""
@@ -173,6 +193,7 @@ class BatteryModbusTransport:
         protocol = self._get_protocol(unit_id, raw)
 
         # Read additional register blocks defined by the protocol
+        # (e.g., cell voltages at 113-128 for master, device info at 105-127 for slave)
         for block in protocol.register_blocks:
             if block.start >= _INITIAL_BLOCK_COUNT:
                 extra = await self._read_registers(block.start, block.count, unit_id)
@@ -180,13 +201,6 @@ class BatteryModbusTransport:
                     for i, v in enumerate(extra):
                         raw[block.start + i] = v
                 await asyncio.sleep(_INTER_READ_DELAY)
-
-        # For slave protocol, also try device info registers
-        if isinstance(protocol, EG4SlaveProtocol):
-            info_regs = await self._read_registers(105, 23, unit_id)
-            if info_regs:
-                for i, v in enumerate(info_regs):
-                    raw[105 + i] = v
 
         # Decode using the detected protocol
         battery_index = unit_id - 1  # 0-based index

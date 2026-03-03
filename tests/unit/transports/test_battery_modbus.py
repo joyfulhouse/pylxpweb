@@ -73,6 +73,49 @@ class TestBatteryModbusTransportInit:
         assert transport._detected_protocols == {}
 
 
+class TestBatteryModbusTransportContextManager:
+    """Tests for async context manager (__aenter__/__aexit__)."""
+
+    @pytest.mark.asyncio
+    async def test_context_manager_connects_and_disconnects(self) -> None:
+        """async with connects on enter and disconnects on exit."""
+        transport = BatteryModbusTransport(host="10.100.3.27")
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.connect = AsyncMock()
+        mock_client.close = MagicMock()
+
+        with patch(
+            "pylxpweb.transports.battery_modbus.AsyncModbusTcpClient",
+            return_value=mock_client,
+        ):
+            async with transport as t:
+                assert t is transport
+                assert t.is_connected is True
+
+        assert transport.is_connected is False
+        mock_client.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_context_manager_disconnects_on_exception(self) -> None:
+        """Transport disconnects even if body raises."""
+        transport = BatteryModbusTransport(host="10.100.3.27")
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.connect = AsyncMock()
+        mock_client.close = MagicMock()
+
+        with patch(
+            "pylxpweb.transports.battery_modbus.AsyncModbusTcpClient",
+            return_value=mock_client,
+        ), pytest.raises(RuntimeError, match="test error"):
+            async with transport:
+                raise RuntimeError("test error")
+
+        assert transport.is_connected is False
+        mock_client.close.assert_called_once()
+
+
 class TestBatteryModbusTransportConnect:
     """Tests for connect/disconnect lifecycle."""
 
