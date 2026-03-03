@@ -36,6 +36,8 @@ Usage:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .capabilities import (
     DONGLE_CAPABILITIES,
     HTTP_CAPABILITIES,
@@ -89,6 +91,23 @@ from .modbus import ModbusTransport
 from .modbus_serial import ModbusSerialTransport
 from .protocol import BaseTransport, InverterTransport
 
+if TYPE_CHECKING:
+    from .battery_modbus import BatteryModbusTransport
+
+
+def __getattr__(name: str) -> type[BatteryModbusTransport]:
+    """Lazy import for BatteryModbusTransport to avoid circular dependency.
+
+    The battery_modbus module imports from battery_protocols, which imports
+    from transports.data, creating a circular dependency at import time.
+    """
+    if name == "BatteryModbusTransport":
+        from .battery_modbus import BatteryModbusTransport
+
+        return BatteryModbusTransport
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     # Unified factory (recommended)
     "create_transport",
@@ -112,6 +131,7 @@ __all__ = [
     "ModbusSerialTransport",
     "DongleTransport",
     "HybridTransport",
+    "BatteryModbusTransport",
     # Discovery utilities
     "DeviceDiscoveryInfo",
     "HOLD_DEVICE_TYPE_CODE",

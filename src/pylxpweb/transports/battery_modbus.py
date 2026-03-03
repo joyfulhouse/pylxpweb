@@ -15,8 +15,8 @@ from typing import Self
 
 from pymodbus.client import AsyncModbusTcpClient
 
-from pylxpweb.battery_protocols import detect_protocol
 from pylxpweb.battery_protocols.base import BatteryProtocol
+from pylxpweb.battery_protocols.detection import detect_protocol
 from pylxpweb.battery_protocols.eg4_master import EG4MasterProtocol
 from pylxpweb.battery_protocols.eg4_slave import EG4SlaveProtocol
 from pylxpweb.transports.data import BatteryData

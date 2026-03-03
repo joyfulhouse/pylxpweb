@@ -15,12 +15,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
-import struct
 import sys
 from datetime import UTC, datetime
+from typing import Any
 
 from pymodbus.client import AsyncModbusTcpClient
+
+from pylxpweb.battery_protocols.base import signed_int16
+from pylxpweb.battery_protocols.detection import detect_protocol
 
 
 async def try_read(
@@ -43,18 +47,13 @@ async def try_read(
         return None
 
 
-def make_signed16(value: int) -> int:
-    """Reinterpret unsigned 16-bit as signed."""
-    return struct.unpack("h", struct.pack("H", value))[0]
-
-
 async def collect_unit(
     client: AsyncModbusTcpClient,
     unit_id: int,
     verbose: bool = True,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Collect all accessible registers from a single battery unit."""
-    unit_data: dict = {
+    unit_data: dict[str, Any] = {
         "unit_id": unit_id,
         "holding_registers": {},
         "input_registers": {},
@@ -74,87 +73,32 @@ async def collect_unit(
                         unit_data[reg_key][str(addr)] = {
                             "raw": val,
                             "hex": f"0x{val:04X}",
-                            "signed": make_signed16(val),
+                            "signed": signed_int16(val),
                         }
             await asyncio.sleep(0.15)
 
     if not unit_data["holding_registers"] and not unit_data["input_registers"]:
         return None
 
-    # Auto-detect protocol: master has regs 0-18 mostly zero, data starts at reg 19+
-    early_non_zero = 0
-    for r in range(0, 19):
-        if str(r) in unit_data["holding_registers"]:
-            early_non_zero += 1
+    # Build int-keyed dict for library detection and decode
+    raw_int: dict[int, int] = {}
+    for addr_str, info in unit_data["holding_registers"].items():
+        raw_int[int(addr_str)] = info["raw"]
 
-    if early_non_zero <= 2:
-        unit_data["detected_protocol"] = "eg4_master"
-    else:
-        unit_data["detected_protocol"] = "eg4_slave"
+    # Auto-detect protocol using library
+    protocol = detect_protocol(raw_int)
+    unit_data["detected_protocol"] = protocol.name
 
-    # Decode key values based on detected protocol
-    decoded: dict = {}
-    hold = unit_data["holding_registers"]
-
-    if unit_data["detected_protocol"] == "eg4_master":
-        if "22" in hold:
-            decoded["voltage"] = hold["22"]["raw"] / 100.0
-        if "23" in hold:
-            decoded["current_aggregate"] = hold["23"]["signed"] / 100.0
-        if "24" in hold:
-            decoded["temperature_max"] = hold["24"]["signed"]
-        if "26" in hold:
-            decoded["soc"] = hold["26"]["raw"] / 10.0
-        if "30" in hold:
-            decoded["cycle_count_max"] = hold["30"]["raw"]
-        if "32" in hold:
-            decoded["soh"] = hold["32"]["raw"]
-        if "33" in hold:
-            decoded["designed_capacity_ah"] = hold["33"]["raw"] / 20.0
-        if "37" in hold:
-            decoded["max_cell_voltage"] = hold["37"]["raw"] / 1000.0
-        if "38" in hold:
-            decoded["min_cell_voltage"] = hold["38"]["raw"] / 1000.0
-        if "41" in hold:
-            decoded["num_cells"] = hold["41"]["raw"]
-        # Cell voltages at register 113+
-        cells = []
-        for i in range(16):
-            key = str(113 + i)
-            if key in hold:
-                cells.append(hold[key]["raw"] / 1000.0)
-        if cells:
-            decoded["cell_voltages"] = cells
-    else:
-        # Slave protocol: standard EG4-LL register map
-        if "0" in hold:
-            decoded["voltage"] = hold["0"]["raw"] / 100.0
-        if "1" in hold:
-            decoded["current"] = hold["1"]["signed"] / 100.0
-        if "24" in hold:
-            decoded["soc"] = hold["24"]["raw"]
-        if "23" in hold:
-            decoded["soh"] = hold["23"]["raw"]
-        if "36" in hold:
-            decoded["num_cells"] = hold["36"]["raw"]
-        if "37" in hold:
-            decoded["designed_capacity_ah"] = hold["37"]["raw"] / 10.0
-        # Cell voltages at register 2+
-        cells = []
-        for i in range(16):
-            key = str(2 + i)
-            if key in hold:
-                cells.append(hold[key]["raw"] / 1000.0)
-        if cells:
-            decoded["cell_voltages"] = cells
-
-    unit_data["decoded"] = decoded
+    # Decode using the protocol's decode() method
+    battery_data = protocol.decode(raw_int, battery_index=unit_id - 1)
+    decoded = dataclasses.asdict(battery_data)
+    # Remove None values and empty lists for cleaner output
+    unit_data["decoded"] = {k: v for k, v in decoded.items() if v is not None and v != []}
 
     if verbose:
-        proto = unit_data["detected_protocol"]
-        v = decoded.get("voltage", "?")
-        soc = decoded.get("soc", "?")
-        print(f"  Unit {unit_id}: {proto}  V={v}  SOC={soc}")
+        v = battery_data.voltage
+        soc = battery_data.soc
+        print(f"  Unit {unit_id}: {protocol.name}  V={v}  SOC={soc}")
 
     return unit_data
 
@@ -188,12 +132,12 @@ async def main() -> None:
 
     units_to_scan = [args.unit] if args.unit > 0 else list(range(1, args.max_units + 1))
 
-    output = {
+    output: dict[str, Any] = {
         "metadata": {
             "timestamp": datetime.now(tz=UTC).isoformat(),
             "host": args.host,
             "port": args.port,
-            "tool_version": "1.0.0",
+            "tool_version": "1.1.0",
         },
         "units": [],
     }

@@ -64,7 +64,7 @@ class EG4MasterProtocol(BatteryProtocol):
     """
 
     name = "eg4_master"
-    register_blocks = [_RUNTIME_BLOCK, _CELL_BLOCK]
+    register_blocks = (_RUNTIME_BLOCK, _CELL_BLOCK)
 
     def decode(self, raw_regs: dict[int, int], battery_index: int = 0) -> BatteryData:
         """Decode master battery registers into BatteryData.

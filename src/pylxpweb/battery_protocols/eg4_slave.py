@@ -56,7 +56,7 @@ class EG4SlaveProtocol(BatteryProtocol):
     """
 
     name = "eg4_slave"
-    register_blocks = [_RUNTIME_BLOCK, _INFO_BLOCK]
+    register_blocks = (_RUNTIME_BLOCK, _INFO_BLOCK)
 
     def decode(self, raw_regs: dict[int, int], battery_index: int = 0) -> BatteryData:
         """Decode slave battery registers into BatteryData.

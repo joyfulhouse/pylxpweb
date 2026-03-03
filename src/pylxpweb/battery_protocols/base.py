@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from pylxpweb.constants.scaling import ScaleFactor, apply_scale
@@ -75,15 +76,15 @@ class BatteryRegisterBlock:
     registers: tuple[BatteryRegister, ...]
 
 
-class BatteryProtocol:
-    """Base class for battery protocol definitions.
+class BatteryProtocol(ABC):
+    """Abstract base class for battery protocol definitions.
 
     Subclasses define register_blocks and override decode() to produce
     BatteryData from raw register values.
     """
 
     name: str = "base"
-    register_blocks: list[BatteryRegisterBlock] = []
+    register_blocks: tuple[BatteryRegisterBlock, ...] = ()
 
     @staticmethod
     def decode_register(reg: BatteryRegister, raw_value: int) -> float:
@@ -141,10 +142,9 @@ class BatteryProtocol:
                     return reg
         raise KeyError(f"No register named '{name}' in {self.name} protocol")
 
+    @abstractmethod
     def decode(self, raw_regs: dict[int, int], battery_index: int = 0) -> BatteryData:
         """Decode raw registers into a BatteryData object.
-
-        Subclasses must override this method.
 
         Args:
             raw_regs: Dict mapping register address to raw 16-bit value.
@@ -153,4 +153,3 @@ class BatteryProtocol:
         Returns:
             BatteryData with all values properly scaled.
         """
-        raise NotImplementedError
