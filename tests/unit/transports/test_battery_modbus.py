@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pylxpweb.transports.battery_modbus import BatteryModbusTransport
+from pylxpweb.transports.data import BatteryData, InverterRuntimeData
 
 
 @pytest.fixture
@@ -105,10 +106,13 @@ class TestBatteryModbusTransportContextManager:
         mock_client.connect = AsyncMock()
         mock_client.close = MagicMock()
 
-        with patch(
-            "pylxpweb.transports.battery_modbus.AsyncModbusTcpClient",
-            return_value=mock_client,
-        ), pytest.raises(RuntimeError, match="test error"):
+        with (
+            patch(
+                "pylxpweb.transports.battery_modbus.AsyncModbusTcpClient",
+                return_value=mock_client,
+            ),
+            pytest.raises(RuntimeError, match="test error"),
+        ):
             async with transport:
                 raise RuntimeError("test error")
 
@@ -204,10 +208,10 @@ class TestBatteryModbusTransportReadUnit:
         """Reading unit 1 (master) auto-detects master protocol."""
         # Master: regs 0-18 all zeros, data starts at reg 19
         master_regs = [0] * 42
+        master_regs[21] = 76  # SOC direct % (aggregate)
         master_regs[22] = 5294  # voltage /100 = 52.94V
         master_regs[23] = 200  # current /100 = 2.00A (aggregate)
         master_regs[24] = 35  # temperature = 35°C
-        master_regs[26] = 760  # SOC /10 = 76%
         master_regs[32] = 98  # SOH = 98%
         master_regs[41] = 16  # num cells
 
@@ -519,3 +523,211 @@ class TestBatteryModbusTransportReadRegisters:
 
         result = await connected_transport._read_registers(0, 3, 1)
         assert result is None
+
+
+def _make_slave_regs(soc: int = 80, remaining: int = 224) -> list[int]:
+    """Build a minimal slave register set (42 regs).
+
+    Must have 3+ non-zero registers in range 0-18 to pass auto-detection
+    as a slave (detection threshold is >2 non-zero in regs 0-18).
+    """
+    regs = [0] * 42
+    regs[0] = 5294  # voltage 52.94V
+    regs[1] = 100  # current 1.00A (non-zero for detection)
+    # Cell voltages (regs 2-17) — need at least one for detection
+    regs[2] = 3310  # cell 1 voltage
+    regs[18] = 18  # pcb temp
+    regs[20] = 19  # max temp
+    regs[21] = remaining  # remaining capacity Ah
+    regs[24] = soc  # SOC
+    regs[33] = 0x1312  # packed temps: 19, 18
+    regs[34] = 0x1211  # packed temps: 18, 17
+    regs[35] = 0x1312  # packed temps: 19, 18
+    regs[36] = 16  # num cells
+    regs[37] = 2800  # designed capacity 280 Ah
+    return regs
+
+
+def _make_master_regs(soc: int = 79, reg26: int = 464, reg27: int = 18464) -> list[int]:
+    """Build a minimal master register set (42 regs, zeros at 0-18)."""
+    regs = [0] * 42
+    regs[21] = soc  # aggregate SOC
+    regs[22] = 5294  # voltage 52.94V
+    regs[24] = 19  # aggregate max temp
+    regs[26] = reg26  # total remaining (overflowed)
+    regs[27] = reg27  # total full (overflowed)
+    regs[33] = 5600  # designed capacity 280 Ah (/20)
+    regs[41] = 16  # num cells
+    return regs
+
+
+def _mock_result(regs: list[int]) -> MagicMock:
+    """Build a mock Modbus read result."""
+    m = MagicMock()
+    m.isError.return_value = False
+    m.registers = regs
+    return m
+
+
+def _mock_error() -> MagicMock:
+    m = MagicMock()
+    m.isError.return_value = True
+    return m
+
+
+class TestReadAllWithSlaves:
+    """Tests for read_all() master SOC back-calculation using slave context."""
+
+    @pytest.mark.asyncio
+    async def test_master_redecoded_with_slave_context(self) -> None:
+        """Master SOC is back-calculated from slave remaining capacities."""
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._connected = True
+
+        master_regs = _make_master_regs(soc=79, reg26=464, reg27=18464)
+        slave2_regs = _make_slave_regs(soc=80, remaining=224)
+        slave3_regs = _make_slave_regs(soc=80, remaining=223)
+        cell_regs = [3310] * 16
+
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(master_regs),  # unit 1 runtime
+                _mock_result(cell_regs),  # unit 1 cells (113-128)
+                _mock_result(slave2_regs),  # unit 2 runtime
+                _mock_result([0] * 23),  # unit 2 info block (105-127)
+                _mock_result(slave3_regs),  # unit 3 runtime
+                _mock_result([0] * 23),  # unit 3 info block (105-127)
+            ],
+        )
+
+        results = await transport.read_all()
+        assert len(results) == 3
+
+        master = results[0]
+        assert master.battery_index == 0
+        # Back-calculated: 660 - 224 - 223 = 213 Ah → 213/280 = 76%
+        assert master.soc == 76
+        assert master.current_capacity == pytest.approx(213.0)
+
+        # Slaves unchanged
+        assert results[1].soc == 80
+        assert results[2].soc == 80
+
+    @pytest.mark.asyncio
+    async def test_master_without_slaves_uses_aggregate(self) -> None:
+        """When no slaves respond, master keeps aggregate SOC."""
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2])
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._connected = True
+
+        master_regs = _make_master_regs(soc=79)
+        cell_regs = [3310] * 16
+
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(master_regs),
+                _mock_result(cell_regs),
+                _mock_error(),  # unit 2 fails
+            ],
+        )
+
+        results = await transport.read_all()
+        assert len(results) == 1
+        # No slaves → no re-decode → aggregate SOC
+        assert results[0].soc == 79
+
+
+class TestOverlayInverterBMS:
+    """Tests for _overlay_inverter_bms() filling master RS485 gaps."""
+
+    def test_overlay_fills_temperatures(self) -> None:
+        """Inverter BMS temps replace master's reg-24-only values."""
+        master = BatteryData(
+            battery_index=0,
+            voltage=52.94,
+            soc=76,
+            temperature=19.0,
+            # RS485 sets both to aggregate MAX (reg 24)
+            min_cell_temperature=19.0,
+            max_cell_temperature=19.0,
+        )
+        bms = InverterRuntimeData(
+            bms_max_cell_temperature=19.0,
+            bms_min_cell_temperature=17.0,
+        )
+
+        result = BatteryModbusTransport._overlay_inverter_bms(master, bms)
+        assert result.min_cell_temperature == 17.0
+        assert result.max_cell_temperature == 19.0
+        # Other fields preserved
+        assert result.voltage == 52.94
+        assert result.soc == 76
+
+    def test_overlay_no_bms_temps_preserves_original(self) -> None:
+        """When BMS has no temp data, master values are unchanged."""
+        master = BatteryData(
+            battery_index=0,
+            min_cell_temperature=19.0,
+            max_cell_temperature=19.0,
+        )
+        bms = InverterRuntimeData(
+            bms_max_cell_temperature=None,
+            bms_min_cell_temperature=None,
+        )
+
+        result = BatteryModbusTransport._overlay_inverter_bms(master, bms)
+        assert result.min_cell_temperature == 19.0
+        assert result.max_cell_temperature == 19.0
+
+    def test_overlay_partial_bms_data(self) -> None:
+        """Only available BMS fields are overlaid."""
+        master = BatteryData(
+            battery_index=0,
+            min_cell_temperature=19.0,
+            max_cell_temperature=19.0,
+        )
+        bms = InverterRuntimeData(
+            bms_max_cell_temperature=None,
+            bms_min_cell_temperature=16.0,
+        )
+
+        result = BatteryModbusTransport._overlay_inverter_bms(master, bms)
+        assert result.min_cell_temperature == 16.0
+        assert result.max_cell_temperature == 19.0  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_read_all_with_bms_overlay(self) -> None:
+        """End-to-end: read_all applies BMS overlay to master."""
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2])
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._connected = True
+
+        master_regs = _make_master_regs(soc=79, reg26=464, reg27=18464)
+        slave_regs = _make_slave_regs(soc=80, remaining=447)
+        cell_regs = [3310] * 16
+
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(master_regs),
+                _mock_result(cell_regs),
+                _mock_result(slave_regs),
+                _mock_result([0] * 23),  # slave info block
+            ],
+        )
+
+        bms = InverterRuntimeData(
+            bms_max_cell_temperature=19.0,
+            bms_min_cell_temperature=17.0,
+        )
+
+        results = await transport.read_all(inverter_bms_data=bms)
+        master = results[0]
+        # BMS temps overlaid
+        assert master.min_cell_temperature == 17.0
+        assert master.max_cell_temperature == 19.0
+        # Slave unaffected
+        assert results[1].min_cell_temperature == 17.0  # from packed temps

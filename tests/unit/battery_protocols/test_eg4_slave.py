@@ -77,16 +77,17 @@ class TestEG4SlaveProtocol:
         assert data.soh == 100
         assert data.soc == 76
 
-    def test_decode_temperatures(self) -> None:
-        """Temperatures: PCB=reg18, avg=reg19, max=reg20."""
+    def test_decode_temperatures_fallback(self) -> None:
+        """Without packed temps, falls back to PCB (min) and max (max)."""
         raw: dict[int, int] = dict.fromkeys(range(39), 0)
         raw[18] = 25  # PCB temp
         raw[19] = 23  # Avg temp
         raw[20] = 27  # Max temp
+        # regs 33-35 = 0 → no packed temps → fallback
         data = self.protocol.decode(raw, battery_index=0)
         assert data.temperature == 27.0  # Use max as primary temp
         assert data.max_cell_temperature == 27.0
-        assert data.min_cell_temperature == 25.0  # PCB temp as min
+        assert data.min_cell_temperature == 25.0  # PCB temp as fallback min
 
     def test_decode_signed_temperature(self) -> None:
         """Temperatures can be negative (signed int16)."""
@@ -207,3 +208,52 @@ class TestEG4SlaveProtocol:
         raw[22] = 100  # 100A
         data = self.protocol.decode(raw, battery_index=0)
         assert data.charge_current_limit == 100.0
+
+    def test_decode_packed_temps(self) -> None:
+        """Per-cell NTC temps from packed regs 33-35 override summary regs."""
+        raw: dict[int, int] = dict.fromkeys(range(39), 0)
+        raw[18] = 25  # PCB temp (fallback min)
+        raw[20] = 27  # Max temp (fallback max)
+        # Packed temps: reg33=0x1312 (19,18), reg34=0x1211 (18,17), reg35=0x1312 (19,18)
+        raw[33] = 0x1312
+        raw[34] = 0x1211
+        raw[35] = 0x1312
+        data = self.protocol.decode(raw, battery_index=0)
+        assert data.cell_temperatures == [19.0, 18.0, 18.0, 17.0, 19.0, 18.0]
+        assert data.min_cell_temperature == 17.0
+        assert data.max_cell_temperature == 19.0
+
+    def test_decode_packed_temps_negative(self) -> None:
+        """Packed temps handle negative values (signed bytes)."""
+        raw: dict[int, int] = dict.fromkeys(range(39), 0)
+        raw[18] = 0  # PCB temp
+        raw[20] = 0  # Max temp
+        # -3°C = 0xFD, -5°C = 0xFB
+        raw[33] = 0xFDFB
+        data = self.protocol.decode(raw, battery_index=0)
+        assert data.cell_temperatures == [-3.0, -5.0]
+        assert data.min_cell_temperature == -5.0
+        assert data.max_cell_temperature == -3.0
+
+    def test_decode_packed_temps_partial(self) -> None:
+        """Only non-zero packed temp registers are decoded."""
+        raw: dict[int, int] = dict.fromkeys(range(39), 0)
+        raw[18] = 20  # PCB temp
+        raw[20] = 22  # Max temp
+        raw[33] = 0x1514  # 21, 20
+        # regs 34, 35 = 0 → skipped
+        data = self.protocol.decode(raw, battery_index=0)
+        assert data.cell_temperatures == [21.0, 20.0]
+        assert data.min_cell_temperature == 20.0
+        assert data.max_cell_temperature == 21.0
+
+    def test_decode_packed_temps_all_zero_uses_fallback(self) -> None:
+        """When all packed temp regs are zero, falls back to PCB/max temps."""
+        raw: dict[int, int] = dict.fromkeys(range(39), 0)
+        raw[18] = 25  # PCB temp
+        raw[20] = 27  # Max temp
+        # regs 33-35 all zero
+        data = self.protocol.decode(raw, battery_index=0)
+        assert data.cell_temperatures == []
+        assert data.min_cell_temperature == 25.0
+        assert data.max_cell_temperature == 27.0

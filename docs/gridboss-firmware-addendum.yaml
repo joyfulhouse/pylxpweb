@@ -1,0 +1,542 @@
+# GridBOSS Firmware Portal API Addendum
+#
+# This file documents the supplementary firmware changelog portal used by GridBOSS (POWER_HUB)
+# and other device types. These endpoints are on a SEPARATE server from the main monitoring API.
+#
+# Server Base URL: https://res.solarcloudsystem.com:8443
+#
+# Discovery Source: JavaScript bundle analysis of os.solarcloudsystem.com (February 2026)
+# Verification: Direct API testing with GridBOSS serial 4524850115 (IAAB-1616 firmware)
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# DEVICE TYPE IDENTIFIERS (for this portal)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# | Device       | Portal deviceType  | Main API deviceType |
+# |--------------|-------------------|---------------------|
+# | GridBOSS/MID | POWER_HUB         | 9                   |
+# | Inverters    | (unknown)         | 6                   |
+# | WiFi Dongle  | ESP_WIFI / ESP_WIFI_E | (no int code)  |
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# GRIDBOSS FIRMWARE VERSION SERIES (as of September 2025)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# GridBOSS firmware uses the "IAAB" standard (inverter standard is "fAAB").
+# EG4-branded builds add the "EG4_" prefix. Version components (v1/v2) follow
+# the same hex encoding as the main inverter firmware format.
+#
+# Confirmed records (firmwareRecord/findPage, platform=EG4, deviceType=POWER_HUB):
+#
+# | Firmware Code    | Date     | Platform | Notes                       |
+# |-----------------|----------|----------|-----------------------------|
+# | EG4_IAAB-16xx   | Sep 2025 | EG4      | LATEST (as of probe date)   |
+# | IAAB-14xx       | Aug 2025 | DEFAULT  | LuxPower / public           |
+# | EG4_IAAB-13     | Mar 2025 | EG4      |                             |
+# | IAAB-11xx       | Nov 2024 | DEFAULT  | LuxPower / public           |
+# | EG4_IAAB-11xx   | Nov 2024 | EG4      |                             |
+#
+# "xx" = wildcard in code — exact minor version bytes depend on installed firmware.
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# AUTHENTICATION FLOW
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Two auth mechanisms exist on res.solarcloudsystem.com:8443:
+#
+# 1. NO AUTH (public): /resource/findAllTypeInfo — returns changelog summaries
+# 2. JWT (portal auth): /login/fromThirdPlatform + /firmwareRecord/findPage
+#
+# The JWT flow uses a one-time encrypted token ("apiKey") extracted from the
+# `infoForwardUrl` field of the main API's checkUpdates response:
+#
+#   infoForwardUrl = "http://os.solarcloudsystem.com/#/apiLogin?
+#                     targetRouter=releaseLog%3FdeviceType%3DPOWER_HUB
+#                     &k=<ENCRYPTED_TOKEN>"
+#
+# Extract `k` param → POST as `{"apiKey": "<ENCRYPTED_TOKEN>"}` to get JWT.
+# JWT is short-lived; re-obtain via new checkUpdates call when needed.
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# GRIDBOSS checkUpdates QUIRK (main API)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# For GridBOSS devices, the main API /web/maintain/standardUpdate/checkUpdates
+# returns `success: false` with "already the latest version" message EVEN WHEN
+# `infoForwardUrl` is included. This differs from standard inverters where
+# `infoForwardUrl` only appears when `success: true` (update available).
+#
+# GridBOSS "already latest" response:
+# {
+#   "success": false,
+#   "msg": "The current machine firmware is already the latest version.",
+#   "infoForwardUrl": "http://os.solarcloudsystem.com/#/apiLogin?targetRouter=releaseLog%3FdeviceType%3DPOWER_HUB&k=<token>"
+# }
+#
+# This means `infoForwardUrl` is ALWAYS safe to extract for changelog access,
+# regardless of whether a firmware update is available.
+
+tags:
+  - name: Firmware Portal
+    description: |-
+      Supplementary firmware changelog portal at `res.solarcloudsystem.com:8443`.
+
+      This is a **separate service** from the main monitoring API. It provides:
+      - Public firmware changelogs (no auth required)
+      - Authenticated full firmware record access (via JWT)
+
+      **Server**: `https://res.solarcloudsystem.com:8443`
+
+      **Auth difference from main API**:
+      - Main API: JSESSIONID cookie (form-encoded login)
+      - Firmware portal: JWT bearer token (JSON login via `login/fromThirdPlatform`)
+
+      **Request format difference**:
+      - Main API: `application/x-www-form-urlencoded`
+      - Firmware portal: `application/json` (for authenticated endpoints)
+      - Exception: `/resource/findAllTypeInfo` uses form-encoded
+
+      **GridBOSS device type string**: `POWER_HUB`
+      (Note: this is the portal's string identifier; the main API uses integer `9`)
+
+paths:
+  /resource/findAllTypeInfo:
+    post:
+      tags:
+        - Firmware Portal
+      summary: Get public firmware changelog summaries
+      description: |-
+        **✅ NO AUTHENTICATION REQUIRED**
+
+        Retrieve firmware type and changelog summary entries for a device category.
+        This is the public-facing changelog used by the firmware release notes page
+        at `os.solarcloudsystem.com`.
+
+        **Server**: `https://res.solarcloudsystem.com:8443`
+
+        **Request format**: `application/x-www-form-urlencoded` (unlike other portal endpoints)
+
+        **GridBOSS device type string**: `POWER_HUB`
+
+        **Behavior**:
+        - Returns a subset of records (publicly visible only — typically 2 most recent)
+        - Does NOT return all historical records (use `/firmwareRecord/findPage` with JWT for full list)
+        - Results are ordered newest first
+
+        **Comparison**:
+        - `/resource/getAllFirmware` — WiFi dongle firmware only, no filtering
+        - `/resource/findAllTypeInfo` — device-type-filtered, includes GridBOSS (POWER_HUB)
+        - `/firmwareRecord/findPage` — full paginated history, requires JWT auth
+      operationId: getFirmwareTypeInfo
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - firmwareDeviceType
+              properties:
+                firmwareDeviceType:
+                  type: string
+                  description: |-
+                    Portal device type identifier.
+                    Use `POWER_HUB` for GridBOSS/MID devices.
+                  enum:
+                    - POWER_HUB
+                    - ESP_WIFI
+                    - ESP_WIFI_E
+                  example: POWER_HUB
+      responses:
+        '200':
+          description: Firmware changelog summary entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FirmwareTypeInfo'
+              example:
+                - id: 42
+                  firmwareCode: "IAAB-14xx"
+                  deviceType: "POWER_HUB"
+                  updateDate: "2025-08-15"
+                  firmwareDescription: "Stability improvements and grid management updates"
+                  platform: "DEFAULT"
+                - id: 38
+                  firmwareCode: "IAAB-11xx"
+                  deviceType: "POWER_HUB"
+                  updateDate: "2024-11-01"
+                  firmwareDescription: "Initial production release"
+                  platform: "DEFAULT"
+        '500':
+          description: |-
+            Server error — commonly caused by missing or invalid `firmwareDeviceType` parameter.
+            Unlike typical 4xx errors, this server returns 500 for bad/missing required parameters.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    example: 500
+                  message:
+                    type: string
+                    example: "Internal Server Error"
+
+  /login/fromThirdPlatform:
+    post:
+      tags:
+        - Firmware Portal
+      summary: Authenticate via main portal token (third-party login)
+      description: |-
+        Obtain a JWT access token for the firmware portal using the encrypted `k=` token
+        from the main API's `infoForwardUrl` field.
+
+        **Server**: `https://res.solarcloudsystem.com:8443`
+
+        **Token source**:
+
+        1. Call `POST /WManage/web/maintain/standardUpdate/checkUpdates` on the main API
+        2. Extract `infoForwardUrl` from response (present for GridBOSS even when `success: false`)
+        3. Parse the `k` query parameter from the URL:
+           ```
+           http://os.solarcloudsystem.com/#/apiLogin?targetRouter=releaseLog%3FdeviceType%3DPOWER_HUB&k=<TOKEN>
+           ```
+        4. POST `{"apiKey": "<TOKEN>"}` to this endpoint
+        5. Read the JWT from the response `data.token` field (also present in response `token` header)
+
+        **Token lifetime**: Short-lived — re-obtain via new `checkUpdates` call when JWT expires.
+
+        **Returned role**: `VIEWER` (read-only access to firmware records)
+
+        **Content-Type**: `application/json` (unlike main API which uses form-encoded)
+      operationId: firmwarePortalLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - apiKey
+              properties:
+                apiKey:
+                  type: string
+                  description: |-
+                    Encrypted token extracted from the `k=` query parameter of `infoForwardUrl`.
+                    This token is generated server-side by the main API at login time.
+                  example: "<encrypted_base64_token>"
+      responses:
+        '200':
+          description: Successful authentication — JWT token returned
+          headers:
+            token:
+              description: JWT access token (also available in response body)
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FirmwarePortalAuthResponse'
+              example:
+                code: 200
+                message: "success"
+                data:
+                  token: "<jwt_token>"
+                  userId: 12345
+                  username: "bryanli"
+                  role: "VIEWER"
+                  permissions:
+                    - "sys:firmware:record:view"
+        '401':
+          description: Invalid or expired apiKey token
+
+  /firmwareRecord/findPage:
+    post:
+      tags:
+        - Firmware Portal
+      summary: Get paginated firmware records (authenticated)
+      description: |-
+        Retrieve the full paginated list of firmware records for a device type.
+        Returns all historical versions, including EG4-specific and LuxPower/DEFAULT builds.
+
+        **Server**: `https://res.solarcloudsystem.com:8443`
+
+        **Authentication**: JWT Bearer token required (from `/login/fromThirdPlatform`)
+
+        **Content-Type**: `application/json` (nested `queryParams` object required — flat params will fail)
+
+        **CRITICAL**: The `queryParams` must be a **nested object**, not flat parameters.
+        The API returns `"queryParams is null"` error if you attempt to flatten them:
+        ```json
+        ✅ Correct:  {"queryParams": {"deviceType": "POWER_HUB"}, "size": 20, "current": 1}
+        ❌ Incorrect: {"deviceType": "POWER_HUB", "size": 20, "current": 1}
+        ```
+
+        **GridBOSS device type string**: `POWER_HUB`
+
+        **Firmware delivery**: Records provide metadata only. Actual firmware files are
+        **cloud-pushed** server-to-device — there are no user-downloadable binary files.
+        The download server (`http://47.254.33.206:8083/resource/firmware/`) contains only
+        WiFi dongle (ESP32) binaries, not GridBOSS firmware.
+
+        **Known GridBOSS firmware versions** (POWER_HUB, as of September 2025):
+
+        | Code           | Date     | Platform | Notes                     |
+        |----------------|----------|----------|---------------------------|
+        | EG4_IAAB-16xx  | Sep 2025 | EG4      | Latest EG4 build          |
+        | IAAB-14xx      | Aug 2025 | DEFAULT  | LuxPower / shared         |
+        | EG4_IAAB-13    | Mar 2025 | EG4      |                           |
+        | IAAB-11xx      | Nov 2024 | DEFAULT  | LuxPower / shared         |
+        | EG4_IAAB-11xx  | Nov 2024 | EG4      | First EG4 build           |
+
+        **Firmware code format**: `[EG4_]IAAB-{v1hex}{v2hex}xx`
+        - `IAAB` is the GridBOSS firmware standard (equivalent to `fAAB` for inverters)
+        - `EG4_` prefix = EG4-branded build; absent = LuxPower/DEFAULT platform
+        - Version encoding matches inverter format: decimal v1/v2 → 2-digit uppercase hex
+      operationId: getFirmwareRecords
+      security:
+        - FirmwarePortalJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - queryParams
+              properties:
+                queryParams:
+                  type: object
+                  description: Filter criteria (MUST be nested object, not flat)
+                  properties:
+                    deviceType:
+                      type: string
+                      description: Portal device type identifier
+                      enum:
+                        - POWER_HUB
+                      example: POWER_HUB
+                size:
+                  type: integer
+                  description: Page size (records per page)
+                  default: 20
+                  example: 20
+                current:
+                  type: integer
+                  description: Current page number (1-indexed)
+                  default: 1
+                  example: 1
+            example:
+              queryParams:
+                deviceType: "POWER_HUB"
+              size: 20
+              current: 1
+      responses:
+        '200':
+          description: Paginated firmware records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FirmwareRecordPage'
+              example:
+                code: 200
+                message: "success"
+                data:
+                  records:
+                    - id: 55
+                      firmwareCode: "EG4_IAAB-16xx"
+                      deviceType: "POWER_HUB"
+                      platform: "EG4"
+                      updateDate: "2025-09-15"
+                      firmwareDescription: "Latest EG4 GridBOSS firmware — requires inverter FAAB-2525 or later"
+                      requiredInverterFirmware: "FAAB-2525"
+                    - id: 49
+                      firmwareCode: "IAAB-14xx"
+                      deviceType: "POWER_HUB"
+                      platform: "DEFAULT"
+                      updateDate: "2025-08-15"
+                      firmwareDescription: "Stability improvements"
+                      requiredInverterFirmware: null
+                  total: 5
+                  size: 20
+                  current: 1
+        '401':
+          description: Missing or invalid JWT token
+
+components:
+  securitySchemes:
+    FirmwarePortalJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |-
+        JWT token obtained from `/login/fromThirdPlatform`.
+        Pass as `Authorization: Bearer <token>` header.
+
+  schemas:
+    FirmwareTypeInfo:
+      type: object
+      description: |-
+        Public firmware changelog summary entry from `/resource/findAllTypeInfo`.
+        Contains only publicly visible entries (not the full history).
+      properties:
+        id:
+          type: integer
+          description: Internal record ID
+          example: 42
+        firmwareCode:
+          type: string
+          description: |-
+            Firmware version code.
+            GridBOSS examples: "IAAB-14xx" (DEFAULT/LuxPower), "EG4_IAAB-16xx" (EG4).
+            "xx" is a wildcard — exact minor version digits depend on the build.
+          example: "IAAB-14xx"
+        deviceType:
+          type: string
+          description: Portal device type identifier
+          example: "POWER_HUB"
+        updateDate:
+          type: string
+          format: date
+          description: Firmware release date
+          example: "2025-08-15"
+        firmwareDescription:
+          type: string
+          description: Human-readable changelog / release notes
+          example: "Stability improvements and grid management updates"
+        platform:
+          type: string
+          description: |-
+            Build platform / OEM.
+            "DEFAULT" = LuxPower/shared firmware.
+            "EG4" = EG4-branded build.
+          enum:
+            - DEFAULT
+            - EG4
+          example: "DEFAULT"
+
+    FirmwarePortalAuthResponse:
+      type: object
+      description: Response from `/login/fromThirdPlatform` authentication
+      properties:
+        code:
+          type: integer
+          description: Response code (200 = success)
+          example: 200
+        message:
+          type: string
+          example: "success"
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+              description: |-
+                JWT access token — use as Authorization Bearer header for subsequent requests
+                (i.e., `Authorization: Bearer <token>`)
+              example: "<jwt_token>"
+            userId:
+              type: integer
+              description: User ID in the firmware portal system
+              example: 12345
+            username:
+              type: string
+              description: Username (mirrors main portal username)
+              example: "bryanli"
+            role:
+              type: string
+              description: User role in firmware portal
+              example: "VIEWER"
+            permissions:
+              type: array
+              description: List of permission strings granted to this user
+              items:
+                type: string
+              example:
+                - "sys:firmware:record:view"
+
+    FirmwareRecordPage:
+      type: object
+      description: Paginated firmware record response from `/firmwareRecord/findPage`
+      properties:
+        code:
+          type: integer
+          description: Response code (200 = success)
+          example: 200
+        message:
+          type: string
+          example: "success"
+        data:
+          type: object
+          properties:
+            records:
+              type: array
+              description: Firmware records for the requested page
+              items:
+                $ref: '#/components/schemas/FirmwareRecord'
+            total:
+              type: integer
+              description: Total number of records across all pages
+              example: 5
+            size:
+              type: integer
+              description: Page size used for this response
+              example: 20
+            current:
+              type: integer
+              description: Current page number
+              example: 1
+
+    FirmwareRecord:
+      type: object
+      description: |-
+        Full firmware record from `/firmwareRecord/findPage`.
+
+        **No download URLs**: Firmware files are cloud-pushed server-to-device.
+        There are no user-downloadable binary files for GridBOSS firmware.
+      properties:
+        id:
+          type: integer
+          description: Internal record ID
+          example: 55
+        firmwareCode:
+          type: string
+          description: |-
+            Firmware version code.
+            Format: `[EG4_]IAAB-{v1hex}{v2hex}xx`
+            - `EG4_` prefix = EG4 platform build
+            - `IAAB` = GridBOSS firmware standard
+            - Version hex encoding matches inverter format (decimal → 2-digit uppercase hex)
+          example: "EG4_IAAB-16xx"
+        deviceType:
+          type: string
+          description: Portal device type identifier
+          example: "POWER_HUB"
+        platform:
+          type: string
+          description: |-
+            Build platform / OEM branding.
+            "DEFAULT" = LuxPower/shared firmware.
+            "EG4" = EG4-branded build with EG4_ prefix.
+          enum:
+            - DEFAULT
+            - EG4
+          example: "EG4"
+        updateDate:
+          type: string
+          format: date
+          description: Firmware release date
+          example: "2025-09-15"
+        firmwareDescription:
+          type: string
+          description: Human-readable changelog and release notes
+          example: "Latest EG4 GridBOSS firmware — requires inverter FAAB-2525 or later"
+        requiredInverterFirmware:
+          type: string
+          nullable: true
+          description: |-
+            Minimum required inverter firmware version for compatibility.
+            Null if no specific inverter firmware dependency.
+          example: "FAAB-2525"

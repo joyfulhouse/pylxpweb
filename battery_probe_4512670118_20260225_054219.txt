@@ -1,0 +1,49 @@
+Battery Round-Robin Probe — 4512670118
+battery_count (reg 96): 3
+Delay between reads: 1.0s
+pylxpweb version: 0.9.14
+
+=== Experiment 1: 3-slot read: 3 slots × 6 iterations ===
+  Registers: 5000-5091
+
+[  0] r5000=0x0000(0) r5001=0x0000(0) | slot0: 0xC003 V=53.27 SoC=70% SoH=100% pos=0 serial='Battery_ID_01' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0031] | slot1: 0xC003 V=53.27 SoC=72% SoH=100% pos=1 serial='Battery_ID_02' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0032] | slot2: 0xC003 V=53.26 SoC=75% SoH=100% pos=2 serial='Battery_ID_03' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0033]
+[  1] r5000=0x0006(6) r5001=0x1770(6000) *** HEADER CHANGED *** | slot0: 0xC003 V=53.27 SoC=70% SoH=100% pos=0 serial='Battery_ID_01' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0031] | slot1: 0xC003 V=53.27 SoC=72% SoH=100% pos=1 serial='Battery_ID_02' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0032] | slot2: 0xC003 V=53.26 SoC=75% SoH=100% pos=2 serial='Battery_ID_03' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0033]
+  [iter 2] Read failed at reg 5002: Failed to read input registers at 5002: Modbus Error: [Input/Output] No response received after 3 retries, continue with next request
+[  3] r5000=0x0000(0) r5001=0x0000(0) *** HEADER CHANGED *** | slot0: 0xC003 V=53.26 SoC=70% SoH=100% pos=0 serial='Battery_ID_01' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0031] | slot1: 0xC003 V=53.27 SoC=72% SoH=100% pos=1 serial='Battery_ID_02' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0032] | slot2: 0xC003 V=53.26 SoC=75% SoH=100% pos=2 serial='Battery_ID_03' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0033]
+[  4] r5000=0x0000(0) r5001=0x0000(0) | slot0: 0xC003 V=53.26 SoC=70% SoH=100% pos=0 serial='Battery_ID_01' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0031] | slot1: 0xC003 V=53.27 SoC=72% SoH=100% pos=1 serial='Battery_ID_02' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0032] | slot2: 0xC003 V=53.26 SoC=75% SoH=100% pos=2 serial='Battery_ID_03' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0033]
+  [iter 5] Read failed at reg 5002: Failed to read input registers at 5002: Modbus Error: [Input/Output] No response received after 3 retries, continue with next request
+
+=== Experiment 2: 4-slot read: 4 slots × 6 iterations ===
+  Registers: 5000-5121
+
+[  0] r5000=0x0000(0) r5001=0x0000(0) | slot0: 0xC003 V=53.26 SoC=70% SoH=100% pos=0 serial='Battery_ID_01' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0031] | slot1: 0xC003 V=53.26 SoC=72% SoH=100% pos=1 serial='Battery_ID_02' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0032] | slot2: 0xC003 V=53.26 SoC=75% SoH=100% pos=2 serial='Battery_ID_03' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0033] | slot3: empty V=0.00 SoC=0% SoH=0% pos=0 serial='(empty)' raw=[0x0000 0x0000 0x0000 0x0000 0x0000 0x0000 0x0000]
+[  1] r5000=0x0000(0) r5001=0x0000(0) | slot0: 0xC003 V=53.26 SoC=70% SoH=100% pos=0 serial='Battery_ID_01' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0031] | slot1: 0xC003 V=53.26 SoC=72% SoH=100% pos=1 serial='Battery_ID_02' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0032] | slot2: 0xC003 V=53.26 SoC=75% SoH=100% pos=2 serial='Battery_ID_03' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0033] | slot3: empty V=0.00 SoC=0% SoH=0% pos=0 serial='(empty)' raw=[0x0000 0x0000 0x0000 0x0000 0x0000 0x0000 0x0000]
+[  2] r5000=0x0000(0) r5001=0x0000(0) | slot0: 0xC003 V=53.26 SoC=70% SoH=100% pos=0 serial='Battery_ID_01' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0031] | slot1: 0xC003 V=53.26 SoC=72% SoH=100% pos=1 serial='Battery_ID_02' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0032] | slot2: 0xC003 V=53.26 SoC=75% SoH=100% pos=2 serial='Battery_ID_03' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0033] | slot3: empty V=0.00 SoC=0% SoH=0% pos=0 serial='(empty)' raw=[0x0000 0x0000 0x0000 0x0000 0x0000 0x0000 0x0000]
+  [iter 3] Read failed at reg 5002: Failed to read input registers at 5002: Modbus Error: [Input/Output] No response received after 3 retries, continue with next request
+[  4] r5000=0x-001(-1) r5001=0x-001(-1) *** HEADER CHANGED *** | slot0: 0xC003 V=53.26 SoC=70% SoH=100% pos=0 serial='Battery_ID_01' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0031] | slot1: 0xC003 V=53.26 SoC=72% SoH=100% pos=1 serial='Battery_ID_02' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0032] | slot2: 0xC003 V=53.27 SoC=75% SoH=100% pos=2 serial='Battery_ID_03' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0033] | slot3: empty V=0.00 SoC=0% SoH=0% pos=0 serial='(empty)' raw=[0x0000 0x0000 0x0000 0x0000 0x0000 0x0000 0x0000]
+[  5] r5000=0x0000(0) r5001=0x0000(0) *** HEADER CHANGED *** | slot0: 0xC003 V=53.26 SoC=70% SoH=100% pos=0 serial='Battery_ID_01' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0031] | slot1: 0xC003 V=53.26 SoC=72% SoH=100% pos=1 serial='Battery_ID_02' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0032] | slot2: 0xC003 V=53.27 SoC=75% SoH=100% pos=2 serial='Battery_ID_03' raw=[0x6142 0x7474 0x7265 0x5F79 0x4449 0x305F 0x0033] | slot3: empty V=0.00 SoC=0% SoH=0% pos=0 serial='(empty)' raw=[0x0000 0x0000 0x0000 0x0000 0x0000 0x0000 0x0000]
+
+=== Experiment 3: 5-slot read: 5 slots × 6 iterations ===
+  Registers: 5000-5151
+
+  [iter 0] Read failed at reg 5002: 1 < count 150 < 125 !
+  [iter 1] Read failed at reg 5002: 1 < count 150 < 125 !
+  [iter 2] Read failed at reg 5002: 1 < count 150 < 125 !
+  [iter 3] Read failed at reg 5002: 1 < count 150 < 125 !
+  [iter 4] Read failed at reg 5002: 1 < count 150 < 125 !
+  [iter 5] Read failed at reg 5002: 1 < count 150 < 125 !
+
+=== Experiment 4: 6-slot read: 6 slots × 6 iterations ===
+  Registers: 5000-5181
+
+  [iter 0] Read failed at reg 5002: 1 < count 180 < 125 !
+  [iter 1] Read failed at reg 5002: 1 < count 180 < 125 !
+  [iter 2] Read failed at reg 5002: 1 < count 180 < 125 !
+  [iter 3] Read failed at reg 5002: 1 < count 180 < 125 !
+  [iter 4] Read failed at reg 5002: 1 < count 180 < 125 !
+  [iter 5] Read failed at reg 5002: 1 < count 180 < 125 !
+
+Unique serials seen across all experiments: 3
+  - Battery_ID_01
+  - Battery_ID_02
+  - Battery_ID_03

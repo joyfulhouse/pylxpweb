@@ -1310,7 +1310,15 @@ paths:
 
         **Firmware Version Format**: `{standard}-{v1}{v2}{v3}`
         - Example: "fAAB-2122" means fAAB standard, v21 app, v22 parameters
-        - Standards: "fAAB" (18KPV), "IAAB" (GridBOSS)
+        - Standards: "fAAB" (18KPV), "IAAB" (GridBOSS/MID)
+
+        **GridBOSS/MID Device Behavior**:
+        - GridBOSS uses firmware standard `IAAB` (EG4 builds are prefixed `EG4_IAAB-xx`)
+        - When GridBOSS firmware is already up-to-date, the API returns `success: false`
+          with the "already latest version" message AND **still includes `infoForwardUrl`**
+        - The `infoForwardUrl` contains `deviceType=POWER_HUB` — the portal identifier for GridBOSS
+        - This differs from standard inverters where `infoForwardUrl` only appears when `success: true`
+        - Safe to always extract `infoForwardUrl` for changelog access regardless of `success` value
 
         **Update Detection**:
         - Compare `v1` with `lastV1` for application updates
@@ -1362,10 +1370,20 @@ paths:
                       pcs2UpdateMatch: true
                     infoForwardUrl: "http://os.solarcloudsystem.com/#/apiLogin?..."
                 alreadyLatest:
-                  summary: Firmware already up to date (HTTP 200, not an error)
+                  summary: Firmware already up to date — standard inverter (HTTP 200, not an error)
                   value:
                     success: false
                     message: "The current machine firmware is already the latest version."
+                alreadyLatestGridBOSS:
+                  summary: GridBOSS firmware already up to date (includes infoForwardUrl)
+                  description: |-
+                    GridBOSS devices return `success: false` AND include `infoForwardUrl` even
+                    when firmware is current. The `k=` token in the URL provides access to the
+                    firmware changelog portal at res.solarcloudsystem.com:8443.
+                  value:
+                    success: false
+                    msg: "The current machine firmware is already the latest version."
+                    infoForwardUrl: "http://os.solarcloudsystem.com/#/apiLogin?targetRouter=releaseLog%3FdeviceType%3DPOWER_HUB&k=<encrypted_token>"
 
   /web/maintain/remoteUpdate/info:
     post:
@@ -3033,10 +3051,29 @@ components:
         infoForwardUrl:
           type: string
           description: |
-            URL to firmware release notes and update details.
-            Only present when `success: true` (update available).
-            Contains comprehensive release notes, changelog, and update instructions.
-          example: http://os.solarcloudsystem.com/#/apiLogin?...
+            URL to firmware release notes on the `os.solarcloudsystem.com` changelog portal.
+
+            **Presence**:
+            - Standard inverters: only present when `success: true` (update available)
+            - GridBOSS/MID devices: present in **both** `success: true` AND `success: false`
+              ("already latest") responses — always safe to extract for changelog access
+
+            **URL format**:
+            ```
+            http://os.solarcloudsystem.com/#/apiLogin?targetRouter=releaseLog%3FdeviceType%3D{TYPE}&k={TOKEN}
+            ```
+
+            **URL parameters**:
+            - `targetRouter`: URL-encoded route — `releaseLog?deviceType={TYPE}`
+              - `POWER_HUB` for GridBOSS/MID devices
+            - `k`: Encrypted token serving as `apiKey` for the `res.solarcloudsystem.com:8443`
+              firmware portal's `/login/fromThirdPlatform` endpoint
+
+            **Using the `k=` token** (see `gridboss-firmware-addendum.yaml`):
+            1. Extract the `k` parameter from this URL
+            2. POST `{"apiKey": "<k_value>"}` to `https://res.solarcloudsystem.com:8443/login/fromThirdPlatform`
+            3. Use the returned JWT to query `/firmwareRecord/findPage` for full history
+          example: "http://os.solarcloudsystem.com/#/apiLogin?targetRouter=releaseLog%3FdeviceType%3DPOWER_HUB&k=<encrypted_token>"
       description: |
         Firmware update check response with version information and compatibility flags.
 

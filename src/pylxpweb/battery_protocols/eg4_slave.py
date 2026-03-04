@@ -5,7 +5,13 @@ Register map sourced from ricardocello's eg4_waveshare.py.
 
 Register layout:
   - Regs 0-38: Runtime state (voltage, current, cells, temps, SOC, etc.)
-  - Regs 105-127: Device info (model, firmware, serial)
+  - Regs 33-35: Packed per-cell NTC temperatures (2 per register, high/low byte)
+  - Regs 105-127: Device info block (read but empty on EG4-LL WP-16/280 firmware)
+
+Note on device info: Firmware RE confirmed that the Modbus buffer positions for
+regs 105-127 are never populated with ASCII data by the slave code path.
+Device info (model, FW, serial) is only available via CAN bus.
+The info block is still read in case other EG4 battery models do populate it.
 """
 
 from __future__ import annotations
@@ -53,6 +59,11 @@ class EG4SlaveProtocol(BatteryProtocol):
 
     Decodes runtime registers (0-38) and device info registers (105-127)
     into a BatteryData object with all values properly scaled.
+
+    Note: On EG4-LL WP-16/280 firmware, device info registers (105-127)
+    return all zeros. The firmware's Modbus register lookup (FUN_2CDB4)
+    serves from a flat buffer that the slave code path never populates
+    with ASCII data. Device info is only available via CAN bus (cloud API).
     """
 
     name = "eg4_slave"
@@ -82,6 +93,15 @@ class EG4SlaveProtocol(BatteryProtocol):
 
         pcb_temp = signed_int16(raw_regs.get(18, 0))
         max_temp = signed_int16(raw_regs.get(20, 0))
+
+        # Per-cell temperatures from packed registers 33-35 (2 temps per register)
+        cell_temps = self._decode_packed_temps(raw_regs)
+        if cell_temps:
+            min_cell_temp = min(cell_temps)
+            max_cell_temp = max(cell_temps)
+        else:
+            min_cell_temp = float(pcb_temp)
+            max_cell_temp = float(max_temp)
 
         soc = raw_regs.get(24, 0)
         soh = raw_regs.get(23, 100)
@@ -117,8 +137,9 @@ class EG4SlaveProtocol(BatteryProtocol):
             cell_voltages=cell_voltages,
             min_cell_voltage=min_cell_v,
             max_cell_voltage=max_cell_v,
-            min_cell_temperature=float(pcb_temp),
-            max_cell_temperature=float(max_temp),
+            cell_temperatures=cell_temps,
+            min_cell_temperature=min_cell_temp,
+            max_cell_temperature=max_cell_temp,
             charge_current_limit=max_charge_current,
             model=model,
             firmware_version=firmware,
@@ -126,3 +147,38 @@ class EG4SlaveProtocol(BatteryProtocol):
             warning_code=warning,
             fault_code=fault,
         )
+
+    @staticmethod
+    def _decode_packed_temps(raw_regs: dict[int, int]) -> list[float]:
+        """Decode per-cell temperatures from packed registers 33-35.
+
+        Each register packs two NTC readings: high byte = even cell temp,
+        low byte = odd cell temp (°C, signed). Cloud API batMinCellTemp /
+        batMaxCellTemp match these packed values exactly.
+
+        Layout (WP-16/280, 6 NTC sensors across 16 cells):
+          reg 33: cells 1-2 temps (high=cell1, low=cell2)
+          reg 34: cells 3-4 temps
+          reg 35: cells 5-6 temps
+
+        Args:
+            raw_regs: Dict mapping register address to raw 16-bit value.
+
+        Returns:
+            List of cell temperatures in °C. Empty if all registers are zero.
+        """
+        temps: list[float] = []
+        for addr in (33, 34, 35):
+            val = raw_regs.get(addr, 0)
+            if val == 0:
+                continue
+            high = (val >> 8) & 0xFF
+            low = val & 0xFF
+            # Interpret as signed bytes (temps can be negative)
+            if high >= 128:
+                high -= 256
+            if low >= 128:
+                low -= 256
+            temps.append(float(high))
+            temps.append(float(low))
+        return temps

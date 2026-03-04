@@ -5,6 +5,13 @@ daisy chain, separate from the inverter's Modbus connection.
 
 Each battery unit has a unique Modbus unit ID (1=master, 2+=slave).
 The transport auto-detects the protocol (master vs slave) per unit.
+
+Data overlay (master battery only):
+  The master protocol cannot provide per-cell temperatures via RS485
+  (only aggregate MAX at reg 24). When ``read_all()`` receives inverter
+  BMS data (already read during the inverter's normal refresh cycle),
+  it overlays the missing fields onto the master's BatteryData.
+  Slave batteries have complete data from RS485 and need no overlay.
 """
 
 from __future__ import annotations
@@ -19,7 +26,7 @@ from pylxpweb.battery_protocols.base import BatteryProtocol
 from pylxpweb.battery_protocols.detection import detect_protocol
 from pylxpweb.battery_protocols.eg4_master import EG4MasterProtocol
 from pylxpweb.battery_protocols.eg4_slave import EG4SlaveProtocol
-from pylxpweb.transports.data import BatteryData
+from pylxpweb.transports.data import BatteryData, InverterRuntimeData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -175,6 +182,8 @@ class BatteryModbusTransport:
         """Read a single battery unit, returning decoded BatteryData.
 
         Auto-detects the protocol (master vs slave) on first read.
+        For master battery with slave context and BMS overlay, use
+        ``read_all()`` instead.
 
         Args:
             unit_id: Modbus unit/slave ID (1=master, 2+=slave).
@@ -182,29 +191,8 @@ class BatteryModbusTransport:
         Returns:
             BatteryData with all values scaled, or None if unit doesn't respond.
         """
-        # Read initial runtime registers (0-41 covers both master and slave)
-        runtime_regs = await self._read_registers(0, _INITIAL_BLOCK_COUNT, unit_id)
-        if runtime_regs is None:
-            return None
-
-        raw: dict[int, int] = dict(enumerate(runtime_regs))
-
-        # Detect protocol from register pattern
-        protocol = self._get_protocol(unit_id, raw)
-
-        # Read additional register blocks defined by the protocol
-        # (e.g., cell voltages at 113-128 for master, device info at 105-127 for slave)
-        for block in protocol.register_blocks:
-            if block.start >= _INITIAL_BLOCK_COUNT:
-                extra = await self._read_registers(block.start, block.count, unit_id)
-                if extra:
-                    for i, v in enumerate(extra):
-                        raw[block.start + i] = v
-                await asyncio.sleep(_INTER_READ_DELAY)
-
-        # Decode using the detected protocol
-        battery_index = unit_id - 1  # 0-based index
-        return protocol.decode(raw, battery_index=battery_index)
+        _, data = await self._read_unit_raw(unit_id)
+        return data
 
     async def scan_units(self) -> list[int]:
         """Discover which unit IDs respond on the bus.
@@ -232,23 +220,69 @@ class BatteryModbusTransport:
         )
         return responding
 
-    async def read_all(self) -> list[BatteryData]:
-        """Read all configured/discovered battery units.
+    async def read_all(
+        self,
+        inverter_bms_data: InverterRuntimeData | None = None,
+    ) -> list[BatteryData]:
+        """Read all battery units with master SOC back-calculation and BMS overlay.
 
-        Reads units sequentially with inter-unit delays to avoid
-        RS485 bus congestion.
+        Reads slaves first, then re-decodes the master using slave context
+        (for individual SOC/remaining capacity). If inverter BMS data is
+        provided, overlays missing master fields (per-cell temperatures)
+        that are only available via the inverter's CAN bus connection.
+
+        Args:
+            inverter_bms_data: Already-read inverter runtime data containing
+                BMS fields (bms_max_cell_temperature, bms_min_cell_temperature,
+                etc.). Passed from the inverter's normal refresh cycle to avoid
+                redundant reads. Only used for the master battery.
 
         Returns:
-            List of BatteryData objects for responding units.
+            List of BatteryData objects for responding units, master first.
         """
         units = self.unit_ids or await self.scan_units()
-        results: list[BatteryData] = []
+
+        # Read all units, keeping track of raw registers for master re-decode
+        raw_by_unit: dict[int, dict[int, int]] = {}
+        slave_results: list[BatteryData] = []
+        master_uid: int | None = None
+        master_data: BatteryData | None = None
 
         for uid in units:
-            data = await self.read_unit(uid)
-            if data is not None:
-                results.append(data)
+            raw, data = await self._read_unit_raw(uid)
+            if data is None:
+                continue
+
+            raw_by_unit[uid] = raw
+            protocol = self._get_protocol(uid, raw)
+
+            if isinstance(protocol, EG4MasterProtocol):
+                master_uid = uid
+                master_data = data
+            else:
+                slave_results.append(data)
+
             await asyncio.sleep(_INTER_UNIT_DELAY)
+
+        # Re-decode master with slave context for individual SOC
+        if master_uid is not None and master_data is not None and slave_results:
+            master_proto = self._get_protocol(master_uid, raw_by_unit[master_uid])
+            if isinstance(master_proto, EG4MasterProtocol):
+                master_data = master_proto.decode_with_slaves(
+                    raw_by_unit[master_uid],
+                    slave_results,
+                    battery_index=master_uid - 1,
+                )
+
+        # Overlay inverter BMS data onto master (fills RS485 gaps)
+        if master_data is not None and inverter_bms_data is not None:
+            master_data = self._overlay_inverter_bms(master_data, inverter_bms_data)
+
+        # Assemble results: master first, then slaves in order
+        results: list[BatteryData] = []
+        if master_data is not None:
+            results.append(master_data)
+        results.extend(slave_results)
 
         _LOGGER.info(
             "Read %d batteries from RS485 bus %s:%d",
@@ -257,3 +291,95 @@ class BatteryModbusTransport:
             self.port,
         )
         return results
+
+    async def _read_unit_raw(self, unit_id: int) -> tuple[dict[int, int], BatteryData | None]:
+        """Read a single unit, returning both raw registers and decoded data.
+
+        Args:
+            unit_id: Modbus unit/slave ID.
+
+        Returns:
+            Tuple of (raw_registers, decoded_data). Raw registers are always
+            returned (may be empty). Decoded data is None on read failure.
+        """
+        runtime_regs = await self._read_registers(0, _INITIAL_BLOCK_COUNT, unit_id)
+        if runtime_regs is None:
+            return {}, None
+
+        raw: dict[int, int] = dict(enumerate(runtime_regs))
+        protocol = self._get_protocol(unit_id, raw)
+
+        for block in protocol.register_blocks:
+            if block.start >= _INITIAL_BLOCK_COUNT:
+                extra = await self._read_registers(block.start, block.count, unit_id)
+                if extra:
+                    for i, v in enumerate(extra):
+                        raw[block.start + i] = v
+                await asyncio.sleep(_INTER_READ_DELAY)
+
+        battery_index = unit_id - 1
+        data = protocol.decode(raw, battery_index=battery_index)
+        return raw, data
+
+    @staticmethod
+    def _overlay_inverter_bms(
+        master: BatteryData,
+        bms: InverterRuntimeData,
+    ) -> BatteryData:
+        """Overlay inverter BMS fields onto master battery data.
+
+        The master RS485 protocol only provides aggregate MAX temperature
+        (reg 24) with no per-cell or min temperature. The inverter reads
+        this data from the battery CAN bus and exposes it in its own
+        registers. This method fills those gaps without overwriting any
+        field that RS485 already provides accurately.
+
+        Args:
+            master: Master BatteryData from RS485 decode.
+            bms: Inverter runtime data with BMS fields already populated.
+
+        Returns:
+            New BatteryData with gaps filled from inverter BMS.
+        """
+        # Only overlay temperature fields that RS485 can't provide.
+        # Master RS485 sets both min and max to reg 24 (aggregate MAX),
+        # so if inverter BMS has actual per-cell temps, use those.
+        min_cell_temp = master.min_cell_temperature
+        max_cell_temp = master.max_cell_temperature
+        if bms.bms_min_cell_temperature is not None:
+            min_cell_temp = bms.bms_min_cell_temperature
+        if bms.bms_max_cell_temperature is not None:
+            max_cell_temp = bms.bms_max_cell_temperature
+
+        return BatteryData(
+            battery_index=master.battery_index,
+            serial_number=master.serial_number,
+            voltage=master.voltage,
+            current=master.current,
+            soc=master.soc,
+            soh=master.soh,
+            temperature=master.temperature,
+            max_capacity=master.max_capacity,
+            current_capacity=master.current_capacity,
+            cycle_count=master.cycle_count,
+            cell_count=master.cell_count,
+            cell_voltages=master.cell_voltages,
+            cell_temperatures=master.cell_temperatures,
+            min_cell_voltage=master.min_cell_voltage,
+            max_cell_voltage=master.max_cell_voltage,
+            min_cell_temperature=min_cell_temp,
+            max_cell_temperature=max_cell_temp,
+            max_cell_num_voltage=master.max_cell_num_voltage,
+            min_cell_num_voltage=master.min_cell_num_voltage,
+            max_cell_num_temp=master.max_cell_num_temp,
+            min_cell_num_temp=master.min_cell_num_temp,
+            charge_voltage_ref=master.charge_voltage_ref,
+            charge_current_limit=master.charge_current_limit,
+            discharge_current_limit=master.discharge_current_limit,
+            discharge_voltage_cutoff=master.discharge_voltage_cutoff,
+            model=master.model,
+            firmware_version=master.firmware_version,
+            status=master.status,
+            fault_code=master.fault_code,
+            warning_code=master.warning_code,
+        )
