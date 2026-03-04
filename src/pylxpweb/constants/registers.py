@@ -569,6 +569,33 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     ],
 }
 
+# ============================================================================
+# MIDBOX (GRIDBOSS) REGISTER MAPPINGS
+# ============================================================================
+# GridBOSS register 20 uses 2-bit-per-port packing for smart port mode:
+#   Bits 0-1: Port 1 mode (0=Off, 1=Smart Load, 2=AC Couple)
+#   Bits 2-3: Port 2 mode
+#   Bits 4-5: Port 3 mode
+#   Bits 6-7: Port 4 mode
+
+MIDBOX_REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
+    20: [
+        "BIT_MIDBOX_SP_MODE_1",  # Bits 0-1 (2-bit field)
+        "BIT_MIDBOX_SP_MODE_2",  # Bits 2-3 (2-bit field)
+        "BIT_MIDBOX_SP_MODE_3",  # Bits 4-5 (2-bit field)
+        "BIT_MIDBOX_SP_MODE_4",  # Bits 6-7 (2-bit field)
+    ],
+}
+
+# Multi-bit fields: param name → (bit_offset, bit_width)
+# Standard bit fields use 1 bit per param. These use wider fields.
+MULTI_BIT_FIELDS: dict[str, tuple[int, int]] = {
+    "BIT_MIDBOX_SP_MODE_1": (0, 2),  # bits 0-1
+    "BIT_MIDBOX_SP_MODE_2": (2, 2),  # bits 2-3
+    "BIT_MIDBOX_SP_MODE_3": (4, 2),  # bits 4-5
+    "BIT_MIDBOX_SP_MODE_4": (6, 2),  # bits 6-7
+}
+
 # Reverse mapping: API Parameter Key → Register (for 18KPV)
 # Note: Some parameters appear in multiple registers (bit fields)
 PARAM_KEY_TO_REGISTER: dict[str, int] = {
@@ -1327,15 +1354,22 @@ def resolve_param_alias(param_name: str) -> str:
 
 def get_register_to_param_mapping(
     family: str | None = None,
+    *,
+    device_type: str | None = None,
 ) -> dict[int, list[str]]:
     """Get the register-to-parameter mapping for an inverter family.
 
     Currently all families share the same 18KPV-based mapping.  The *family*
     parameter is accepted for forward compatibility but has no effect yet.
 
+    For GridBOSS/MID devices, pass ``device_type="MIDBOX"`` to get the
+    MIDBOX-specific register mapping (e.g., register 20 smart port modes).
+
     Args:
         family: Inverter family string (from InverterFamily enum value).
             Currently unused — all families return the same mapping.
+        device_type: Device type string. Pass ``"MIDBOX"`` for GridBOSS
+            devices to include GridBOSS-specific register mappings.
 
     Returns:
         Dict mapping register address to list of parameter key names.
@@ -1346,20 +1380,25 @@ def get_register_to_param_mapping(
     Example:
         mapping = get_register_to_param_mapping()
         param_keys = mapping.get(21)  # ["FUNC_EPS_EN", "FUNC_OVF_LOAD_DERATE_EN", ...]
+
+        midbox_mapping = get_register_to_param_mapping(device_type="MIDBOX")
+        param_keys = midbox_mapping.get(20)  # ["BIT_MIDBOX_SP_MODE_1", ...]
     """
     # Currently all families use the 18KPV mapping as the base
     # The HTTP transport handles family-specific differences on the server side
     # For local transports, the 18KPV mapping covers most common parameters
-    #
-    # Future: Add family-specific overrides when they are documented
-    # For SNA devices, the server returns "HOLD_MODBUS_ADDRESS" instead of
-    # "HOLD_COM_ADDR" for register 15 - use PARAM_ALIASES to handle this
     _ = family  # Reserved for future family-specific mappings
+
+    if device_type == "MIDBOX":
+        return MIDBOX_REGISTER_TO_PARAM_KEYS
+
     return REGISTER_TO_PARAM_KEYS
 
 
 def get_param_to_register_mapping(
     family: str | None = None,
+    *,
+    device_type: str | None = None,
 ) -> dict[str, int]:
     """Get the parameter-to-register mapping for an inverter family.
 
@@ -1372,6 +1411,8 @@ def get_param_to_register_mapping(
     Args:
         family: Inverter family string (from InverterFamily enum value).
             Currently unused — all families return the same mapping.
+        device_type: Device type string. Pass ``"MIDBOX"`` for GridBOSS
+            devices to include GridBOSS-specific register mappings.
 
     Returns:
         Dict mapping parameter key name to register address.
@@ -1383,7 +1424,7 @@ def get_param_to_register_mapping(
         mapping.get("HOLD_MODBUS_ADDRESS")  # 15 (via alias)
     """
     # Build reverse mapping from the register-to-param mapping
-    register_mapping = get_register_to_param_mapping(family)
+    register_mapping = get_register_to_param_mapping(family, device_type=device_type)
     result = {param: reg for reg, params in register_mapping.items() for param in params}
 
     # Add aliases to the mapping so both names work

@@ -406,6 +406,212 @@ class TestInverterFamilySupport:
         assert family is None
 
 
+class TestMultiBitFieldReadWrite:
+    """Tests for multi-bit field read/write (GridBOSS smart port modes)."""
+
+    @pytest.fixture
+    def mock_modbus_transport(self) -> ModbusTransport:
+        """Create a ModbusTransport with mocked read/write for MIDBOX testing."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+        transport._connected = True
+        # Set device type to MIDBOX so register 20 maps to smart port modes
+        transport._device_type = "MIDBOX"
+        transport.write_parameters = AsyncMock(return_value=True)
+        return transport
+
+    @pytest.mark.asyncio
+    async def test_read_multi_bit_fields_decodes_as_int(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test reading register 20 decodes 2-bit fields as integers."""
+        # Register 20: port1=2 (AC Couple), port2=1 (Smart Load), port3=0, port4=0
+        # Binary: 00_00_01_10 = 0x06
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0x06})
+
+        result = await mock_modbus_transport.read_named_parameters(20, 1)
+
+        assert result["BIT_MIDBOX_SP_MODE_1"] == 2  # bits 0-1 = 10 = 2
+        assert result["BIT_MIDBOX_SP_MODE_2"] == 1  # bits 2-3 = 01 = 1
+        assert result["BIT_MIDBOX_SP_MODE_3"] == 0  # bits 4-5 = 00 = 0
+        assert result["BIT_MIDBOX_SP_MODE_4"] == 0  # bits 6-7 = 00 = 0
+
+    @pytest.mark.asyncio
+    async def test_read_multi_bit_fields_all_ports_ac_couple(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test reading all ports set to AC Couple (value 2 = 0b10)."""
+        # All four ports = 2: 10_10_10_10 = 0xAA
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0xAA})
+
+        result = await mock_modbus_transport.read_named_parameters(20, 1)
+
+        assert result["BIT_MIDBOX_SP_MODE_1"] == 2
+        assert result["BIT_MIDBOX_SP_MODE_2"] == 2
+        assert result["BIT_MIDBOX_SP_MODE_3"] == 2
+        assert result["BIT_MIDBOX_SP_MODE_4"] == 2
+
+    @pytest.mark.asyncio
+    async def test_write_multi_bit_field_single_port(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test writing a single smart port mode performs correct read-modify-write."""
+        # Current: port1=1 (Smart Load), port2=0, port3=0, port4=0 = 0x01
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0x01})
+
+        result = await mock_modbus_transport.write_named_parameters(
+            {"BIT_MIDBOX_SP_MODE_1": 2}  # Change port 1 to AC Couple
+        )
+
+        assert result is True
+        # Expected: port1=2 (bits 0-1 = 10), rest unchanged = 0x02
+        mock_modbus_transport.write_parameters.assert_called_once_with({20: 0x02})
+
+    @pytest.mark.asyncio
+    async def test_write_multi_bit_field_preserves_other_ports(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test writing one port preserves other ports' values."""
+        # Current: port1=2, port2=1, port3=0, port4=0 = 0b00_00_01_10 = 0x06
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0x06})
+
+        # Set port 3 to Smart Load (1)
+        result = await mock_modbus_transport.write_named_parameters(
+            {"BIT_MIDBOX_SP_MODE_3": 1}
+        )
+
+        assert result is True
+        # Expected: port1=2, port2=1, port3=1, port4=0 = 0b00_01_01_10 = 0x16
+        mock_modbus_transport.write_parameters.assert_called_once_with({20: 0x16})
+
+    @pytest.mark.asyncio
+    async def test_write_multi_bit_field_clear_to_off(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test setting a port to Off (0) clears the bits."""
+        # Current: all ports AC Couple (2) = 0xAA
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0xAA})
+
+        # Set port 2 to Off (0)
+        result = await mock_modbus_transport.write_named_parameters(
+            {"BIT_MIDBOX_SP_MODE_2": 0}
+        )
+
+        assert result is True
+        # Expected: port1=2, port2=0, port3=2, port4=2 = 0b10_10_00_10 = 0xA2
+        mock_modbus_transport.write_parameters.assert_called_once_with({20: 0xA2})
+
+    @pytest.mark.asyncio
+    async def test_write_multiple_multi_bit_fields(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test writing multiple port modes in one call."""
+        # Current: all off = 0x00
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0x00})
+
+        result = await mock_modbus_transport.write_named_parameters({
+            "BIT_MIDBOX_SP_MODE_1": 2,  # AC Couple
+            "BIT_MIDBOX_SP_MODE_4": 1,  # Smart Load
+        })
+
+        assert result is True
+        # Expected: port1=2, port2=0, port3=0, port4=1 = 0b01_00_00_10 = 0x42
+        mock_modbus_transport.write_parameters.assert_called_once_with({20: 0x42})
+
+    @pytest.mark.asyncio
+    async def test_write_multi_bit_without_device_type_uses_param_detection(
+        self,
+    ) -> None:
+        """Test that multi-bit fields work even without _device_type set.
+
+        The _resolve_register_mappings method auto-detects MIDBOX params
+        from MULTI_BIT_FIELDS.
+        """
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+        transport._connected = True
+        transport.read_parameters = AsyncMock(return_value={20: 0x00})
+        transport.write_parameters = AsyncMock(return_value=True)
+
+        result = await transport.write_named_parameters(
+            {"BIT_MIDBOX_SP_MODE_1": 1}
+        )
+
+        assert result is True
+        # Port 1 = 1 (Smart Load) in bits 0-1 = 0x01
+        transport.write_parameters.assert_called_once_with({20: 0x01})
+
+    @pytest.mark.asyncio
+    async def test_write_multi_bit_field_rejects_out_of_range(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test writing an out-of-range value raises ValueError."""
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0x00})
+
+        # Value 5 exceeds 2-bit max (0-3)
+        with pytest.raises(ValueError, match="out of range"):
+            await mock_modbus_transport.write_named_parameters(
+                {"BIT_MIDBOX_SP_MODE_1": 5}
+            )
+
+    @pytest.mark.asyncio
+    async def test_write_multi_bit_field_rejects_negative(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test writing a negative value raises ValueError."""
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0x00})
+
+        with pytest.raises(ValueError, match="out of range"):
+            await mock_modbus_transport.write_named_parameters(
+                {"BIT_MIDBOX_SP_MODE_2": -1}
+            )
+
+
+class TestStandardBitFieldsUnchanged:
+    """Verify standard 1-bit fields still work after multi-bit support."""
+
+    @pytest.fixture
+    def mock_modbus_transport(self) -> ModbusTransport:
+        """Create a ModbusTransport with standard config."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+        transport._connected = True
+        transport.write_parameters = AsyncMock(return_value=True)
+        return transport
+
+    @pytest.mark.asyncio
+    async def test_standard_bit_field_read_still_returns_bool(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test register 21 still returns booleans for standard bit fields."""
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={21: 0x81})
+
+        result = await mock_modbus_transport.read_named_parameters(21, 1)
+
+        # Standard 1-bit fields should be bool, not int
+        assert result["FUNC_EPS_EN"] is True
+        assert isinstance(result["FUNC_EPS_EN"], bool)
+        assert result["FUNC_AC_CHARGE"] is True
+        assert result["FUNC_OVF_LOAD_DERATE_EN"] is False
+
+    @pytest.mark.asyncio
+    async def test_standard_bit_field_write_still_works(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Test standard 1-bit field write is not affected by multi-bit support."""
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={21: 0x80})
+
+        await mock_modbus_transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        mock_modbus_transport.write_parameters.assert_called_once_with({21: 0x81})
+
+
 class TestRegisterMappingFunctions:
     """Tests for the register mapping helper functions."""
 
@@ -454,3 +660,36 @@ class TestRegisterMappingFunctions:
         mapping = get_param_to_register_mapping("EG4_HYBRID")
         assert "HOLD_AC_CHARGE_POWER_CMD" in mapping
         assert "FUNC_EPS_EN" in mapping
+
+    def test_get_register_to_param_mapping_midbox(self) -> None:
+        """Test MIDBOX device_type returns GridBOSS-specific mapping."""
+        from pylxpweb.constants.registers import get_register_to_param_mapping
+
+        mapping = get_register_to_param_mapping(device_type="MIDBOX")
+        assert 20 in mapping
+        assert "BIT_MIDBOX_SP_MODE_1" in mapping[20]
+        assert "BIT_MIDBOX_SP_MODE_4" in mapping[20]
+        # Should NOT contain inverter registers
+        assert 21 not in mapping
+
+    def test_get_param_to_register_mapping_midbox(self) -> None:
+        """Test MIDBOX device_type returns GridBOSS param-to-register mapping."""
+        from pylxpweb.constants.registers import get_param_to_register_mapping
+
+        mapping = get_param_to_register_mapping(device_type="MIDBOX")
+        assert mapping["BIT_MIDBOX_SP_MODE_1"] == 20
+        assert mapping["BIT_MIDBOX_SP_MODE_2"] == 20
+        assert mapping["BIT_MIDBOX_SP_MODE_3"] == 20
+        assert mapping["BIT_MIDBOX_SP_MODE_4"] == 20
+
+    def test_midbox_register_20_does_not_conflict_with_inverter(self) -> None:
+        """Test that inverter register 20 (HOLD_PV_INPUT_MODE) is separate from MIDBOX."""
+        from pylxpweb.constants.registers import get_register_to_param_mapping
+
+        inverter_mapping = get_register_to_param_mapping()
+        midbox_mapping = get_register_to_param_mapping(device_type="MIDBOX")
+
+        # Inverter register 20 = HOLD_PV_INPUT_MODE (scalar)
+        assert inverter_mapping[20] == ["HOLD_PV_INPUT_MODE"]
+        # MIDBOX register 20 = smart port modes (multi-bit)
+        assert midbox_mapping[20][0] == "BIT_MIDBOX_SP_MODE_1"
