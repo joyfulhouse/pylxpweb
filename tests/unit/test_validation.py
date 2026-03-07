@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+from pylxpweb.devices.base import WARMUP_READS, BaseDevice
+from pylxpweb.devices.models import DeviceInfo, Entity
 from pylxpweb.validation import (
     DAILY_ENERGY_MARGIN,
     DEFAULT_RATED_POWER_KW,
@@ -9,6 +13,7 @@ from pylxpweb.validation import (
     MAX_ENERGY_DELTA,
     MIN_LIFETIME_KWH,
     SELF_HEAL_THRESHOLD,
+    UPWARD_SELF_HEAL_THRESHOLD,
     validate_daily_energy_bounds,
     validate_energy_monotonicity,
 )
@@ -31,7 +36,35 @@ class TestValidateEnergyMonotonicity:
         curr = {"grid_import_total": 202_000_000.0}
         result, count = validate_energy_monotonicity(prev, curr, 0, "test_dev")
         assert result == "reject"
-        assert count == 0  # upward spike resets count
+        assert count == 1  # upward spike increments count
+
+    def test_upward_spike_increments_count(self) -> None:
+        """Upward spike increments reject count instead of resetting."""
+        prev = {"grid_import_total": 2700.0}
+        curr = {"grid_import_total": 202_000_000.0}
+        result, count = validate_energy_monotonicity(prev, curr, 3, "test_dev")
+        assert result == "reject"
+        assert count == 4
+
+    def test_upward_spike_self_heals_after_threshold(self) -> None:
+        """5 consecutive upward spike rejections → accept as new baseline."""
+        prev = {"grid_import_total": 2700.0}
+        curr = {"grid_import_total": 5000.0}  # > MIN_LIFETIME_KWH
+        result, count = validate_energy_monotonicity(
+            prev, curr, UPWARD_SELF_HEAL_THRESHOLD - 1, "test_dev"
+        )
+        assert result == "self_healed"
+        assert count == 0
+
+    def test_upward_spike_low_value_blocks_self_heal(self) -> None:
+        """Upward spike value < MIN_LIFETIME_KWH won't self-heal."""
+        prev = {"grid_import_total": 50.0}
+        curr = {"grid_import_total": 999.0}  # Below MIN_LIFETIME_KWH
+        result, count = validate_energy_monotonicity(
+            prev, curr, UPWARD_SELF_HEAL_THRESHOLD - 1, "test_dev"
+        )
+        assert result == "reject"
+        assert count == UPWARD_SELF_HEAL_THRESHOLD
 
     def test_downward_drop_rejected(self) -> None:
         """Decrease in lifetime counter is rejected."""
@@ -116,7 +149,7 @@ class TestValidateEnergyMonotonicity:
         curr = {"grid_import_total": 2700.0 + MAX_ENERGY_DELTA + 0.1}
         result, count = validate_energy_monotonicity(prev, curr, 0, "test_dev")
         assert result == "reject"
-        assert count == 0
+        assert count == 1
 
     def test_self_heal_exactly_at_min_threshold(self) -> None:
         """Value exactly at MIN_LIFETIME_KWH allows self-heal."""
@@ -314,3 +347,90 @@ class TestValidateDailyEnergyBounds:
             elapsed_seconds=30.0,
             prev_values=prev,
         )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for BaseDevice warm-up / validate_data tests
+# ---------------------------------------------------------------------------
+
+
+class _StubDevice(BaseDevice):
+    """Minimal concrete BaseDevice for testing warm-up and gating."""
+
+    async def refresh(self) -> None:  # pragma: no cover
+        pass
+
+    def to_device_info(self) -> DeviceInfo:  # pragma: no cover
+        return DeviceInfo(identifiers=set(), name="stub", manufacturer="test", model="stub")
+
+    def to_entities(self) -> list[Entity]:  # pragma: no cover
+        return []
+
+
+def _make_device(*, validate: bool = True) -> _StubDevice:
+    client = MagicMock()
+    client.username = "test"
+    dev = _StubDevice(client, "STUB123", "StubModel")
+    dev.validate_data = validate
+    return dev
+
+
+class TestBaseDeviceWarmUp:
+    """Warm-up period bypasses energy validation for first N reads."""
+
+    def test_first_reads_accepted_during_warmup(self) -> None:
+        """First WARMUP_READS calls accept data regardless of delta."""
+        dev = _make_device()
+        prev = {"grid_import_total": 2700.0}
+        # Huge jump that would normally be rejected
+        curr = {"grid_import_total": 202_000_000.0}
+        for i in range(WARMUP_READS):
+            assert dev._is_energy_valid(prev, curr), f"Read {i + 1} should pass during warm-up"
+
+    def test_validation_enforced_after_warmup(self) -> None:
+        """After warm-up period, validation rejects corrupt data."""
+        dev = _make_device()
+        prev = {"grid_import_total": 2700.0}
+        good = {"grid_import_total": 2701.0}
+        corrupt = {"grid_import_total": 202_000_000.0}
+        # Exhaust warm-up
+        for _ in range(WARMUP_READS):
+            dev._is_energy_valid(prev, good)
+        # Now corrupt data should be rejected
+        assert not dev._is_energy_valid(prev, corrupt)
+
+    def test_counter_resets_on_device_recreation(self) -> None:
+        """New device instance starts with fresh warm-up counter."""
+        dev = _make_device()
+        assert dev._energy_validation_calls == 0
+
+    def test_daily_energy_bypassed_during_warmup(self) -> None:
+        """_is_daily_energy_valid also bypassed during warm-up."""
+        dev = _make_device()
+        corrupt_daily = {"charge_energy_today": 6549.2}
+        # Call _is_energy_valid first to increment counter
+        dev._is_energy_valid({}, {})
+        assert dev._is_daily_energy_valid(corrupt_daily, None, None)
+
+
+class TestBaseDeviceValidateDataGating:
+    """validate_data=False disables all energy validation."""
+
+    def test_energy_valid_when_disabled(self) -> None:
+        """_is_energy_valid returns True when validate_data=False."""
+        dev = _make_device(validate=False)
+        # Exhaust warm-up
+        for _ in range(WARMUP_READS + 1):
+            dev._is_energy_valid({}, {})
+        prev = {"grid_import_total": 2700.0}
+        curr = {"grid_import_total": 202_000_000.0}
+        assert dev._is_energy_valid(prev, curr)
+
+    def test_daily_energy_valid_when_disabled(self) -> None:
+        """_is_daily_energy_valid returns True when validate_data=False."""
+        dev = _make_device(validate=False)
+        # Exhaust warm-up
+        for _ in range(WARMUP_READS + 1):
+            dev._is_energy_valid({}, {})
+        corrupt = {"charge_energy_today": 6549.2}
+        assert dev._is_daily_energy_valid(corrupt, None, None)

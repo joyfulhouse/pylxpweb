@@ -35,6 +35,12 @@ MAX_ENERGY_DELTA = 108.0
 # "new" value as a self-healing baseline reset.
 SELF_HEAL_THRESHOLD = 3
 
+# Upward spike self-heal threshold.  Higher than downward (5 vs 3)
+# because upward spikes from 0xFFFF corruption are common; we want more
+# confidence before accepting a large jump as legitimate (e.g. after a
+# week-long outage).  At 30s polling, 5 rejections = ~2.5 minutes.
+UPWARD_SELF_HEAL_THRESHOLD = 5
+
 EnergyValidationResult = Literal["valid", "reject", "self_healed"]
 
 
@@ -76,17 +82,32 @@ def validate_energy_monotonicity(
 
         # Upward spike: impossibly large increase
         if curr > prev and (curr - prev) > max_delta:
+            count = reject_count + 1
+
+            if count >= UPWARD_SELF_HEAL_THRESHOLD and curr >= MIN_LIFETIME_KWH:
+                _LOGGER.warning(
+                    "%s upward spike accepted after %d consecutive rejections: "
+                    "%s was %.1f, accepting %.1f as new baseline",
+                    device_id,
+                    count,
+                    key,
+                    prev,
+                    curr,
+                )
+                return "self_healed", 0
+
             _LOGGER.warning(
-                "%s corrupt spike rejected: %s jumped %.1f -> %.1f "
-                "(delta %.1f > %.0f max) — keeping previous data",
+                "%s energy spike rejected (%d/%d): %s jumped %.1f -> %.1f (delta %.1f > %.0f max)",
                 device_id,
+                count,
+                UPWARD_SELF_HEAL_THRESHOLD,
                 key,
                 prev,
                 curr,
                 curr - prev,
                 max_delta,
             )
-            return "reject", 0
+            return "reject", count
 
         # Downward drop: monotonicity violation
         if curr < prev:

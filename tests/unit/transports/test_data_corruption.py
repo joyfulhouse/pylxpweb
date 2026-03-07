@@ -415,6 +415,181 @@ class TestMidboxRuntimeDataCorruption:
         assert data.is_corrupt() is False
 
 
+class TestInverterVoltageCanary:
+    """PV and AC voltage canary checks for InverterRuntimeData."""
+
+    def test_pv_voltage_above_600_is_corrupt(self) -> None:
+        """Corrupt PV voltage (0xFFFF/10 = 6553.5V) detected."""
+        data = InverterRuntimeData(pv1_voltage=6553.5)
+        assert data.is_corrupt() is True
+
+    def test_pv_voltage_500v_not_corrupt(self) -> None:
+        """Normal high PV voltage (500V) passes."""
+        data = InverterRuntimeData(pv1_voltage=500.0)
+        assert data.is_corrupt() is False
+
+    def test_pv_voltage_600v_boundary_not_corrupt(self) -> None:
+        """PV voltage at 600V boundary passes."""
+        data = InverterRuntimeData(pv2_voltage=600.0)
+        assert data.is_corrupt() is False
+
+    def test_pv3_voltage_above_600_is_corrupt(self) -> None:
+        """Corruption detected on PV3 string."""
+        data = InverterRuntimeData(pv3_voltage=700.0)
+        assert data.is_corrupt() is True
+
+    def test_pv4_pv5_pv6_voltage_above_600_is_corrupt(self) -> None:
+        """Corruption detected on extended PV strings (V23)."""
+        for field in ("pv4_voltage", "pv5_voltage", "pv6_voltage"):
+            data = InverterRuntimeData(**{field: 6553.5})
+            assert data.is_corrupt() is True, f"{field} should be corrupt"
+
+    def test_l1_l2_voltage_above_300_is_corrupt(self) -> None:
+        """Corrupt AC L1/L2 voltage (0xFFFF/10 = 6553.5V) detected."""
+        data = InverterRuntimeData(grid_l1_voltage=6553.5)
+        assert data.is_corrupt() is True
+
+    def test_l1_l2_voltage_120v_not_corrupt(self) -> None:
+        """Normal US split-phase voltage passes."""
+        data = InverterRuntimeData(grid_l1_voltage=120.5, grid_l2_voltage=121.0)
+        assert data.is_corrupt() is False
+
+    def test_eps_l1_voltage_above_300_is_corrupt(self) -> None:
+        """Corrupt EPS L1 voltage detected."""
+        data = InverterRuntimeData(eps_l1_voltage=6553.5)
+        assert data.is_corrupt() is True
+
+    def test_eps_l2_voltage_above_300_is_corrupt(self) -> None:
+        """Corrupt EPS L2 voltage detected."""
+        data = InverterRuntimeData(eps_l2_voltage=400.0)
+        assert data.is_corrupt() is True
+
+    def test_rst_voltage_garbage_not_checked(self) -> None:
+        """R/S/T voltages are NOT validated (garbage on split-phase US)."""
+        data = InverterRuntimeData(
+            grid_voltage_r=6553.5,
+            grid_voltage_s=6553.5,
+            grid_voltage_t=6553.5,
+        )
+        assert data.is_corrupt() is False
+
+    def test_none_values_bypass_voltage_checks(self) -> None:
+        """None voltage values are ignored."""
+        data = InverterRuntimeData(pv1_voltage=None, grid_l1_voltage=None, eps_l1_voltage=None)
+        assert data.is_corrupt() is False
+
+
+class TestInverterTemperatureCanary:
+    """Temperature canary checks for InverterRuntimeData."""
+
+    def test_temperature_above_100_is_corrupt(self) -> None:
+        """Temperature > 100°C triggers corruption."""
+        data = InverterRuntimeData(internal_temperature=150.0)
+        assert data.is_corrupt() is True
+
+    def test_temperature_below_minus40_is_corrupt(self) -> None:
+        """Temperature < -40°C triggers corruption."""
+        data = InverterRuntimeData(radiator_temperature_1=-50.0)
+        assert data.is_corrupt() is True
+
+    def test_temperature_normal_25c_not_corrupt(self) -> None:
+        """Normal 25°C temperature passes."""
+        data = InverterRuntimeData(
+            internal_temperature=25.0,
+            radiator_temperature_1=30.0,
+            radiator_temperature_2=28.0,
+            battery_temperature=22.0,
+        )
+        assert data.is_corrupt() is False
+
+    def test_temperature_boundary_minus40_not_corrupt(self) -> None:
+        """Temperature at -40°C boundary passes."""
+        data = InverterRuntimeData(internal_temperature=-40.0)
+        assert data.is_corrupt() is False
+
+    def test_temperature_boundary_100_not_corrupt(self) -> None:
+        """Temperature at 100°C boundary passes."""
+        data = InverterRuntimeData(radiator_temperature_2=100.0)
+        assert data.is_corrupt() is False
+
+    def test_bms_cell_temperature_above_100_is_corrupt(self) -> None:
+        """BMS cell temperature > 100°C triggers corruption."""
+        data = InverterRuntimeData(bms_max_cell_temperature=120.0)
+        assert data.is_corrupt() is True
+
+    def test_bms_cell_temperature_below_minus40_is_corrupt(self) -> None:
+        """BMS cell temperature < -40°C triggers corruption."""
+        data = InverterRuntimeData(bms_min_cell_temperature=-50.0)
+        assert data.is_corrupt() is True
+
+    def test_none_temperatures_bypass_check(self) -> None:
+        """None temperature values are ignored."""
+        data = InverterRuntimeData(
+            internal_temperature=None,
+            radiator_temperature_1=None,
+            battery_temperature=None,
+        )
+        assert data.is_corrupt() is False
+
+
+class TestInverterCurrentCanary:
+    """PV current canary checks for InverterRuntimeData."""
+
+    def test_pv_current_above_100_is_corrupt(self) -> None:
+        """PV current > 100A triggers corruption."""
+        data = InverterRuntimeData(pv1_current=150.0)
+        assert data.is_corrupt() is True
+
+    def test_pv_current_50a_not_corrupt(self) -> None:
+        """Normal 50A PV current passes."""
+        data = InverterRuntimeData(pv1_current=50.0, pv2_current=45.0, pv3_current=40.0)
+        assert data.is_corrupt() is False
+
+    def test_pv_current_boundary_100_not_corrupt(self) -> None:
+        """PV current at 100A boundary passes."""
+        data = InverterRuntimeData(pv2_current=100.0)
+        assert data.is_corrupt() is False
+
+    def test_pv3_current_above_100_is_corrupt(self) -> None:
+        """Corruption detected on PV3 current."""
+        data = InverterRuntimeData(pv3_current=200.0)
+        assert data.is_corrupt() is True
+
+    def test_none_current_bypass_check(self) -> None:
+        """None current values are ignored."""
+        data = InverterRuntimeData(pv1_current=None, pv2_current=None)
+        assert data.is_corrupt() is False
+
+
+class TestBatteryCurrentCanary:
+    """Individual battery current canary for BatteryData."""
+
+    def test_battery_current_above_250_is_corrupt(self) -> None:
+        """Individual battery current > 250A triggers corruption."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, current=300.0)
+        assert data.is_corrupt() is True
+
+    def test_battery_current_negative_above_250_is_corrupt(self) -> None:
+        """Large negative battery current (discharge) triggers corruption."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, current=-300.0)
+        assert data.is_corrupt() is True
+
+    def test_battery_current_normal_not_corrupt(self) -> None:
+        """Normal battery current passes."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, current=80.0)
+        assert data.is_corrupt() is False
+
+    def test_battery_current_boundary_250_not_corrupt(self) -> None:
+        """Battery current at 250A boundary passes."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, current=250.0)
+        assert data.is_corrupt() is False
+
+    def test_battery_current_zero_not_corrupt(self) -> None:
+        """Zero current (idle) passes."""
+        data = BatteryData(soc=50, soh=90, voltage=52.0, current=0.0)
+        assert data.is_corrupt() is False
+
+
 class TestInverterPowerCanary:
     """Power canary checks for InverterRuntimeData.
 

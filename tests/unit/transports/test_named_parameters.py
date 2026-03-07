@@ -478,9 +478,7 @@ class TestMultiBitFieldReadWrite:
         mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0x06})
 
         # Set port 3 to Smart Load (1)
-        result = await mock_modbus_transport.write_named_parameters(
-            {"BIT_MIDBOX_SP_MODE_3": 1}
-        )
+        result = await mock_modbus_transport.write_named_parameters({"BIT_MIDBOX_SP_MODE_3": 1})
 
         assert result is True
         # Expected: port1=2, port2=1, port3=1, port4=0 = 0b00_01_01_10 = 0x16
@@ -495,9 +493,7 @@ class TestMultiBitFieldReadWrite:
         mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0xAA})
 
         # Set port 2 to Off (0)
-        result = await mock_modbus_transport.write_named_parameters(
-            {"BIT_MIDBOX_SP_MODE_2": 0}
-        )
+        result = await mock_modbus_transport.write_named_parameters({"BIT_MIDBOX_SP_MODE_2": 0})
 
         assert result is True
         # Expected: port1=2, port2=0, port3=2, port4=2 = 0b10_10_00_10 = 0xA2
@@ -511,10 +507,12 @@ class TestMultiBitFieldReadWrite:
         # Current: all off = 0x00
         mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0x00})
 
-        result = await mock_modbus_transport.write_named_parameters({
-            "BIT_MIDBOX_SP_MODE_1": 2,  # AC Couple
-            "BIT_MIDBOX_SP_MODE_4": 1,  # Smart Load
-        })
+        result = await mock_modbus_transport.write_named_parameters(
+            {
+                "BIT_MIDBOX_SP_MODE_1": 2,  # AC Couple
+                "BIT_MIDBOX_SP_MODE_4": 1,  # Smart Load
+            }
+        )
 
         assert result is True
         # Expected: port1=2, port2=0, port3=0, port4=1 = 0b01_00_00_10 = 0x42
@@ -537,9 +535,7 @@ class TestMultiBitFieldReadWrite:
         transport.read_parameters = AsyncMock(return_value={20: 0x00})
         transport.write_parameters = AsyncMock(return_value=True)
 
-        result = await transport.write_named_parameters(
-            {"BIT_MIDBOX_SP_MODE_1": 1}
-        )
+        result = await transport.write_named_parameters({"BIT_MIDBOX_SP_MODE_1": 1})
 
         assert result is True
         # Port 1 = 1 (Smart Load) in bits 0-1 = 0x01
@@ -554,9 +550,7 @@ class TestMultiBitFieldReadWrite:
 
         # Value 5 exceeds 2-bit max (0-3)
         with pytest.raises(ValueError, match="out of range"):
-            await mock_modbus_transport.write_named_parameters(
-                {"BIT_MIDBOX_SP_MODE_1": 5}
-            )
+            await mock_modbus_transport.write_named_parameters({"BIT_MIDBOX_SP_MODE_1": 5})
 
     @pytest.mark.asyncio
     async def test_write_multi_bit_field_rejects_negative(
@@ -566,9 +560,7 @@ class TestMultiBitFieldReadWrite:
         mock_modbus_transport.read_parameters = AsyncMock(return_value={20: 0x00})
 
         with pytest.raises(ValueError, match="out of range"):
-            await mock_modbus_transport.write_named_parameters(
-                {"BIT_MIDBOX_SP_MODE_2": -1}
-            )
+            await mock_modbus_transport.write_named_parameters({"BIT_MIDBOX_SP_MODE_2": -1})
 
 
 class TestStandardBitFieldsUnchanged:

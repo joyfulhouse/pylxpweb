@@ -317,6 +317,52 @@ class InverterRuntimeData:
                         max_power_watts,
                     )
                     return True
+        # PV voltage: 0-600V generous range.  Corrupt 0xFFFF/10 = 6553.5V.
+        for label, v in (
+            ("pv1_voltage", self.pv1_voltage),
+            ("pv2_voltage", self.pv2_voltage),
+            ("pv3_voltage", self.pv3_voltage),
+            ("pv4_voltage", self.pv4_voltage),
+            ("pv5_voltage", self.pv5_voltage),
+            ("pv6_voltage", self.pv6_voltage),
+        ):
+            if v is not None and v > 600:
+                _LOGGER.warning("Canary: %s=%.1f > 600V", label, v)
+                return True
+        # AC/EPS voltage — L1/L2 only (0-300V).  R/S/T registers contain
+        # garbage on US split-phase inverters (_features.py:174) and cannot
+        # be validated without phase awareness.
+        for label, v in (
+            ("grid_l1_voltage", self.grid_l1_voltage),
+            ("grid_l2_voltage", self.grid_l2_voltage),
+            ("eps_l1_voltage", self.eps_l1_voltage),
+            ("eps_l2_voltage", self.eps_l2_voltage),
+        ):
+            if v is not None and v > 300:
+                _LOGGER.warning("Canary: %s=%.1f > 300V", label, v)
+                return True
+        # Temperatures: -40 to 100°C covers all operating conditions.
+        for label, t in (
+            ("internal_temperature", self.internal_temperature),
+            ("radiator_temperature_1", self.radiator_temperature_1),
+            ("radiator_temperature_2", self.radiator_temperature_2),
+            ("battery_temperature", self.battery_temperature),
+            ("bms_max_cell_temperature", self.bms_max_cell_temperature),
+            ("bms_min_cell_temperature", self.bms_min_cell_temperature),
+        ):
+            if t is not None and (t < -40 or t > 100):
+                _LOGGER.warning("Canary: %s=%.1f outside -40..100C", label, t)
+                return True
+        # PV current: 0-100A per string (most panels <= 50A).
+        # abs() catches signed corruption (e.g. -655.35A from 0xFFFF).
+        for label, i in (
+            ("pv1_current", self.pv1_current),
+            ("pv2_current", self.pv2_current),
+            ("pv3_current", self.pv3_current),
+        ):
+            if i is not None and abs(i) > 100:
+                _LOGGER.warning("Canary: %s=%.1f > 100A", label, i)
+                return True
         return False
 
     @property
@@ -838,6 +884,14 @@ class BatteryData:
                 self.battery_index,
                 self.min_cell_voltage,
                 self.max_cell_voltage,
+            )
+            return True
+        # Individual battery current: 0-250A.
+        if abs(self.current) > 250:
+            _LOGGER.warning(
+                "Battery %d canary: current=%.1f exceeds 250A",
+                self.battery_index,
+                self.current,
             )
             return True
         return False

@@ -7,6 +7,7 @@ and Home Assistant integration.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -18,6 +19,13 @@ from pylxpweb.validation import (
 )
 
 from .models import DeviceInfo, Entity
+
+_LOGGER = logging.getLogger(__name__)
+
+# Number of initial energy reads that bypass validation to establish
+# baseline values.  Prevents false rejections at startup when the first
+# real data arrives with no previous values to compare against.
+WARMUP_READS = 2
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
@@ -95,6 +103,11 @@ class BaseDevice(ABC):
         # Shared by BaseInverter and MIDDevice for lifetime energy checks.
         self._energy_reject_count: int = 0
 
+        # Warm-up counter: first N energy reads establish baseline without
+        # validation.  Prevents false rejections on startup when prev=None
+        # transitions to real data with large deltas.
+        self._energy_validation_calls: int = 0
+
         # Max energy delta (kWh) for spike detection.  Subclasses override
         # with rated_power_kw * 1.5 once device capabilities are known.
         self._max_energy_delta: float = MAX_ENERGY_DELTA
@@ -158,13 +171,12 @@ class BaseDevice(ABC):
     ) -> bool:
         """Check whether new lifetime energy values pass monotonicity validation.
 
-        Always active — lifetime kWh counters physically cannot decrease,
-        so a decrease is always corruption regardless of the validate_data
-        toggle.  The validate_data flag controls canary-based is_corrupt()
-        checks which can have edge-case false positives; monotonicity
-        cannot false-positive.
+        Gated by ``validate_data`` toggle.  When disabled, all energy data
+        is accepted without validation.  During the warm-up period (first
+        ``WARMUP_READS`` calls), data is accepted to establish baseline.
 
-        Updates ``_energy_reject_count`` as a side-effect.
+        Updates ``_energy_reject_count`` and ``_energy_validation_calls``
+        as side-effects.
 
         Args:
             prev_values: Previous cycle's lifetime energy dict.
@@ -173,6 +185,16 @@ class BaseDevice(ABC):
         Returns:
             True if the data should be accepted, False if it should be rejected.
         """
+        self._energy_validation_calls += 1
+        if not self.validate_data:
+            return True
+        if self._energy_validation_calls <= WARMUP_READS:
+            _LOGGER.debug(
+                "Warm-up read %d/%d: accepting energy data",
+                self._energy_validation_calls,
+                WARMUP_READS,
+            )
+            return True
         result, self._energy_reject_count = validate_energy_monotonicity(
             prev_values,
             curr_values,
@@ -190,11 +212,13 @@ class BaseDevice(ABC):
     ) -> bool:
         """Check whether daily energy values are within plausible bounds.
 
-        Delegates to :func:`~pylxpweb.validation.validate_daily_energy_bounds`
-        which applies an absolute cap and, when previous data exists, a
-        tighter time-based delta check.  Always active (not gated by
-        ``validate_data`` toggle).
+        Gated by ``validate_data`` toggle and warm-up period (counter
+        already incremented by ``_is_energy_valid``).
         """
+        if not self.validate_data:
+            return True
+        if self._energy_validation_calls <= WARMUP_READS:
+            return True
         return validate_daily_energy_bounds(
             curr_values=curr_values,
             device_id=self.serial_number,
