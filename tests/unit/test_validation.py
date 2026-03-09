@@ -11,6 +11,7 @@ from pylxpweb.validation import (
     DEFAULT_RATED_POWER_KW,
     MAX_ELAPSED_HOURS,
     MAX_ENERGY_DELTA,
+    MIN_DAILY_DELTA,
     MIN_LIFETIME_KWH,
     SELF_HEAL_THRESHOLD,
     UPWARD_SELF_HEAL_THRESHOLD,
@@ -410,7 +411,7 @@ class TestBaseDeviceWarmUp:
         corrupt_daily = {"charge_energy_today": 6549.2}
         # Call _is_energy_valid first to increment counter
         dev._is_energy_valid({}, {})
-        assert dev._is_daily_energy_valid(corrupt_daily, None, None)
+        assert dev._is_daily_energy_valid(corrupt_daily, None)
 
 
 class TestBaseDeviceValidateDataGating:
@@ -433,4 +434,130 @@ class TestBaseDeviceValidateDataGating:
         for _ in range(WARMUP_READS + 1):
             dev._is_energy_valid({}, {})
         corrupt = {"charge_energy_today": 6549.2}
-        assert dev._is_daily_energy_valid(corrupt, None, None)
+        assert dev._is_daily_energy_valid(corrupt, None)
+
+
+class TestMinDailyDelta:
+    """Test MIN_DAILY_DELTA floor on delta_bound."""
+
+    def test_floor_prevents_false_rejection(self) -> None:
+        """Delta bound never drops below MIN_DAILY_DELTA (register resolution).
+
+        With a very short elapsed (5s), the computed bound would be
+        18 * (5/3600) * 2 = 0.05 kWh, below the 0.1 register resolution.
+        The floor ensures 0.1 is still accepted.
+        """
+        prev = {"charge_energy_today": 5.0}
+        curr = {"charge_energy_today": 5.1}  # +0.1 (minimum register tick)
+        assert validate_daily_energy_bounds(
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=5.0,
+            prev_values=prev,
+        )
+
+    def test_floor_value(self) -> None:
+        """MIN_DAILY_DELTA matches energy register resolution (0.1 kWh)."""
+        assert MIN_DAILY_DELTA == 0.1
+
+    def test_corrupt_spike_still_rejected(self) -> None:
+        """Floor doesn't weaken protection against large corrupt spikes."""
+        prev = {"charge_energy_today": 0.0}
+        curr = {"charge_energy_today": 6549.2}
+        assert not validate_daily_energy_bounds(
+            curr,
+            "test_dev",
+            rated_power_kw=18.0,
+            elapsed_seconds=5.0,
+            prev_values=prev,
+        )
+
+
+class TestDailyEnergyChangeTracking:
+    """Test BaseDevice._is_daily_energy_valid() change-time tracking.
+
+    Verifies that elapsed time is computed from the last value *change*
+    (not last read), preventing false rejections when registers sit
+    unchanged for several polls before ticking.
+    """
+
+    def _make(self) -> _StubDevice:
+        dev = _make_device()
+        dev._rated_power_kw = 18.0
+        # Exhaust warm-up so validation is active
+        for _ in range(WARMUP_READS + 1):
+            dev._is_energy_valid({}, {})
+        return dev
+
+    def test_first_read_no_prev_accepted(self) -> None:
+        """First read with no previous data uses absolute cap only."""
+        dev = self._make()
+        curr = {"charge_energy_today": 8.8}
+        assert dev._is_daily_energy_valid(curr, None)
+        assert dev._daily_energy_change_time is None
+
+    def test_unchanged_values_do_not_update_change_time(self) -> None:
+        """Unchanged daily values leave _daily_energy_change_time untouched."""
+        dev = self._make()
+        values = {"charge_energy_today": 5.0}
+        assert dev._is_daily_energy_valid(values, values)
+        assert dev._daily_energy_change_time is None
+
+    def test_increase_stamps_change_time(self) -> None:
+        """An accepted daily increase updates _daily_energy_change_time."""
+        dev = self._make()
+        prev = {"charge_energy_today": 5.0}
+        curr = {"charge_energy_today": 5.1}
+        assert dev._is_daily_energy_valid(curr, prev)
+        assert dev._daily_energy_change_time is not None
+
+    def test_decrease_does_not_stamp_change_time(self) -> None:
+        """Midnight reset (decrease) does not update _daily_energy_change_time."""
+        dev = self._make()
+        prev = {"charge_energy_today": 12.0}
+        curr = {"charge_energy_today": 0.0}
+        assert dev._is_daily_energy_valid(curr, prev)
+        assert dev._daily_energy_change_time is None
+
+    def test_elapsed_from_last_change_not_last_read(self) -> None:
+        """Elapsed is computed from _daily_energy_change_time, not read time.
+
+        Simulates: register unchanged for 60s (6 polls), then ticks +0.1.
+        The elapsed window should cover all 60s.
+        """
+        from datetime import datetime, timedelta
+
+        dev = self._make()
+        dev._daily_energy_change_time = datetime.now() - timedelta(seconds=60)
+
+        prev = {"charge_energy_today": 5.0}
+        curr = {"charge_energy_today": 5.1}
+        # delta_bound = max(18 * (60/3600) * 2.0, 0.1) = max(0.6, 0.1) = 0.6
+        # 0.1 < 0.6 → accepted
+        assert dev._is_daily_energy_valid(curr, prev)
+
+    def test_short_elapsed_with_min_delta_floor(self) -> None:
+        """Very short elapsed (1s) still accepts 0.1 kWh due to floor."""
+        from datetime import datetime, timedelta
+
+        dev = self._make()
+        dev._daily_energy_change_time = datetime.now() - timedelta(seconds=1)
+
+        prev = {"charge_energy_today": 5.0}
+        curr = {"charge_energy_today": 5.1}
+        # Computed bound = 18 * (1/3600) * 2.0 = 0.01
+        # Floor at 0.1 → delta_bound = 0.1
+        # 0.1 <= 0.1 → accepted
+        assert dev._is_daily_energy_valid(curr, prev)
+
+    def test_corrupt_spike_rejected_despite_long_elapsed(self) -> None:
+        """Large corrupt spike still rejected even with generous elapsed."""
+        from datetime import datetime, timedelta
+
+        dev = self._make()
+        dev._daily_energy_change_time = datetime.now() - timedelta(seconds=60)
+
+        prev = {"charge_energy_today": 0.0}
+        curr = {"charge_energy_today": 6549.2}
+        assert not dev._is_daily_energy_valid(curr, prev)

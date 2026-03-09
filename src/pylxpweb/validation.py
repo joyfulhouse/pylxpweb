@@ -157,6 +157,11 @@ DEFAULT_RATED_POWER_KW = 108.0
 # so that very long outages don't produce absurdly large bounds.
 MAX_ELAPSED_HOURS = 24.0
 
+# Minimum plausible daily energy delta (kWh).  Energy registers have 0.1 kWh
+# resolution (16-bit with DIV_10 scaling), so any computed bound below this
+# would reject the smallest possible real increment.
+MIN_DAILY_DELTA = 0.1
+
 
 def validate_daily_energy_bounds(
     curr_values: dict[str, float | None],
@@ -196,10 +201,15 @@ def validate_daily_energy_bounds(
 
     # Compute time-based delta bound when we have elapsed time.
     # Cap at MAX_ELAPSED_HOURS so long outages don't weaken the bound.
+    # Floor at MIN_DAILY_DELTA so the bound never drops below register
+    # resolution (0.1 kWh) — prevents rejecting the smallest real tick.
     delta_bound: float | None = None
     if elapsed_seconds is not None and prev_values is not None:
         elapsed_hours = min(elapsed_seconds / 3600.0, MAX_ELAPSED_HOURS)
-        delta_bound = power * elapsed_hours * DAILY_ENERGY_MARGIN
+        delta_bound = max(
+            power * elapsed_hours * DAILY_ENERGY_MARGIN,
+            MIN_DAILY_DELTA,
+        )
 
     for key, curr in curr_values.items():
         if curr is None:

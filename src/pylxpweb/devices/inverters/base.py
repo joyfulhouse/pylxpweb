@@ -604,7 +604,6 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     if not self._is_daily_energy_valid(
                         transport_data.daily_energy_values(),
                         prev_daily,
-                        self._energy_elapsed_seconds(),
                     ):
                         return  # keep cached energy data
                     self._transport_energy = transport_data
@@ -629,7 +628,6 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     if not self._is_daily_energy_valid(
                         curr.daily_energy_values(),
                         prev_daily,
-                        self._energy_elapsed_seconds(),
                     ):
                         return  # keep cached energy data
                     self._energy = energy_data
@@ -740,7 +738,6 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 energy_valid = self._is_daily_energy_valid(
                     energy.daily_energy_values(),
                     prev_daily,
-                    self._energy_elapsed_seconds(),
                 )
             if energy_valid:
                 self._transport_energy = energy

@@ -217,7 +217,6 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         return self._is_daily_energy_valid(
             new_runtime.daily_energy_values(),
             prev_daily,
-            self._runtime_elapsed_seconds(),
         )
 
     async def refresh(self) -> None:

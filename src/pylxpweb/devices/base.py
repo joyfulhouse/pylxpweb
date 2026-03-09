@@ -123,6 +123,12 @@ class BaseDevice(ABC):
         # Zero means unknown — validation falls back to DEFAULT_RATED_POWER_KW.
         self._rated_power_kw: float = 0.0
 
+        # Tracks when daily energy values last *increased* (not just last read).
+        # Used for elapsed_seconds in daily bounds validation so the window
+        # reflects the actual accumulation period, not the polling interval.
+        # Only updated when an accepted read contains a daily value increase.
+        self._daily_energy_change_time: datetime | None = None
+
     @property
     def model(self) -> str:
         """Get device model name.
@@ -208,9 +214,17 @@ class BaseDevice(ABC):
         self,
         curr_values: dict[str, float | None],
         prev_values: dict[str, float | None] | None,
-        elapsed_seconds: float | None,
     ) -> bool:
         """Check whether daily energy values are within plausible bounds.
+
+        Computes elapsed time from ``_daily_energy_change_time`` — the last
+        time a daily energy value *increased* — rather than from the last
+        accepted read.  This prevents false rejections when a register sits
+        unchanged for several polls and then ticks by the minimum resolution
+        (0.1 kWh).
+
+        On acceptance, updates ``_daily_energy_change_time`` if any daily
+        value increased so the next window starts from this point.
 
         Gated by ``validate_data`` toggle and warm-up period (counter
         already incremented by ``_is_energy_valid``).
@@ -219,13 +233,31 @@ class BaseDevice(ABC):
             return True
         if self._energy_validation_calls <= WARMUP_READS:
             return True
-        return validate_daily_energy_bounds(
+
+        # Compute elapsed from last value change, not last read.
+        elapsed: float | None = None
+        if self._daily_energy_change_time is not None:
+            elapsed = (datetime.now() - self._daily_energy_change_time).total_seconds()
+
+        valid = validate_daily_energy_bounds(
             curr_values=curr_values,
             device_id=self.serial_number,
             rated_power_kw=self._rated_power_kw,
-            elapsed_seconds=elapsed_seconds,
+            elapsed_seconds=elapsed,
             prev_values=prev_values,
         )
+
+        if valid and prev_values is not None:
+            # Update change time only when a daily value actually increased.
+            for key, curr in curr_values.items():
+                if curr is None:
+                    continue
+                prev = prev_values.get(key)
+                if prev is not None and curr > prev:
+                    self._daily_energy_change_time = datetime.now()
+                    break
+
+        return valid
 
     @abstractmethod
     async def refresh(self) -> None:
