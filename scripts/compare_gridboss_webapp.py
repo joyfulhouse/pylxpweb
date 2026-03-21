@@ -25,13 +25,13 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Suppress noisy library output
 logging.getLogger("pymodbus").setLevel(logging.ERROR)
 logging.getLogger("pylxpweb").setLevel(logging.WARNING)
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -99,7 +99,7 @@ async def read_dongle_registers(
             for offset, value in enumerate(values):
                 registers[start + offset] = value
         except Exception as exc:
-            print(f"  WARNING: Failed to read input regs {start}-{start+count-1}: {exc}")
+            print(f"  WARNING: Failed to read input regs {start}-{start + count - 1}: {exc}")
         await asyncio.sleep(0.3)
 
     # Holding register 20 — smart port status (bit-packed)
@@ -183,7 +183,7 @@ def format_comparison(
             low = modbus_regs.get(addr, 0)
             high = modbus_regs.get(addr + 1, 0)
             modbus_raw = _combine_32bit(low, high)
-            reg_label = f"{addr}/{addr+1}"
+            reg_label = f"{addr}/{addr + 1}"
         else:
             modbus_raw = modbus_regs.get(addr, 0)
             if reg_def.signed:
@@ -192,7 +192,9 @@ def format_comparison(
 
         # Scale the modbus value
         if reg_def.bit_width == 32:
-            modbus_scaled = modbus_raw / 10.0 if reg_def.scale.name == "DIV_10" else float(modbus_raw)
+            modbus_scaled = (
+                modbus_raw / 10.0 if reg_def.scale.name == "DIV_10" else float(modbus_raw)
+            )
         else:
             modbus_scaled = _scale(
                 modbus_regs.get(addr, 0), reg_def.scale, is_signed=reg_def.signed
@@ -203,10 +205,7 @@ def format_comparison(
         # Compare: cloud API values are raw (pre-scale), modbus_raw is also raw
         # For 16-bit regs: cloud should equal modbus_raw (both raw)
         # For 32-bit regs: cloud is the combined 32-bit raw value
-        if cloud_val is not None:
-            match = "OK" if cloud_val == modbus_raw else "DIFF"
-        else:
-            match = "n/a"
+        match = ("OK" if cloud_val == modbus_raw else "DIFF") if cloud_val is not None else "n/a"
 
         cloud_str = str(cloud_val) if cloud_val is not None else "-"
         modbus_str = str(modbus_raw)
@@ -258,9 +257,13 @@ def format_comparison(
         ("smart_load", 50, 84),
         ("ac_couple", 60, 104),
     ]:
-        print(f"\n  {energy_type.upper()} Daily Energy (regs {daily_base}-{daily_base+7}):")
+        print(f"\n  {energy_type.upper()} Daily Energy (regs {daily_base}-{daily_base + 7}):")
         for port in range(1, 5):
-            cloud_l1 = getattr(cloud_data, f"e{energy_type.replace('_', '').title().replace(' ', '')}{port}TodayL1", None)
+            cloud_l1 = getattr(
+                cloud_data,
+                f"e{energy_type.replace('_', '').title().replace(' ', '')}{port}TodayL1",
+                None,
+            )
             # Simpler approach: construct the field name explicitly
             if energy_type == "smart_load":
                 cloud_l1 = getattr(cloud_data, f"eSmartLoad{port}TodayL1", None)
@@ -282,8 +285,7 @@ def format_comparison(
                 prev_l2 = modbus_regs.get(reg_l2 - 2, 0)
                 off_by_one = (
                     "OFF-BY-ONE!"
-                    if (cloud_l1 == prev_l1 and cloud_l2 == prev_l2
-                        and (cloud_l1 or cloud_l2))
+                    if (cloud_l1 == prev_l1 and cloud_l2 == prev_l2 and (cloud_l1 or cloud_l2))
                     else ""
                 )
             else:
@@ -325,8 +327,7 @@ def format_comparison(
                 )
                 off_by_one = (
                     "OFF-BY-ONE!"
-                    if (cloud_l1 == prev_l1 and cloud_l2 == prev_l2
-                        and (cloud_l1 or cloud_l2))
+                    if (cloud_l1 == prev_l1 and cloud_l2 == prev_l2 and (cloud_l1 or cloud_l2))
                     else ""
                 )
             else:
@@ -336,7 +337,7 @@ def format_comparison(
             kwh_l2 = modbus_l2 / 10.0
             print(
                 f"    Port {port}: cloud=({cloud_l1},{cloud_l2}) "
-                f"modbus_reg({base}-{base+3})=({modbus_l1},{modbus_l2}) "
+                f"modbus_reg({base}-{base + 3})=({modbus_l1},{modbus_l2}) "
                 f"[{kwh_l1:.1f}/{kwh_l2:.1f} kWh] {match_same} {off_by_one}"
             )
 
@@ -376,9 +377,7 @@ async def main() -> None:
     cloud_task = read_cloud_api(GRIDBOSS_SERIAL)
 
     print("Reading from Dongle Modbus...")
-    dongle_task = read_dongle_registers(
-        DONGLE_IP, DONGLE_SERIAL, GRIDBOSS_SERIAL
-    )
+    dongle_task = read_dongle_registers(DONGLE_IP, DONGLE_SERIAL, GRIDBOSS_SERIAL)
 
     cloud_data, modbus_regs = await asyncio.gather(cloud_task, dongle_task)
     print("  Cloud API: OK")

@@ -1174,6 +1174,21 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         description="EPS L2 cumulative energy (32-bit).",
     ),
     # =========================================================================
+    # AC COUPLE POWER (reg 153) — EG4_OFFGRID and EG4_HYBRID
+    # =========================================================================
+    RegisterDefinition(
+        address=153,
+        canonical_name="ac_couple_power",
+        cloud_api_field="acCouplePower",
+        ha_sensor_key=None,
+        unit="W",
+        category=RegisterCategory.RUNTIME,
+        models=ALL,
+        description="AC coupled power. On EG4_OFFGRID (12000XP/6000XP), this is the "
+        "only source of AC couple power. On EG4_HYBRID, this tracks close to "
+        "register 123 (genPower). Cloud API field: acCouplePower.",
+    ),
+    # =========================================================================
     # OUTPUT POWER (reg 170) — split-phase total
     # =========================================================================
     RegisterDefinition(

@@ -391,11 +391,20 @@ class InverterRuntimePropertiesMixin:
     def ac_couple_power(self) -> int:
         """Get AC coupled power in watts.
 
-        Uses generator_power register (123) from local transport as the
-        closest proxy — the generator port carries AC couple flow when no
-        physical generator is connected. Falls back to cloud acCouplePower.
+        Prefers register 153 (ac_couple_power) from local transport when
+        available.  Falls back to register 123 (generator_power) for
+        EG4_HYBRID devices where both registers carry equivalent AC
+        couple data.  Cloud path uses acCouplePower field.
+
+        On EG4_OFFGRID (12000XP/6000XP), register 123 is a seconds
+        counter — only register 153 is correct.
         """
         if self._transport_runtime is not None:
+            # Prefer reg 153 (ac_couple_power) — correct for all families
+            val = self._transport_runtime.ac_couple_power
+            if val is not None:
+                return int(val)
+            # Fall back to reg 123 (generator_power) — valid on EG4_HYBRID
             val = self._transport_runtime.generator_power
             return int(val) if val is not None else 0
         if self._runtime is None:
@@ -524,8 +533,7 @@ class InverterRuntimePropertiesMixin:
     def total_load_power(self) -> int | None:
         """Get total load power in watts.
 
-        This is now an alias for consumption_power since consumption_power
-        represents the total power being consumed by all loads in the home.
+        Deprecated: use consumption_power instead, which returns the same data.
         """
         return self.consumption_power
 

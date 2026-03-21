@@ -9,14 +9,14 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Suppress pymodbus debug output
 logging.getLogger("pymodbus").setLevel(logging.ERROR)
 logging.getLogger("pymodbus.transaction").setLevel(logging.ERROR)
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -54,9 +54,7 @@ def get_mapped_registers() -> tuple[dict[int, str], dict[int, str]]:
     return input_mapped, holding_mapped
 
 
-async def read_registers_safe(
-    client, read_func, start: int, count: int, unit_id: int
-) -> dict[int, int]:
+async def read_registers_safe(read_func, start: int, count: int, unit_id: int) -> dict[int, int]:
     """Read registers with timeout handling."""
     result: dict[int, int] = {}
     try:
@@ -95,36 +93,28 @@ async def scan_all_registers(host: str, port: int, unit_id: int = 1):
     print("  Reading input registers 0-127...")
     for start in range(0, 128, 40):
         count = min(40, 128 - start)
-        regs = await read_registers_safe(
-            client, client.read_input_registers, start, count, unit_id
-        )
+        regs = await read_registers_safe(client.read_input_registers, start, count, unit_id)
         input_regs.update(regs)
 
     # Read INPUT registers 128-255
     print("  Reading input registers 128-255...")
     for start in range(128, 256, 40):
         count = min(40, 256 - start)
-        regs = await read_registers_safe(
-            client, client.read_input_registers, start, count, unit_id
-        )
+        regs = await read_registers_safe(client.read_input_registers, start, count, unit_id)
         input_regs.update(regs)
 
     # Read HOLDING registers 0-127
     print("  Reading holding registers 0-127...")
     for start in range(0, 128, 40):
         count = min(40, 128 - start)
-        regs = await read_registers_safe(
-            client, client.read_holding_registers, start, count, unit_id
-        )
+        regs = await read_registers_safe(client.read_holding_registers, start, count, unit_id)
         holding_regs.update(regs)
 
     # Read HOLDING registers 128-255
     print("  Reading holding registers 128-255...")
     for start in range(128, 256, 40):
         count = min(40, 256 - start)
-        regs = await read_registers_safe(
-            client, client.read_holding_registers, start, count, unit_id
-        )
+        regs = await read_registers_safe(client.read_holding_registers, start, count, unit_id)
         holding_regs.update(regs)
 
     client.close()

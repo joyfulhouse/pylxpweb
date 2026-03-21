@@ -531,7 +531,7 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "FUNC_179_BIT8",  # Bit 8: unknown
         "FUNC_BAT_CHARGE_CONTROL",  # Bit 9: 0=SOC, 1=Voltage (confirmed 2026-02-18)
         "FUNC_BAT_DISCHARGE_CONTROL",  # Bit 10: 0=SOC, 1=Voltage (confirmed 2026-02-18)
-        "FUNC_179_BIT11",  # Bit 11: unknown
+        "FUNC_AC_COUPLE_EN",  # Bit 11: AC Coupling enable (confirmed on 12000XP via Modbus probe)
         "FUNC_179_BIT12",  # Bit 12: unknown
         "FUNC_179_BIT13",  # Bit 13: unknown
         "FUNC_179_BIT14",  # Bit 14: unknown

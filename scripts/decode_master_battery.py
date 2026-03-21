@@ -57,9 +57,9 @@ async def read_all_registers(
 
     # Read in small chunks to avoid timeouts
     chunks = [
-        (0, 50),      # Regs 0-49
-        (100, 30),    # Regs 100-129 (device info area)
-        (113, 16),    # Regs 113-128 (cell voltages, may overlap)
+        (0, 50),  # Regs 0-49
+        (100, 30),  # Regs 100-129 (device info area)
+        (113, 16),  # Regs 113-128 (cell voltages, may overlap)
     ]
 
     for start, count in chunks:
@@ -164,7 +164,7 @@ def decode_master_battery(regs: dict[int, int]) -> dict[str, object]:
     if raw_25 == 30000:
         data["reg25_text"] = "CAPPED (30000) - overflow/sentinel"
     else:
-        data["reg25_text"] = f"{raw_25} (÷100 = {raw_25/100:.2f})"
+        data["reg25_text"] = f"{raw_25} (÷100 = {raw_25 / 100:.2f})"
 
     # Reg 41 (offset 0x52): Number of cells
     raw_41 = regs.get(41, 0)
@@ -219,7 +219,7 @@ def decode_master_battery(regs: dict[int, int]) -> dict[str, object]:
     if raw_35 == 30000:
         data["reg35_text"] = "CAPPED (30000) - overflow/sentinel"
     else:
-        data["reg35_text"] = f"{raw_35} (÷100 = {raw_35/100:.2f})"
+        data["reg35_text"] = f"{raw_35} (÷100 = {raw_35 / 100:.2f})"
 
     # Reg 36: (unknown)
     data["reg36"] = regs.get(36, 0)
@@ -287,9 +287,9 @@ def decode_slave_battery(regs: dict[int, int]) -> dict[str, object]:
 
 def print_master_battery(data: dict[str, object]) -> None:
     """Pretty-print master battery data."""
-    print(f"\n{'='*72}")
+    print(f"\n{'=' * 72}")
     print("  MASTER BATTERY (Unit ID 1) - Firmware-Derived Register Map")
-    print(f"{'='*72}")
+    print(f"{'=' * 72}")
 
     print("\n  --- Core Data ---")
     print(f"  Pack Voltage:     {data['voltage']:.2f} V  (reg 22 = {data['voltage_raw']})")
@@ -297,14 +297,19 @@ def print_master_battery(data: dict[str, object]) -> None:
     print(f"  Temperature:      {data['temperature']}°C  (reg 24 = {data['temperature_raw']})")
 
     print("\n  --- Status ---")
-    print(f"  Status:           {data['status_text']}  (reg 19 = {data['status_raw']} / 0x{data['status_raw']:04X})")
+    status_hex = f"0x{data['status_raw']:04X}"
+    print(
+        f"  Status:           {data['status_text']}  (reg 19 = {data['status_raw']} / {status_hex})"
+    )
     print(f"  Protection:       {data['protection_text']}  (reg 20 = {data['protection_raw']})")
     print(f"  Error/Balance:    reg 21 = {data['error_raw']} (0x{data['error_raw']:04X})")
 
     print("\n  --- Battery Info ---")
     print(f"  Cycle Count:      {data['cycle_count']}  (reg 30)")
     print(f"  SOH/Balance:      {data['soh_or_balance']}  (reg 32)")
-    print(f"  Designed Capacity:{data['designed_capacity_ah']:.1f} Ah  (reg 33 = {data['designed_capacity_raw']}, ÷20)")
+    cap_ah = data["designed_capacity_ah"]
+    cap_raw = data["designed_capacity_raw"]
+    print(f"  Designed Capacity:{cap_ah:.1f} Ah  (reg 33 = {cap_raw}, \u00f720)")
     print(f"  Number of Cells:  {data['num_cells']}  (reg 41)")
 
     print("\n  --- Cell Voltages (reg 113+) ---")
@@ -315,19 +320,24 @@ def print_master_battery(data: dict[str, object]) -> None:
             for i in range(0, len(cells), 8):
                 chunk = cells[i : i + 8]
                 formatted = " ".join(f"{v:.3f}" for v in chunk)
-                print(f"    [{i+1:2d}-{min(i+8, len(cells)):2d}]:  {formatted}")
+                print(f"    [{i + 1:2d}-{min(i + 8, len(cells)):2d}]:  {formatted}")
             min_v = min(non_zero)
             max_v = max(non_zero)
             print(f"    Min/Max:      {min_v:.3f} / {max_v:.3f} V  (delta: {max_v - min_v:.3f} V)")
 
     print("\n  --- Max/Min Cell ---")
-    print(f"  Max Cell V:       {data['max_cell_voltage']:.3f} V  (reg 37 = {data['max_cell_voltage_mv']} mV)")
-    print(f"  Min Cell V:       {data['min_cell_voltage']:.3f} V  (reg 38 = {data['min_cell_voltage_mv']} mV)")
+    max_mv = data["max_cell_voltage_mv"]
+    print(f"  Max Cell V:       {data['max_cell_voltage']:.3f} V  (reg 37 = {max_mv} mV)")
+    min_mv = data["min_cell_voltage_mv"]
+    print(f"  Min Cell V:       {data['min_cell_voltage']:.3f} V  (reg 38 = {min_mv} mV)")
     print(f"  Max Cell Index:   {data['max_cell_index']}  (reg 39)")
     print(f"  Min Cell Index:   {data['min_cell_index']}  (reg 40)")
 
     print("\n  --- Firmware & Unknown ---")
-    print(f"  FW Version:       {data['firmware_version_text']}  (reg 28 = {data['firmware_version_raw']} / 0x{data['firmware_version_raw']:04X})")
+    fw_raw = data["firmware_version_raw"]
+    print(
+        f"  FW Version:       {data['firmware_version_text']}  (reg 28 = {fw_raw} / 0x{fw_raw:04X})"
+    )
     print(f"  Reg 25:           {data.get('reg25_text', '')}  (possible overflow sentinel)")
     print(f"  Reg 27:           {data['reg27_raw']}  (0x{data['reg27_raw']:04X})")
     print(f"  Reg 29:           {data['reg29']}")
@@ -340,15 +350,18 @@ def print_master_battery(data: dict[str, object]) -> None:
 
 def print_slave_battery(uid: int, data: dict[str, object]) -> None:
     """Pretty-print slave battery data for comparison."""
-    print(f"\n{'='*72}")
+    print(f"\n{'=' * 72}")
     print(f"  SLAVE BATTERY (Unit ID {uid}) - Standard EG4-LL Register Map")
-    print(f"{'='*72}")
+    print(f"{'=' * 72}")
     print(f"  Pack Voltage:     {data['voltage']:.2f} V")
     print(f"  Current:          {data['current']:.2f} A")
     print(f"  SOC:              {data['soc']}%")
     print(f"  SOH:              {data['soh']}%")
     print(f"  Status:           {data['status_text']}")
-    print(f"  Temperature:      PCB={data['pcb_temp']}°C  Avg={data['avg_temp']}°C  Max={data['max_temp']}°C")
+    pcb = data["pcb_temp"]
+    avg = data["avg_temp"]
+    mx = data["max_temp"]
+    print(f"  Temperature:      PCB={pcb}\u00b0C  Avg={avg}\u00b0C  Max={mx}\u00b0C")
     print(f"  Cycle Count:      {data['cycle_count']}")
     print(f"  Designed Cap:     {data['designed_capacity_ah']:.1f} Ah")
     print(f"  Number of Cells:  {data['num_cells']}")
@@ -359,7 +372,7 @@ def print_slave_battery(uid: int, data: dict[str, object]) -> None:
         for i in range(0, len(cells), 8):
             chunk = cells[i : i + 8]
             formatted = " ".join(f"{v:.3f}" for v in chunk)
-            print(f"    [{i+1:2d}-{min(i+8, len(cells)):2d}]:  {formatted}")
+            print(f"    [{i + 1:2d}-{min(i + 8, len(cells)):2d}]:  {formatted}")
         min_v = min(non_zero)
         max_v = max(non_zero)
         print(f"    Min/Max:      {min_v:.3f} / {max_v:.3f} V  (delta: {max_v - min_v:.3f} V)")
@@ -426,17 +439,21 @@ async def main() -> None:
     client.close()
 
     # --- Comparison Summary ---
-    print(f"\n{'='*72}")
+    print(f"\n{'=' * 72}")
     print("COMPARISON SUMMARY")
     print("=" * 72)
     if master_regs:
         master_data = decode_master_battery(master_regs)
-        print(f"  Master (ID 1):  V={master_data['voltage']:.2f}V  I={master_data['current_cA']:.2f}A"
-              f"  T={master_data['temperature']}°C  Cycles={master_data['cycle_count']}"
-              f"  Cells={master_data['num_cells']}")
-        print(f"                  MaxCell={master_data['max_cell_voltage']:.3f}V"
-              f"  MinCell={master_data['min_cell_voltage']:.3f}V"
-              f"  DesignCap={master_data['designed_capacity_ah']:.0f}Ah")
+        print(
+            f"  Master (ID 1):  V={master_data['voltage']:.2f}V  I={master_data['current_cA']:.2f}A"
+            f"  T={master_data['temperature']}°C  Cycles={master_data['cycle_count']}"
+            f"  Cells={master_data['num_cells']}"
+        )
+        print(
+            f"                  MaxCell={master_data['max_cell_voltage']:.3f}V"
+            f"  MinCell={master_data['min_cell_voltage']:.3f}V"
+            f"  DesignCap={master_data['designed_capacity_ah']:.0f}Ah"
+        )
 
 
 if __name__ == "__main__":

@@ -16,15 +16,13 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Suppress pymodbus debug output
 logging.getLogger("pymodbus").setLevel(logging.WARNING)
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from dotenv import load_dotenv
-
-# Load environment variables from .env
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
@@ -115,9 +113,7 @@ async def scan_registers(
     for start in range(0, 128, 40):
         count = min(40, 128 - start)
         try:
-            resp = await client.read_input_registers(
-                address=start, count=count, device_id=unit_id
-            )
+            resp = await client.read_input_registers(address=start, count=count, device_id=unit_id)
             if not resp.isError() and hasattr(resp, "registers"):
                 for offset, value in enumerate(resp.registers):
                     result.input_registers[start + offset] = value
@@ -129,9 +125,7 @@ async def scan_registers(
     for start in range(128, 256, 40):
         count = min(40, 256 - start)
         try:
-            resp = await client.read_input_registers(
-                address=start, count=count, device_id=unit_id
-            )
+            resp = await client.read_input_registers(address=start, count=count, device_id=unit_id)
             if not resp.isError() and hasattr(resp, "registers"):
                 for offset, value in enumerate(resp.registers):
                     result.input_registers[start + offset] = value
@@ -176,9 +170,7 @@ async def scan_registers(
         count = min(40, 5152 - start)
         try:
             resp = await asyncio.wait_for(
-                client.read_input_registers(
-                    address=start, count=count, device_id=unit_id
-                ),
+                client.read_input_registers(address=start, count=count, device_id=unit_id),
                 timeout=5.0,
             )
             if not resp.isError() and hasattr(resp, "registers"):
@@ -247,27 +239,25 @@ def analyze_webapp_vs_modbus() -> None:
     print("=" * 80)
 
     webapp_fields = get_webapp_runtime_fields()
-    modbus_fields = {
-        f.name for f in InverterRuntimeData.__dataclass_fields__.values()
-    }
+    modbus_fields = {f.name for f in InverterRuntimeData.__dataclass_fields__.values()}
 
     # Fields in webapp but not in Modbus data model
     print("\n--- Fields in WebAPI InverterRuntime NOT in Modbus InverterRuntimeData ---")
     webapp_only = set(webapp_fields.keys()) - modbus_fields - {"model_fields"}
-    for field in sorted(webapp_only):
-        if not field.startswith("_") and field not in (
+    for field_name in sorted(webapp_only):
+        if not field_name.startswith("_") and field_name not in (
             "success",
             "model_config",
             "model_fields",
             "model_computed_fields",
             "pac",
         ):
-            print(f"  {field}: {webapp_fields[field]}")
+            print(f"  {field_name}: {webapp_fields[field_name]}")
 
     print("\n--- Fields in Modbus InverterRuntimeData NOT in WebAPI InverterRuntime ---")
     modbus_only = modbus_fields - set(webapp_fields.keys())
-    for field in sorted(modbus_only):
-        print(f"  {field}")
+    for field_name in sorted(modbus_only):
+        print(f"  {field_name}")
 
 
 def format_battery_registers(

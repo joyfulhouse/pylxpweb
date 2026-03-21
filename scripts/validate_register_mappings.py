@@ -58,9 +58,7 @@ async def validate_18kpv() -> None:
         await dongle_transport.connect()
 
         try:
-            await _compare_parameters(
-                http_transport, dongle_transport, "HTTP", "Dongle"
-            )
+            await _compare_parameters(http_transport, dongle_transport, "HTTP", "Dongle")
         finally:
             await dongle_transport.disconnect()
             await http_transport.disconnect()
@@ -103,9 +101,7 @@ async def validate_flexboss() -> None:
         await modbus_transport.connect()
 
         try:
-            await _compare_parameters(
-                http_transport, modbus_transport, "HTTP", "Modbus"
-            )
+            await _compare_parameters(http_transport, modbus_transport, "HTTP", "Modbus")
         finally:
             await modbus_transport.disconnect()
             await http_transport.disconnect()
@@ -126,7 +122,7 @@ async def _compare_parameters(
     # Standard parameter ranges (matching HA integration's read pattern)
     # API limit is 127 registers per call
     register_ranges = [
-        (0, 127),    # Base parameters
+        (0, 127),  # Base parameters
         (127, 127),  # Extended parameters 1
         (240, 127),  # Extended parameters 2
     ]

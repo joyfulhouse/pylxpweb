@@ -81,6 +81,7 @@ def _prompt_if_missing(value: str | None, prompt_text: str, secret: bool = False
     try:
         if secret:
             import getpass
+
             return getpass.getpass(prompt_text) or None
         return input(prompt_text) or None
     except (EOFError, KeyboardInterrupt):
@@ -204,18 +205,14 @@ REGISTER_LABELS: dict[int, str] = {
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def collect_http_data(
-    username: str, password: str, base_url: str
-) -> dict[str, Any]:
+async def collect_http_data(username: str, password: str, base_url: str) -> dict[str, Any]:
     """Collect runtime data from HTTP API for all inverters."""
     from pylxpweb import LuxpowerClient
     from pylxpweb.devices import Station
 
     result: dict[str, Any] = {"source": "http_api", "base_url": base_url, "inverters": []}
 
-    async with LuxpowerClient(
-        username=username, password=password, base_url=base_url
-    ) as client:
+    async with LuxpowerClient(username=username, password=password, base_url=base_url) as client:
         stations = await Station.load_all(client)
         if not stations:
             result["error"] = "No stations found"
@@ -226,11 +223,13 @@ async def collect_http_data(
                 await inv.refresh()
                 runtime = inv._runtime
                 if runtime is None:
-                    result["inverters"].append({
-                        "serial": inv.serial_number,
-                        "model": inv.model,
-                        "error": "No runtime data",
-                    })
+                    result["inverters"].append(
+                        {
+                            "serial": inv.serial_number,
+                            "model": inv.model,
+                            "error": "No runtime data",
+                        }
+                    )
                     continue
 
                 # Dump ALL runtime fields as raw dict
@@ -263,16 +262,19 @@ async def collect_http_data(
                     "sinks_total": sinks,
                     "sinks_detail": f"pCharge({runtime.pCharge}) + pToGrid({runtime.pToGrid}) + pToUser({runtime.pToUser}) + peps({runtime.peps})",
                     "imbalance": sources - sinks,
-                    "consumption_equals_pToUser_plus_peps": runtime.consumptionPower == (runtime.pToUser + runtime.peps),
+                    "consumption_equals_pToUser_plus_peps": runtime.consumptionPower
+                    == (runtime.pToUser + runtime.peps),
                 }
 
-                result["inverters"].append({
-                    "serial": inv.serial_number,
-                    "model": inv.model,
-                    "power_summary": power_summary,
-                    "energy_balance": balance,
-                    "raw_api_response": raw_fields,
-                })
+                result["inverters"].append(
+                    {
+                        "serial": inv.serial_number,
+                        "model": inv.model,
+                        "power_summary": power_summary,
+                        "energy_balance": balance,
+                        "raw_api_response": raw_fields,
+                    }
+                )
 
     return result
 
@@ -387,7 +389,9 @@ async def collect_raw_registers(
         power_register_summary = {}
         for addr, label in sorted(REGISTER_LABELS.items()):
             if addr in raw_registers:
-                power_register_summary[f"reg_{addr:03d}_{label.split('(')[0].strip()}"] = raw_registers[addr]
+                power_register_summary[f"reg_{addr:03d}_{label.split('(')[0].strip()}"] = (
+                    raw_registers[addr]
+                )
 
         result["register_groups"] = group_results
         result["power_register_summary"] = power_register_summary
@@ -401,6 +405,7 @@ async def collect_raw_registers(
     except Exception as e:
         result["error"] = str(e)
         import traceback
+
         result["traceback"] = traceback.format_exc()
 
     return result
@@ -502,14 +507,18 @@ Use --no-sanitize to keep raw values (not recommended for sharing).
             if len(parts) == 3:
                 dongles.append((parts[0], parts[1], parts[2]))
             else:
-                print(f"WARNING: Invalid --dongle format '{spec}', expected IP:DONGLE_SERIAL:INVERTER_SERIAL")
+                print(
+                    f"WARNING: Invalid --dongle format '{spec}', expected IP:DONGLE_SERIAL:INVERTER_SERIAL"
+                )
     elif os.getenv("DONGLE_IP"):
         # Fall back to single env var set
-        dongles.append((
-            os.getenv("DONGLE_IP", ""),
-            os.getenv("DONGLE_SERIAL", ""),
-            os.getenv("DONGLE_INVERTER_SERIAL", ""),
-        ))
+        dongles.append(
+            (
+                os.getenv("DONGLE_IP", ""),
+                os.getenv("DONGLE_SERIAL", ""),
+                os.getenv("DONGLE_INVERTER_SERIAL", ""),
+            )
+        )
 
     # Build modbus list from --modbus args or env vars
     modbus_connections: list[tuple[str, int, str]] = []  # (ip, port, serial)
@@ -521,13 +530,17 @@ Use --no-sanitize to keep raw values (not recommended for sharing).
             elif len(parts) == 3:
                 modbus_connections.append((parts[0], int(parts[1]), parts[2]))
             else:
-                print(f"WARNING: Invalid --modbus format '{spec}', expected IP:SERIAL or IP:PORT:SERIAL")
+                print(
+                    f"WARNING: Invalid --modbus format '{spec}', expected IP:SERIAL or IP:PORT:SERIAL"
+                )
     elif os.getenv("MODBUS_IP"):
-        modbus_connections.append((
-            os.getenv("MODBUS_IP", ""),
-            int(os.getenv("MODBUS_PORT", "502")),
-            os.getenv("MODBUS_SERIAL", ""),
-        ))
+        modbus_connections.append(
+            (
+                os.getenv("MODBUS_IP", ""),
+                int(os.getenv("MODBUS_PORT", "502")),
+                os.getenv("MODBUS_SERIAL", ""),
+            )
+        )
 
     # Interactive prompts for local connections if none configured
     if not dongles and not modbus_connections:
@@ -591,7 +604,9 @@ Use --no-sanitize to keep raw values (not recommended for sharing).
     # ── Dongles ──
     for i, (ip, d_serial, i_serial) in enumerate(dongles, 1):
         label = f"DONGLE #{i}" if len(dongles) > 1 else "DONGLE"
-        print(f"\n[{label}] Reading raw registers from {ip}:{args.dongle_port} (inv: {i_serial}) ...")
+        print(
+            f"\n[{label}] Reading raw registers from {ip}:{args.dongle_port} (inv: {i_serial}) ..."
+        )
         try:
             data = await collect_raw_registers(
                 "dongle",
@@ -605,9 +620,14 @@ Use --no-sanitize to keep raw values (not recommended for sharing).
             print(f"[{label}] Done")
         except Exception as e:
             print(f"[{label}] Error: {e}")
-            diagnostics["local_devices"].append({
-                "label": label, "source": "dongle", "host": ip, "error": str(e),
-            })
+            diagnostics["local_devices"].append(
+                {
+                    "label": label,
+                    "source": "dongle",
+                    "host": ip,
+                    "error": str(e),
+                }
+            )
 
     # ── Modbus TCP ──
     for i, (ip, port, serial) in enumerate(modbus_connections, 1):
@@ -625,9 +645,14 @@ Use --no-sanitize to keep raw values (not recommended for sharing).
             print(f"[{label}] Done")
         except Exception as e:
             print(f"[{label}] Error: {e}")
-            diagnostics["local_devices"].append({
-                "label": label, "source": "modbus", "host": ip, "error": str(e),
-            })
+            diagnostics["local_devices"].append(
+                {
+                    "label": label,
+                    "source": "modbus",
+                    "host": ip,
+                    "error": str(e),
+                }
+            )
 
     if not dongles and not modbus_connections:
         print("\n[LOCAL] Skipped (no dongle or Modbus connections configured)")

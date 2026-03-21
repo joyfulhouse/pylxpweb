@@ -67,8 +67,16 @@ async def read_modbus_battery_data() -> dict:
             data["capacity_ah"] = regs.get(97, 0)
             data["max_cell_voltage_mv"] = regs.get(101, 0)
             data["min_cell_voltage_mv"] = regs.get(102, 0)
-            data["max_cell_temp_c"] = regs.get(103, 0) / 10.0 if regs.get(103, 0) < 32768 else (regs.get(103, 0) - 65536) / 10.0
-            data["min_cell_temp_c"] = regs.get(104, 0) / 10.0 if regs.get(104, 0) < 32768 else (regs.get(104, 0) - 65536) / 10.0
+            data["max_cell_temp_c"] = (
+                regs.get(103, 0) / 10.0
+                if regs.get(103, 0) < 32768
+                else (regs.get(103, 0) - 65536) / 10.0
+            )
+            data["min_cell_temp_c"] = (
+                regs.get(104, 0) / 10.0
+                if regs.get(104, 0) < 32768
+                else (regs.get(104, 0) - 65536) / 10.0
+            )
             data["cycle_count"] = regs.get(106, 0)
             print("[MODBUS] BMS registers 80-112 read OK")
     except Exception as e:
@@ -83,7 +91,10 @@ async def read_modbus_battery_data() -> dict:
             if not result.isError():
                 non_zero = [(start + i, v) for i, v in enumerate(result.registers) if v != 0]
                 if non_zero:
-                    print(f"[MODBUS] Extended INPUT {start}-{start+31}: {len(non_zero)} non-zero values")
+                    print(
+                        f"[MODBUS] Extended INPUT {start}-{start + 31}: "
+                        f"{len(non_zero)} non-zero values"
+                    )
                     data[f"extended_input_{start}"] = non_zero
         except Exception:
             pass
@@ -182,8 +193,12 @@ async def read_web_api_battery_data() -> dict:
                     "cycle_count": batt.cycleCnt,
                     "remain_capacity_ah": batt.currentRemainCapacity,
                     "full_capacity_ah": batt.currentFullCapacity,
-                    "charge_current_limit": batt.batChargeMaxCur / 10.0 if batt.batChargeMaxCur else 0,
-                    "charge_voltage_ref": batt.batChargeVoltRef / 10.0 if batt.batChargeVoltRef else 0,
+                    "charge_current_limit": batt.batChargeMaxCur / 10.0
+                    if batt.batChargeMaxCur
+                    else 0,
+                    "charge_voltage_ref": batt.batChargeVoltRef / 10.0
+                    if batt.batChargeVoltRef
+                    else 0,
                 }
                 data["batteries"].append(battery_data)
 
@@ -240,8 +255,12 @@ def compare_data(modbus_data: dict, web_data: dict) -> None:
             print(f"    Current: {batt['current']:.2f}A")
             print(f"    SOC: {batt['soc']}%")
             print(f"    SOH: {batt['soh']}%")
-            print(f"    Cell V range: {batt['min_cell_voltage_mv']}-{batt['max_cell_voltage_mv']} mV")
-            print(f"    Cell T range: {batt['min_cell_temp_c']:.1f}-{batt['max_cell_temp_c']:.1f}°C")
+            print(
+                f"    Cell V range: {batt['min_cell_voltage_mv']}-{batt['max_cell_voltage_mv']} mV"
+            )
+            print(
+                f"    Cell T range: {batt['min_cell_temp_c']:.1f}-{batt['max_cell_temp_c']:.1f}°C"
+            )
             print(f"    Cycle count: {batt['cycle_count']}")
             print(f"    Capacity: {batt['remain_capacity_ah']}/{batt['full_capacity_ah']} Ah")
 
@@ -250,7 +269,7 @@ def compare_data(modbus_data: dict, web_data: dict) -> None:
     print("=" * 70)
     if web_data.get("batteries"):
         print(f"""
-The Web API provides individual battery data for {len(web_data['batteries'])} batteries,
+The Web API provides individual battery data for {len(web_data["batteries"])} batteries,
 while Modbus only provides aggregate BMS data (max/min across all batteries).
 
 This suggests the individual battery data is:

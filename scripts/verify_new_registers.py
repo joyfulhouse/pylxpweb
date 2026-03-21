@@ -9,11 +9,11 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 logging.getLogger("pymodbus").setLevel(logging.ERROR)
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 

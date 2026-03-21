@@ -62,7 +62,7 @@ INPUT_REGISTER_GROUPS: dict[str, tuple[int, int]] = {
     "status_energy": (32, 32),  # Registers 32-63: Status, energy, fault/warning codes
     "temperatures": (64, 16),  # Registers 64-79: Temps, currents, fault history
     "bms_data": (80, 33),  # Registers 80-112: BMS passthrough data
-    "extended_data": (113, 26),  # Regs 113-138: Parallel, generator, EPS, per-leg
+    "extended_data": (113, 41),  # Regs 113-153: Parallel, generator, EPS, per-leg, AC couple
     "eps_split_phase": (140, 3),  # Registers 140-142: EPS L1/L2 voltages
     "output_power": (170, 2),  # Registers 170-171: Output power
     "split_phase_grid": (193, 12),  # Registers 193-204: Split-phase grid voltages + per-leg power

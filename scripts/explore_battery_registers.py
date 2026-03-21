@@ -166,7 +166,9 @@ async def main() -> None:
         if result.values:
             non_zero = [v for v in result.values if v != 0]
             if non_zero:
-                print(f"\n[INPUT {start}-{start + count - 1}] Found {len(non_zero)} non-zero values:")
+                print(
+                    f"\n[INPUT {start}-{start + count - 1}] Found {len(non_zero)} non-zero values:"
+                )
                 print(format_registers(result.values, start))
         elif result.error:
             print(f"[INPUT {start}-{start + count - 1}] Error: {result.error}")
@@ -196,7 +198,10 @@ async def main() -> None:
         if result.values:
             non_zero = [v for v in result.values if v != 0]
             if non_zero:
-                print(f"\n[HOLDING {start}-{start + count - 1}] Found {len(non_zero)} non-zero values:")
+                print(
+                    f"\n[HOLDING {start}-{start + count - 1}] "
+                    f"Found {len(non_zero)} non-zero values:"
+                )
                 print(format_registers(result.values, start))
         elif result.error:
             print(f"[HOLDING {start}-{start + count - 1}] Error: {result.error}")

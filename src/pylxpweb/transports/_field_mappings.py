@@ -99,6 +99,7 @@ RUNTIME_FIELD: dict[str, str | None] = {
     "generator_voltage": "generator_voltage",
     "generator_frequency": "generator_frequency",
     "generator_power": "generator_power",
+    "ac_couple_power": "ac_couple_power",
     # Operational
     "running_time": "inverter_on_time",
     "ac_input_type": "ac_input_type",

@@ -205,6 +205,7 @@ class InverterRuntimeData:
     generator_voltage: float | None = None  # V
     generator_frequency: float | None = None  # Hz
     generator_power: float | None = None  # W
+    ac_couple_power: float | None = None  # W — register 153
 
     # -------------------------------------------------------------------------
     # US Split-Phase Per-Leg Power (regs 195-204)

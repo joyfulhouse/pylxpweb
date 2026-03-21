@@ -10,11 +10,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 logging.getLogger("pymodbus").setLevel(logging.ERROR)
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -73,7 +73,9 @@ async def read_webapp(serial: str):
         return runtime, energy
 
 
-async def run_cycles(num_cycles: int, delay: float, host: str, port: int, serial: str) -> list[ReadingPair]:
+async def run_cycles(
+    num_cycles: int, delay: float, host: str, port: int, serial: str
+) -> list[ReadingPair]:
     """Run multiple read cycles."""
     readings: list[ReadingPair] = []
 
@@ -85,23 +87,31 @@ async def run_cycles(num_cycles: int, delay: float, host: str, port: int, serial
         # Then Web API
         runtime, energy = await read_webapp(serial)
 
-        readings.append(ReadingPair(
-            cycle=i + 1,
-            modbus_regs=modbus,
-            webapp_runtime=runtime,
-            webapp_energy=energy,
-        ))
+        readings.append(
+            ReadingPair(
+                cycle=i + 1,
+                modbus_regs=modbus,
+                webapp_runtime=runtime,
+                webapp_energy=energy,
+            )
+        )
 
         # Show key values
-        print(f"  Modbus: vBat={modbus.get(4, 0)}, SOC={modbus.get(5, 0) & 0xFF}%, "
-              f"pDischg={modbus.get(11, 0)}W, pinv={modbus.get(16, 0)}W")
-        print(f"  WebAPI: vBat={runtime.vBat}, SOC={runtime.soc}%, "
-              f"pDischg={runtime.pDisCharge}W, pinv={runtime.pinv}W")
+        print(
+            f"  Modbus: vBat={modbus.get(4, 0)}, SOC={modbus.get(5, 0) & 0xFF}%, "
+            f"pDischg={modbus.get(11, 0)}W, pinv={modbus.get(16, 0)}W"
+        )
+        print(
+            f"  WebAPI: vBat={runtime.vBat}, SOC={runtime.soc}%, "
+            f"pDischg={runtime.pDisCharge}W, pinv={runtime.pinv}W"
+        )
 
         # Show unmapped registers of interest
-        print(f"  Unmapped: [6]={modbus.get(6, 0)}, [98]={signed16(modbus.get(98, 0))}, "
-              f"[127]={modbus.get(127, 0)}, [128]={modbus.get(128, 0)}, "
-              f"[145]={modbus.get(145, 0)}, [170]={modbus.get(170, 0)}")
+        print(
+            f"  Unmapped: [6]={modbus.get(6, 0)}, [98]={signed16(modbus.get(98, 0))}, "
+            f"[127]={modbus.get(127, 0)}, [128]={modbus.get(128, 0)}, "
+            f"[145]={modbus.get(145, 0)}, [170]={modbus.get(170, 0)}"
+        )
 
         if i < num_cycles - 1:
             print(f"  Waiting {delay}s...")
@@ -136,7 +146,10 @@ def analyze_correlations(readings: list[ReadingPair]) -> None:
     ]
 
     # Build correlation table
-    print(f"\n{'Register':<10} {'Scaling':<10} " + " ".join(f"{'Cycle ' + str(i+1):>12}" for i in range(len(readings))))
+    print(
+        f"\n{'Register':<10} {'Scaling':<10} "
+        + " ".join(f"{'Cycle ' + str(i + 1):>12}" for i in range(len(readings)))
+    )
     print("-" * (22 + 13 * len(readings)))
 
     for reg in unmapped_regs:
@@ -164,7 +177,9 @@ def analyze_correlations(readings: list[ReadingPair]) -> None:
     print("WEB API VALUES FOR COMPARISON")
     print("=" * 100)
 
-    print(f"\n{'Field':<20} " + " ".join(f"{'Cycle ' + str(i+1):>12}" for i in range(len(readings))))
+    print(
+        f"\n{'Field':<20} " + " ".join(f"{'Cycle ' + str(i + 1):>12}" for i in range(len(readings)))
+    )
     print("-" * (22 + 13 * len(readings)))
 
     for field_name, getter in webapp_fields:
@@ -180,8 +195,10 @@ def analyze_correlations(readings: list[ReadingPair]) -> None:
 
     # Check register 98 vs battery current (derived from batPower / vBat)
     print("\n--- Register 98: Battery Current Analysis ---")
-    print(f"{'Cycle':<8} {'Reg98 raw':>12} {'Reg98 sign':>12} {'Reg98÷10':>12} "
-          f"{'batPower':>12} {'vBat':>10} {'Calc Curr':>12} {'Match?':>10}")
+    print(
+        f"{'Cycle':<8} {'Reg98 raw':>12} {'Reg98 sign':>12} {'Reg98÷10':>12} "
+        f"{'batPower':>12} {'vBat':>10} {'Calc Curr':>12} {'Match?':>10}"
+    )
     print("-" * 100)
 
     for r in readings:
@@ -192,13 +209,17 @@ def analyze_correlations(readings: list[ReadingPair]) -> None:
         vbat = r.webapp_runtime.vBat / 10  # Convert to volts
         calc_curr = bat_power / vbat if vbat > 0 else 0
         match = "✓" if abs(reg98_div10 - calc_curr) < 5 else "✗"
-        print(f"{r.cycle:<8} {reg98:>12} {reg98_signed:>12} {reg98_div10:>12.1f} "
-              f"{bat_power:>12} {vbat:>10.1f} {calc_curr:>12.1f} {match:>10}")
+        print(
+            f"{r.cycle:<8} {reg98:>12} {reg98_signed:>12} {reg98_div10:>12.1f} "
+            f"{bat_power:>12} {vbat:>10.1f} {calc_curr:>12.1f} {match:>10}"
+        )
 
     # Check registers 127/128 vs L1/L2 voltages
     print("\n--- Registers 127/128: L1/L2 Voltage Analysis ---")
-    print(f"{'Cycle':<8} {'Reg127':>10} {'÷10':>10} {'Reg128':>10} {'÷10':>10} "
-          f"{'vacr':>10} {'vacs':>10} {'Sum':>10}")
+    print(
+        f"{'Cycle':<8} {'Reg127':>10} {'÷10':>10} {'Reg128':>10} {'÷10':>10} "
+        f"{'vacr':>10} {'vacs':>10} {'Sum':>10}"
+    )
     print("-" * 90)
 
     for r in readings:
@@ -207,8 +228,10 @@ def analyze_correlations(readings: list[ReadingPair]) -> None:
         vacr = r.webapp_runtime.vacr
         vacs = r.webapp_runtime.vacs
         line_sum = reg127 / 10 + reg128 / 10
-        print(f"{r.cycle:<8} {reg127:>10} {reg127/10:>10.1f} {reg128:>10} {reg128/10:>10.1f} "
-              f"{vacr/10:>10.1f} {vacs/10:>10.1f} {line_sum:>10.1f}")
+        print(
+            f"{r.cycle:<8} {reg127:>10} {reg127 / 10:>10.1f} {reg128:>10} {reg128 / 10:>10.1f} "
+            f"{vacr / 10:>10.1f} {vacs / 10:>10.1f} {line_sum:>10.1f}"
+        )
 
     # Check register 170 vs line-to-line voltage
     print("\n--- Register 170: Line-to-Line Voltage Analysis ---")
@@ -220,18 +243,26 @@ def analyze_correlations(readings: list[ReadingPair]) -> None:
         vacr = r.webapp_runtime.vacr / 10
         l1_l2 = r.modbus_regs.get(127, 0) / 10 + r.modbus_regs.get(128, 0) / 10
         match = "✓" if abs(reg170 / 10 - l1_l2) < 5 else "~"
-        print(f"{r.cycle:<8} {reg170:>10} {reg170/10:>10.1f} {vacr:>10.1f} {l1_l2:>10.1f} {match:>10}")
+        print(
+            f"{r.cycle:<8} {reg170:>10} {reg170 / 10:>10.1f} "
+            f"{vacr:>10.1f} {l1_l2:>10.1f} {match:>10}"
+        )
 
     # Check register 6 vs power values
     print("\n--- Register 6: Power Analysis ---")
-    print(f"{'Cycle':<8} {'Reg6':>10} {'÷10':>10} {'pinv':>10} {'peps':>10} {'pDischg':>10} {'consPwr':>10}")
+    print(
+        f"{'Cycle':<8} {'Reg6':>10} {'÷10':>10} {'pinv':>10} "
+        f"{'peps':>10} {'pDischg':>10} {'consPwr':>10}"
+    )
     print("-" * 80)
 
     for r in readings:
         reg6 = r.modbus_regs.get(6, 0)
-        print(f"{r.cycle:<8} {reg6:>10} {reg6/10:>10.1f} {r.webapp_runtime.pinv:>10} "
-              f"{r.webapp_runtime.peps:>10} {r.webapp_runtime.pDisCharge:>10} "
-              f"{r.webapp_runtime.consumptionPower:>10}")
+        print(
+            f"{r.cycle:<8} {reg6:>10} {reg6 / 10:>10.1f} {r.webapp_runtime.pinv:>10} "
+            f"{r.webapp_runtime.peps:>10} {r.webapp_runtime.pDisCharge:>10} "
+            f"{r.webapp_runtime.consumptionPower:>10}"
+        )
 
     # Summary
     print("\n" + "=" * 100)

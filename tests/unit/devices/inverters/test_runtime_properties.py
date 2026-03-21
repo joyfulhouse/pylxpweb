@@ -14,6 +14,7 @@ import pytest
 
 from pylxpweb.devices.inverters.generic import GenericInverter
 from pylxpweb.models import InverterRuntime
+from pylxpweb.transports.data import InverterRuntimeData
 
 
 @pytest.fixture
@@ -111,6 +112,20 @@ def inverter_without_runtime() -> GenericInverter:
         model="18KPV",
     )
     inverter._runtime = None
+    return inverter
+
+
+@pytest.fixture
+def inverter_with_transport() -> GenericInverter:
+    """Create inverter with transport runtime data (local Modbus path)."""
+    mock_client = MagicMock()
+
+    inverter = GenericInverter(
+        client=mock_client,
+        serial_number="1234567890",
+        model="18KPV",
+    )
+    inverter._transport_runtime = InverterRuntimeData()
     return inverter
 
 
@@ -373,3 +388,31 @@ class TestPropertyTypes:
         for prop in bool_properties:
             value = getattr(inverter_with_runtime, prop)
             assert isinstance(value, bool), f"{prop} should return bool, got {type(value)}"
+
+
+class TestACCouplePower:
+    """Tests for ac_couple_power property — register 153 preferred over reg 123."""
+
+    def test_prefers_transport_reg153_over_reg123(self, inverter_with_transport):
+        """When transport has ac_couple_power (reg 153), use it — not generator_power."""
+        inverter = inverter_with_transport
+        inverter._transport_runtime.ac_couple_power = 1500.0
+        inverter._transport_runtime.generator_power = 9999.0  # seconds counter on OFFGRID
+        assert inverter.ac_couple_power == 1500
+
+    def test_falls_back_to_transport_generator_power(self, inverter_with_transport):
+        """When transport has no ac_couple_power, fall back to generator_power."""
+        inverter = inverter_with_transport
+        inverter._transport_runtime.ac_couple_power = None
+        inverter._transport_runtime.generator_power = 750.0
+        assert inverter.ac_couple_power == 750
+
+    def test_falls_back_to_cloud_acCouplePower(self, inverter_with_runtime):
+        """When no transport, use cloud acCouplePower."""
+        inverter = inverter_with_runtime
+        inverter._runtime.acCouplePower = 654
+        assert inverter.ac_couple_power == 654
+
+    def test_returns_zero_when_no_data(self, inverter_without_runtime):
+        """When no transport and no cloud data, return 0."""
+        assert inverter_without_runtime.ac_couple_power == 0

@@ -537,9 +537,7 @@ class TestSplitPhaseEpsFallback:
         regs[129] = 1213  # EPS L1 power = 1213W
         regs[130] = 423  # EPS L2 power = 423W
 
-        data = InverterRuntimeData.from_modbus_registers(
-            regs, "EG4_HYBRID", split_phase=True
-        )
+        data = InverterRuntimeData.from_modbus_registers(regs, "EG4_HYBRID", split_phase=True)
         assert data.eps_power == 1636.0  # 1213 + 423
         assert data.eps_l1_power == 1213
         assert data.eps_l2_power == 423
@@ -551,9 +549,7 @@ class TestSplitPhaseEpsFallback:
         regs[129] = 1213
         regs[130] = 423
 
-        data = InverterRuntimeData.from_modbus_registers(
-            regs, "EG4_HYBRID", split_phase=False
-        )
+        data = InverterRuntimeData.from_modbus_registers(regs, "EG4_HYBRID", split_phase=False)
         assert data.eps_power == 0.0
         assert data.eps_l1_power == 1213
         assert data.eps_l2_power == 423
@@ -565,9 +561,7 @@ class TestSplitPhaseEpsFallback:
         regs[129] = 800
         regs[130] = 700
 
-        data = InverterRuntimeData.from_modbus_registers(
-            regs, "EG4_HYBRID", split_phase=True
-        )
+        data = InverterRuntimeData.from_modbus_registers(regs, "EG4_HYBRID", split_phase=True)
         assert data.eps_power == 1500.0  # Uses combined, not L1+L2
 
     def test_eps_no_fallback_when_all_zero(self) -> None:
@@ -577,9 +571,7 @@ class TestSplitPhaseEpsFallback:
         regs[129] = 0
         regs[130] = 0
 
-        data = InverterRuntimeData.from_modbus_registers(
-            regs, "EG4_HYBRID", split_phase=True
-        )
+        data = InverterRuntimeData.from_modbus_registers(regs, "EG4_HYBRID", split_phase=True)
         assert data.eps_power == 0.0
 
     def test_eps_apparent_power_fallback(self) -> None:
@@ -589,9 +581,7 @@ class TestSplitPhaseEpsFallback:
         regs[131] = 1300  # EPS L1 apparent power
         regs[132] = 500  # EPS L2 apparent power
 
-        data = InverterRuntimeData.from_modbus_registers(
-            regs, "EG4_HYBRID", split_phase=True
-        )
+        data = InverterRuntimeData.from_modbus_registers(regs, "EG4_HYBRID", split_phase=True)
         assert data.eps_apparent_power == 1800  # 1300 + 500
 
     def test_eps_apparent_power_field_rename(self) -> None:
@@ -609,7 +599,5 @@ class TestSplitPhaseEpsFallback:
         regs[129] = 500
         regs[130] = 0
 
-        data = InverterRuntimeData.from_modbus_registers(
-            regs, "EG4_HYBRID", split_phase=True
-        )
+        data = InverterRuntimeData.from_modbus_registers(regs, "EG4_HYBRID", split_phase=True)
         assert data.eps_power == 500.0

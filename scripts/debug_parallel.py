@@ -68,7 +68,9 @@ async def main(username: str, password: str, base_url: str) -> None:
                 safe_gb = gridboss_serial[:4] + "X" * (len(gridboss_serial) - 4)
                 print(f"  Using GridBOSS serial: {safe_gb}")
                 try:
-                    pg_response = await client.api.devices.get_parallel_group_details(gridboss_serial)
+                    pg_response = await client.api.devices.get_parallel_group_details(
+                        gridboss_serial
+                    )
                     pg_dict = pg_response.model_dump()
 
                     # Sanitize serials in response
@@ -102,7 +104,9 @@ async def main(username: str, password: str, base_url: str) -> None:
                     # Clear cache and re-fetch
                     client._cache.clear()
                     print("  Re-fetching parallel group details after sync...")
-                    pg_response2 = await client.api.devices.get_parallel_group_details(gridboss_serial)
+                    pg_response2 = await client.api.devices.get_parallel_group_details(
+                        gridboss_serial
+                    )
                     pg_dict2 = pg_response2.model_dump()
                     if "devices" in pg_dict2 and pg_dict2["devices"]:
                         for d in pg_dict2["devices"]:
@@ -123,9 +127,11 @@ async def main(username: str, password: str, base_url: str) -> None:
                 print(f"  Station: {station.name}")
                 print(f"  Parallel groups found: {len(station.parallel_groups)}")
                 for i, pg in enumerate(station.parallel_groups):
-                    print(f"    Group {i}: first_serial={pg.first_device_serial[:4]}XXXX, "
-                          f"inverters={len(pg.inverters)}, "
-                          f"mid={pg.mid_device is not None}")
+                    print(
+                        f"    Group {i}: first_serial={pg.first_device_serial[:4]}XXXX, "
+                        f"inverters={len(pg.inverters)}, "
+                        f"mid={pg.mid_device is not None}"
+                    )
                     for inv in pg.inverters:
                         safe = inv.serial[:4] + "X" * (len(inv.serial) - 4)
                         print(f"      Inverter: {safe} model={inv.model}")
@@ -136,6 +142,7 @@ async def main(username: str, password: str, base_url: str) -> None:
             except Exception as e:
                 print(f"  ERROR: {type(e).__name__}: {e}")
                 import traceback
+
                 traceback.print_exc()
 
     print()
