@@ -506,6 +506,10 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         async with self._lock:
             for attempt in range(max_retries + 1):
                 try:
+                    # After OSError reconnect, re-check socket state
+                    if self._writer is None or self._reader is None:
+                        raise TransportConnectionError("Socket not initialized")
+
                     # Drain any pending data before sending (handles unsolicited packets)
                     await self._drain_buffer()
 
@@ -550,14 +554,33 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         "Consider using Modbus TCP with RS485 adapter instead."
                     ) from err
                 except OSError as err:
-                    _LOGGER.error("Socket error communicating with dongle: %s", err)
-                    # Mark as disconnected so next poll triggers reconnect
+                    # Tear down the broken connection
                     self._connected = False
                     self._reader = None
                     if self._writer:
                         with contextlib.suppress(Exception):
                             self._writer.close()
                     self._writer = None
+
+                    if attempt < max_retries:
+                        _LOGGER.warning(
+                            "Socket error on attempt %d/%d: %s, reconnecting...",
+                            attempt + 1,
+                            max_retries + 1,
+                            err,
+                        )
+                        try:
+                            await asyncio.sleep(0.5)
+                            await self.connect()
+                        except Exception as reconn_err:
+                            _LOGGER.error(
+                                "Reconnect failed after socket error: %s",
+                                reconn_err,
+                            )
+                            raise TransportReadError(f"Socket error: {err}") from err
+                        continue
+
+                    _LOGGER.error("Socket error communicating with dongle: %s", err)
                     raise TransportReadError(f"Socket error: {err}") from err
                 except TransportReadError as err:
                     last_error = err
