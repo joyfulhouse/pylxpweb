@@ -470,12 +470,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         """Send a packet and receive response with retry logic.
 
         Auto-reconnects if the TCP connection was lost (e.g. dongle reboot,
-        network glitch).  The reconnect happens once per call; if the fresh
-        connection also fails the error propagates normally.
+        network glitch).  On socket error, tears down the connection,
+        reconnects, and retries — up to ``max_retries`` times.
 
         Args:
             packet: Packet bytes to send
-            max_retries: Number of retry attempts for empty responses
+            max_retries: Number of retry attempts for transient errors
+                (empty responses, socket errors, validation mismatches)
             expected_func: Expected Modbus function code (0x03, 0x04, 0x06, 0x10).
                 When provided, rejects responses with a different function code.
                 Handles exception responses (high bit set) by masking to base code.
@@ -488,7 +489,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         Raises:
             TransportReadError: If send/receive fails after retries
             TransportTimeoutError: If operation times out
-            TransportConnectionError: If reconnection also fails
+            TransportConnectionError: If socket not initialized
         """
         if not self._connected:
             _LOGGER.info(
@@ -506,7 +507,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         async with self._lock:
             for attempt in range(max_retries + 1):
                 try:
-                    # After OSError reconnect, re-check socket state
+                    # Reconnect if socket was torn down (e.g. after OSError)
+                    if self._writer is None or self._reader is None:
+                        try:
+                            await self.connect()
+                        except Exception:
+                            if attempt >= max_retries:
+                                raise TransportConnectionError("Socket not initialized") from None
+                            await asyncio.sleep(0.5)
+                            continue
                     if self._writer is None or self._reader is None:
                         raise TransportConnectionError("Socket not initialized")
 
@@ -554,7 +563,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         "Consider using Modbus TCP with RS485 adapter instead."
                     ) from err
                 except OSError as err:
-                    # Tear down the broken connection
+                    # Tear down the broken connection; next iteration
+                    # will reconnect via the top-of-loop guard.
                     self._connected = False
                     self._reader = None
                     if self._writer:
@@ -564,20 +574,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
                     if attempt < max_retries:
                         _LOGGER.warning(
-                            "Socket error on attempt %d/%d: %s, reconnecting...",
+                            "Socket error on attempt %d/%d: %s, will reconnect on next retry",
                             attempt + 1,
                             max_retries + 1,
                             err,
                         )
-                        try:
-                            await asyncio.sleep(0.5)
-                            await self.connect()
-                        except Exception as reconn_err:
-                            _LOGGER.error(
-                                "Reconnect failed after socket error: %s",
-                                reconn_err,
-                            )
-                            raise TransportReadError(f"Socket error: {err}") from err
+                        await asyncio.sleep(0.5)
                         continue
 
                     _LOGGER.error("Socket error communicating with dongle: %s", err)

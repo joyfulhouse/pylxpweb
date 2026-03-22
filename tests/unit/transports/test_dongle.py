@@ -513,8 +513,10 @@ class TestDongleRegisterOperations:
         async def mock_connect() -> None:
             transport._connected = True
             transport._reader = AsyncMock()
-            transport._writer = AsyncMock()
-            transport._writer.close = MagicMock()
+            writer = AsyncMock()
+            writer.write = MagicMock()
+            writer.close = MagicMock()
+            transport._writer = writer
             # Return empty response (will fail, but proves connect was called)
             transport._reader.read = AsyncMock(return_value=b"")
 
@@ -550,6 +552,7 @@ class TestDongleRegisterOperations:
         first_reader = AsyncMock()
         first_reader.read = AsyncMock(side_effect=OSError("Connection lost"))
         first_writer = AsyncMock()
+        first_writer.write = MagicMock()
         first_writer.close = MagicMock()
         transport._reader = first_reader
         transport._writer = first_writer
@@ -559,6 +562,7 @@ class TestDongleRegisterOperations:
         # First read is _drain_buffer (empty), second is the actual response
         second_reader.read = AsyncMock(side_effect=[b"", valid_response])
         second_writer = AsyncMock()
+        second_writer.write = MagicMock()
         second_writer.close = MagicMock()
 
         async def mock_connect() -> None:
@@ -592,6 +596,7 @@ class TestDongleRegisterOperations:
             reader = AsyncMock()
             reader.read = AsyncMock(side_effect=OSError("Connection lost"))
             writer = AsyncMock()
+            writer.write = MagicMock()
             writer.close = MagicMock()
             transport._reader = reader
             transport._writer = writer
@@ -600,6 +605,7 @@ class TestDongleRegisterOperations:
         transport._reader = AsyncMock()
         transport._reader.read = AsyncMock(side_effect=OSError("Connection lost"))
         transport._writer = AsyncMock()
+        transport._writer.write = MagicMock()
         transport._writer.close = MagicMock()
 
         transport.connect = AsyncMock(side_effect=mock_connect)
@@ -612,8 +618,14 @@ class TestDongleRegisterOperations:
         assert transport.connect.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_oserror_reconnect_failure_raises(self) -> None:
-        """Test that failed reconnect after OSError raises immediately."""
+    async def test_oserror_reconnect_failure_continues_retries(self) -> None:
+        """Test that failed reconnect continues to next retry attempt.
+
+        With max_retries=2 (3 attempts total):
+        - Attempt 0: OSError → teardown → sleep → continue
+        - Attempt 1: top-of-loop reconnect → fails → sleep → continue
+        - Attempt 2: top-of-loop reconnect → fails → raise (final attempt)
+        """
         transport = DongleTransport(
             host="192.168.1.100",
             dongle_serial="BA12345678",
@@ -623,13 +635,17 @@ class TestDongleRegisterOperations:
         transport._reader = AsyncMock()
         transport._reader.read = AsyncMock(side_effect=OSError("Connection lost"))
         transport._writer = AsyncMock()
+        transport._writer.write = MagicMock()
         transport._writer.close = MagicMock()
 
-        # Reconnect itself fails
+        # Reconnect always fails — but retries should still be attempted
         transport.connect = AsyncMock(side_effect=TransportConnectionError("Cannot connect"))
 
-        with pytest.raises(TransportReadError, match="Socket error"):
-            await transport._send_receive(b"\x00" * 10)
+        with pytest.raises(TransportConnectionError, match="Socket not initialized"):
+            await transport._send_receive(b"\x00" * 10, max_retries=2)
+
+        # Both retry attempts should have tried to reconnect
+        assert transport.connect.call_count == 2
 
     @pytest.mark.asyncio
     async def test_write_parameters(self) -> None:
