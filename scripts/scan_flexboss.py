@@ -22,34 +22,25 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 
 def get_mapped_registers() -> tuple[dict[int, str], dict[int, str]]:
-    """Get all mapped input and holding registers."""
-    from pylxpweb.transports.register_maps import (
-        PV_SERIES_ENERGY_MAP,
-        PV_SERIES_RUNTIME_MAP,
-    )
+    """Get all mapped input and holding registers.
+
+    Uses the canonical ``INVERTER_INPUT_REGISTERS`` definitions (the
+    ``registers/`` package replaced the legacy ``register_maps`` module).
+    """
+    from pylxpweb.registers import INVERTER_INPUT_REGISTERS, RegisterCategory
 
     input_mapped: dict[int, str] = {}
     holding_mapped: dict[int, str] = {}
 
-    # Runtime map uses INPUT registers
-    for field_name in dir(PV_SERIES_RUNTIME_MAP):
-        if field_name.startswith("_"):
-            continue
-        field_def = getattr(PV_SERIES_RUNTIME_MAP, field_name)
-        if hasattr(field_def, "address"):
-            input_mapped[field_def.address] = field_name
-            if hasattr(field_def, "bit_width") and field_def.bit_width == 32:
-                input_mapped[field_def.address + 1] = f"{field_name}[hi]"
-
-    # Energy map also uses INPUT registers
-    for field_name in dir(PV_SERIES_ENERGY_MAP):
-        if field_name.startswith("_"):
-            continue
-        field_def = getattr(PV_SERIES_ENERGY_MAP, field_name)
-        if hasattr(field_def, "address"):
-            input_mapped[field_def.address] = f"energy.{field_name}"
-            if hasattr(field_def, "bit_width") and field_def.bit_width == 32:
-                input_mapped[field_def.address + 1] = f"energy.{field_name}[hi]"
+    for reg in INVERTER_INPUT_REGISTERS:
+        prefix = (
+            "energy"
+            if reg.category in (RegisterCategory.ENERGY_DAILY, RegisterCategory.ENERGY_LIFETIME)
+            else "runtime"
+        )
+        input_mapped[reg.address] = f"{prefix}.{reg.canonical_name}"
+        if reg.bit_width == 32:
+            input_mapped[reg.address + 1] = f"{prefix}.{reg.canonical_name}[hi]"
 
     return input_mapped, holding_mapped
 

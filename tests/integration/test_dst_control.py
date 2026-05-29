@@ -297,26 +297,20 @@ async def test_dst_sync_when_already_correct(live_client: LuxpowerClient) -> Non
     plants = await live_client.plants.get_plants()
     plant_id = plants.rows[0].plantId
 
-    # Get current plant details
+    # Record original DST flag so we can restore it in the finally block.
     details = await live_client.plants.get_plant_details(str(plant_id))
     original_dst = details["daylightSavingTime"]
-    timezone_str = details["timezone"]
-    current_tz_minutes = details.get("currentTimezoneWithMinute")
 
-    # Calculate expected DST status
-    expected_dst = None
-    if current_tz_minutes is not None and "GMT" in timezone_str:
-        try:
-            offset_str = timezone_str.replace("GMT", "").strip()
-            base_hours = int(offset_str)
-            current_hours = current_tz_minutes / 60.0
-            difference = current_hours - base_hours
-            expected_dst = difference >= 0.5
-        except Exception as e:
-            pytest.skip(f"Cannot calculate expected DST: {e}")
-
+    # Determine the "correct" DST value using the SAME detection that
+    # sync_dst_setting() relies on (Station.detect_dst_status, IANA-timezone
+    # based) rather than a separate offset heuristic. A divergent heuristic
+    # disagreed with production detection across DST transitions, making this
+    # test seasonally flaky (it set a value production then "corrected").
+    detection_station = await Station.load(live_client, plant_id)
+    expected_dst = detection_station.detect_dst_status()
     if expected_dst is None:
-        pytest.skip("Cannot determine expected DST status from timezone data")
+        pytest.skip("DST detection unavailable (no IANA timezone configured)")
+    live_client.clear_cache()
 
     try:
         # Set API DST flag to CORRECT value

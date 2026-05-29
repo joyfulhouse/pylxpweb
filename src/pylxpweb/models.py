@@ -450,12 +450,16 @@ class InverterRuntime(BaseModel):
     vpv2: int
     vpv3: int | None = None
     vpv4: int | None = None  # Some models have 4 PV inputs
+    vpv5: int | None = None  # >4-string models (V23 extended)
+    vpv6: int | None = None  # >5-string models (V23 extended)
     remainTime: int = 0
     # PV power (watts, no scaling)
     ppv1: int
     ppv2: int
     ppv3: int | None = None
     ppv4: int | None = None  # Some models have 4 PV inputs
+    ppv5: int | None = None  # >4-string models (V23 extended)
+    ppv6: int | None = None  # >5-string models (V23 extended)
     ppv: int
     ppvpCharge: int | None = None  # PV charge power (alternate field name on some models)
     # AC voltages (�100 for volts)

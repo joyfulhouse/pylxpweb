@@ -49,6 +49,10 @@ INVERTER_RUNTIME_SCALING: dict[str, ScaleFactor] = {
     "vpv1": ScaleFactor.SCALE_10,
     "vpv2": ScaleFactor.SCALE_10,
     "vpv3": ScaleFactor.SCALE_10,
+    # PV4-6 voltages (V23 extended, >3-string models) — same ÷10 scale
+    "vpv4": ScaleFactor.SCALE_10,
+    "vpv5": ScaleFactor.SCALE_10,
+    "vpv6": ScaleFactor.SCALE_10,
     # AC Voltages (÷10: 2411 → 241.1V)
     "vacr": ScaleFactor.SCALE_10,
     "vacs": ScaleFactor.SCALE_10,
@@ -69,15 +73,27 @@ INVERTER_RUNTIME_SCALING: dict[str, ScaleFactor] = {
     "genFreq": ScaleFactor.SCALE_100,
     # Generator Voltage (÷10)
     "genVolt": ScaleFactor.SCALE_10,
-    # Currents (÷100: 20000 → 200.0A)
+    # Cloud BMS current limits. The cloud payload reports the SAME physical
+    # limit twice, at two DIFFERENT raw scales (validated against the real
+    # sample runtime_44300E0585.json and docs/api/LUXPOWER_API.md):
+    #   - maxChgCurr / maxDischgCurr           = 0.01A units → ÷100 (6000 → 60.0A)
+    #   - maxChgCurrValue / maxDischgCurrValue = 0.1A  units → ÷10  (600  → 60.0A)
+    # The 0.1A `*Value` fields mirror modbus input reg 81/82 units (DIV_10).
+    # Do NOT collapse these to a single scale — that would 10x the `*Value`
+    # amps (600 → 6.0A) or the base amps (6000 → 600.0A). See #172 for the
+    # separate battery-module fix (do not conflate).
     "maxChgCurr": ScaleFactor.SCALE_100,
     "maxDischgCurr": ScaleFactor.SCALE_100,
-    "maxChgCurrValue": ScaleFactor.SCALE_100,
-    "maxDischgCurrValue": ScaleFactor.SCALE_100,
+    "maxChgCurrValue": ScaleFactor.SCALE_10,
+    "maxDischgCurrValue": ScaleFactor.SCALE_10,
     # Power values - NO SCALING (direct Watts)
     "ppv1": ScaleFactor.SCALE_NONE,
     "ppv2": ScaleFactor.SCALE_NONE,
     "ppv3": ScaleFactor.SCALE_NONE,
+    # PV4-6 power (V23 extended, >3-string models) — direct Watts, no scaling
+    "ppv4": ScaleFactor.SCALE_NONE,
+    "ppv5": ScaleFactor.SCALE_NONE,
+    "ppv6": ScaleFactor.SCALE_NONE,
     "ppv": ScaleFactor.SCALE_NONE,
     "pCharge": ScaleFactor.SCALE_NONE,
     "pDisCharge": ScaleFactor.SCALE_NONE,

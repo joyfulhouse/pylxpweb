@@ -351,6 +351,14 @@ class InverterRuntimeData:
         # Import scaling functions
         from pylxpweb.constants.scaling import scale_runtime_value
 
+        def _opt_voltage(field: str, raw: int | None) -> float | None:
+            """Scale an optional cloud PV voltage, preserving None when absent."""
+            return scale_runtime_value(field, raw) if raw is not None else None
+
+        def _opt_power(raw: int | None) -> float | None:
+            """Cast an optional cloud PV power (W, no scaling), preserving None."""
+            return float(raw) if raw is not None else None
+
         return cls(
             timestamp=datetime.now(),
             # PV - API returns values needing /10 scaling
@@ -360,6 +368,17 @@ class InverterRuntimeData:
             pv2_power=float(runtime.ppv2 or 0),
             pv3_voltage=scale_runtime_value("vpv3", runtime.vpv3 or 0),
             pv3_power=float(runtime.ppv3 or 0),
+            # PV4-6 (V23 extended, >3-string models).  Same SCALE_10 voltage /
+            # SCALE_NONE power handling as pv1-3, but preserve None when the
+            # cloud omits the field so a 3-string inverter's output (pv4-6 =
+            # None) is unchanged.  pv_total_power below comes from the cloud's
+            # own ``ppv`` aggregate, which already includes every PV string.
+            pv4_voltage=_opt_voltage("vpv4", runtime.vpv4),
+            pv4_power=_opt_power(runtime.ppv4),
+            pv5_voltage=_opt_voltage("vpv5", runtime.vpv5),
+            pv5_power=_opt_power(runtime.ppv5),
+            pv6_voltage=_opt_voltage("vpv6", runtime.vpv6),
+            pv6_power=_opt_power(runtime.ppv6),
             pv_total_power=float(runtime.ppv or 0),
             # Battery
             battery_voltage=scale_runtime_value("vBat", runtime.vBat),
@@ -405,6 +424,7 @@ class InverterRuntimeData:
         model_family: str = "EG4_HYBRID",
         *,
         split_phase: bool = False,
+        pv_string_count: int = 3,
     ) -> InverterRuntimeData:
         """Create from Modbus input register values.
 
@@ -418,11 +438,21 @@ class InverterRuntimeData:
                 ``"EG4_OFFGRID"``, or ``"LXP"``).
             split_phase: If True, compute combined power from per-leg values
                 when the combined register reads 0 (split-phase firmware gap).
+            pv_string_count: Number of PV (MPPT) strings the inverter MODEL
+                exposes (0..n).  The V23-extended pv4-6 registers are only
+                parsed when their index is ``<= pv_string_count``.  Defaults to
+                3 (the residential norm), so a 3-string model never picks up
+                pv4-6 even if those addresses happen to be present in
+                ``input_registers``.
 
         Returns:
             Transport-agnostic runtime data with scaling applied
         """
-        from pylxpweb.registers.inverter_input import BY_NAME, registers_for_model
+        from pylxpweb.registers.inverter_input import (
+            BY_NAME,
+            PV4_6_EXTENDED_NAMES,
+            registers_for_model,
+        )
 
         # Get registers applicable to this model, filtered to runtime categories
         model_regs = registers_for_model(model_family)
@@ -437,6 +467,15 @@ class InverterRuntimeData:
         bms_warning_code: int | None = None
 
         for reg in runtime_regs:
+            # V23-extended pv4-6: only parse when the MODEL exposes that string
+            # index.  A 3-string model (pv_string_count=3) leaves pv4-6 None
+            # even if regs 217-222 are present in the raw snapshot.
+            if reg.canonical_name in PV4_6_EXTENDED_NAMES:
+                # Runtime regs here are pv4_voltage/pv4_power/... -> index at [2]
+                pv_index = int(reg.canonical_name[2])
+                if pv_index > pv_string_count:
+                    continue
+
             field_name = RUNTIME_FIELD.get(reg.canonical_name)
             if field_name is None:
                 # Special handling: packed registers, fault/warning codes
@@ -475,9 +514,17 @@ class InverterRuntimeData:
             inverter_warning_code if inverter_warning_code else bms_warning_code
         )
 
-        # Compute derived fields
+        # Compute derived fields.  Sum all non-None pvN_power across pv1..pv6
+        # so the total is count-agnostic: a 3-string inverter has pv4-6=None
+        # (excluded by _sum_optional), so its total is unchanged; a >3-string
+        # inverter includes the extra strings.
         kwargs["pv_total_power"] = _sum_optional(
-            kwargs.get("pv1_power"), kwargs.get("pv2_power"), kwargs.get("pv3_power")
+            kwargs.get("pv1_power"),
+            kwargs.get("pv2_power"),
+            kwargs.get("pv3_power"),
+            kwargs.get("pv4_power"),
+            kwargs.get("pv5_power"),
+            kwargs.get("pv6_power"),
         )
 
         # load_power comes from power_to_user (reg 27), power_from_grid also

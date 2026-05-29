@@ -137,6 +137,36 @@ class InverterRuntimePropertiesMixin:
         return self._raw_int("pv3_power", "ppv3")
 
     @property
+    def pv4_voltage(self) -> float | None:
+        """Get PV string 4 voltage in volts (V23 extended, >3-string models)."""
+        return self._scaled_float("pv4_voltage", "vpv4")
+
+    @property
+    def pv5_voltage(self) -> float | None:
+        """Get PV string 5 voltage in volts (V23 extended, >3-string models)."""
+        return self._scaled_float("pv5_voltage", "vpv5")
+
+    @property
+    def pv6_voltage(self) -> float | None:
+        """Get PV string 6 voltage in volts (V23 extended, >3-string models)."""
+        return self._scaled_float("pv6_voltage", "vpv6")
+
+    @property
+    def pv4_power(self) -> int | None:
+        """Get PV string 4 power in watts (V23 extended, >3-string models)."""
+        return self._raw_int("pv4_power", "ppv4")
+
+    @property
+    def pv5_power(self) -> int | None:
+        """Get PV string 5 power in watts (V23 extended, >3-string models)."""
+        return self._raw_int("pv5_power", "ppv5")
+
+    @property
+    def pv6_power(self) -> int | None:
+        """Get PV string 6 power in watts (V23 extended, >3-string models)."""
+        return self._raw_int("pv6_power", "ppv6")
+
+    @property
     def pv_total_power(self) -> int | None:
         """Get total PV power from all strings in watts."""
         return self._raw_int("pv_total_power", "ppv")

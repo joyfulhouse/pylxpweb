@@ -109,9 +109,70 @@ class TestInverterRuntimeScaling:
         assert scale_runtime_value("genFreq", 5995) == 59.95
 
     def test_current_scaling(self) -> None:
-        """Test current scaling (÷100)."""
+        """Test cloud BMS current-limit scaling using each field's REAL raw units.
+
+        The cloud payload reports the same physical 60.0A limit twice, at two
+        different raw scales (validated against runtime_44300E0585.json and
+        docs/api/LUXPOWER_API.md, which show maxChgCurr=6000, maxChgCurrValue=600):
+          - maxChgCurr / maxDischgCurr           = 0.01A units → ÷100 (6000 → 60.0A)
+          - maxChgCurrValue / maxDischgCurrValue = 0.1A  units → ÷10  (600  → 60.0A)
+
+        Using each field's realistic raw value makes this guard catch a wrong
+        scale on the ``*Value`` fields: if they were (incorrectly) ÷100, then
+        raw 600 would yield 6.0A and these assertions would fail.
+        """
+        # 0.01A-unit fields: raw 6000 → 60.0A.
         assert scale_runtime_value("maxChgCurr", 6000) == 60.0
         assert scale_runtime_value("maxDischgCurr", 6000) == 60.0
+        # 0.1A-unit companion fields: raw 600 → 60.0A (NOT 6000).
+        assert scale_runtime_value("maxChgCurrValue", 600) == 60.0
+        assert scale_runtime_value("maxDischgCurrValue", 600) == 60.0
+        # Guard: the *Value fields must NOT use the 0.01A scale (÷100). If they
+        # did, raw 600 would mis-scale to 6.0A.
+        assert scale_runtime_value("maxChgCurrValue", 600) != 6.0
+
+    def test_bms_current_limit_cloud_local_same_physical_amps(self) -> None:
+        """CLOUD and LOCAL must agree on PHYSICAL amps despite differing raw units.
+
+        Cloud/local divergence regression. The cloud ``maxChgCurr`` field and
+        modbus input register 81 (``bms_charge_current_limit``) report the SAME
+        physical BMS limit, but at DIFFERENT raw scales:
+
+          - CLOUD  ``maxChgCurr``   = 0.01A units -> SCALE_100 (raw 6000 -> 60.0A)
+          - LOCAL  reg 81           = 0.1A  units -> DIV_10    (raw 600  -> 60.0A)
+
+        Validated against the real cloud sample ``runtime_44300E0585.json``
+        (maxChgCurr=6000, maxChgCurrValue=600 — same 60.0A at two scales) and the
+        published API docs (÷100). A live LOCAL reg-81 value could not be observed
+        (inverter-level ``lxp_*_max_charge_current`` reads "unavailable" in
+        production), so the LOCAL raw here (600, 0.1A) is taken from the cloud
+        companion field ``maxChgCurrValue`` which mirrors the same units as reg 81.
+
+        Guards against re-applying the (reverted) assumption that the two paths
+        share one raw scale — that would 10x-inflate cloud amps (6000 -> 600.0A).
+        """
+        from pylxpweb.registers.inverter_input import BY_NAME
+
+        # Same physical limit, expressed in each path's native raw units.
+        physical_amps = 60.0
+        cloud_raw_001a = 6000  # cloud maxChgCurr: 0.01A units
+        local_raw_01a = 600  # modbus reg 81: 0.1A units (== cloud maxChgCurrValue)
+
+        for reg_name, cloud_field in (
+            ("bms_charge_current_limit", "maxChgCurr"),
+            ("bms_discharge_current_limit", "maxDischgCurr"),
+        ):
+            reg = BY_NAME[reg_name]
+            local_divisor = int(reg.scale)  # DIV_10 == 10
+            local_value = local_raw_01a / local_divisor
+            cloud_value = scale_runtime_value(cloud_field, cloud_raw_001a)
+            assert local_value == physical_amps, (
+                f"{reg_name}: local {local_value} != {physical_amps}A"
+            )
+            assert cloud_value == physical_amps, (
+                f"{cloud_field}: cloud {cloud_value} != {physical_amps}A"
+            )
+            assert cloud_value == local_value
 
     def test_power_no_scaling(self) -> None:
         """Test power values have no scaling."""

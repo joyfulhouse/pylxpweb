@@ -3,7 +3,7 @@
 
 Reads all registers from the FlexBOSS21 via Modbus TCP and identifies:
 1. Registers that contain non-zero data
-2. Registers that are not mapped in the current register_maps.py
+2. Registers that are not mapped in the canonical register definitions
 3. Comparison with InverterRuntime fields available via web API
 """
 
@@ -47,33 +47,25 @@ class RegisterScanResult:
 
 
 def get_mapped_input_registers() -> dict[int, str]:
-    """Get all registers mapped in PV_SERIES_RUNTIME_MAP and PV_SERIES_ENERGY_MAP."""
-    from pylxpweb.transports.register_maps import (
-        PV_SERIES_ENERGY_MAP,
-        PV_SERIES_RUNTIME_MAP,
-    )
+    """Get all mapped INPUT registers from the canonical register definitions.
+
+    Uses ``INVERTER_INPUT_REGISTERS`` (the ``registers/`` package replaced the
+    legacy ``register_maps`` module's ``PV_SERIES_RUNTIME_MAP`` /
+    ``PV_SERIES_ENERGY_MAP``).
+    """
+    from pylxpweb.registers import INVERTER_INPUT_REGISTERS, RegisterCategory
 
     mapped: dict[int, str] = {}
 
-    # Extract from runtime map
-    for field_name in dir(PV_SERIES_RUNTIME_MAP):
-        if field_name.startswith("_"):
-            continue
-        field_def = getattr(PV_SERIES_RUNTIME_MAP, field_name)
-        if hasattr(field_def, "address"):
-            mapped[field_def.address] = f"runtime.{field_name}"
-            if field_def.bit_width == 32:
-                mapped[field_def.address + 1] = f"runtime.{field_name} (high/low)"
-
-    # Extract from energy map
-    for field_name in dir(PV_SERIES_ENERGY_MAP):
-        if field_name.startswith("_"):
-            continue
-        field_def = getattr(PV_SERIES_ENERGY_MAP, field_name)
-        if hasattr(field_def, "address"):
-            mapped[field_def.address] = f"energy.{field_name}"
-            if field_def.bit_width == 32:
-                mapped[field_def.address + 1] = f"energy.{field_name} (high/low)"
+    for reg in INVERTER_INPUT_REGISTERS:
+        prefix = (
+            "energy"
+            if reg.category in (RegisterCategory.ENERGY_DAILY, RegisterCategory.ENERGY_LIFETIME)
+            else "runtime"
+        )
+        mapped[reg.address] = f"{prefix}.{reg.canonical_name}"
+        if reg.bit_width == 32:
+            mapped[reg.address + 1] = f"{prefix}.{reg.canonical_name} (high/low)"
 
     return mapped
 

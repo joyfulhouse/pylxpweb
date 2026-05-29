@@ -24,6 +24,7 @@ from pylxpweb.constants import (
     DEVICE_TYPE_CODE_PV_SERIES,
     DEVICE_TYPE_CODE_SNA,
 )
+from pylxpweb.registers.inverter_input import pv_string_count_for_model
 
 # Mapping of deprecated family names to their replacements
 _DEPRECATED_FAMILY_NAMES: dict[str, str] = {
@@ -208,6 +209,35 @@ FAMILY_DEFAULT_FEATURES: dict[InverterFamily, dict[str, bool]] = {
         "grid_peak_shaving": False,
         "drms_support": False,
     },
+}
+
+
+# Explicit, declarative PV (MPPT) string count per inverter model.
+#
+# This is the single, obvious source of truth: each inverter MODEL — keyed by
+# its HOLD_DEVICE_TYPE_CODE — declares how many PV strings it has (0..n).
+# Sensor/register creation is driven by this count: a 3-string model exposes
+# pv1-3 only, a 0-string model (battery-only / AC-coupled-only) exposes none,
+# and a hypothetical 5-string model would expose pv1-5.
+#
+# To support a new model's string count, add ONE line here.
+#
+# Values below are LIVE-CONFIRMED from production hardware:
+#   - 18kPV / 12kPV  (DEVICE_TYPE_CODE_PV_SERIES) -> 3 strings
+#   - FlexBOSS21/18  (DEVICE_TYPE_CODE_FLEXBOSS)   -> 3 strings
+#
+# Models WITHOUT an explicit entry here fall back to the count implied by their
+# Modbus register set (``pv_string_count_for_model`` counts pvN_voltage
+# registers present in ``registers_for_model``).  This guarantees existing
+# pv1-3 behavior never regresses for any unconfirmed model.  When a model's
+# real string count is confirmed, add it here (see TODOs) — that is the
+# maintainable, no-guessing path.
+DEVICE_TYPE_CODE_PV_STRING_COUNT: dict[int, int] = {
+    DEVICE_TYPE_CODE_PV_SERIES: 3,  # 18kPV, 12kPV (live-confirmed)
+    DEVICE_TYPE_CODE_FLEXBOSS: 3,  # FlexBOSS21, FlexBOSS18 (live-confirmed)
+    # TODO(confirm): DEVICE_TYPE_CODE_SNA pv_string_count (EG4 12000XP/6000XP).
+    # TODO(confirm): DEVICE_TYPE_CODE_LXP_EU / DEVICE_TYPE_CODE_LXP_LB counts.
+    # Until confirmed, these use the register-derived fallback (currently 3).
 }
 
 
@@ -485,6 +515,12 @@ class InverterFeatures:
     # Grid configuration
     grid_type: GridType = GridType.UNKNOWN
 
+    # PV (MPPT) input string count.  Explicit per-model value (0..n) that
+    # drives PV sensor/register creation.  Default 3 — the residential norm.
+    # Set from DEVICE_TYPE_CODE_PV_STRING_COUNT, else the register-derived
+    # fallback (see ``from_device_type_code``).
+    pv_string_count: int = 3
+
     # Hardware capabilities
     split_phase: bool = False  # Split-phase grid (US 120V/240V)
     three_phase_capable: bool = False  # Three-phase grid support
@@ -526,6 +562,26 @@ class InverterFeatures:
         for key, value in defaults.items():
             if hasattr(features, key):
                 setattr(features, key, value)
+
+        # PV string count resolution (in priority order):
+        #   1. explicit DEVICE_TYPE_CODE_PV_STRING_COUNT entry (authoritative,
+        #      live-confirmed per model) — used if present.
+        #   2. register-derived count (pv_string_count_for_model) — used only
+        #      when it is >0, i.e. the family has a real Modbus register model.
+        #      This keeps existing pv1-3 behavior for any unconfirmed but
+        #      register-modeled family.
+        #   3. otherwise the family is genuinely UNKNOWN (no register model,
+        #      register count == 0) — keep the dataclass default of 3 (the
+        #      conservative pv1-3 set) so pv1-3 always work (no regression).
+        explicit_count = DEVICE_TYPE_CODE_PV_STRING_COUNT.get(device_type_code)
+        if explicit_count is not None:
+            features.pv_string_count = explicit_count
+        else:
+            register_count = pv_string_count_for_model(family.value)
+            if register_count > 0:
+                features.pv_string_count = register_count
+            # else: register count is 0 (UNKNOWN family, no register model) —
+            # leave the dataclass default (3) untouched per rule 3 above.
 
         # Set grid type based on family
         if family in (InverterFamily.EG4_OFFGRID, InverterFamily.EG4_HYBRID):

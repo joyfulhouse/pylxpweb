@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pylxpweb.registers import PV4_6_INPUT_REGISTER_GROUP
 from pylxpweb.transports.dongle import (
     DEFAULT_PORT,
     MODBUS_READ_HOLDING,
@@ -494,48 +495,158 @@ class TestDongleRegisterOperations:
 
     @pytest.mark.asyncio
     async def test_auto_reconnect_after_disconnect(self) -> None:
-        """Test that _send_receive auto-reconnects after connection drops.
+        """Test that _send_receive auto-reconnects on next call after disconnect.
 
-        Simulates a dropped connection (OSError during read) followed by
-        a successful reconnect on the next call.
+        Simulates: previous call left _connected=False, next _send_receive
+        reconnects before attempting the transaction.
         """
         transport = DongleTransport(
             host="192.168.1.100",
             dongle_serial="BA12345678",
             inverter_serial="CE12345678",
         )
-        # Simulate an established connection
-        transport._connected = True
-        transport._reader = AsyncMock()
-        transport._writer = AsyncMock()
-        transport._writer.close = MagicMock()
+        # Simulate a prior disconnect (e.g. previous call failed)
+        transport._connected = False
+        transport._reader = None
+        transport._writer = None
 
-        # First call: OSError tears down the connection
-        transport._reader.read = AsyncMock(side_effect=OSError("Connection reset"))
-        with pytest.raises(TransportReadError, match="Socket error"):
-            await transport._send_receive(b"\x00" * 10)
-
-        assert not transport._connected
-
-        # Next call: should attempt reconnect (not just raise "not connected")
         # Mock connect to succeed and set up fresh reader/writer
         async def mock_connect() -> None:
             transport._connected = True
             transport._reader = AsyncMock()
-            transport._writer = AsyncMock()
-            transport._writer.close = MagicMock()
-            # Return a valid response on read
+            writer = AsyncMock()
+            writer.write = MagicMock()
+            writer.close = MagicMock()
+            transport._writer = writer
+            # Return empty response (will fail, but proves connect was called)
             transport._reader.read = AsyncMock(return_value=b"")
 
         transport.connect = AsyncMock(side_effect=mock_connect)
 
-        # This should call connect(), not raise TransportConnectionError
+        # This should call connect() before attempting the transaction
         with pytest.raises(TransportReadError):
-            # Will fail with empty response after reconnect, but the point
-            # is that connect() was called
             await transport._send_receive(b"\x00" * 10)
 
         transport.connect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_oserror_reconnect_retry_succeeds(self) -> None:
+        """Test that OSError triggers reconnect+retry within _send_receive.
+
+        Simulates: first attempt hits OSError (connection drop), reconnects,
+        second attempt succeeds with valid response.
+        """
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        transport._connected = True
+
+        valid_response = _build_mock_response(
+            modbus_func=MODBUS_READ_HOLDING,
+            start_register=105,
+            register_values=[42],
+        )
+
+        # First attempt: reader raises OSError
+        first_reader = AsyncMock()
+        first_reader.read = AsyncMock(side_effect=OSError("Connection lost"))
+        first_writer = AsyncMock()
+        first_writer.write = MagicMock()
+        first_writer.close = MagicMock()
+        transport._reader = first_reader
+        transport._writer = first_writer
+
+        # After reconnect: fresh reader returns valid response
+        second_reader = AsyncMock()
+        # First read is _drain_buffer (empty), second is the actual response
+        second_reader.read = AsyncMock(side_effect=[b"", valid_response])
+        second_writer = AsyncMock()
+        second_writer.write = MagicMock()
+        second_writer.close = MagicMock()
+
+        async def mock_connect() -> None:
+            transport._connected = True
+            transport._reader = second_reader
+            transport._writer = second_writer
+
+        transport.connect = AsyncMock(side_effect=mock_connect)
+
+        result = await transport._send_receive(
+            b"\x00" * 10,
+            expected_func=MODBUS_READ_HOLDING,
+            expected_register=105,
+        )
+
+        assert result == [42]
+        transport.connect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_oserror_all_retries_exhausted(self) -> None:
+        """Test that OSError on all attempts raises after exhausting retries."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        transport._connected = True
+
+        async def mock_connect() -> None:
+            transport._connected = True
+            reader = AsyncMock()
+            reader.read = AsyncMock(side_effect=OSError("Connection lost"))
+            writer = AsyncMock()
+            writer.write = MagicMock()
+            writer.close = MagicMock()
+            transport._reader = reader
+            transport._writer = writer
+
+        # Initial reader also fails
+        transport._reader = AsyncMock()
+        transport._reader.read = AsyncMock(side_effect=OSError("Connection lost"))
+        transport._writer = AsyncMock()
+        transport._writer.write = MagicMock()
+        transport._writer.close = MagicMock()
+
+        transport.connect = AsyncMock(side_effect=mock_connect)
+
+        with pytest.raises(TransportReadError, match="Socket error"):
+            await transport._send_receive(b"\x00" * 10, max_retries=2)
+
+        # Should have reconnected for attempts 1 and 2 (attempt 0 fails,
+        # reconnects for attempt 1, fails, reconnects for attempt 2, fails)
+        assert transport.connect.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_oserror_reconnect_failure_continues_retries(self) -> None:
+        """Test that failed reconnect continues to next retry attempt.
+
+        With max_retries=2 (3 attempts total):
+        - Attempt 0: OSError → teardown → sleep → continue
+        - Attempt 1: top-of-loop reconnect → fails → sleep → continue
+        - Attempt 2: top-of-loop reconnect → fails → raise (final attempt)
+        """
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        transport._connected = True
+        transport._reader = AsyncMock()
+        transport._reader.read = AsyncMock(side_effect=OSError("Connection lost"))
+        transport._writer = AsyncMock()
+        transport._writer.write = MagicMock()
+        transport._writer.close = MagicMock()
+
+        # Reconnect always fails — but retries should still be attempted
+        transport.connect = AsyncMock(side_effect=TransportConnectionError("Cannot connect"))
+
+        with pytest.raises(TransportConnectionError, match="Socket not initialized"):
+            await transport._send_receive(b"\x00" * 10, max_retries=2)
+
+        # Both retry attempts should have tried to reconnect
+        assert transport.connect.call_count == 2
 
     @pytest.mark.asyncio
     async def test_write_parameters(self) -> None:
@@ -638,3 +749,76 @@ class TestCreateDongleTransportFactory:
         assert transport.dongle_serial == "BA87654321"
         assert transport.serial == "CE87654321"
         assert transport.inverter_family == InverterFamily.LXP
+
+
+class TestDongleReadRuntimeSerialization:
+    """Tests that DongleTransport.read_runtime is serialised under _op_lock.
+
+    The dongle has a single TCP connection and processes one request at a
+    time.  The inherited ``RegisterDataMixin.read_runtime`` issues a
+    multi-register runtime read PLUS the supplementary pv4-6 read, releasing
+    the per-transaction lock between calls.  Without op-level serialisation,
+    concurrent operations can interleave and misroute responses.  This mirrors
+    the serialisation already applied to ``read_all_input_data``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_read_runtime_holds_op_lock(self) -> None:
+        """read_runtime must hold _op_lock while issuing register reads."""
+        from pylxpweb.devices.inverters._features import InverterFamily
+
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+        )
+
+        lock_held_during_reads: list[bool] = []
+
+        async def fake_read_input(start: int, count: int) -> list[int]:
+            # Record whether the op_lock is held (owner set) during each read.
+            lock_held_during_reads.append(transport._op_lock._owner is not None)
+            return [0] * count
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read_input):
+            await transport.read_runtime()
+
+        assert lock_held_during_reads, "expected at least one register read"
+        assert all(lock_held_during_reads), (
+            "read_runtime issued register reads without holding _op_lock; "
+            "the dongle runtime read is not serialised"
+        )
+
+    @pytest.mark.asyncio
+    async def test_read_runtime_serialises_pv4_6_read(self) -> None:
+        """The supplementary pv4-6 read must also occur under the lock."""
+        from pylxpweb.devices.inverters._features import InverterFamily
+
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+        )
+        # Force pv4-6 path (models with >=4 strings issue the extra read).
+        transport._pv_string_count = 6
+
+        reads: list[tuple[int, bool]] = []
+
+        async def fake_read_input(start: int, count: int) -> list[int]:
+            reads.append((start, transport._op_lock._owner is not None))
+            return [0] * count
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read_input):
+            await transport.read_runtime()
+
+        # The pv4-6 supplementary read (start 217) must have occurred...
+        read_starts = [start for start, _ in reads]
+        assert PV4_6_INPUT_REGISTER_GROUP[0] in read_starts, (
+            "pv4-6 supplementary read did not occur for a >=4-string model"
+        )
+        # ...and every read (including pv4-6) must hold the lock.
+        assert all(held for _, held in reads), (
+            "pv4-6 supplementary read was not serialised under _op_lock"
+        )

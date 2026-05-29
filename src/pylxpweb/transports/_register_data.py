@@ -26,6 +26,7 @@ from pylxpweb.registers import (
     BATTERY_BASE_ADDRESS,
     BATTERY_MAX_COUNT,
     BATTERY_REGISTER_COUNT,
+    PV4_6_INPUT_REGISTER_GROUP,
 )
 
 from ._register_readers import (
@@ -90,6 +91,7 @@ if TYPE_CHECKING:
         _inter_register_delay: float
         _inverter_family: InverterFamily | None
         _split_phase: bool
+        _pv_string_count: int
 
         async def _read_input_registers(self, start: int, count: int) -> list[int]: ...
 
@@ -420,6 +422,35 @@ class RegisterDataMixin(_DataMixinBase):
 
         return registers
 
+    async def _read_pv4_6_registers(self) -> dict[int, int]:
+        """Read the V23-extended PV4-6 input registers (217-222) if applicable.
+
+        Only models whose ``pv_string_count >= 4`` expose these registers, so a
+        3-string model never issues this read (no wasteful/failing transaction
+        on residential hardware).  A read failure is non-fatal — pv4-6 simply
+        stay unpopulated — to match the resilience of the other supplementary
+        register groups.
+
+        Returns:
+            Dict mapping address to raw value (empty if not applicable or on
+            read failure).
+        """
+        if self._pv_string_count < 4:
+            return {}
+
+        start, count = PV4_6_INPUT_REGISTER_GROUP
+        await asyncio.sleep(self._inter_register_delay)
+        try:
+            values = await self._read_input_registers(start, count)
+        except (TransportReadError, TransportTimeoutError) as e:
+            _LOGGER.debug(
+                "PV4-6 registers unavailable for %s, continuing: %s",
+                self._serial,
+                e,
+            )
+            return {}
+        return self._registers_from_values(start, values)
+
     # ------------------------------------------------------------------
     # Device data methods
     # ------------------------------------------------------------------
@@ -434,9 +465,13 @@ class RegisterDataMixin(_DataMixinBase):
             TransportReadError: If read operation fails.
         """
         input_registers = await self._read_register_groups()
+        input_registers.update(await self._read_pv4_6_registers())
         family = self._inverter_family.value if self._inverter_family else "EG4_HYBRID"
         return InverterRuntimeData.from_modbus_registers(
-            input_registers, family, split_phase=self._split_phase
+            input_registers,
+            family,
+            split_phase=self._split_phase,
+            pv_string_count=self._pv_string_count,
         )
 
     async def read_energy(self) -> InverterEnergyData:
@@ -567,11 +602,17 @@ class RegisterDataMixin(_DataMixinBase):
             if i < len(INPUT_REGISTER_GROUPS) - 1:
                 await asyncio.sleep(self._inter_register_delay)
 
+        # V23-extended PV4-6 registers (only read for models with >=4 strings)
+        input_registers.update(await self._read_pv4_6_registers())
+
         family = self._inverter_family.value if self._inverter_family else "EG4_HYBRID"
 
         # Construct all three data types from the shared snapshot
         runtime = InverterRuntimeData.from_modbus_registers(
-            input_registers, family, split_phase=self._split_phase
+            input_registers,
+            family,
+            split_phase=self._split_phase,
+            pv_string_count=self._pv_string_count,
         )
         energy = InverterEnergyData.from_modbus_registers(input_registers, family)
 

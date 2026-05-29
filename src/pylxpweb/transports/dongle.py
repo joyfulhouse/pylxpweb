@@ -147,6 +147,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._timeout = timeout
         self._inverter_family = inverter_family
         self._split_phase: bool = False
+        self._pv_string_count: int = 3
         self._connection_retries = connection_retries
         self._inter_register_delay = 0.5  # Dongle needs slower pace than Modbus
         self._reader: asyncio.StreamReader | None = None
@@ -208,6 +209,16 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     def split_phase(self, value: bool) -> None:
         """Set the split-phase flag for per-leg power fallback."""
         self._split_phase = value
+
+    @property
+    def pv_string_count(self) -> int:
+        """Number of PV (MPPT) strings the inverter model exposes (0..n)."""
+        return self._pv_string_count
+
+    @pv_string_count.setter
+    def pv_string_count(self, value: int) -> None:
+        """Set the PV string count (gates pv4-6 register reads/parsing)."""
+        self._pv_string_count = int(value)
 
     async def _discard_initial_data(self) -> None:
         """Discard any initial data sent by the dongle after connection.
@@ -470,12 +481,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         """Send a packet and receive response with retry logic.
 
         Auto-reconnects if the TCP connection was lost (e.g. dongle reboot,
-        network glitch).  The reconnect happens once per call; if the fresh
-        connection also fails the error propagates normally.
+        network glitch).  On socket error, tears down the connection,
+        reconnects, and retries — up to ``max_retries`` times.
 
         Args:
             packet: Packet bytes to send
-            max_retries: Number of retry attempts for empty responses
+            max_retries: Number of retry attempts for transient errors
+                (empty responses, socket errors, validation mismatches)
             expected_func: Expected Modbus function code (0x03, 0x04, 0x06, 0x10).
                 When provided, rejects responses with a different function code.
                 Handles exception responses (high bit set) by masking to base code.
@@ -488,7 +500,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         Raises:
             TransportReadError: If send/receive fails after retries
             TransportTimeoutError: If operation times out
-            TransportConnectionError: If reconnection also fails
+            TransportConnectionError: If socket not initialized
         """
         if not self._connected:
             _LOGGER.info(
@@ -506,6 +518,18 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         async with self._lock:
             for attempt in range(max_retries + 1):
                 try:
+                    # Reconnect if socket was torn down (e.g. after OSError)
+                    if self._writer is None or self._reader is None:
+                        try:
+                            await self.connect()
+                        except Exception:
+                            if attempt >= max_retries:
+                                raise TransportConnectionError("Socket not initialized") from None
+                            await asyncio.sleep(0.5)
+                            continue
+                    if self._writer is None or self._reader is None:
+                        raise TransportConnectionError("Socket not initialized")
+
                     # Drain any pending data before sending (handles unsolicited packets)
                     await self._drain_buffer()
 
@@ -550,14 +574,26 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         "Consider using Modbus TCP with RS485 adapter instead."
                     ) from err
                 except OSError as err:
-                    _LOGGER.error("Socket error communicating with dongle: %s", err)
-                    # Mark as disconnected so next poll triggers reconnect
+                    # Tear down the broken connection; next iteration
+                    # will reconnect via the top-of-loop guard.
                     self._connected = False
                     self._reader = None
                     if self._writer:
                         with contextlib.suppress(Exception):
                             self._writer.close()
                     self._writer = None
+
+                    if attempt < max_retries:
+                        _LOGGER.warning(
+                            "Socket error on attempt %d/%d: %s, will reconnect on next retry",
+                            attempt + 1,
+                            max_retries + 1,
+                            err,
+                        )
+                        await asyncio.sleep(0.5)
+                        continue
+
+                    _LOGGER.error("Socket error communicating with dongle: %s", err)
                     raise TransportReadError(f"Socket error: {err}") from err
                 except TransportReadError as err:
                     last_error = err
@@ -885,6 +921,20 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         """Serialised read of MID/GridBOSS runtime data (5 INPUT + 1 HOLD read)."""
         async with self._op_lock:
             return await super().read_midbox_runtime()
+
+    async def read_runtime(self) -> InverterRuntimeData:
+        """Serialised runtime read (multi-group input read + pv4-6 extra read).
+
+        The inherited ``RegisterDataMixin.read_runtime`` issues the runtime
+        register groups plus the supplementary pv4-6 read, releasing the
+        per-transaction lock between each call.  On the dongle's single TCP
+        connection that allows concurrent operations to interleave and
+        misroute responses, so the whole sequence is wrapped in ``_op_lock``
+        — consistent with ``read_all_input_data``.  The pv4-6 read itself
+        remains non-fatal (handled inside ``RegisterDataMixin``).
+        """
+        async with self._op_lock:
+            return await super().read_runtime()
 
     async def read_all_input_data(
         self,

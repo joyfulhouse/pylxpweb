@@ -88,6 +88,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._timeout = timeout
         self._inverter_family = inverter_family
         self._split_phase: bool = False
+        self._pv_string_count: int = 3
         self._retries = retries
         self._retry_delay = retry_delay
         self._inter_register_delay = inter_register_delay
@@ -133,6 +134,16 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     def split_phase(self, value: bool) -> None:
         """Set the split-phase flag for per-leg power fallback."""
         self._split_phase = value
+
+    @property
+    def pv_string_count(self) -> int:
+        """Number of PV (MPPT) strings the inverter model exposes (0..n)."""
+        return self._pv_string_count
+
+    @pv_string_count.setter
+    def pv_string_count(self, value: int) -> None:
+        """Set the PV string count (gates pv4-6 register reads/parsing)."""
+        self._pv_string_count = int(value)
 
     # ------------------------------------------------------------------
     # Register Read/Write (with retry and error tracking)

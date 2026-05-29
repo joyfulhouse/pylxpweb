@@ -43,9 +43,15 @@ class TestInverterRuntimeData:
         runtime.vpv1 = 5100  # 510.0V after /10 scaling
         runtime.vpv2 = 5050
         runtime.vpv3 = None
+        runtime.vpv4 = None
+        runtime.vpv5 = None
+        runtime.vpv6 = None
         runtime.ppv1 = 1000
         runtime.ppv2 = 1500
         runtime.ppv3 = None
+        runtime.ppv4 = None
+        runtime.ppv5 = None
+        runtime.ppv6 = None
         runtime.ppv = 2500
         runtime.vBat = 530  # 53.0V after /10 scaling
         runtime.soc = 85
@@ -601,3 +607,115 @@ class TestSplitPhaseEpsFallback:
 
         data = InverterRuntimeData.from_modbus_registers(regs, "EG4_HYBRID", split_phase=True)
         assert data.eps_power == 500.0
+
+
+class TestPv456Parity:
+    """PV string 4-6 parity for InverterRuntimeData (LOCAL + HTTP paths).
+
+    PV strings 4-6 (V23 extended) carry voltage + power only (no current).
+    A 3-string model leaves pv4-6 None, so its output — including
+    ``pv_total_power`` — must be byte-for-byte identical to before this
+    feature existed.  A >3-string model must include the extra strings in
+    ``pv_total_power`` (LOCAL ``from_modbus_registers``) and populate the
+    pv4-6 voltage/power fields from cloud (HTTP ``from_http_response``).
+    """
+
+    @staticmethod
+    def _real_runtime() -> InverterRuntime:
+        """Load a real cloud runtime payload (3-string, pv4-6 absent)."""
+        import json
+        from pathlib import Path
+
+        sample = Path(__file__).resolve().parents[2] / "samples" / "runtime_1234567890.json"
+        return InverterRuntime.model_validate(json.loads(sample.read_text()))
+
+    # -- LOCAL (from_modbus_registers) ------------------------------------
+
+    def test_local_pv_total_includes_pv4_pv5(self) -> None:
+        """5-string LOCAL: pv_total_power sums pv1-5 (pv4/5 non-None)."""
+        regs: dict[int, int] = {
+            0: 0,  # status
+            5: (100 << 8) | 50,  # SOC=50, SOH=100
+            7: 1000,  # PV1 power
+            8: 1500,  # PV2 power
+            9: 500,  # PV3 power
+            217: 3300,  # PV4 voltage (×10 = 330.0V)
+            218: 3200,  # PV5 voltage
+            220: 700,  # PV4 power (W)
+            221: 300,  # PV5 power (W)
+            222: 0,  # PV6 power (model only has 5 strings)
+        }
+        data = InverterRuntimeData.from_modbus_registers(regs, "EG4_HYBRID", pv_string_count=5)
+        assert data.pv4_power == 700.0
+        assert data.pv5_power == 300.0
+        assert data.pv6_power is None  # index 6 > count 5 → not parsed
+        # 1000 + 1500 + 500 + 700 + 300 = 4000
+        assert data.pv_total_power == 4000.0
+
+    def test_local_pv_total_3string_unchanged(self) -> None:
+        """3-string LOCAL regression: pv4-6 ignored, total = pv1-3 only.
+
+        Even when regs 217-222 are present in the raw snapshot, a 3-string
+        model must not pick them up — the output must match a snapshot
+        without those registers at all.
+        """
+        base: dict[int, int] = {
+            0: 0,
+            5: (100 << 8) | 50,
+            7: 1000,
+            8: 1500,
+            9: 500,
+        }
+        with_pv456 = dict(base)
+        with_pv456.update({217: 3300, 218: 3200, 220: 700, 221: 300, 222: 100})
+
+        data_clean = InverterRuntimeData.from_modbus_registers(
+            base, "EG4_HYBRID", pv_string_count=3
+        )
+        data_noisy = InverterRuntimeData.from_modbus_registers(
+            with_pv456, "EG4_HYBRID", pv_string_count=3
+        )
+
+        assert data_clean.pv_total_power == 3000.0  # 1000+1500+500
+        # pv4-6 ignored: total and pv4-6 fields identical with/without regs
+        assert data_noisy.pv_total_power == 3000.0
+        assert data_noisy.pv4_power is None
+        assert data_noisy.pv5_power is None
+        assert data_noisy.pv6_power is None
+        assert data_noisy.pv4_voltage is None
+
+    # -- HTTP (from_http_response) ----------------------------------------
+
+    def test_http_populates_pv4_pv5_pv6(self) -> None:
+        """HTTP: vpv4-6/ppv4-6 populate pv4-6 voltage/power with scaling."""
+        runtime = self._real_runtime()
+        # Inject a >3-string cloud payload (real object, mutated fields).
+        runtime.vpv4 = 3300  # ×0.1 = 330.0V
+        runtime.vpv5 = 3200  # 320.0V
+        runtime.vpv6 = 3100  # 310.0V
+        runtime.ppv4 = 700  # W (no scaling)
+        runtime.ppv5 = 300
+        runtime.ppv6 = 100
+
+        data = InverterRuntimeData.from_http_response(runtime)
+
+        assert data.pv4_voltage == 330.0
+        assert data.pv5_voltage == 320.0
+        assert data.pv6_voltage == 310.0
+        assert data.pv4_power == 700.0
+        assert data.pv5_power == 300.0
+        assert data.pv6_power == 100.0
+
+    def test_http_3string_pv4_6_none(self) -> None:
+        """HTTP 3-string regression: pv4-6 stay None (cloud sends null)."""
+        runtime = self._real_runtime()  # pv4-6 absent in real payload
+        assert runtime.vpv4 is None and runtime.ppv4 is None
+
+        data = InverterRuntimeData.from_http_response(runtime)
+
+        assert data.pv4_voltage is None
+        assert data.pv5_voltage is None
+        assert data.pv6_voltage is None
+        assert data.pv4_power is None
+        assert data.pv5_power is None
+        assert data.pv6_power is None

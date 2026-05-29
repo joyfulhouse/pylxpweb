@@ -711,3 +711,89 @@ class TestEdgeCases:
 
         assert features1.model_family == features2.model_family
         assert features1.device_type_code == features2.device_type_code
+
+
+# =============================================================================
+# PV String Count Tests
+# =============================================================================
+#
+# pv_string_count is an EXPLICIT, declarative per-inverter-model value: each
+# device type code declares how many PV (MPPT) strings it has (0..n).  Models
+# without an explicit entry fall back to the count implied by their Modbus
+# register set (``pv_string_count_for_model``), so pv1-3 never regresses.
+
+
+class TestPVStringCount:
+    """pv_string_count is per-model and supports 0..n strings."""
+
+    def test_default_features_three_strings(self) -> None:
+        # Bare InverterFeatures defaults to the residential norm (3 strings).
+        features = InverterFeatures()
+        assert features.pv_string_count == 3
+
+    def test_18kpv_and_flexboss21_three_strings(self) -> None:
+        # 18kPV and FlexBOSS21 are live-confirmed 3-string (EG4_HYBRID).
+        from pylxpweb.constants import (
+            DEVICE_TYPE_CODE_FLEXBOSS,
+            DEVICE_TYPE_CODE_PV_SERIES,
+        )
+
+        for code in (DEVICE_TYPE_CODE_PV_SERIES, DEVICE_TYPE_CODE_FLEXBOSS):
+            features = InverterFeatures.from_device_type_code(code)
+            assert features.model_family == InverterFamily.EG4_HYBRID
+            assert features.pv_string_count == 3
+
+    def test_eg4_offgrid_three_strings(self) -> None:
+        from pylxpweb.constants import DEVICE_TYPE_CODE_SNA
+
+        features = InverterFeatures.from_device_type_code(DEVICE_TYPE_CODE_SNA)
+        assert features.model_family == InverterFamily.EG4_OFFGRID
+        assert features.pv_string_count == 3
+
+    def test_lxp_three_strings(self) -> None:
+        features = InverterFeatures.from_device_type_code(DEVICE_TYPE_CODE_LXP_LB)
+        assert features.model_family == InverterFamily.LXP
+        assert features.pv_string_count == 3
+
+    def test_unknown_model_defaults_to_three_strings(self) -> None:
+        # Resolution rule (from_device_type_code):
+        #   1. explicit DEVICE_TYPE_CODE_PV_STRING_COUNT entry, else
+        #   2. register-derived count (pv_string_count_for_model), else
+        #   3. the dataclass default of 3 when the family is genuinely UNKNOWN.
+        #
+        # An unknown device type code maps to InverterFamily.UNKNOWN, which has
+        # NO register model — pv_string_count_for_model("UNKNOWN") == 0 (asserted
+        # in test_pv456_registers.py).  Because the register-derived count is 0
+        # (not >0), step 2 does NOT override, so the residential default of 3
+        # stands.  This guarantees pv1-3 always work even for unrecognised models
+        # (no regression).
+        from pylxpweb.registers.inverter_input import pv_string_count_for_model
+
+        # Precondition for this test's reasoning: UNKNOWN has no PV registers.
+        assert pv_string_count_for_model(InverterFamily.UNKNOWN.value) == 0
+
+        features = InverterFeatures.from_device_type_code(99999)
+        assert features.model_family == InverterFamily.UNKNOWN
+        # Resolved count is the dataclass default (3), NOT the register count (0).
+        assert features.pv_string_count == 3
+
+    def test_explicit_map_is_authoritative_source(self) -> None:
+        from pylxpweb.constants import (
+            DEVICE_TYPE_CODE_FLEXBOSS,
+            DEVICE_TYPE_CODE_PV_SERIES,
+        )
+        from pylxpweb.devices.inverters._features import DEVICE_TYPE_CODE_PV_STRING_COUNT
+
+        # Live-confirmed models are declared explicitly (the maintainable spot).
+        assert DEVICE_TYPE_CODE_PV_STRING_COUNT[DEVICE_TYPE_CODE_PV_SERIES] == 3
+        assert DEVICE_TYPE_CODE_PV_STRING_COUNT[DEVICE_TYPE_CODE_FLEXBOSS] == 3
+
+    def test_count_supports_zero_strings(self) -> None:
+        # 0 strings (battery-only / AC-coupled-only) must be representable.
+        features = InverterFeatures(pv_string_count=0)
+        assert features.pv_string_count == 0
+
+    def test_count_supports_five_strings(self) -> None:
+        # Flexibility for a hypothetical >3-string model.
+        features = InverterFeatures(pv_string_count=5)
+        assert features.pv_string_count == 5
