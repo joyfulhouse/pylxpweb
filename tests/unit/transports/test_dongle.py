@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pylxpweb.registers import PV4_6_INPUT_REGISTER_GROUP
 from pylxpweb.transports.dongle import (
     DEFAULT_PORT,
     MODBUS_READ_HOLDING,
@@ -748,3 +749,76 @@ class TestCreateDongleTransportFactory:
         assert transport.dongle_serial == "BA87654321"
         assert transport.serial == "CE87654321"
         assert transport.inverter_family == InverterFamily.LXP
+
+
+class TestDongleReadRuntimeSerialization:
+    """Tests that DongleTransport.read_runtime is serialised under _op_lock.
+
+    The dongle has a single TCP connection and processes one request at a
+    time.  The inherited ``RegisterDataMixin.read_runtime`` issues a
+    multi-register runtime read PLUS the supplementary pv4-6 read, releasing
+    the per-transaction lock between calls.  Without op-level serialisation,
+    concurrent operations can interleave and misroute responses.  This mirrors
+    the serialisation already applied to ``read_all_input_data``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_read_runtime_holds_op_lock(self) -> None:
+        """read_runtime must hold _op_lock while issuing register reads."""
+        from pylxpweb.devices.inverters._features import InverterFamily
+
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+        )
+
+        lock_held_during_reads: list[bool] = []
+
+        async def fake_read_input(start: int, count: int) -> list[int]:
+            # Record whether the op_lock is held (owner set) during each read.
+            lock_held_during_reads.append(transport._op_lock._owner is not None)
+            return [0] * count
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read_input):
+            await transport.read_runtime()
+
+        assert lock_held_during_reads, "expected at least one register read"
+        assert all(lock_held_during_reads), (
+            "read_runtime issued register reads without holding _op_lock; "
+            "the dongle runtime read is not serialised"
+        )
+
+    @pytest.mark.asyncio
+    async def test_read_runtime_serialises_pv4_6_read(self) -> None:
+        """The supplementary pv4-6 read must also occur under the lock."""
+        from pylxpweb.devices.inverters._features import InverterFamily
+
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+        )
+        # Force pv4-6 path (models with >=4 strings issue the extra read).
+        transport._pv_string_count = 6
+
+        reads: list[tuple[int, bool]] = []
+
+        async def fake_read_input(start: int, count: int) -> list[int]:
+            reads.append((start, transport._op_lock._owner is not None))
+            return [0] * count
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read_input):
+            await transport.read_runtime()
+
+        # The pv4-6 supplementary read (start 217) must have occurred...
+        read_starts = [start for start, _ in reads]
+        assert PV4_6_INPUT_REGISTER_GROUP[0] in read_starts, (
+            "pv4-6 supplementary read did not occur for a >=4-string model"
+        )
+        # ...and every read (including pv4-6) must hold the lock.
+        assert all(held for _, held in reads), (
+            "pv4-6 supplementary read was not serialised under _op_lock"
+        )

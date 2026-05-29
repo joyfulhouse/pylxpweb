@@ -147,6 +147,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._timeout = timeout
         self._inverter_family = inverter_family
         self._split_phase: bool = False
+        self._pv_string_count: int = 3
         self._connection_retries = connection_retries
         self._inter_register_delay = 0.5  # Dongle needs slower pace than Modbus
         self._reader: asyncio.StreamReader | None = None
@@ -208,6 +209,16 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     def split_phase(self, value: bool) -> None:
         """Set the split-phase flag for per-leg power fallback."""
         self._split_phase = value
+
+    @property
+    def pv_string_count(self) -> int:
+        """Number of PV (MPPT) strings the inverter model exposes (0..n)."""
+        return self._pv_string_count
+
+    @pv_string_count.setter
+    def pv_string_count(self, value: int) -> None:
+        """Set the PV string count (gates pv4-6 register reads/parsing)."""
+        self._pv_string_count = int(value)
 
     async def _discard_initial_data(self) -> None:
         """Discard any initial data sent by the dongle after connection.
@@ -910,6 +921,20 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         """Serialised read of MID/GridBOSS runtime data (5 INPUT + 1 HOLD read)."""
         async with self._op_lock:
             return await super().read_midbox_runtime()
+
+    async def read_runtime(self) -> InverterRuntimeData:
+        """Serialised runtime read (multi-group input read + pv4-6 extra read).
+
+        The inherited ``RegisterDataMixin.read_runtime`` issues the runtime
+        register groups plus the supplementary pv4-6 read, releasing the
+        per-transaction lock between each call.  On the dongle's single TCP
+        connection that allows concurrent operations to interleave and
+        misroute responses, so the whole sequence is wrapped in ``_op_lock``
+        — consistent with ``read_all_input_data``.  The pv4-6 read itself
+        remains non-fatal (handled inside ``RegisterDataMixin``).
+        """
+        async with self._op_lock:
+            return await super().read_runtime()
 
     async def read_all_input_data(
         self,

@@ -19,6 +19,7 @@ EG4 18KPV documentation shows separate regs but actual hardware uses packed form
 
 from __future__ import annotations
 
+import re as _re
 from dataclasses import dataclass
 from enum import Enum, StrEnum
 
@@ -28,6 +29,42 @@ from enum import Enum, StrEnum
 ALL: frozenset[str] = frozenset({"EG4_HYBRID", "EG4_OFFGRID", "LXP"})
 EG4: frozenset[str] = frozenset({"EG4_HYBRID", "EG4_OFFGRID"})
 LXP_ONLY: frozenset[str] = frozenset({"LXP"})
+
+# Canonical names for the V23-extended PV strings 4-6 (input regs 217-231).
+#
+# These registers are defined for ALL families (so ``from_modbus_registers``
+# CAN parse them), but they are NOT part of the *base* PV string model used by
+# the register-derived fallback count (``pv_string_count_for_model``).  Reading
+# and parsing of these registers is gated entirely by the inverter model's
+# ``pv_string_count`` — the single source of truth declared in
+# ``devices/inverters/_features.py`` (``DEVICE_TYPE_CODE_PV_STRING_COUNT``).
+#
+# Why a marker instead of family gating: residential EG4/LXP families are all
+# 3-string (live-confirmed: 18kPV, FlexBOSS21).  Commercial >3-string inverters
+# (LSP, 12+ strings) are a future device type.  Gating reads/sensors on the
+# per-model ``pv_string_count`` (not the family) means a 3-string model never
+# reads regs 217-231 and never creates pv4-6 sensors, while a model declaring
+# count>=4 transparently does both — one source of truth, no family guesswork.
+PV4_6_EXTENDED_NAMES: frozenset[str] = frozenset(
+    {
+        "pv4_voltage",
+        "pv5_voltage",
+        "pv6_voltage",
+        "pv4_power",
+        "pv5_power",
+        "pv6_power",
+        "epv4_day",
+        "epv4_all",
+        "epv5_day",
+        "epv5_all",
+        "epv6_day",
+        "epv6_all",
+    }
+)
+
+# Modbus input register span covering PV4-6 voltage + power (regs 217-222).
+# Read as a single group ONLY for models whose ``pv_string_count >= 4``.
+PV4_6_INPUT_REGISTER_GROUP: tuple[int, int] = (217, 6)
 
 
 class ScaleFactor(int, Enum):
@@ -1387,6 +1424,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="V",
         category=RegisterCategory.RUNTIME,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV4 voltage (V23 extended).",
     ),
     RegisterDefinition(
@@ -1397,6 +1435,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="V",
         category=RegisterCategory.RUNTIME,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV5 voltage (V23 extended).",
     ),
     RegisterDefinition(
@@ -1407,6 +1446,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="V",
         category=RegisterCategory.RUNTIME,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV6 voltage (V23 extended).",
     ),
     RegisterDefinition(
@@ -1416,6 +1456,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         ha_sensor_key="pv4_power",
         unit="W",
         category=RegisterCategory.RUNTIME,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV4 power (V23 extended).",
     ),
     RegisterDefinition(
@@ -1425,6 +1466,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         ha_sensor_key="pv5_power",
         unit="W",
         category=RegisterCategory.RUNTIME,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV5 power (V23 extended).",
     ),
     RegisterDefinition(
@@ -1434,6 +1476,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         ha_sensor_key="pv6_power",
         unit="W",
         category=RegisterCategory.RUNTIME,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV6 power (V23 extended).",
     ),
     RegisterDefinition(
@@ -1444,6 +1487,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV4 daily energy yield.",
     ),
     RegisterDefinition(
@@ -1455,6 +1499,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_LIFETIME,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV4 cumulative energy yield (32-bit, low word).",
     ),
     RegisterDefinition(
@@ -1465,6 +1510,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV5 daily energy yield.",
     ),
     RegisterDefinition(
@@ -1476,6 +1522,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_LIFETIME,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV5 cumulative energy yield (32-bit, low word).",
     ),
     RegisterDefinition(
@@ -1486,6 +1533,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV6 daily energy yield.",
     ),
     RegisterDefinition(
@@ -1497,6 +1545,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_LIFETIME,
+        models=ALL,  # parsed for all families; gated at runtime by pv_string_count
         description="PV6 cumulative energy yield (32-bit, low word).",
     ),
     # =========================================================================
@@ -1552,3 +1601,41 @@ def sensor_keys_for_model(family: str) -> frozenset[str]:
         for r in INVERTER_INPUT_REGISTERS
         if r.ha_sensor_key is not None and family in r.models
     )
+
+
+# Matches canonical names ``pv1_voltage`` .. ``pvN_voltage``.
+_PV_VOLTAGE_NAME = _re.compile(r"^pv(\d+)_voltage$")
+
+
+def pv_string_count_for_model(family: str) -> int:
+    """Register-derived FALLBACK count of PV (MPPT) strings for a family.
+
+    This is the *conservative base* count — it deliberately ignores the
+    V23-extended pv4-6 registers (``PV4_6_EXTENDED_NAMES``).  Those extended
+    registers are defined for ALL families so they can be parsed, but a family
+    is never assumed to expose >3 strings just because the register definitions
+    exist.  The authoritative >3-string count comes exclusively from the
+    per-model ``DEVICE_TYPE_CODE_PV_STRING_COUNT`` table in
+    ``devices/inverters/_features.py``; this helper is only used when a model
+    has no explicit entry there.
+
+    Returns the highest base ``N`` for which a non-extended ``pvN_voltage``
+    register is present in ``registers_for_model(family)``.  All current
+    residential families (18kPV, FlexBOSS21, LXP) return 3.
+
+    Args:
+        family: Inverter family string (``"EG4_HYBRID"``, ``"EG4_OFFGRID"``,
+            ``"LXP"``).
+
+    Returns:
+        The base PV string count (3 for all current families), or 0 if the
+        family has no base PV voltage registers (e.g. ``"UNKNOWN"``).
+    """
+    indices = [
+        int(m.group(1))
+        for r in registers_for_model(family)
+        if r.canonical_name is not None
+        and r.canonical_name not in PV4_6_EXTENDED_NAMES
+        and (m := _PV_VOLTAGE_NAME.match(r.canonical_name))
+    ]
+    return max(indices) if indices else 0

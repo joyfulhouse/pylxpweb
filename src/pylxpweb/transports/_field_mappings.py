@@ -27,6 +27,18 @@ RUNTIME_FIELD: dict[str, str | None] = {
     "pv1_current": "pv1_current",
     "pv2_current": "pv2_current",
     "pv3_current": "pv3_current",
+    # PV4-6 (V23 extended, regs 217-222).  These map to dataclass fields.  The
+    # registers are defined for ALL families, but ``from_modbus_registers`` only
+    # parses pvN when the model's ``pv_string_count >= N`` (default 3), and the
+    # transport only READS regs 217-222 when ``pv_string_count >= 4``.  So for a
+    # 3-string model these fields stay None; a model declaring count>=4 populates
+    # them.  Mapping them here makes the count-driven parse path work.
+    "pv4_voltage": "pv4_voltage",
+    "pv5_voltage": "pv5_voltage",
+    "pv6_voltage": "pv6_voltage",
+    "pv4_power": "pv4_power",
+    "pv5_power": "pv5_power",
+    "pv6_power": "pv6_power",
     # Battery
     "battery_voltage": "battery_voltage",
     "soc_soh_packed": None,  # → battery_soc, battery_soh (unpacked)

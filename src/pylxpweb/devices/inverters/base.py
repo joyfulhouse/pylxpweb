@@ -429,6 +429,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         inverter._features = InverterFeatures.from_device_type_code(device_type_code)
         inverter._features_detected = True
 
+        # Propagate the model's PV (MPPT) string count to the transport so it
+        # reads/parses pv4-6 registers only for >3-string models.  Residential
+        # 3-string models keep the transport default (3) and never read regs
+        # 217-222.
+        if hasattr(transport, "pv_string_count"):
+            transport.pv_string_count = inverter._features.pv_string_count
+
         _LOGGER.info(
             "Created transport-backed inverter %s (model=%s, family=%s)",
             transport.serial,
@@ -2720,6 +2727,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         self._features_detected = True
 
+        # Keep the transport's PV string count in sync so pv4-6 registers are
+        # read/parsed only for >3-string models (residential keeps default 3).
+        if self._transport is not None and hasattr(self._transport, "pv_string_count"):
+            self._transport.pv_string_count = self._features.pv_string_count
+
         # Compute dynamic thresholds from rated power.
         rated_kw = self._features.model_info.get_power_rating_kw(device_type_code)
         if rated_kw > 0:
@@ -2943,6 +2955,24 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             False
         """
         return self._features.volt_watt_curve
+
+    @property
+    def pv_string_count(self) -> int:
+        """Number of PV (MPPT) input strings this inverter model exposes.
+
+        Explicit, per-model value (0..n) that drives PV sensor creation.
+        Declared in ``DEVICE_TYPE_CODE_PV_STRING_COUNT``; unconfirmed models
+        fall back to the count implied by their Modbus register set.
+
+        Returns:
+            String count (3 for residential models by default)
+
+        Example:
+            >>> await inverter.detect_features()
+            >>> inverter.pv_string_count
+            3
+        """
+        return self._features.pv_string_count
 
     @property
     def supports_grid_peak_shaving(self) -> bool:

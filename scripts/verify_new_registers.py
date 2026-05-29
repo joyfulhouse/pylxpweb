@@ -20,7 +20,6 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 async def main():
     """Verify new register mappings."""
-    from pylxpweb.transports.register_maps import PV_SERIES_RUNTIME_MAP
     from pymodbus.client import AsyncModbusTcpClient
 
     from pylxpweb.transports.data import InverterRuntimeData
@@ -52,8 +51,8 @@ async def main():
 
     client.close()
 
-    # Parse using the new mappings
-    data = InverterRuntimeData.from_modbus_registers(registers, PV_SERIES_RUNTIME_MAP)
+    # Parse using the canonical register definitions (split-phase EG4 hybrid)
+    data = InverterRuntimeData.from_modbus_registers(registers, "EG4_HYBRID", split_phase=True)
 
     print("\n--- NEW SPLIT-PHASE REGISTERS ---")
     print(f"Grid L1 Voltage (reg 127): {data.grid_l1_voltage} V")
