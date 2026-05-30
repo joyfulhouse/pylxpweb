@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.29] - 2026-05-30
+
+### Added
+
+- **Typed consumed-surface public API** (typed seam contract): export the device hierarchy
+  (`BaseInverter`, `Battery`, `BatteryBank`, `MIDDevice`, `ParallelGroup`, `Station`), transport
+  data classes (`InverterRuntimeData`, `InverterEnergyData`, `BatteryData`, `BatteryBankData`,
+  `MidboxRuntimeData`), and feature types (`InverterFeatures`, `InverterModelInfo`,
+  `InverterFamily`, `GridType`) from the package root so consumers import a stable, typed surface.
+- **Public transport accessors** on `BaseInverter` and `MIDDevice`: `transport`, `transport_runtime`,
+  `transport_energy`, `transport_battery` (read-only) — replacing private `_transport*` poking by
+  consumers.
+- **`BaseInverter.set_cache_ttls(*, runtime=, energy=, battery=)`**: public API to pin transport-data
+  cache TTLs to a consumer's polling interval (replaces writing private `_*_cache_ttl` attributes).
+- **`BaseInverter.has_runtime_data`** and **`BaseInverter.power_rating_text`** properties, and
+  **`BatteryBank.cycle_count`** property — close device-object seam gaps so the consumed property
+  surface resolves real values instead of None.
+
 ## [0.9.26] - 2026-03-04
 
 ### Added

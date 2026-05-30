@@ -42,6 +42,20 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 
 from .client import LuxpowerClient
+from .devices import (
+    BaseInverter,
+    Battery,
+    BatteryBank,
+    MIDDevice,
+    ParallelGroup,
+    Station,
+)
+from .devices.inverters import (
+    GridType,
+    InverterFamily,
+    InverterFeatures,
+    InverterModelInfo,
+)
 from .endpoints import (
     AnalyticsEndpoints,
     ControlEndpoints,
@@ -65,6 +79,13 @@ from .models import (
     DongleStatus,
     FirmwareUpdateInfo,
     OperatingMode,
+)
+from .transports.data import (
+    BatteryBankData,
+    BatteryData,
+    InverterEnergyData,
+    InverterRuntimeData,
+    MidboxRuntimeData,
 )
 
 try:
@@ -94,4 +115,22 @@ __all__ = [
     "FirmwareUpdateInfo",
     # Enums
     "OperatingMode",
+    # Device hierarchy (consumed-surface public API)
+    "Station",
+    "ParallelGroup",
+    "BaseInverter",
+    "MIDDevice",
+    "Battery",
+    "BatteryBank",
+    # Transport data classes (consumed-surface public API)
+    "InverterRuntimeData",
+    "InverterEnergyData",
+    "BatteryData",
+    "BatteryBankData",
+    "MidboxRuntimeData",
+    # Feature detection (consumed-surface public API)
+    "InverterFeatures",
+    "InverterModelInfo",
+    "InverterFamily",
+    "GridType",
 ]

@@ -82,6 +82,16 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         # Local transport for hybrid/local-only mode (optional)
         self._transport: InverterTransport | None = None
 
+    @property
+    def transport(self) -> InverterTransport | None:
+        """Attached local transport, or None in cloud-only mode."""
+        return self._transport
+
+    @property
+    def transport_runtime(self) -> MidboxRuntimeData | None:
+        """Runtime data from the local transport, or None when not transport-backed."""
+        return self._transport_runtime
+
     def set_max_system_power(self, total_kw: float) -> None:
         """Set the max system power behind this GridBOSS.
 

@@ -605,3 +605,17 @@ class InverterRuntimePropertiesMixin:
         if self._runtime is None:
             return ""
         return self._runtime.powerRatingText
+
+    @property
+    def power_rating_text(self) -> str:
+        """Power rating text (alias of :attr:`power_rating`).
+
+        Mirrors the cloud ``powerRatingText`` field name so consumers mapping
+        the device by that attribute resolve a real value instead of None.
+        """
+        return self.power_rating
+
+    @property
+    def has_runtime_data(self) -> bool:
+        """Whether any runtime data (cloud or transport) is currently loaded."""
+        return self._runtime is not None or self._transport_runtime is not None
