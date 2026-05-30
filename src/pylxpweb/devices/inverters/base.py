@@ -22,7 +22,11 @@ from pylxpweb.constants import (
 )
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 from pylxpweb.models import OperatingMode
-from pylxpweb.transports.data import InverterEnergyData
+from pylxpweb.transports.data import (
+    BatteryBankData,
+    InverterEnergyData,
+    InverterRuntimeData,
+)
 
 from .._firmware_update_mixin import FirmwareUpdateMixin
 from ..base import BaseDevice
@@ -94,16 +98,16 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # Runtime data (refreshed frequently) - PRIVATE: use properties for access
         # HTTP API returns InverterRuntime, transport returns InverterRuntimeData
         self._runtime: InverterRuntime | None = None
-        self._transport_runtime: Any | None = None  # InverterRuntimeData when using transport
+        self._transport_runtime: InverterRuntimeData | None = None
 
         # Energy data (refreshed less frequently) - PRIVATE: use properties for access
         # HTTP API returns EnergyInfo, transport returns InverterEnergyData
         self._energy: EnergyInfo | None = None
-        self._transport_energy: Any | None = None  # InverterEnergyData when using transport
+        self._transport_energy: InverterEnergyData | None = None
 
         # Battery bank (aggregate data and individual batteries) - PRIVATE: use properties
         self._battery_bank: Any | None = None  # Will be BatteryBank object
-        self._transport_battery: Any | None = None  # BatteryBankData when using transport
+        self._transport_battery: BatteryBankData | None = None
 
         # Parameters (configuration registers, refreshed hourly)
         self.parameters: dict[str, Any] | None = None
@@ -191,6 +195,56 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             self.serial_number,
             transport_type,
         )
+
+    def set_cache_ttls(
+        self,
+        *,
+        runtime: timedelta | None = None,
+        energy: timedelta | None = None,
+        battery: timedelta | None = None,
+    ) -> None:
+        """Set explicit transport-data cache TTLs (public configuration API).
+
+        Consumers that poll on a custom interval (e.g. Home Assistant) can pin
+        the runtime/energy/battery caches to that interval instead of the
+        transport-type defaults applied by :meth:`set_transport_cache_ttls`.
+        Only the TTLs passed are changed; omitted ones keep their current value.
+
+        Args:
+            runtime: New TTL for runtime data, or None to leave unchanged.
+            energy: New TTL for energy data, or None to leave unchanged.
+            battery: New TTL for battery data, or None to leave unchanged.
+        """
+        if runtime is not None:
+            self._runtime_cache_ttl = runtime
+        if energy is not None:
+            self._energy_cache_ttl = energy
+        if battery is not None:
+            self._battery_cache_ttl = battery
+
+    # ============================================================================
+    # Transport Accessors (public, read-only)
+    # ============================================================================
+
+    @property
+    def transport(self) -> InverterTransport | None:
+        """Attached local transport, or None in cloud-only mode."""
+        return self._transport
+
+    @property
+    def transport_runtime(self) -> InverterRuntimeData | None:
+        """Runtime data from the local transport, or None when not transport-backed."""
+        return self._transport_runtime
+
+    @property
+    def transport_energy(self) -> InverterEnergyData | None:
+        """Energy data from the local transport, or None when not transport-backed."""
+        return self._transport_energy
+
+    @property
+    def transport_battery(self) -> BatteryBankData | None:
+        """Battery-bank data from the local transport, or None when not transport-backed."""
+        return self._transport_battery
 
     # ============================================================================
     # Factory Methods

@@ -248,6 +248,25 @@ class BatteryBank(BaseDevice):
         return max(b.cell_voltage_delta for b in self.batteries)
 
     @property
+    def cycle_count(self) -> int | None:
+        """Get the bank-level cycle count from transport BMS register data.
+
+        Sourced from the parent inverter's transport :class:`BatteryBankData`
+        (Modbus reg 106) — the same field the local data path consumes. Cloud
+        ``BatteryInfo`` carries no bank cycle count, so this is None in
+        cloud-only mode.
+
+        Returns:
+            Bank cycle count, or None if no transport bank data is available.
+        """
+        if self._inverter is None:
+            return None
+        transport_battery = self._inverter.transport_battery
+        if transport_battery is None:
+            return None
+        return transport_battery.cycle_count
+
+    @property
     def cycle_count_delta(self) -> int | None:
         """Get cycle count spread across batteries (max - min).
 
