@@ -120,6 +120,11 @@ from pylxpweb.registers.inverter_input import (
     registers_for_model,
     sensor_keys_for_model,
 )
+
+# Weekly (7-day) schedule layout, regs 500-723 -- definitions only, NOT wired
+# into runtime reads (excluded from INVERTER_HOLDING_REGISTERS; gated by reg 233
+# bit 3). The live daily 3-period schedule is regs 68-89 in inverter_holding.py.
+# See scheduling.py for the authoritative-source note.
 from pylxpweb.registers.scheduling import (
     SCHEDULE_BY_ADDRESS,
     SCHEDULE_BY_API_KEY,

@@ -1,10 +1,28 @@
-"""7-day scheduling register definitions (holding registers 500-723).
+"""Weekly (7-day) scheduling register definitions (holding registers 500-723).
 
 224 registers generated parametrically from schedule type templates.
-Active only when register 233 bit 3 (FUNC_ENERTEK_WORKING_MODE) is enabled.
-When disabled, daily schedule registers 68-89 are in effect instead.
 
-Cloud API:
+Authoritative source / mode selection
+-------------------------------------
+This module is the authoritative definition of the WEEKLY schedule register
+layout (regs 500-723). The DAILY (3-period) schedule is a separate, live system
+defined in ``inverter_holding.py`` (regs 68-89, ``HoldingCategory.SCHEDULE``).
+The two are mutually exclusive operating modes, selected by holding register 233
+bit 3 (``weekly_schedule_enable`` / ``FUNC_ENERTEK_WORKING_MODE``)::
+
+    reg 233 bit 3 == 0  ->  daily schedule active  (regs 68-89)
+    reg 233 bit 3 == 1  ->  weekly schedule active (regs 500-723)
+
+Status: definitions only -- NOT wired into runtime reads/writes
+---------------------------------------------------------------
+These definitions are intentionally excluded from ``INVERTER_HOLDING_REGISTERS``
+and are not read or written by any current transport path. They are validated
+and structurally tested (``tests/unit/test_scheduling_registers.py``), and
+reserved for a future weekly-schedule feature. A grep hit on
+``SCHEDULE_REGISTERS`` / ``SCHEDULE_TYPES`` here therefore reflects the weekly
+layout, not the live daily schedule.
+
+Cloud API (for the future weekly feature):
   Read:   POST /web/maintain/remoteWeeklyOperation/readValues
   Write:  POST /web/maintain/remoteWeeklyOperation/setValues
   Toggle: POST /web/maintain/remoteSet/functionControl (FUNC_ENERTEK_WORKING_MODE)
