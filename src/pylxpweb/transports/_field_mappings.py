@@ -128,6 +128,34 @@ RUNTIME_FIELD: dict[str, str | None] = {
     "grid_import_power_l2": "grid_import_power_l2",
     # Parallel
     "parallel_config": None,  # → parallel_master_slave, parallel_phase, parallel_number
+    # -------------------------------------------------------------------------
+    # Diagnostic / raw registers intentionally NOT surfaced on
+    # InverterRuntimeData.  Explicit None keeps them acknowledged by the
+    # completeness contract test (a future register added without a key here
+    # fails CI) while preserving the existing "read but drop" behaviour.
+    # -------------------------------------------------------------------------
+    "battery_control_temperature": None,
+    "battery_current_inv": None,
+    "battery_voltage_inv_sample": None,
+    "bms_battery_type": None,
+    "bms_status_0": None,
+    "bms_status_1": None,
+    "bms_status_2": None,
+    "bms_status_3": None,
+    "bms_status_4": None,
+    "bms_status_5": None,
+    "bms_status_6": None,
+    "bms_status_7": None,
+    "bms_status_8": None,
+    "bms_status_9": None,
+    "bms_fw_update_state": None,
+    "quick_charge_remaining_seconds": None,
+    "smart_load_power": None,
+    # Raw BMS-reported battery status word (reg has ha_sensor_key="battery_status"
+    # but is not currently surfaced through InverterRuntimeData — tracked for
+    # follow-up wiring).  Acknowledged here for the completeness contract; the
+    # reachability contract lists it as a known gap.
+    "battery_status_inv": None,
 }
 
 # Canonical names that map to InverterRuntimeData.load_power.
@@ -144,6 +172,15 @@ ENERGY_FIELD: dict[str, str | None] = {
     "pv1_energy_today": "pv1_energy_today",
     "pv2_energy_today": "pv2_energy_today",
     "pv3_energy_today": "pv3_energy_today",
+    # PV4-6 daily energy (V23 extended, regs 223/226/229) is DEFERRED: there is
+    # no >3-string device or cloud payload to validate against, no transport
+    # read group for regs 223-231, and no pv_string_count gate on the energy
+    # parse.  Explicit None acknowledges the registers for the completeness
+    # contract without half-wiring a speculative path (the ha_sensor_keys are
+    # listed in the reachability debt list).  Full wiring tracked in beads.
+    "epv4_day": None,
+    "epv5_day": None,
+    "epv6_day": None,
     "inverter_energy_today": "inverter_energy_today",
     "charge_energy_today": "charge_energy_today",
     "discharge_energy_today": "discharge_energy_today",
@@ -157,6 +194,11 @@ ENERGY_FIELD: dict[str, str | None] = {
     "pv1_energy_total": "pv1_energy_total",
     "pv2_energy_total": "pv2_energy_total",
     "pv3_energy_total": "pv3_energy_total",
+    # PV4-6 lifetime energy (V23 extended, regs 224/227/230) — DEFERRED, see
+    # the epv4_day note above.
+    "epv4_all": None,
+    "epv5_all": None,
+    "epv6_all": None,
     "inverter_energy_total": "inverter_energy_total",
     "charge_energy_total": "charge_energy_total",
     "discharge_energy_total": "discharge_energy_total",
@@ -173,6 +215,13 @@ ENERGY_FIELD: dict[str, str | None] = {
     "eps_l2_energy_today": "eps_l2_energy_today",
     "eps_l1_energy_total": "eps_l1_energy_total",
     "eps_l2_energy_total": "eps_l2_energy_total",
+    # Canonical load-energy registers (regs 171/172) are intentionally NOT
+    # mapped: the legacy/contract field load_energy_today/total is populated
+    # from ac_charge_energy_today/total (reg 32 / 48-49) above for backward
+    # compatibility.  Explicit None keeps these acknowledged (not a silent gap)
+    # so the completeness contract test stays green.
+    "load_energy_today": None,
+    "load_energy_total": None,
 }
 
 # =========================================================================

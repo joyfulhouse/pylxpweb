@@ -120,6 +120,7 @@ class TestPV456Registers:
             assert name in BY_NAME, f"{name} missing from BY_NAME"
 
     def test_cloud_field_lookups(self) -> None:
+        # PV4-6 RUNTIME (voltage/power) cloud fields are wired (E1).
         expected_fields = (
             "vpv4",
             "vpv5",
@@ -127,12 +128,22 @@ class TestPV456Registers:
             "ppv4",
             "ppv5",
             "ppv6",
-            "epv4Today",
-            "epv5Today",
-            "epv6Today",
         )
         for cf in expected_fields:
             assert cf in BY_CLOUD_FIELD, f"{cf} missing from BY_CLOUD_FIELD"
+
+    def test_pv456_energy_cloud_fields_deferred(self) -> None:
+        # PV4-6 ENERGY is DEFERRED (no cloud EnergyInfo field, no >3-string
+        # device): the epvNToday cloud fields were removed from the register
+        # table so the cloud↔modbus scale contract is not falsely asserted.
+        # Tracked in beads; see KNOWN_UNREACHABLE_HA_KEYS in
+        # test_register_contract.py.  When real >3-string cloud data appears,
+        # re-add the cloud fields + scaling and restore these to the lookup test.
+        for cf in ("epv4Today", "epv5Today", "epv6Today"):
+            assert cf not in BY_CLOUD_FIELD, (
+                f"{cf} is back in BY_CLOUD_FIELD; if pv4-6 energy is now wired, "
+                f"update the contract harness and this test together"
+            )
 
     def test_input_register_group_span(self) -> None:
         # The conditional read group must cover exactly regs 217-222 (V+P).
