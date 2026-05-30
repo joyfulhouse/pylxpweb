@@ -63,7 +63,6 @@ ignore = []
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*" = ["ARG"]  # Allow unused arguments in tests
-"src/pylxpweb/registers.py" = ["E501"]  # Allow long lines in auto-generated register data
 "utils/**/*" = ["E501", "SIM101"]  # Allow long lines and simplified conditions in utility scripts
 
 [tool.mypy]
@@ -129,8 +128,6 @@ omit = [
     "*/site-packages/*",
     "*/distutils/*",
     "utils/*",
-    "src/pylxpweb/constants.py",
-    "src/pylxpweb/registers.py",
     "src/pylxpweb/cli/*",
 ]
 
