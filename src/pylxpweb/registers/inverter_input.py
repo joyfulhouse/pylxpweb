@@ -1482,7 +1482,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
     RegisterDefinition(
         address=223,
         canonical_name="epv4_day",
-        cloud_api_field="epv4Today",
+        cloud_api_field=None,  # DEFERRED: no cloud field for pv4-6 energy (epv4Today)
         ha_sensor_key="epv4_day",
         scale=ScaleFactor.DIV_10,
         unit="kWh",
@@ -1505,7 +1505,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
     RegisterDefinition(
         address=226,
         canonical_name="epv5_day",
-        cloud_api_field="epv5Today",
+        cloud_api_field=None,  # DEFERRED: no cloud field for pv4-6 energy (epv5Today)
         ha_sensor_key="epv5_day",
         scale=ScaleFactor.DIV_10,
         unit="kWh",
@@ -1528,7 +1528,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
     RegisterDefinition(
         address=229,
         canonical_name="epv6_day",
-        cloud_api_field="epv6Today",
+        cloud_api_field=None,  # DEFERRED: no cloud field for pv4-6 energy (epv6Today)
         ha_sensor_key="epv6_day",
         scale=ScaleFactor.DIV_10,
         unit="kWh",
