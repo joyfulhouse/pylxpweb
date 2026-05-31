@@ -99,6 +99,9 @@ from .registers import (
     AC_CHARGE_TYPE_TIME,
     AC_CHARGE_TYPE_TIME_SOC_VOLT,
     BATTERY_STATUS_MAP,
+    BMS_PERMISSION_ALLOW_CHARGE,
+    BMS_PERMISSION_ALLOW_DISCHARGE,
+    BMS_PERMISSION_FORCE_CHARGE,
     DEVICE_TYPE_CODE_FLEXBOSS,
     DEVICE_TYPE_CODE_GRIDBOSS,
     DEVICE_TYPE_CODE_LXP_EU,
@@ -293,6 +296,7 @@ from .registers import (
     WEB_PARAM_TO_HOLD_REGISTER,
     ScheduleConfig,
     ScheduleType,
+    decode_bms_permissions,
     get_func_en_bit,
     # Bit manipulation functions
     get_func_en_bit_mask,
@@ -339,6 +343,11 @@ from .scaling import (
 __all__ = [
     # Battery status
     "BATTERY_STATUS_MAP",
+    # BMS permission/request bitmap (reg 95, issue #232)
+    "BMS_PERMISSION_ALLOW_CHARGE",
+    "BMS_PERMISSION_ALLOW_DISCHARGE",
+    "BMS_PERMISSION_FORCE_CHARGE",
+    "decode_bms_permissions",
     # Locations
     "TIMEZONE_MAP",
     "TIMEZONE_REVERSE_MAP",

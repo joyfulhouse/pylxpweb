@@ -318,12 +318,49 @@ INPUT_BMS_STATUS_INV = 95  # Inverter-aggregated battery status
 # Register 95 raw status codes. Note: value 3 means "Active" (battery in use)
 # and does NOT indicate charge vs discharge direction. The actual battery status
 # (Charging/Discharging/Idle) is derived from Pcharge/Pdischarge registers instead.
+#
+# Register 95 is also a BMS permission/request BITMAP (eg4 issue #232): each bit
+# is an independent flag, and the codes above are simply the observed
+# combinations of bits 0x01 | 0x02 (Idle=0x00, "Unknown(1)"=0x01 charge-only,
+# StandBy=0x02 discharge-only, Active=0x03 both).  Use ``decode_bms_permissions``
+# to read the individual flags; the cloud API exposes the same three flags as
+# ``bmsCharge`` / ``bmsDischarge`` / ``bmsForceCharge``.
 BATTERY_STATUS_MAP: dict[int, str] = {
     0: "Idle",
     1: "Unknown(1)",
     2: "StandBy",
     3: "Active",
 }
+
+# Register 95 BMS permission/request bit masks (eg4 issue #232).  Confirmed
+# against the cloud API booleans (bmsCharge/bmsDischarge/bmsForceCharge).
+BMS_PERMISSION_ALLOW_CHARGE = 0x01  # BMS permits charging
+BMS_PERMISSION_ALLOW_DISCHARGE = 0x02  # BMS permits discharging
+BMS_PERMISSION_FORCE_CHARGE = 0x20  # BMS requests a full/calibration charge
+
+
+def decode_bms_permissions(raw: int) -> tuple[bool, bool, bool]:
+    """Decode inverter input register 95 into BMS permission/request flags.
+
+    Register 95 is a bitmap of independent BMS flags (eg4 issue #232), matching
+    the cloud API's ``bmsCharge`` / ``bmsDischarge`` / ``bmsForceCharge`` booleans:
+
+    * ``0x01`` — charging allowed (cleared when the bank is full)
+    * ``0x02`` — discharging allowed (cleared when the bank is empty)
+    * ``0x20`` — force-charge request (BMS asks for a full calibration charge)
+
+    Args:
+        raw: Raw uint16 value of input register 95.
+
+    Returns:
+        ``(allow_charge, allow_discharge, force_charge)`` booleans.
+    """
+    return (
+        bool(raw & BMS_PERMISSION_ALLOW_CHARGE),
+        bool(raw & BMS_PERMISSION_ALLOW_DISCHARGE),
+        bool(raw & BMS_PERMISSION_FORCE_CHARGE),
+    )
+
 
 # BMS Battery Info (Addresses 96-100)
 INPUT_BMS_PARALLEL_NUM = 96  # Number of batteries in parallel

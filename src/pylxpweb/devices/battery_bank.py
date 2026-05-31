@@ -149,6 +149,32 @@ class BatteryBank(BaseDevice):
         """
         return self.data.hasRuntimeData if self.data.hasRuntimeData is not None else False
 
+    # ========== BMS Permission/Request Flags (issue #232) ==========
+    # The flags live on the parent inverter's runtime (cloud bmsCharge/... or
+    # decoded input register 95 in LOCAL/HYBRID).  Delegate to the inverter's
+    # dual-source properties so the bank surfaces them in every mode.
+
+    @property
+    def allow_charge(self) -> bool | None:
+        """Whether the BMS permits charging (reg 95 ``0x01`` / cloud ``bmsCharge``)."""
+        if self._inverter is not None:
+            return self._inverter.bms_allow_charge
+        return None
+
+    @property
+    def allow_discharge(self) -> bool | None:
+        """Whether the BMS permits discharging (reg 95 ``0x02`` / cloud ``bmsDischarge``)."""
+        if self._inverter is not None:
+            return self._inverter.bms_allow_discharge
+        return None
+
+    @property
+    def force_charge(self) -> bool | None:
+        """Whether the BMS requests a full charge (reg 95 ``0x20`` / cloud ``bmsForceCharge``)."""
+        if self._inverter is not None:
+            return self._inverter.bms_force_charge
+        return None
+
     # ========== State of Charge ==========
 
     @property

@@ -236,6 +236,13 @@ class InverterRuntimeData:
     battery_parallel_num: int | None = None  # Number of parallel battery units
     battery_capacity_ah: float | None = None  # Ah (Battery capacity)
 
+    # BMS permission/request flags (reg 95 bitmap, issue #232).  Decoded from
+    # input register 95 in from_modbus_registers(); None for cloud-built
+    # instances (the cloud path reads RuntimeInfo.bmsCharge/... directly).
+    bms_allow_charge: bool | None = None  # reg 95 bit 0x01 (cloud bmsCharge)
+    bms_allow_discharge: bool | None = None  # reg 95 bit 0x02 (cloud bmsDischarge)
+    bms_force_charge: bool | None = None  # reg 95 bit 0x20 (cloud bmsForceCharge)
+
     # -------------------------------------------------------------------------
     # Additional Temperatures
     # -------------------------------------------------------------------------
@@ -448,6 +455,7 @@ class InverterRuntimeData:
         Returns:
             Transport-agnostic runtime data with scaling applied
         """
+        from pylxpweb.constants.registers import decode_bms_permissions
         from pylxpweb.registers.inverter_input import (
             BY_NAME,
             PV4_6_EXTENDED_NAMES,
@@ -501,6 +509,15 @@ class InverterRuntimeData:
                     inverter_warning_code = read_raw(input_registers, reg)
                 elif reg.canonical_name == "bms_warning_code":
                     bms_warning_code = read_raw(input_registers, reg)
+                elif reg.canonical_name == "battery_status_inv":
+                    # Reg 95 is a BMS permission/request bitmap (issue #232),
+                    # NOT just the idle/standby/active enum.
+                    raw = read_raw(input_registers, reg)
+                    if raw is not None:
+                        allow_charge, allow_discharge, force_charge = decode_bms_permissions(raw)
+                        kwargs["bms_allow_charge"] = allow_charge
+                        kwargs["bms_allow_discharge"] = allow_discharge
+                        kwargs["bms_force_charge"] = force_charge
                 continue
 
             if field_name in _RUNTIME_INT_FIELDS:
@@ -1187,6 +1204,12 @@ class BatteryBankData:
     # Inverter battery voltage sample (reg 107)
     battery_voltage_inv_sample: float | None = None  # V
 
+    # BMS permission/request flags (reg 95 bitmap, issue #232).  Same three
+    # flags the cloud API exposes as bmsCharge/bmsDischarge/bmsForceCharge.
+    allow_charge: bool | None = None  # reg 95 bit 0x01 (cloud bmsCharge)
+    allow_discharge: bool | None = None  # reg 95 bit 0x02 (cloud bmsDischarge)
+    force_charge: bool | None = None  # reg 95 bit 0x20 (cloud bmsForceCharge)
+
     # Status
     status: str | None = None  # "Idle", "Charging", "StandBy", "Discharging"
     fault_code: int | None = None
@@ -1381,6 +1404,7 @@ class BatteryBankData:
         Returns:
             BatteryBankData with all values properly scaled, or None if no battery
         """
+        from pylxpweb.constants.registers import decode_bms_permissions
         from pylxpweb.registers.battery import BATTERY_MAX_COUNT
         from pylxpweb.registers.inverter_input import BY_NAME
 
@@ -1443,6 +1467,16 @@ class BatteryBankData:
         bat_volt_inv_sample = read_scaled(input_registers, BY_NAME["battery_voltage_inv_sample"])
         max_capacity = read_scaled(input_registers, BY_NAME["battery_capacity_ah"])
 
+        # BMS permission/request flags (reg 95 bitmap, issue #232)
+        allow_charge: bool | None = None
+        allow_discharge: bool | None = None
+        force_charge: bool | None = None
+        battery_status_inv_raw = read_raw(input_registers, BY_NAME["battery_status_inv"])
+        if battery_status_inv_raw is not None:
+            allow_charge, allow_discharge, force_charge = decode_bms_permissions(
+                battery_status_inv_raw
+            )
+
         # Compute current capacity from max_capacity and SOC
         current_capacity: float | None = None
         if max_capacity is not None and battery_soc is not None:
@@ -1503,6 +1537,9 @@ class BatteryBankData:
             min_cell_temperature=min_cell_temp,
             cycle_count=cycle_count,
             battery_voltage_inv_sample=bat_volt_inv_sample,
+            allow_charge=allow_charge,
+            allow_discharge=allow_discharge,
+            force_charge=force_charge,
             batteries=batteries,
         )
 

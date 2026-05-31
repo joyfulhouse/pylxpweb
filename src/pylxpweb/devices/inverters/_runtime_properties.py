@@ -467,6 +467,50 @@ class InverterRuntimePropertiesMixin:
         return self._runtime._12KUsingGenerator
 
     # ===========================================
+    # BMS Permission/Request Flags (reg 95 bitmap / cloud bmsCharge, issue #232)
+    # ===========================================
+
+    @property
+    def bms_allow_charge(self) -> bool | None:
+        """Whether the BMS currently permits charging.
+
+        Local: input register 95 bit ``0x01`` (decoded by the transport).
+        Cloud: ``RuntimeInfo.bmsCharge``.  Cleared when the bank is full.
+        """
+        if self._transport_runtime is not None:
+            return self._transport_runtime.bms_allow_charge
+        if self._runtime is None:
+            return None
+        return self._runtime.bmsCharge
+
+    @property
+    def bms_allow_discharge(self) -> bool | None:
+        """Whether the BMS currently permits discharging.
+
+        Local: input register 95 bit ``0x02``.  Cloud: ``RuntimeInfo.bmsDischarge``.
+        Cleared when the bank is empty.
+        """
+        if self._transport_runtime is not None:
+            return self._transport_runtime.bms_allow_discharge
+        if self._runtime is None:
+            return None
+        return self._runtime.bmsDischarge
+
+    @property
+    def bms_force_charge(self) -> bool | None:
+        """Whether the BMS is requesting a full/calibration charge.
+
+        Local: input register 95 bit ``0x20``.  Cloud:
+        ``RuntimeInfo.bmsForceCharge``.  Set when the BMS wants a full charge to
+        recalibrate (useful for banks normally held below 100%).
+        """
+        if self._transport_runtime is not None:
+            return self._transport_runtime.bms_force_charge
+        if self._runtime is None:
+            return None
+        return self._runtime.bmsForceCharge
+
+    # ===========================================
     # US Split-Phase Per-Leg Properties (regs 195-204)
     # ===========================================
 

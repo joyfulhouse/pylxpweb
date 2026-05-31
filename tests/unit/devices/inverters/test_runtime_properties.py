@@ -416,3 +416,33 @@ class TestACCouplePower:
     def test_returns_zero_when_no_data(self, inverter_without_runtime):
         """When no transport and no cloud data, return 0."""
         assert inverter_without_runtime.ac_couple_power == 0
+
+
+class TestBmsPermissionProperties:
+    """Dual-source BMS permission/request flags (reg 95 / cloud, issue #232)."""
+
+    def test_cloud_reads_runtime_booleans(self, inverter_with_runtime):
+        """No transport → read RuntimeInfo.bmsCharge/bmsDischarge/bmsForceCharge."""
+        inverter = inverter_with_runtime
+        inverter._runtime.bmsCharge = True
+        inverter._runtime.bmsDischarge = True
+        inverter._runtime.bmsForceCharge = False
+        assert inverter.bms_allow_charge is True
+        assert inverter.bms_allow_discharge is True
+        assert inverter.bms_force_charge is False
+
+    def test_local_prefers_transport_decode(self, inverter_with_transport):
+        """Transport present → read the reg-95-decoded transport flags."""
+        inverter = inverter_with_transport
+        inverter._transport_runtime.bms_allow_charge = False
+        inverter._transport_runtime.bms_allow_discharge = True
+        inverter._transport_runtime.bms_force_charge = True
+        assert inverter.bms_allow_charge is False
+        assert inverter.bms_allow_discharge is True
+        assert inverter.bms_force_charge is True
+
+    def test_none_when_no_data(self, inverter_without_runtime):
+        """No transport and no cloud runtime → None (unavailable)."""
+        assert inverter_without_runtime.bms_allow_charge is None
+        assert inverter_without_runtime.bms_allow_discharge is None
+        assert inverter_without_runtime.bms_force_charge is None

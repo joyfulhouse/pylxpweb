@@ -882,7 +882,14 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         # register is read-but-not-surfaced (eg4-mu0).
         ha_sensor_key=None,
         category=RegisterCategory.BMS,
-        description="Inverter-aggregated lithium battery status. 0=Idle, 2=StandBy, 3=Active.",
+        description=(
+            "Inverter-aggregated lithium battery status / BMS permission bitmap. "
+            "Legacy enum 0=Idle, 2=StandBy, 3=Active; also a bitmap (issue #232): "
+            "0x01=allow charge, 0x02=allow discharge, 0x20=force-charge request. "
+            "Decoded into bms_allow_charge/bms_allow_discharge/bms_force_charge "
+            "(see decode_bms_permissions); cloud equivalents bmsCharge/"
+            "bmsDischarge/bmsForceCharge."
+        ),
     ),
     RegisterDefinition(
         address=96,

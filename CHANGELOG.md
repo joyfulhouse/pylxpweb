@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.32] - 2026-05-31
+
+### Added
+
+- **BMS permission/request flags (reg 95 bitmap)** — input register 95 is now decoded as a
+  BMS permission/request bitmap (eg4 issue #232), confirmed against the cloud API booleans
+  `bmsCharge` / `bmsDischarge` / `bmsForceCharge`:
+  - `decode_bms_permissions(raw)` helper + `BMS_PERMISSION_ALLOW_CHARGE` (0x01),
+    `BMS_PERMISSION_ALLOW_DISCHARGE` (0x02), `BMS_PERMISSION_FORCE_CHARGE` (0x20) constants.
+  - `InverterRuntimeData.bms_allow_charge` / `bms_allow_discharge` / `bms_force_charge` (decoded
+    from reg 95 in `from_modbus_registers`).
+  - Dual-source `BaseInverter.bms_allow_charge` / `bms_allow_discharge` / `bms_force_charge`
+    properties (transport reg-95 decode, falling back to the cloud `RuntimeInfo` booleans).
+  - `BatteryBankData.allow_charge` / `allow_discharge` / `force_charge` (LOCAL) and matching
+    `BatteryBank` properties (CLOUD, delegating to the parent inverter) so the flags surface in
+    every connection mode.
+  - The legacy reg-95 `battery_status_inv` enum is retained (read-but-unsurfaced); its register
+    description now documents the bitmap interpretation.
+
 ## [0.9.29] - 2026-05-30
 
 ### Added
