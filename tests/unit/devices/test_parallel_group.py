@@ -292,8 +292,10 @@ class TestComputeEnergyFromInvertersUsesEnergyBalance:
     """Test _compute_energy_from_inverters uses energy balance for consumption.
 
     Issue #163: todayUsage/totalUsage were computed by summing load_energy_today
-    and load_energy_total which are actually mapped to AC charge rectifier energy
-    (register 32/48-49).  The correct approach is energy balance:
+    and load_energy_total, which then aliased AC-charge rectifier energy (reg
+    32/48-49).  Even now that load_energy_* holds the real Eload register
+    (eg4-8oq), the per-inverter Eload counter is not a reliable parallel-group
+    consumption source, so the correct approach remains energy balance:
         usage = yield + discharge + import - charge - export
     """
 

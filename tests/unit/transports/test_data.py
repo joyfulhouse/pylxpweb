@@ -222,7 +222,7 @@ class TestInverterEnergyData:
             29: 80,  # PV2 today (8.0 kWh)
             30: 4,  # PV3 today (0.4 kWh)
             31: 184,  # Inverter today (18.4 kWh)
-            32: 100,  # Load today / Erec_day (10.0 kWh)
+            32: 100,  # AC-charge today / Erec_day (10.0 kWh)
             33: 50,  # Charge today (5.0 kWh)
             34: 30,  # Discharge today (3.0 kWh)
             35: 10,  # EPS today (1.0 kWh)
@@ -239,7 +239,7 @@ class TestInverterEnergyData:
             47: 0,  # Inverter total (5000.0 kWh)
             # Grid/load totals - 32-bit little-endian pairs
             48: 15000,
-            49: 0,  # Load total / Erec_all (1500.0 kWh)
+            49: 0,  # AC-charge total / Erec_all (1500.0 kWh)
             50: 10000,
             51: 0,  # Charge total (1000.0 kWh)
             52: 8000,
@@ -250,6 +250,12 @@ class TestInverterEnergyData:
             57: 0,  # Grid export total (2500.0 kWh)
             58: 40000,
             59: 0,  # Grid import total / Etouser_all (4000.0 kWh)
+            # Real load energy (Eload, regs 171 and 172-173 32-bit) — distinct
+            # from the AC-charge (Erec) values above to prove they no longer
+            # alias each other (eg4-8oq).
+            171: 250,  # Load today / Eload_day (25.0 kWh)
+            172: 20000,
+            173: 0,  # Load total / Eload_all (2000.0 kWh)
         }
 
         data = InverterEnergyData.from_modbus_registers(input_regs)
@@ -261,7 +267,10 @@ class TestInverterEnergyData:
         assert data.charge_energy_today == pytest.approx(5.0, rel=0.01)
         assert data.discharge_energy_today == pytest.approx(3.0, rel=0.01)
         assert data.grid_export_today == pytest.approx(15.0, rel=0.01)
-        assert data.load_energy_today == pytest.approx(10.0, rel=0.01)  # Erec_day (reg 32)
+        # Real load energy (Eload_day, reg 171) and AC-charge (Erec_day, reg 32)
+        # are now separate fields (eg4-8oq).
+        assert data.load_energy_today == pytest.approx(25.0, rel=0.01)  # Eload_day (reg 171)
+        assert data.ac_charge_energy_today == pytest.approx(10.0, rel=0.01)  # Erec_day (reg 32)
 
         # Per-PV daily values
         assert data.pv1_energy_today == pytest.approx(10.0, rel=0.01)
@@ -276,7 +285,10 @@ class TestInverterEnergyData:
         assert data.charge_energy_total == pytest.approx(1000.0, rel=0.01)
         assert data.discharge_energy_total == pytest.approx(800.0, rel=0.01)
         assert data.grid_export_total == pytest.approx(2500.0, rel=0.01)
-        assert data.load_energy_total == pytest.approx(1500.0, rel=0.01)  # Erec_all (reg 48)
+        # Real load energy (Eload_all, regs 172-173) and AC-charge (Erec_all,
+        # regs 48-49) are now separate fields (eg4-8oq).
+        assert data.load_energy_total == pytest.approx(2000.0, rel=0.01)  # Eload_all (reg 172)
+        assert data.ac_charge_energy_total == pytest.approx(1500.0, rel=0.01)  # Erec_all (reg 48)
 
         # Per-PV lifetime values
         assert data.pv1_energy_total == pytest.approx(1000.0, rel=0.01)

@@ -143,9 +143,10 @@ class ParallelGroup:
         total_import = _sum_field("grid_import_total")
         total_export = _sum_field("grid_export_total")
 
-        # Usage via energy balance.  The transport field ``load_energy_today``
-        # is mapped to AC-charge rectifier energy (register 32, Erec_day),
-        # NOT household consumption.  Energy balance is the correct formula:
+        # Usage via energy balance.  Per-inverter ``load_energy_today`` (now the
+        # real Eload register, reg 171) is not a reliable parallel-group
+        # consumption source, and the firmware Eload counter is per-unit
+        # inconsistent (eg4-05k/eg4-8oq).  Energy balance is the correct formula:
         #   usage = yield + discharge + import - charge - export
         # See: eg4_web_monitor issue #163
         today_usage = today_yield + today_discharge + today_import - today_charge - today_export

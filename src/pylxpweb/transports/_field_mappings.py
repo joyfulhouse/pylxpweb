@@ -151,10 +151,10 @@ RUNTIME_FIELD: dict[str, str | None] = {
     "bms_fw_update_state": None,
     "quick_charge_remaining_seconds": None,
     "smart_load_power": None,
-    # Raw BMS-reported battery status word (reg has ha_sensor_key="battery_status"
-    # but is not currently surfaced through InverterRuntimeData — tracked for
-    # follow-up wiring).  Acknowledged here for the completeness contract; the
-    # reachability contract lists it as a known gap.
+    # Raw inverter-aggregated battery status word.  Intentionally not surfaced:
+    # the HA ``battery_status`` sensor is fed by the friendlier BMS-bank
+    # charge/discharge state, so this register carries no ha_sensor_key and is
+    # read-but-dropped (eg4-mu0).  Acknowledged here for the completeness contract.
     "battery_status_inv": None,
 }
 
@@ -172,42 +172,40 @@ ENERGY_FIELD: dict[str, str | None] = {
     "pv1_energy_today": "pv1_energy_today",
     "pv2_energy_today": "pv2_energy_today",
     "pv3_energy_today": "pv3_energy_today",
-    # PV4-6 daily energy (V23 extended, regs 223/226/229) is DEFERRED: there is
-    # no >3-string device or cloud payload to validate against, no transport
-    # read group for regs 223-231, and no pv_string_count gate on the energy
-    # parse.  Explicit None acknowledges the registers for the completeness
-    # contract without half-wiring a speculative path (the ha_sensor_keys are
-    # listed in the reachability debt list).  Full wiring tracked in beads.
-    "epv4_day": None,
-    "epv5_day": None,
-    "epv6_day": None,
+    # PV4-6 daily energy (V23 extended, regs 223/226/229).  Parsed only when the
+    # model's pv_string_count >= N and read only by the PV4-6 energy read group
+    # (gated identically to the runtime pv4-6 path); a 3-string model leaves
+    # these None (eg4-478).
+    "epv4_day": "pv4_energy_today",
+    "epv5_day": "pv5_energy_today",
+    "epv6_day": "pv6_energy_today",
     "inverter_energy_today": "inverter_energy_today",
     "charge_energy_today": "charge_energy_today",
     "discharge_energy_today": "discharge_energy_today",
     "eps_energy_today": "eps_energy_today",
     "grid_export_energy_today": "grid_export_today",
     "grid_import_energy_today": "grid_import_today",
-    # Legacy mapped reg 32 (Erec_day = AC charge rectifier energy) to load_energy_today.
-    # Canonical defs have the real load_energy_today at reg 171, but the legacy behavior
-    # used ac_charge_energy_today for this field. Preserve backward compatibility.
-    "ac_charge_energy_today": "load_energy_today",
+    # Reg 32 (Erec_day = AC-charge rectifier energy) now maps to its OWN field.
+    # It previously aliased load_energy_today, which conflated grid-to-battery
+    # charge energy with real load consumption (eg4-8oq).
+    "ac_charge_energy_today": "ac_charge_energy_today",
     "pv1_energy_total": "pv1_energy_total",
     "pv2_energy_total": "pv2_energy_total",
     "pv3_energy_total": "pv3_energy_total",
-    # PV4-6 lifetime energy (V23 extended, regs 224/227/230) — DEFERRED, see
-    # the epv4_day note above.
-    "epv4_all": None,
-    "epv5_all": None,
-    "epv6_all": None,
+    # PV4-6 lifetime energy (V23 extended, regs 224/227/230, 32-bit) — see the
+    # epv4_day note above (eg4-478).
+    "epv4_all": "pv4_energy_total",
+    "epv5_all": "pv5_energy_total",
+    "epv6_all": "pv6_energy_total",
     "inverter_energy_total": "inverter_energy_total",
     "charge_energy_total": "charge_energy_total",
     "discharge_energy_total": "discharge_energy_total",
     "eps_energy_total": "eps_energy_total",
     "grid_export_energy_total": "grid_export_total",
     "grid_import_energy_total": "grid_import_total",
-    # Legacy mapped regs 48-49 (Erec_all = AC charge rectifier energy total) to load_energy_total.
-    # Same backward-compat mapping as load_energy_today above.
-    "ac_charge_energy_total": "load_energy_total",
+    # Regs 48-49 (Erec_all = AC-charge rectifier energy total) now map to their
+    # OWN field, no longer aliasing load_energy_total (eg4-8oq).
+    "ac_charge_energy_total": "ac_charge_energy_total",
     "generator_energy_today": "generator_energy_today",
     "generator_energy_total": "generator_energy_total",
     # EPS per-leg energy (split-phase, regs 133-138)
@@ -215,13 +213,12 @@ ENERGY_FIELD: dict[str, str | None] = {
     "eps_l2_energy_today": "eps_l2_energy_today",
     "eps_l1_energy_total": "eps_l1_energy_total",
     "eps_l2_energy_total": "eps_l2_energy_total",
-    # Canonical load-energy registers (regs 171/172) are intentionally NOT
-    # mapped: the legacy/contract field load_energy_today/total is populated
-    # from ac_charge_energy_today/total (reg 32 / 48-49) above for backward
-    # compatibility.  Explicit None keeps these acknowledged (not a silent gap)
-    # so the completeness contract test stays green.
-    "load_energy_today": None,
-    "load_energy_total": None,
+    # Canonical load-energy registers (regs 171/172, Eload_day/Eload_all) now map
+    # to the real load_energy fields.  This is the genuine load consumption that
+    # matches the cloud's todayUsage/totalUsage, replacing the former AC-charge
+    # alias (eg4-8oq).  load_energy_total is 32-bit (regs 172-173).
+    "load_energy_today": "load_energy_today",
+    "load_energy_total": "load_energy_total",
 }
 
 # =========================================================================
