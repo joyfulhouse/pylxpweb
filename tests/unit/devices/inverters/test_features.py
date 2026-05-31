@@ -423,6 +423,85 @@ class TestInverterFeatures:
         assert features.off_grid_capable is True  # Most inverters have this
 
 
+class TestFromFamily:
+    """Tests for InverterFeatures.from_family (family-only feature resolution)."""
+
+    def test_eg4_offgrid_no_code(self) -> None:
+        """EG4_OFFGRID is unambiguous from the family alone (representative SNA)."""
+        features = InverterFeatures.from_family(InverterFamily.EG4_OFFGRID)
+        assert features is not None
+        assert features.model_family == InverterFamily.EG4_OFFGRID
+        assert features.grid_type == GridType.SPLIT_PHASE
+        assert features.split_phase is True
+        assert features.three_phase_capable is False
+        assert features.discharge_recovery_hysteresis is True
+        assert features.volt_watt_curve is False
+
+    def test_eg4_hybrid_no_code(self) -> None:
+        """EG4_HYBRID is unambiguous from the family alone (representative PV series)."""
+        features = InverterFeatures.from_family(InverterFamily.EG4_HYBRID)
+        assert features is not None
+        assert features.model_family == InverterFamily.EG4_HYBRID
+        assert features.grid_type == GridType.SPLIT_PHASE
+        assert features.split_phase is True
+        assert features.three_phase_capable is False
+        assert features.volt_watt_curve is True
+
+    def test_matching_code_is_authoritative(self) -> None:
+        """A device type code that maps to the family is used directly."""
+        # FlexBOSS (10284) maps to EG4_HYBRID and must be honoured.
+        features = InverterFeatures.from_family(InverterFamily.EG4_HYBRID, 10284)
+        assert features is not None
+        assert features.device_type_code == 10284
+        assert features.model_family == InverterFamily.EG4_HYBRID
+
+    def test_lxp_requires_code(self) -> None:
+        """LXP is ambiguous (EU three-phase vs LB split-phase) without a code."""
+        assert InverterFeatures.from_family(InverterFamily.LXP) is None
+        assert InverterFeatures.from_family(InverterFamily.LXP, None) is None
+
+    def test_lxp_eu_with_code(self) -> None:
+        """LXP + device_type_code 12 resolves to LXP-EU three-phase."""
+        features = InverterFeatures.from_family(InverterFamily.LXP, 12)
+        assert features is not None
+        assert features.grid_type == GridType.SINGLE_PHASE
+        assert features.split_phase is False
+        assert features.three_phase_capable is True
+
+    def test_lxp_lb_with_code(self) -> None:
+        """LXP + device_type_code 44 resolves to LXP-LB split-phase."""
+        features = InverterFeatures.from_family(InverterFamily.LXP, 44)
+        assert features is not None
+        assert features.grid_type == GridType.SPLIT_PHASE
+        assert features.split_phase is True
+        assert features.three_phase_capable is False
+
+    def test_lxp_unrecognized_code_returns_none(self) -> None:
+        """A code that does not map to LXP cannot disambiguate -> None."""
+        assert InverterFeatures.from_family(InverterFamily.LXP, 999) is None
+
+    def test_unknown_family_returns_none(self) -> None:
+        """UNKNOWN family has no representative code -> None."""
+        assert InverterFeatures.from_family(InverterFamily.UNKNOWN) is None
+
+    def test_mismatched_code_falls_back_to_family(self) -> None:
+        """A code mapping to a different family falls back to the family default."""
+        # 54 maps to EG4_OFFGRID; caller explicitly asked for EG4_HYBRID, so the
+        # family wins via its representative code.
+        features = InverterFeatures.from_family(InverterFamily.EG4_HYBRID, 54)
+        assert features is not None
+        assert features.model_family == InverterFamily.EG4_HYBRID
+
+    def test_agrees_with_from_device_type_code(self) -> None:
+        """For a matching code, from_family equals from_device_type_code."""
+        for code in (54, 2092, 10284, 12, 44):
+            family = DEVICE_TYPE_CODE_TO_FAMILY[code]
+            via_family = InverterFeatures.from_family(family, code)
+            via_code = InverterFeatures.from_device_type_code(code)
+            assert via_family is not None
+            assert via_family == via_code
+
+
 # =============================================================================
 # Helper Function Tests
 # =============================================================================

@@ -154,6 +154,19 @@ DEVICE_TYPE_CODE_TO_FAMILY: dict[int, InverterFamily] = {
 }
 
 
+# Representative device type code per family, used by ``InverterFeatures.from_family``
+# when a caller has only a family name (for example a stored configuration that
+# predates device-type-code capture).  Only families whose capabilities are
+# unambiguous from the family alone are listed here.  Families that require the
+# device type code to disambiguate — notably ``LXP`` (EU is three-phase, LB is
+# split-phase) — are intentionally absent, so ``from_family`` returns ``None`` for
+# them and the caller applies a conservative fallback.
+_FAMILY_REPRESENTATIVE_DEVICE_TYPE_CODE: dict[InverterFamily, int] = {
+    InverterFamily.EG4_OFFGRID: DEVICE_TYPE_CODE_SNA,
+    InverterFamily.EG4_HYBRID: DEVICE_TYPE_CODE_PV_SERIES,
+}
+
+
 # Known feature sets by model family
 # These represent the default capabilities for each family
 FAMILY_DEFAULT_FEATURES: dict[InverterFamily, dict[str, bool]] = {
@@ -596,6 +609,64 @@ class InverterFeatures:
                 features.grid_type = GridType.SINGLE_PHASE
 
         return features
+
+    @classmethod
+    def from_family(
+        cls,
+        family: InverterFamily,
+        device_type_code: int | None = None,
+    ) -> InverterFeatures | None:
+        """Create a features instance from a model family.
+
+        :meth:`from_device_type_code` is the authoritative entry point and should
+        be preferred whenever a device type code is known. This family-based
+        helper exists for callers that only have a family name (for example a
+        stored configuration that predates device-type-code capture) and need the
+        family-default capability set without reading registers.
+
+        Resolution order:
+
+        1. If ``device_type_code`` is provided and maps to ``family``, delegate to
+           :meth:`from_device_type_code` (fully authoritative).
+        2. Otherwise, for families whose capabilities are unambiguous from the
+           family alone (``EG4_OFFGRID``, ``EG4_HYBRID``), build from the
+           family-representative device type code so grid type, phase flags and
+           PV string count are correct.
+        3. Otherwise the family cannot be resolved to a definite capability set —
+           either it needs a device type code to disambiguate (``LXP``: EU is
+           three-phase, LB is split-phase) or it is ``UNKNOWN`` — and ``None`` is
+           returned so the caller can apply a conservative fallback.
+
+        Args:
+            family: Inverter model family.
+            device_type_code: Optional device type code from
+                HOLD_DEVICE_TYPE_CODE. Used directly when it maps to ``family``;
+                a mismatched or absent code falls back to the family-representative
+                code.
+
+        Returns:
+            An :class:`InverterFeatures` instance, or ``None`` when the family
+            cannot be resolved without a device type code.
+
+        Example:
+            >>> InverterFeatures.from_family(InverterFamily.EG4_HYBRID).split_phase
+            True
+            >>> InverterFeatures.from_family(InverterFamily.LXP) is None  # needs code
+            True
+            >>> InverterFeatures.from_family(InverterFamily.LXP, 44).split_phase
+            True
+        """
+        if (
+            device_type_code is not None
+            and DEVICE_TYPE_CODE_TO_FAMILY.get(device_type_code) == family
+        ):
+            return cls.from_device_type_code(device_type_code)
+
+        representative = _FAMILY_REPRESENTATIVE_DEVICE_TYPE_CODE.get(family)
+        if representative is not None:
+            return cls.from_device_type_code(representative)
+
+        return None
 
 
 def get_inverter_family(device_type_code: int) -> InverterFamily:
