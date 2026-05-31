@@ -95,26 +95,12 @@ KNOWN_RAW_UNIT_DIFFERENCES: dict[str, dict[str, float]] = {
 # SHRINKING — entries are debt, not design.
 # =========================================================================
 KNOWN_UNREACHABLE_HA_KEYS: dict[str, str] = {
-    # Raw BMS battery-status word.  Read into no InverterRuntimeData field yet;
-    # the HA integration does not consume `battery_status` from runtime (eg4-mu0).
-    "battery_status_inv": "raw BMS status word not yet surfaced on InverterRuntimeData",
-    # BMS fault/warning codes advertise their OWN ha_sensor_keys but
-    # from_modbus_registers only LOSSILY merges them into fault_code/warning_code
-    # (the inverter code wins when nonzero, dropping the BMS code).  There is no
-    # dedicated bms_fault_code/bms_warning_code dataclass field, so these keys
-    # are not independently reachable.  Wire dedicated fields or drop the keys.
-    "bms_fault_code": "lossy-merged into fault_code; no dedicated field",
-    "bms_warning_code": "lossy-merged into warning_code; no dedicated field",
-    # PV4-6 energy (V23 extended) is DEFERRED: no >3-string device or cloud
-    # payload, no transport read group for regs 223-231, no pv_string_count gate
-    # on the energy parse.  The registers keep their ha_sensor_keys to document
-    # intent; full wiring is tracked in beads.
-    "epv4_day": "pv4-6 energy deferred (no device/cloud data, no read group)",
-    "epv4_all": "pv4-6 energy deferred (no device/cloud data, no read group)",
-    "epv5_day": "pv4-6 energy deferred (no device/cloud data, no read group)",
-    "epv5_all": "pv4-6 energy deferred (no device/cloud data, no read group)",
-    "epv6_day": "pv4-6 energy deferred (no device/cloud data, no read group)",
-    "epv6_all": "pv4-6 energy deferred (no device/cloud data, no read group)",
+    # (empty) — all previously-deferred registers are now wired end-to-end.
+    # battery_status_inv / bms_fault_code / bms_warning_code had their
+    # aspirational ha_sensor_keys dropped (eg4-mu0, eg4-5c5); pv4-6 energy
+    # (epv4-6 day/all) is now fully wired with a read group + pv_string_count
+    # gate + dataclass fields (eg4-478).  Keep this dict EMPTY unless a new,
+    # justified debt entry is genuinely required.
 }
 
 
@@ -125,9 +111,9 @@ KNOWN_UNREACHABLE_HA_KEYS: dict[str, str] = {
 #   parallel_config -> parallel_master_slave/parallel_phase/parallel_number
 #   fault_code     -> fault_code (real field)
 #   warning_code   -> warning_code (real field)
-# NOTE: bms_fault_code/bms_warning_code are deliberately NOT here — they only
-# merge lossily into fault_code/warning_code, so they are tracked as debt in
-# KNOWN_UNREACHABLE_HA_KEYS instead of counted as reachable.
+# NOTE: bms_fault_code/bms_warning_code merge lossily into fault_code/
+# warning_code (fallback when the inverter code is 0) and no longer advertise
+# ha_sensor_keys, so the reachability test does not flag them (eg4-5c5).
 _RUNTIME_SPECIAL_REACHABLE = {
     "soc_soh_packed",
     "parallel_config",

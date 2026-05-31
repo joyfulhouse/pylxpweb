@@ -200,11 +200,15 @@ class TestFaultRegisterSensorKeys:
     def test_warning_code_has_sensor_key(self) -> None:
         assert BY_NAME["warning_code"].ha_sensor_key == "warning_code"
 
-    def test_bms_fault_code_has_sensor_key(self) -> None:
-        assert BY_NAME["bms_fault_code"].ha_sensor_key == "bms_fault_code"
+    def test_bms_fault_code_has_no_sensor_key(self) -> None:
+        # BMS fault/warning codes are merged into the inverter-level
+        # fault_code/warning_code (fallback when the inverter code is 0) and are
+        # not surfaced as standalone HA sensors, so they carry no ha_sensor_key
+        # (eg4-5c5).
+        assert BY_NAME["bms_fault_code"].ha_sensor_key is None
 
-    def test_bms_warning_code_has_sensor_key(self) -> None:
-        assert BY_NAME["bms_warning_code"].ha_sensor_key == "bms_warning_code"
+    def test_bms_warning_code_has_no_sensor_key(self) -> None:
+        assert BY_NAME["bms_warning_code"].ha_sensor_key is None
 
 
 class TestInverterRuntimeDataFaultProperties:

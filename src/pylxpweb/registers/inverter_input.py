@@ -66,6 +66,13 @@ PV4_6_EXTENDED_NAMES: frozenset[str] = frozenset(
 # Read as a single group ONLY for models whose ``pv_string_count >= 4``.
 PV4_6_INPUT_REGISTER_GROUP: tuple[int, int] = (217, 6)
 
+# Modbus input register span covering PV4-6 daily + lifetime energy
+# (regs 223-231: epv4_day=223, epv4_all=224/32-bit, epv5_day=226,
+# epv5_all=227/32-bit, epv6_day=229, epv6_all=230/32-bit).  Read as a single
+# group ONLY for models whose ``pv_string_count >= 4`` (same gate as the
+# voltage/power group above).
+PV4_6_ENERGY_INPUT_REGISTER_GROUP: tuple[int, int] = (223, 9)
+
 
 class ScaleFactor(int, Enum):
     """Divisor applied to raw register value."""
@@ -868,7 +875,12 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         address=95,
         canonical_name="battery_status_inv",
         cloud_api_field=None,
-        ha_sensor_key="battery_status",
+        # No ha_sensor_key: the HA ``battery_status`` sensor is fed by the
+        # friendlier BMS-bank charge/discharge state (``battery_bank_status``),
+        # not this inverter-aggregated idle/standby/active word.  Surfacing the
+        # raw word here would conflict with / regress that sensor, so this
+        # register is read-but-not-surfaced (eg4-mu0).
+        ha_sensor_key=None,
         category=RegisterCategory.BMS,
         description="Inverter-aggregated lithium battery status. 0=Idle, 2=StandBy, 3=Active.",
     ),
@@ -904,7 +916,10 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         address=99,
         canonical_name="bms_fault_code",
         cloud_api_field=None,
-        ha_sensor_key="bms_fault_code",
+        # No ha_sensor_key: the BMS fault code is merged into the inverter-level
+        # ``fault_code`` field (used as a fallback when the inverter code is 0)
+        # and is not surfaced as a standalone HA sensor (eg4-5c5).
+        ha_sensor_key=None,
         category=RegisterCategory.FAULT,
         description="BMS fault code.",
     ),
@@ -912,7 +927,10 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         address=100,
         canonical_name="bms_warning_code",
         cloud_api_field=None,
-        ha_sensor_key="bms_warning_code",
+        # No ha_sensor_key: merged into the inverter-level ``warning_code``
+        # field (fallback when the inverter code is 0); not a standalone HA
+        # sensor (eg4-5c5).
+        ha_sensor_key=None,
         category=RegisterCategory.FAULT,
         description="BMS warning code.",
     ),

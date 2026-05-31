@@ -574,24 +574,41 @@ class InverterEnergyData:
     pv1_energy_today: float | None = None
     pv2_energy_today: float | None = None
     pv3_energy_today: float | None = None
+    # PV4-6 (V23 extended, >3-string models).  Populated only when the model's
+    # pv_string_count >= N; a 3-string inverter leaves these None (excluded from
+    # the pv_energy_today aggregate by _sum_optional).
+    pv4_energy_today: float | None = None
+    pv5_energy_today: float | None = None
+    pv6_energy_today: float | None = None
     charge_energy_today: float | None = None
     discharge_energy_today: float | None = None
     grid_import_today: float | None = None
     grid_export_today: float | None = None
     load_energy_today: float | None = None
     eps_energy_today: float | None = None
+    # AC-charge rectifier energy (Erec, reg 32) — energy drawn FROM the grid to
+    # charge the battery.  A distinct quantity from load_energy (Eload, reg 171);
+    # it previously masqueraded as load_energy via an alias (eg4-8oq).
+    ac_charge_energy_today: float | None = None
 
     # Lifetime energy (kWh)
     pv_energy_total: float | None = None
     pv1_energy_total: float | None = None
     pv2_energy_total: float | None = None
     pv3_energy_total: float | None = None
+    # PV4-6 lifetime (V23 extended); see pv4_energy_today note above.
+    pv4_energy_total: float | None = None
+    pv5_energy_total: float | None = None
+    pv6_energy_total: float | None = None
     charge_energy_total: float | None = None
     discharge_energy_total: float | None = None
     grid_import_total: float | None = None
     grid_export_total: float | None = None
     load_energy_total: float | None = None
     eps_energy_total: float | None = None
+    # AC-charge rectifier lifetime energy (Erec_all, regs 48-49, 32-bit); see
+    # ac_charge_energy_today note above (eg4-8oq).
+    ac_charge_energy_total: float | None = None
 
     # Inverter output energy
     inverter_energy_today: float | None = None
@@ -714,6 +731,8 @@ class InverterEnergyData:
         cls,
         input_registers: dict[int, int],
         model_family: str = "EG4_HYBRID",
+        *,
+        pv_string_count: int = 3,
     ) -> InverterEnergyData:
         """Create from Modbus input register values.
 
@@ -722,32 +741,59 @@ class InverterEnergyData:
         Args:
             input_registers: Dict mapping register address to raw value
             model_family: Inverter family string for model filtering.
+            pv_string_count: Number of PV (MPPT) strings the inverter MODEL
+                exposes (0..n).  The V23-extended pv4-6 energy registers
+                (223-231) are only parsed when their index is
+                ``<= pv_string_count``.  Defaults to 3 (the residential norm),
+                so a 3-string model never picks up pv4-6 energy even if those
+                addresses happen to be present in ``input_registers`` (mirrors
+                the runtime parse).
 
         Returns:
             Transport-agnostic energy data with scaling applied
         """
-        from pylxpweb.registers.inverter_input import registers_for_model
+        from pylxpweb.registers.inverter_input import (
+            PV4_6_EXTENDED_NAMES,
+            registers_for_model,
+        )
 
         model_regs = registers_for_model(model_family)
         energy_regs = [r for r in model_regs if r.category.value in ENERGY_CATEGORIES]
 
         kwargs: dict[str, float | None] = {}
         for reg in energy_regs:
+            # V23-extended pv4-6 energy: only parse when the MODEL exposes that
+            # string index.  A 3-string model (pv_string_count=3) leaves pv4-6
+            # None even if regs 223-231 are present in the raw snapshot.  The
+            # energy canonical names are ``epvN_day``/``epvN_all`` (digit at [3]).
+            if reg.canonical_name in PV4_6_EXTENDED_NAMES:
+                pv_index = int(reg.canonical_name[3])
+                if pv_index > pv_string_count:
+                    continue
+
             field_name = ENERGY_FIELD.get(reg.canonical_name)
             if field_name is None:
                 continue
             kwargs[field_name] = read_scaled(input_registers, reg)
 
-        # Compute PV totals from per-string values
+        # Compute PV totals from per-string values.  Sum is count-agnostic: a
+        # 3-string inverter has pv4-6=None (excluded by _sum_optional), so its
+        # total is unchanged; a >3-string inverter includes the extra strings.
         kwargs["pv_energy_today"] = _sum_optional(
             kwargs.get("pv1_energy_today"),
             kwargs.get("pv2_energy_today"),
             kwargs.get("pv3_energy_today"),
+            kwargs.get("pv4_energy_today"),
+            kwargs.get("pv5_energy_today"),
+            kwargs.get("pv6_energy_today"),
         )
         kwargs["pv_energy_total"] = _sum_optional(
             kwargs.get("pv1_energy_total"),
             kwargs.get("pv2_energy_total"),
             kwargs.get("pv3_energy_total"),
+            kwargs.get("pv4_energy_total"),
+            kwargs.get("pv5_energy_total"),
+            kwargs.get("pv6_energy_total"),
         )
 
         return cls(timestamp=datetime.now(), **kwargs)

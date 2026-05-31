@@ -17,6 +17,7 @@ from pylxpweb.models import InverterRuntime
 from pylxpweb.registers.inverter_input import (
     BY_CLOUD_FIELD,
     BY_NAME,
+    PV4_6_ENERGY_INPUT_REGISTER_GROUP,
     PV4_6_EXTENDED_NAMES,
     PV4_6_INPUT_REGISTER_GROUP,
     RegisterCategory,
@@ -25,7 +26,8 @@ from pylxpweb.registers.inverter_input import (
     registers_for_model,
     sensor_keys_for_model,
 )
-from pylxpweb.transports.data import InverterRuntimeData
+from pylxpweb.transports._field_mappings import ENERGY_FIELD
+from pylxpweb.transports.data import InverterEnergyData, InverterRuntimeData
 
 _PV4_6_CANONICAL = (
     "pv4_voltage",
@@ -133,21 +135,23 @@ class TestPV456Registers:
             assert cf in BY_CLOUD_FIELD, f"{cf} missing from BY_CLOUD_FIELD"
 
     def test_pv456_energy_cloud_fields_deferred(self) -> None:
-        # PV4-6 ENERGY is DEFERRED (no cloud EnergyInfo field, no >3-string
-        # device): the epvNToday cloud fields were removed from the register
-        # table so the cloud↔modbus scale contract is not falsely asserted.
-        # Tracked in beads; see KNOWN_UNREACHABLE_HA_KEYS in
-        # test_register_contract.py.  When real >3-string cloud data appears,
-        # re-add the cloud fields + scaling and restore these to the lookup test.
+        # PV4-6 ENERGY: the LOCAL (modbus) path is now fully wired (eg4-478) —
+        # read group 223-231, pv_string_count gate, dataclass fields.  The CLOUD
+        # path stays deferred: there is no cloud EnergyInfo field for pv4-6
+        # energy, so the epvNToday cloud fields remain absent from the register
+        # table and the cloud↔modbus scale contract is not falsely asserted.
+        # When real >3-string cloud data appears, add the cloud fields + scaling.
         for cf in ("epv4Today", "epv5Today", "epv6Today"):
             assert cf not in BY_CLOUD_FIELD, (
-                f"{cf} is back in BY_CLOUD_FIELD; if pv4-6 energy is now wired, "
-                f"update the contract harness and this test together"
+                f"{cf} is back in BY_CLOUD_FIELD; if pv4-6 cloud energy is now "
+                f"wired, add its scaling and a parity proof"
             )
 
     def test_input_register_group_span(self) -> None:
-        # The conditional read group must cover exactly regs 217-222 (V+P).
+        # The conditional read groups must cover exactly regs 217-222 (V+P) and
+        # regs 223-231 (daily + lifetime energy).
         assert PV4_6_INPUT_REGISTER_GROUP == (217, 6)
+        assert PV4_6_ENERGY_INPUT_REGISTER_GROUP == (223, 9)
 
 
 class TestPV456CountGating:
@@ -406,15 +410,20 @@ class TestPV456TransportConditionalRead:
 
         async def fake_read(start: int, count: int) -> list[int]:
             requested.append((start, count))
-            # regs 217-222: pv4_v, pv5_v, pv6_v, pv4_p, pv5_p, pv6_p
-            return [3000, 3100, 3200, 2400, 2500, 2600]
+            # Return ascending sentinels so each address gets a distinct value.
+            return [start + offset for offset in range(count)]
 
         with patch.object(transport, "_read_input_registers", side_effect=fake_read):
             regs = await transport._read_pv4_6_registers()
 
+        # Both the voltage/power group AND the energy group are read for a
+        # >3-string model.
         assert (217, 6) in requested
-        assert regs[217] == 3000
-        assert regs[222] == 2600
+        assert (223, 9) in requested
+        assert regs[217] == 217  # pv4_voltage raw
+        assert regs[222] == 222  # pv6_power raw
+        assert regs[223] == 223  # epv4_day raw
+        assert regs[231] == 231  # epv6_all high word
 
     @pytest.mark.asyncio
     async def test_pv4_6_read_failure_is_non_fatal(self) -> None:
@@ -432,3 +441,125 @@ class TestPV456TransportConditionalRead:
 
         # Failure leaves pv4-6 unpopulated rather than failing the whole read.
         assert regs == {}
+
+
+class TestPV456EnergyDataModelFields:
+    """InverterEnergyData has PV4-6 daily + lifetime energy fields (eg4-478)."""
+
+    def test_pv4_energy_today_field(self) -> None:
+        assert InverterEnergyData(pv4_energy_today=12.5).pv4_energy_today == 12.5
+
+    def test_pv5_energy_today_field(self) -> None:
+        assert InverterEnergyData(pv5_energy_today=13.5).pv5_energy_today == 13.5
+
+    def test_pv6_energy_today_field(self) -> None:
+        assert InverterEnergyData(pv6_energy_today=14.5).pv6_energy_today == 14.5
+
+    def test_pv4_energy_total_field(self) -> None:
+        assert InverterEnergyData(pv4_energy_total=1200.0).pv4_energy_total == 1200.0
+
+    def test_pv5_energy_total_field(self) -> None:
+        assert InverterEnergyData(pv5_energy_total=1300.0).pv5_energy_total == 1300.0
+
+    def test_pv6_energy_total_field(self) -> None:
+        assert InverterEnergyData(pv6_energy_total=1400.0).pv6_energy_total == 1400.0
+
+
+class TestPV456EnergyFieldMapping:
+    """ENERGY_FIELD maps epv4-6 day/all to real dataclass fields (not None)."""
+
+    @pytest.mark.parametrize(
+        ("canonical", "field"),
+        [
+            ("epv4_day", "pv4_energy_today"),
+            ("epv5_day", "pv5_energy_today"),
+            ("epv6_day", "pv6_energy_today"),
+            ("epv4_all", "pv4_energy_total"),
+            ("epv5_all", "pv5_energy_total"),
+            ("epv6_all", "pv6_energy_total"),
+        ],
+    )
+    def test_energy_field_mapped(self, canonical: str, field: str) -> None:
+        assert ENERGY_FIELD[canonical] == field
+
+
+class TestPV456EnergyModbusGating:
+    """from_modbus_registers gates pv4-6 ENERGY on pv_string_count, not family.
+
+    Layout (all DIV_10, 0.1 kWh): epv4_day=223, epv4_all=224(32b), epv5_day=226,
+    epv5_all=227(32b), epv6_day=229, epv6_all=230(32b).
+    """
+
+    @staticmethod
+    def _energy_registers() -> dict[int, int]:
+        return {
+            223: 100,  # epv4_day raw -> 10.0
+            224: 5000,  # epv4_all low word -> 500.0 (high word 225 = 0)
+            225: 0,
+            226: 110,  # epv5_day -> 11.0
+            227: 5100,  # epv5_all -> 510.0
+            228: 0,
+            229: 120,  # epv6_day -> 12.0
+            230: 5200,  # epv6_all -> 520.0
+            231: 0,
+        }
+
+    @pytest.mark.parametrize("family", ["EG4_HYBRID", "EG4_OFFGRID", "LXP"])
+    def test_pv4_6_energy_not_populated_for_3string(self, family: str) -> None:
+        # Raw values present at 223-231 but model is 3-string (default) -> None.
+        energy = InverterEnergyData.from_modbus_registers(self._energy_registers(), family)
+        assert energy.pv4_energy_today is None
+        assert energy.pv5_energy_today is None
+        assert energy.pv6_energy_today is None
+        assert energy.pv4_energy_total is None
+        assert energy.pv5_energy_total is None
+        assert energy.pv6_energy_total is None
+
+    def test_pv4_5_populated_for_5string(self) -> None:
+        energy = InverterEnergyData.from_modbus_registers(
+            self._energy_registers(), "EG4_HYBRID", pv_string_count=5
+        )
+        assert energy.pv4_energy_today == 10.0
+        assert energy.pv5_energy_today == 11.0
+        assert energy.pv4_energy_total == 500.0
+        assert energy.pv5_energy_total == 510.0
+        # pv6 is beyond the 5-string count -> left None.
+        assert energy.pv6_energy_today is None
+        assert energy.pv6_energy_total is None
+
+    def test_pv4_6_all_populated_for_6string(self) -> None:
+        energy = InverterEnergyData.from_modbus_registers(
+            self._energy_registers(), "EG4_HYBRID", pv_string_count=6
+        )
+        assert energy.pv6_energy_today == 12.0
+        assert energy.pv6_energy_total == 520.0
+
+
+class TestPV456EnergyTotalsCountAgnostic:
+    """pv_energy_today aggregate includes pv4-6 only when the model exposes them.
+
+    pv1-3 daily energy live at regs 28/29/30 (DIV_10); pv4-6 daily at 223/226/229.
+    """
+
+    @staticmethod
+    def _registers() -> dict[int, int]:
+        return {
+            28: 100,  # pv1_energy_today -> 10.0
+            29: 200,  # pv2_energy_today -> 20.0
+            30: 300,  # pv3_energy_today -> 30.0
+            223: 100,  # epv4_day -> 10.0
+            226: 110,  # epv5_day -> 11.0
+            229: 120,  # epv6_day -> 12.0
+        }
+
+    def test_3string_total_excludes_pv4_6(self) -> None:
+        energy = InverterEnergyData.from_modbus_registers(self._registers(), "EG4_HYBRID")
+        # 10 + 20 + 30 = 60.0; pv4-6 are None and excluded.
+        assert energy.pv_energy_today == 60.0
+
+    def test_6string_total_includes_pv4_6(self) -> None:
+        energy = InverterEnergyData.from_modbus_registers(
+            self._registers(), "EG4_HYBRID", pv_string_count=6
+        )
+        # 10 + 20 + 30 + 10 + 11 + 12 = 93.0.
+        assert energy.pv_energy_today == 93.0
