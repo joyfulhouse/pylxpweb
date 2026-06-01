@@ -464,6 +464,33 @@ def scale_battery_value(field_name: str, value: int | float) -> float:
     return apply_scale(value, BATTERY_MODULE_SCALING[field_name])
 
 
+def derive_pv_current(power: float | int | None, voltage: float | int | None) -> float | None:
+    """Derive a PV string current (A) from its power (W) and voltage (V).
+
+    EG4 hybrid inverters expose NO PV-current Modbus register: input registers
+    72-74 (long assumed to be ``pvN_current``) read 0 even while the strings are
+    actively producing — verified live on both an 18kPV and a FlexBOSS21. The
+    cloud API likewise has no PV-current field. Solar Assistant and the EG4 web
+    portal therefore derive the value the only way the protocol allows, as
+    ``I = P / V``. This helper centralises that derivation for the Modbus and
+    HTTP runtime paths.
+
+    Args:
+        power: PV string power in watts (None when the string is absent).
+        voltage: PV string voltage in volts (None when the string is absent).
+
+    Returns:
+        Current in amps rounded to 2 decimals, ``0.0`` when the voltage is ~0
+        (idle/dark string, avoids divide-by-zero), or ``None`` when either input
+        is missing so a string the model does not have stays absent.
+    """
+    if power is None or voltage is None:
+        return None
+    if voltage <= 0:
+        return 0.0
+    return round(power / voltage, 2)
+
+
 def scale_energy_value(field_name: str, value: int | float, to_kwh: bool = True) -> float:
     """Convenience function to scale energy values.
 

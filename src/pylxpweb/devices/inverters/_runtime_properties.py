@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pylxpweb.constants import scale_runtime_value
+from pylxpweb.constants import derive_pv_current, scale_runtime_value
 
 if TYPE_CHECKING:
     from pylxpweb.models import InverterRuntime
@@ -170,6 +170,40 @@ class InverterRuntimePropertiesMixin:
     def pv_total_power(self) -> int | None:
         """Get total PV power from all strings in watts."""
         return self._raw_int("pv_total_power", "ppv")
+
+    # PV string currents are DERIVED (I = P / V): EG4 firmware exposes no
+    # PV-current register and the cloud API no PV-current field, so these read
+    # the string's own power/voltage properties — which already resolve the
+    # transport (Modbus) value when present, else the cloud value — and divide.
+    @property
+    def pv1_current(self) -> float | None:
+        """Get PV string 1 current in amps (derived from power / voltage)."""
+        return derive_pv_current(self.pv1_power, self.pv1_voltage)
+
+    @property
+    def pv2_current(self) -> float | None:
+        """Get PV string 2 current in amps (derived from power / voltage)."""
+        return derive_pv_current(self.pv2_power, self.pv2_voltage)
+
+    @property
+    def pv3_current(self) -> float | None:
+        """Get PV string 3 current in amps (derived from power / voltage)."""
+        return derive_pv_current(self.pv3_power, self.pv3_voltage)
+
+    @property
+    def pv4_current(self) -> float | None:
+        """Get PV string 4 current in amps (V23 extended, >3-string models)."""
+        return derive_pv_current(self.pv4_power, self.pv4_voltage)
+
+    @property
+    def pv5_current(self) -> float | None:
+        """Get PV string 5 current in amps (V23 extended, >3-string models)."""
+        return derive_pv_current(self.pv5_power, self.pv5_voltage)
+
+    @property
+    def pv6_current(self) -> float | None:
+        """Get PV string 6 current in amps (V23 extended, >3-string models)."""
+        return derive_pv_current(self.pv6_power, self.pv6_voltage)
 
     # ===========================================
     # AC Grid Properties

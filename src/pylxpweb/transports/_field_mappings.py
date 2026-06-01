@@ -24,9 +24,15 @@ RUNTIME_FIELD: dict[str, str | None] = {
     "pv1_power": "pv1_power",
     "pv2_power": "pv2_power",
     "pv3_power": "pv3_power",
-    "pv1_current": "pv1_current",
-    "pv2_current": "pv2_current",
-    "pv3_current": "pv3_current",
+    # Input registers 72-74 are NOT PV current despite the canonical name: they
+    # read 0 even while the strings produce (verified live on 18kPV + FlexBOSS21,
+    # and the firmware decompilation defines no PV-current register).  Acknowledge
+    # them here (the runtime-field contract requires every register be a key) but
+    # route them nowhere — pvN_current is DERIVED as power/voltage in
+    # ``InverterRuntimeData.from_modbus_registers`` via ``derive_pv_current``.
+    "pv1_current": None,
+    "pv2_current": None,
+    "pv3_current": None,
     # PV4-6 (V23 extended, regs 217-222).  These map to dataclass fields.  The
     # registers are defined for ALL families, but ``from_modbus_registers`` only
     # parses pvN when the model's ``pv_string_count >= N`` (default 3), and the

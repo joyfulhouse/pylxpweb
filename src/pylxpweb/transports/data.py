@@ -121,10 +121,13 @@ class InverterRuntimeData:
     pv3_current: float | None = None  # A
     pv3_power: float | None = None  # W
     pv4_voltage: float | None = None  # V (V23 extended)
+    pv4_current: float | None = None  # A (V23 extended, derived)
     pv4_power: float | None = None  # W (V23 extended)
     pv5_voltage: float | None = None  # V (V23 extended)
+    pv5_current: float | None = None  # A (V23 extended, derived)
     pv5_power: float | None = None  # W (V23 extended)
     pv6_voltage: float | None = None  # V (V23 extended)
+    pv6_current: float | None = None  # A (V23 extended, derived)
     pv6_power: float | None = None  # W (V23 extended)
     pv_total_power: float | None = None  # W
 
@@ -356,7 +359,7 @@ class InverterRuntimeData:
             Transport-agnostic runtime data with scaling applied
         """
         # Import scaling functions
-        from pylxpweb.constants.scaling import scale_runtime_value
+        from pylxpweb.constants.scaling import derive_pv_current, scale_runtime_value
 
         def _opt_voltage(field: str, raw: int | None) -> float | None:
             """Scale an optional cloud PV voltage, preserving None when absent."""
@@ -366,7 +369,7 @@ class InverterRuntimeData:
             """Cast an optional cloud PV power (W, no scaling), preserving None."""
             return float(raw) if raw is not None else None
 
-        return cls(
+        runtime_data = cls(
             timestamp=datetime.now(),
             # PV - API returns values needing /10 scaling
             pv1_voltage=scale_runtime_value("vpv1", runtime.vpv1),
@@ -423,6 +426,21 @@ class InverterRuntimeData:
             device_status=runtime.status or 0,
             # Note: InverterRuntime doesn't have faultCode/warningCode fields
         )
+
+        # Derive per-string PV current (I = P / V).  The cloud API exposes no
+        # PV-current field, mirroring the Modbus path; derive it here so an
+        # HTTP-sourced InverterRuntimeData carries the same pvN_current as a
+        # Modbus-sourced one.
+        for n in range(1, 7):
+            setattr(
+                runtime_data,
+                f"pv{n}_current",
+                derive_pv_current(
+                    getattr(runtime_data, f"pv{n}_power"),
+                    getattr(runtime_data, f"pv{n}_voltage"),
+                ),
+            )
+        return runtime_data
 
     @classmethod
     def from_modbus_registers(
@@ -543,6 +561,17 @@ class InverterRuntimeData:
             kwargs.get("pv5_power"),
             kwargs.get("pv6_power"),
         )
+
+        # Derive per-string PV current (I = P / V).  The firmware exposes no
+        # PV-current register (regs 72-74 read 0 while producing), so compute it
+        # from the power/voltage already parsed above.  A string the model does
+        # not have (pvN_power/voltage None) yields None and stays absent.
+        from pylxpweb.constants.scaling import derive_pv_current
+
+        for n in range(1, 7):
+            kwargs[f"pv{n}_current"] = derive_pv_current(
+                kwargs.get(f"pv{n}_power"), kwargs.get(f"pv{n}_voltage")
+            )
 
         # load_power comes from power_to_user (reg 27), power_from_grid also
         # maps to the same register in the legacy code

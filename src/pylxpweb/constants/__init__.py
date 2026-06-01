@@ -325,6 +325,7 @@ from .scaling import (
     _get_scaling_for_field,
     # Scaling functions
     apply_scale,
+    derive_pv_current,
     get_battery_field_precision,
     get_precision,
     # Packed time helpers (Modbus register format)
@@ -562,6 +563,7 @@ __all__ = [
     "INVERTER_OVERVIEW_SCALING",
     "PARAMETER_SCALING",
     "apply_scale",
+    "derive_pv_current",
     "get_precision",
     "get_battery_field_precision",
     "pack_time",
