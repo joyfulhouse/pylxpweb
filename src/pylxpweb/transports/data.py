@@ -1951,6 +1951,17 @@ class MidboxRuntimeData:
             smart_load_3_l2_power=_f(midbox_data.smartLoad3L2ActivePower),
             smart_load_4_l1_power=_f(midbox_data.smartLoad4L1ActivePower),
             smart_load_4_l2_power=_f(midbox_data.smartLoad4L2ActivePower),
+            # Smart Port current (API returns deci-amps, divide by 10 — same
+            # scale as grid/load/gen/ups currents above).  Surfaces the smart
+            # load per-leg current in pure-cloud mode (#243).
+            smart_port_1_l1_current=_f_div(midbox_data.smartLoad1L1RmsCurr, 10.0),
+            smart_port_1_l2_current=_f_div(midbox_data.smartLoad1L2RmsCurr, 10.0),
+            smart_port_2_l1_current=_f_div(midbox_data.smartLoad2L1RmsCurr, 10.0),
+            smart_port_2_l2_current=_f_div(midbox_data.smartLoad2L2RmsCurr, 10.0),
+            smart_port_3_l1_current=_f_div(midbox_data.smartLoad3L1RmsCurr, 10.0),
+            smart_port_3_l2_current=_f_div(midbox_data.smartLoad3L2RmsCurr, 10.0),
+            smart_port_4_l1_current=_f_div(midbox_data.smartLoad4L1RmsCurr, 10.0),
+            smart_port_4_l2_current=_f_div(midbox_data.smartLoad4L2RmsCurr, 10.0),
             # Smart Port Status (only available via HTTP API)
             smart_port_1_status=midbox_data.smartPort1Status,
             smart_port_2_status=midbox_data.smartPort2Status,

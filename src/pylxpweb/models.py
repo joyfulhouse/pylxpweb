@@ -844,6 +844,20 @@ class MidboxData(BaseModel):
     smartLoad4L1ActivePower: int | None = None
     smartLoad4L2ActivePower: int | None = None
 
+    # Smart Load RMS current, per-phase (÷10 for amps, like grid/load/gen/ups).
+    # These carry the same data as GridBOSS Modbus regs 18-25 (smart-port
+    # current) — the dongle reads those registers and the cloud relays them
+    # here. LOCAL reads regs 18-25 directly; mapping these cloud fields lets
+    # pure-cloud mode read the identical values (#243).
+    smartLoad1L1RmsCurr: int | None = None
+    smartLoad1L2RmsCurr: int | None = None
+    smartLoad2L1RmsCurr: int | None = None
+    smartLoad2L2RmsCurr: int | None = None
+    smartLoad3L1RmsCurr: int | None = None
+    smartLoad3L2RmsCurr: int | None = None
+    smartLoad4L1RmsCurr: int | None = None
+    smartLoad4L2RmsCurr: int | None = None
+
     # ===========================================
     # AC Couple Power Fields (watts, no scaling)
     # Optional - not all devices report all fields

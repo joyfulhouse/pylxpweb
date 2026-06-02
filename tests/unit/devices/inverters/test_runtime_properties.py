@@ -328,6 +328,7 @@ class TestPropertyTypes:
             "bus2_voltage",
             "generator_voltage",
             "generator_frequency",
+            "power_factor",
         ]
 
         for prop in float_properties:
@@ -368,7 +369,6 @@ class TestPropertyTypes:
     def test_all_string_properties_return_str(self, inverter_with_runtime):
         """Verify all text properties return str."""
         str_properties = [
-            "power_factor",
             "status_text",
             "firmware_version",
             "power_rating",

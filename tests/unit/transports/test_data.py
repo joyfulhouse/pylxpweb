@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from pylxpweb.models import EnergyInfo, InverterRuntime
+from pylxpweb.models import EnergyInfo, InverterRuntime, MidboxData
 from pylxpweb.transports.data import (
     BatteryBankData,
     BatteryData,
@@ -529,6 +529,43 @@ class TestMidboxRuntimeLifetimeValues:
         result = data.lifetime_energy_values()
         assert all(v is None for v in result.values())
         assert len(result) == 24
+
+
+class TestMidboxSmartLoadCurrentFromHttp:
+    """Smart-load per-leg current surfaces from cloud getMidboxRuntime (#243)."""
+
+    @staticmethod
+    def _midbox(**overrides: object) -> MidboxData:
+        """Build a MidboxData with required fields stubbed + given overrides."""
+        base: dict[str, object] = {
+            f: None for f, info in MidboxData.model_fields.items() if info.is_required()
+        }
+        base["serverTime"] = ""
+        base["deviceTime"] = ""
+        base.update(overrides)
+        return MidboxData(**base)  # type: ignore[arg-type]
+
+    def test_smart_load_current_scaled_div10(self) -> None:
+        """Cloud smartLoad*RmsCurr (deci-amps) -> smart_port current ÷10."""
+        md = self._midbox(
+            smartLoad1L1RmsCurr=130,  # 13.0 A
+            smartLoad1L2RmsCurr=7,  # 0.7 A
+            smartLoad4L2RmsCurr=16,  # 1.6 A
+        )
+        rt = MidboxRuntimeData.from_http_response(md)
+        assert rt.smart_port_1_l1_current == 13.0
+        assert rt.smart_port_1_l2_current == 0.7
+        assert rt.smart_port_4_l2_current == 1.6
+        # Same divisor as the sibling grid/load/gen/ups currents
+        md2 = self._midbox(gridL1RmsCurr=130, smartLoad2L1RmsCurr=130)
+        rt2 = MidboxRuntimeData.from_http_response(md2)
+        assert rt2.smart_port_2_l1_current == rt2.grid_l1_current == 13.0
+
+    def test_smart_load_current_none_when_absent(self) -> None:
+        """Unset smart-load current fields stay None (not 0)."""
+        rt = MidboxRuntimeData.from_http_response(self._midbox())
+        assert rt.smart_port_1_l1_current is None
+        assert rt.smart_port_3_l2_current is None
 
 
 class TestSplitPhaseEpsFallback:

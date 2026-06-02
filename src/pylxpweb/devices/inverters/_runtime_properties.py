@@ -230,14 +230,22 @@ class InverterRuntimePropertiesMixin:
         return self._scaled_float("grid_frequency", "fac")
 
     @property
-    def power_factor(self) -> str | None:
-        """Get power factor."""
+    def power_factor(self) -> float | None:
+        """Get power factor as a 0.0-1.0 ratio (negative indicates leading).
+
+        Both sources share the same ratio scale: the Modbus reg-19 decode
+        yields 0.0-1.0 (raw 1000 == unity), and the cloud ``pf`` field is
+        already decoded to that same ratio (live-confirmed: reg 1000 -> cloud
+        pf 1). Transport is preferred; cloud is used as a fallback so the value
+        is available in pure-cloud mode too (issue #243).
+        """
         if self._transport_runtime is not None:
             val = self._transport_runtime.power_factor
-            return str(val) if val is not None else None
-        if self._runtime is None:
-            return None
-        return self._runtime.pf
+            if val is not None:
+                return val
+        if self._runtime is not None and self._runtime.pf is not None:
+            return float(self._runtime.pf)
+        return None
 
     # ===========================================
     # EPS (Emergency Power Supply) Properties
