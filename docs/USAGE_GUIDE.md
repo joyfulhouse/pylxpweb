@@ -653,7 +653,7 @@ if __name__ == "__main__":
 - **[Property Reference](PROPERTY_REFERENCE.md)** - Complete list of all available properties
 - **[API Reference](api/LUXPOWER_API.md)** - Low-level API documentation
 - **[Scaling Guide](SCALING_GUIDE.md)** - Detailed scaling information
-- **[Control Operations Guide](CONTROL_GUIDE.md)** - Advanced control operations *(coming soon)*
+- **Control Operations Guide** - Advanced control operations *(coming soon)*
 
 ## Support
 

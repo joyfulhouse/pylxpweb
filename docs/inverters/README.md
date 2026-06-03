@@ -136,4 +136,4 @@ To contribute register maps for new device types:
 
 - [API Documentation](../api/LUXPOWER_API.md) - Luxpower API reference
 - [Utilities](../../utils/README.md) - Register mapping tools
-- [Parameter Mapping](../api/PARAMETER_MAPPING.md) - Parameter ID reference
+- [Parameter Reference](../PARAMETER_REFERENCE.md) - Parameter ID reference
