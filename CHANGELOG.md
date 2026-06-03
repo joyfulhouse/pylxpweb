@@ -2,8 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
 
 ## [0.9.32] - 2026-05-31
 
@@ -1380,6 +1382,12 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[Unreleased]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.32...HEAD
+[0.9.32]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.29...v0.9.32
+[0.9.29]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.26...v0.9.29
+[0.9.26]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.17...v0.9.26
+[0.9.17]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.0...v0.9.17
+[0.9.0]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.23...v0.9.0
 [0.3.23]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.22...v0.3.23
 [0.3.22]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.21...v0.3.22
 [0.3.21]: https://github.com/joyfulhouse/pylxpweb/compare/v0.3.20...v0.3.21
