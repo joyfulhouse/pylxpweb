@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.35b7] - 2026-06-05
+
+### Fixed
+
+- **PV/forced charge power register (reg 74) addressable locally** — added
+  `74: ["HOLD_FORCED_CHG_POWER_CMD"]` to `REGISTER_TO_PARAM_KEYS` so the local
+  Modbus path can read/write the forced/PV charge power command by name. It was
+  missing from the local map, which forced consumers onto the wrong register 64
+  (a 0-100% charge-power limit) with a lossy kW↔% conversion.
+- **Reg 74 unit metadata corrected** — `HOLD_FORCED_CHG_POWER_CMD` is **100W
+  units** (0-150 = 0-15 kW, same encoding as AC charge power reg 66), not a
+  percentage. Fixed the register comment, the `HoldingRegisterDefinition`
+  (`unit`/`max_value`/description), the scaling note, and the
+  `HybridInverter.set_forced_charge_power()` / `get_charge_discharge_power()`
+  docstrings; `set_forced_charge_power` now accepts 0-150 (was capped at 100).
+  Hardware-verified: FlexBOSS reg74=20→2.0 kW, 18kPV reg74=120→12.0 kW.
+- **Packaging** — moved `classifiers` back under `[project]` (it was misplaced
+  under `[project.urls]`, breaking `uv build`) and dropped the deprecated
+  License classifier in favor of the SPDX `license` field.
+
 ## [0.9.32] - 2026-05-31
 
 ### Added

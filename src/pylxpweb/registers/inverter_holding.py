@@ -602,11 +602,14 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=74,
         canonical_name="forced_charge_power_command",
         api_param_key="HOLD_FORCED_CHG_POWER_CMD",
-        unit="%",
+        unit="W",
         min_value=0,
-        max_value=100,
+        max_value=15000,
         category=HoldingCategory.SCHEDULE,
-        description="Forced charge power command percentage.",
+        description=(
+            "Forced/PV charge (ChgFirst) power command. Raw value in 100W units "
+            "(0-150 = 0-15kW), same encoding as AC charge power (reg 66)."
+        ),
     ),
     HoldingRegisterDefinition(
         address=75,

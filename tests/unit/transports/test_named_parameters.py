@@ -85,6 +85,22 @@ class TestReadNamedParametersModbus:
         assert result.get("HOLD_COM_ADDR") == 1
         assert result.get("HOLD_LANGUAGE") == 0
 
+    @pytest.mark.asyncio
+    async def test_read_named_parameters_forced_chg_power(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Register 74 (HOLD_FORCED_CHG_POWER_CMD) decodes to its named param.
+
+        Reg 74 is the forced/PV charge power command in 100W units
+        (0-150 = 0-15 kW), e.g. raw 120 -> 12.0 kW.
+        """
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={74: 120})
+
+        result = await mock_modbus_transport.read_named_parameters(74, 1)
+
+        assert "HOLD_FORCED_CHG_POWER_CMD" in result
+        assert result["HOLD_FORCED_CHG_POWER_CMD"] == 120
+
 
 class TestWriteNamedParametersModbus:
     """Tests for Modbus transport write_named_parameters."""
@@ -112,6 +128,23 @@ class TestWriteNamedParametersModbus:
 
         assert result is True
         mock_modbus_transport.write_parameters.assert_called_once_with({66: 75})
+
+    @pytest.mark.asyncio
+    async def test_write_named_parameters_forced_chg_power(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Writing HOLD_FORCED_CHG_POWER_CMD resolves to register 74.
+
+        100W units: 1 kW -> raw 10. Local path must be able to address reg 74
+        by name (regression: it was missing from the local register map, which
+        forced the integration onto the wrong register 64).
+        """
+        result = await mock_modbus_transport.write_named_parameters(
+            {"HOLD_FORCED_CHG_POWER_CMD": 10}
+        )
+
+        assert result is True
+        mock_modbus_transport.write_parameters.assert_called_once_with({74: 10})
 
     @pytest.mark.asyncio
     async def test_write_named_parameters_bit_field_single(

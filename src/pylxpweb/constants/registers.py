@@ -130,7 +130,7 @@ HOLD_AC_CHARGE_START_SOC = 160  # Battery SOC to start AC charging (0-90%)
 # Forced Charge (ChgFirst / PV Charge Priority) Parameters
 # Per EG4-18KPV-12LV Modbus PDF, regs 74-81 are "Charging Priority" (ChgFirst).
 # Cloud API names: HOLD_FORCED_CHG_POWER_CMD, HOLD_FORCED_CHG_SOC_LIMIT
-HOLD_FORCED_CHG_POWER_CMD = 74  # Forced charge power command (0-100%)
+HOLD_FORCED_CHG_POWER_CMD = 74  # Forced/PV charge power, 100W units (0-150 = 0-15kW)
 HOLD_FORCED_CHG_SOC_LIMIT = 75  # Forced charge SOC limit (0-100%)
 
 # Forced Charge Time Schedule (regs 76-81) - packed time format (Modbus)
@@ -507,6 +507,10 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     71: ["HOLD_AC_CHARGE_END_MINUTE_1"],
     72: ["HOLD_AC_CHARGE_ENABLE_1"],
     73: ["HOLD_AC_CHARGE_ENABLE_2"],
+    # Forced/PV charge (ChgFirst) power command.
+    # 100W units (0-150 = 0.0-15.0 kW), same encoding as AC charge power (reg 66).
+    # Hardware-verified: FlexBOSS reg74=20 -> 2.0 kW, 18kPV reg74=120 -> 12.0 kW.
+    74: ["HOLD_FORCED_CHG_POWER_CMD"],
     # Battery protection
     100: ["HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT"],
     # Battery charge/discharge current limits (A, confirmed 2026-02-18)

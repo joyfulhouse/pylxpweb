@@ -252,17 +252,22 @@ class HybridInverter(GenericInverter):
         return await self._set_register_bit(FUNC_EN_REGISTER, FUNC_EN_BIT_FORCED_DISCHG_EN, enabled)
 
     async def get_charge_discharge_power(self) -> dict[str, int]:
-        """Get charge and discharge power settings.
+        """Get AC charge and forced/PV charge power settings.
+
+        Both values are RAW 100W units (0-150 = 0-15 kW), not percentages.
+        The ``*_percent`` dict keys are a legacy misnomer kept for backward
+        compatibility; divide by 10 for kW.
 
         Returns:
             Dictionary with:
-            - charge_power_percent: AC charge power (0-100%)
-            - forced_charge_power_percent: Forced charge power (0-100%)
+            - charge_power_percent: AC charge power, raw 100W units (reg 66)
+            - forced_charge_power_percent: Forced/PV charge power, raw 100W
+              units (reg 74)
 
         Example:
             >>> settings = await inverter.get_charge_discharge_power()
             >>> settings
-            {'charge_power_percent': 50, 'forced_charge_power_percent': 100}
+            {'charge_power_percent': 120, 'forced_charge_power_percent': 20}
         """
         from pylxpweb.constants import HOLD_AC_CHARGE_POWER_CMD
 
@@ -273,25 +278,28 @@ class HybridInverter(GenericInverter):
             "forced_charge_power_percent": params.get("HOLD_FORCED_CHG_POWER_CMD", 0),
         }
 
-    async def set_forced_charge_power(self, power_percent: int) -> bool:
+    async def set_forced_charge_power(self, power_100w: int) -> bool:
         """Set forced charge (PV charge priority) power limit.
 
+        Register 74 stores RAW 100W units (0-150 = 0-15 kW), not a percentage
+        — same encoding as AC charge power (reg 66). e.g. ``20`` -> 2.0 kW.
+
         Args:
-            power_percent: Forced charge power percentage (0-100)
+            power_100w: Forced charge power in 100W units (0-150 = 0-15 kW).
 
         Returns:
             True if successful
 
         Example:
-            >>> await inverter.set_forced_charge_power(80)
+            >>> await inverter.set_forced_charge_power(20)  # 2.0 kW
             True
         """
         from pylxpweb.constants import HOLD_FORCED_CHG_POWER_CMD
 
-        if not 0 <= power_percent <= 100:
-            raise ValueError("power_percent must be between 0 and 100")
+        if not 0 <= power_100w <= 150:
+            raise ValueError("power_100w must be between 0 and 150 (0-15 kW)")
 
-        return await self.write_parameters({HOLD_FORCED_CHG_POWER_CMD: power_percent})
+        return await self.write_parameters({HOLD_FORCED_CHG_POWER_CMD: power_100w})
 
     # ============================================================================
     # Working Mode Time Schedule Operations (Generic + Type-Specific)
