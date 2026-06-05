@@ -421,20 +421,20 @@ class TestChargeDischargePowerOperations:
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        with pytest.raises(ValueError, match="power_percent must be between 0 and 100"):
+        with pytest.raises(ValueError, match="power_100w must be between 0 and 150"):
             await inverter.set_forced_charge_power(-5)
 
     @pytest.mark.asyncio
     async def test_set_forced_charge_power_validation_too_high(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Test forced charge power validation - too high."""
+        """Test forced charge power validation - too high (>150 = >15kW)."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        with pytest.raises(ValueError, match="power_percent must be between 0 and 100"):
-            await inverter.set_forced_charge_power(105)
+        with pytest.raises(ValueError, match="power_100w must be between 0 and 150"):
+            await inverter.set_forced_charge_power(151)
 
 
 class TestACChargeScheduleOperations:

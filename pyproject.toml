@@ -1,6 +1,6 @@
 [project]
 name = "pylxpweb"
-version = "0.9.34"
+version = "0.9.35"
 description = "Python client library for Luxpower/EG4 inverter web monitoring API"
 readme = "README.md"
 authors = [
@@ -14,20 +14,19 @@ dependencies = [
 ]
 license = "MIT"
 keywords = ["luxpower", "eg4", "inverter", "solar", "api", "client"]
-
-[project.urls]
-Homepage = "https://github.com/joyfulhouse/pylxpweb"
-Repository = "https://github.com/joyfulhouse/pylxpweb"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Home Automation",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+
+[project.urls]
+Homepage = "https://github.com/joyfulhouse/pylxpweb"
+Repository = "https://github.com/joyfulhouse/pylxpweb"
 
 [project.optional-dependencies]
 dev = [
