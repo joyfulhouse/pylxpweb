@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.36b1] - 2026-06-08
+
+### Added
+
+- **`BatteryControlMode` enum** (`SOC` / `VOLTAGE`) exported from the package root,
+  with `from_voltage_flag()` and `is_voltage` helpers. Models the register-179
+  charge/discharge regime (bit 9 charge, bit 10 discharge; 0 = SOC, 1 = Voltage).
+- **Friendly battery-control helpers** on `HybridInverter`:
+  `get/set_battery_charge_control_mode`, `get/set_battery_discharge_control_mode`
+  (enum-based), and `get_active_charge_limit()` / `get_active_discharge_cutoff()`
+  which return whichever limit (SOC % or Voltage) the live regime is honoring.
+- **Register 228** (`HOLD_SYSTEM_CHARGE_VOLT_LIMIT`, DIV_10) added to the holding
+  register map.
+
+### Fixed
+
+- **Battery-control methods now work over the cloud (HTTP), not just local
+  transport.** The shared bit/value helpers (`_read_modbus_register`,
+  `_write_modbus_register`, `_get_register_bit`, `_set_modbus_register_bit`) are
+  now dual-path: transport mode does an on-device read-modify-write; cloud mode
+  uses the atomic `control_function` API for bits and `read_parameters` /
+  `write_parameters` for values. This fixes `get/set_battery_charge_control`,
+  `get/set_battery_discharge_control`, the voltage/SOC limit getters/setters,
+  current limits, charge-last, and start-discharge-power in cloud and hybrid mode.
+- **Cloud bit writes no longer corrupt sibling bits.** `set_eps_enabled`,
+  `set_forced_charge`, `set_forced_discharge`, and `set_sporadic_charge` previously
+  used a read-modify-write that read `reg_<n>` (a key the cloud API never returns),
+  zeroing the base value and clearing unrelated bits in register 21/233 in cloud
+  mode. They now route through the atomic `control_function` path.
+- **Cloud voltage reads reconstruct the raw register value** using each register's
+  scale, so callers that re-apply the scale get the same result as the transport
+  path, and float-like cloud strings (e.g. `"59.5"`) no longer raise.
+- **Register 169 cloud name** corrected to `HOLD_ON_GRID_EOD_VOLTAGE` (matches the
+  EG4 cloud API and the existing integer constant; a non-canonical spelling made
+  the on-grid EOD voltage unreadable in cloud mode). Confirmed via live cloud read.
+
 ## [0.9.35] - 2026-06-05
 
 ### Fixed

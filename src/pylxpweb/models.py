@@ -28,6 +28,35 @@ class OperatingMode(StrEnum):
     STANDBY = "standby"
 
 
+class BatteryControlMode(StrEnum):
+    """Battery charge/discharge control regime.
+
+    EG4/LuxPower inverters decide whether the battery charge and discharge
+    limits are governed by State-of-Charge (closed-loop, BMS/lithium) or by
+    battery Voltage (open-loop, lead-acid or no BMS comms). The regime is held
+    in register 179 (``FUNC_EXT_REGISTER``) — bit 9 for charge, bit 10 for
+    discharge. ``0`` = SOC, ``1`` = Voltage.
+
+    - SOC: charge/discharge limits use the SOC registers (e.g. on-grid SOC
+      cutoff, AC charge SOC limit). The voltage limit registers are ignored.
+    - VOLTAGE: charge/discharge limits use the voltage registers (e.g. on-grid
+      end-of-discharge voltage). The SOC limit registers are ignored.
+    """
+
+    SOC = "soc"
+    VOLTAGE = "voltage"
+
+    @classmethod
+    def from_voltage_flag(cls, voltage_mode: bool) -> BatteryControlMode:
+        """Map the raw reg-179 bit (True=Voltage) to the enum."""
+        return cls.VOLTAGE if voltage_mode else cls.SOC
+
+    @property
+    def is_voltage(self) -> bool:
+        """True when this is the Voltage (open-loop) regime."""
+        return self is BatteryControlMode.VOLTAGE
+
+
 def _obfuscate_serial(serial: str) -> str:
     """Obfuscate serial number, showing only first 2 and last 2 digits."""
     if len(serial) <= 4:

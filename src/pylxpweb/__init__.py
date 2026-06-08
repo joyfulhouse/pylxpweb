@@ -74,6 +74,7 @@ from .exceptions import (
     LuxpowerError,
 )
 from .models import (
+    BatteryControlMode,
     DatalogListItem,
     DatalogListResponse,
     DongleStatus,
@@ -115,6 +116,7 @@ __all__ = [
     "FirmwareUpdateInfo",
     # Enums
     "OperatingMode",
+    "BatteryControlMode",
     # Device hierarchy (consumed-surface public API)
     "Station",
     "ParallelGroup",

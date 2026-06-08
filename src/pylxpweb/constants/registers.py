@@ -518,6 +518,7 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     102: ["HOLD_LEAD_ACID_DISCHARGE_RATE"],
     # SOC limits
     105: ["HOLD_DISCHG_CUT_OFF_SOC_EOD"],  # On-grid discharge cutoff SOC (10-90%)
+    116: ["HOLD_PTOUSER_START_DISCHARGE"],  # Power-to-user start-discharge threshold (W)
     # System functions (Register 110: 14 bit fields, verified)
     110: [
         "FUNC_PV_GRID_OFF_EN",  # Bit 0
@@ -550,6 +551,7 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     158: ["HOLD_AC_CHARGE_START_BATTERY_VOLTAGE"],
     159: ["HOLD_AC_CHARGE_END_BATTERY_VOLTAGE"],
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
+    169: ["HOLD_ON_GRID_EOD_VOLTAGE"],  # On-grid EOD voltage (V, ×10; cloud-confirmed name)
     190: ["HOLD_P2"],
     # Register 179: Extended function enable bit field (verified via Modbus probe 2026-02-13)
     # API returns 16 FUNC_* params for this register (alphabetical, NOT bit order).

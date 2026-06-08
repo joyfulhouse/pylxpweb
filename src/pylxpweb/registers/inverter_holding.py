@@ -1265,7 +1265,7 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     HoldingRegisterDefinition(
         address=169,
         canonical_name="ongrid_eod_voltage",
-        api_param_key="HOLD_ONGRID_EOD_VOLTAGE",
+        api_param_key="HOLD_ON_GRID_EOD_VOLTAGE",
         scale=ScaleFactor.DIV_10,
         unit="V",
         min_value=40.0,
@@ -1370,6 +1370,25 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         max_value=100,
         category=HoldingCategory.BATTERY,
         description="System-level charge SOC limit (stops all charging at this SOC).",
+    ),
+    # =========================================================================
+    # SYSTEM CHARGE VOLTAGE LIMIT (reg 228, confirmed 2026-02-18)
+    # =========================================================================
+    HoldingRegisterDefinition(
+        address=228,
+        canonical_name="system_charge_volt_limit",
+        api_param_key="HOLD_SYSTEM_CHARGE_VOLT_LIMIT",  # verified
+        ha_entity_key="system_charge_volt_limit",
+        scale=ScaleFactor.DIV_10,
+        unit="V",
+        min_value=48.0,
+        max_value=60.0,
+        category=HoldingCategory.BATTERY,
+        description=(
+            "System-level charge voltage limit (stops all charging at this "
+            "voltage). Active when battery charge control is in Voltage mode "
+            "(reg 179 bit 9 = 1)."
+        ),
     ),
     # =========================================================================
     # GRID PEAK SHAVING (reg 231, 32-bit)
