@@ -1113,3 +1113,68 @@ class TestBankCapacityPrefersBmsValues:
 
         assert bank.full_capacity is None
         assert bank.remain_capacity is None
+
+    def test_open_loop_zero_bms_pair_keeps_legacy_fields(self, mock_client):
+        """Open-loop (lead-acid / no BMS comms): BMS pair reads 0/0.0.
+
+        Neither half of the BMS pair may be trusted — full AND remaining
+        must both come from the legacy fields so the pair never mixes
+        sources (a 0 Ah "remaining" against a configured 400 Ah bank would
+        be a fabricated empty-bank reading).
+        """
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=0,
+            currentBatteryCharge=0.0,
+            fullCapacity=400,
+            remainCapacity=220,
+            batteryArray=[],
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+
+        assert bank.full_capacity == 400
+        assert bank.remain_capacity == 220
+
+    def test_half_present_bms_pair_keeps_legacy_pair(self, mock_client):
+        """A half-present BMS pair must not mix sources.
+
+        maxBatteryCharge without currentBatteryCharge: pairing BMS full
+        with module-sum remaining would produce nonsense fill ratios, so
+        BOTH properties keep the (internally consistent) legacy fields.
+        """
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=840,
+            currentBatteryCharge=None,
+            fullCapacity=1400,
+            remainCapacity=822,
+            batteryArray=[],
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+
+        assert bank.full_capacity == 1400
+        assert bank.remain_capacity == 822
+
+    def test_bms_backed_empty_bank_reports_zero_remaining(self, mock_client):
+        """A genuinely empty BMS-backed bank may report 0 Ah remaining."""
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=840,
+            currentBatteryCharge=0.0,
+            fullCapacity=1400,
+            remainCapacity=822,
+            batteryArray=[],
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+
+        assert bank.full_capacity == 840
+        assert bank.remain_capacity == 0
