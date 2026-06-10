@@ -235,11 +235,16 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         Uses transport if available, otherwise falls back to HTTP API.
         Transport data is stored directly in ``_transport_runtime`` as a
         pre-scaled ``MidboxRuntimeData`` dataclass — no conversion needed.
+
+        Transport read failures are counted (see ``transport_link_down``);
+        once the link is declared down AND cloud credentials exist, each
+        refresh still probes the transport but falls back to the HTTP API
+        so values keep moving instead of freezing (eg4-57g).
         """
-        try:
-            if self._transport is not None and hasattr(self._transport, "read_midbox_runtime"):
-                read_midbox = self._transport.read_midbox_runtime
-                runtime_data = await read_midbox()
+        transport = self._transport
+        if transport is not None and hasattr(transport, "read_midbox_runtime"):
+            try:
+                runtime_data = await self._tracked_transport_read(transport.read_midbox_runtime())
                 if self.validate_data and runtime_data.is_corrupt(
                     max_power_watts=self._max_power_watts,
                 ):
@@ -258,33 +263,66 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
                     "Refreshed MID device %s via transport",
                     self.serial_number,
                 )
-            elif self._client is not None:
-                from pylxpweb.transports.data import MidboxRuntimeData
-
-                self._runtime = await self._client.api.devices.get_midbox_runtime(
-                    self.serial_number
-                )
-                new_runtime = MidboxRuntimeData.from_http_response(self._runtime.midboxData)
-                # Extract isOffGrid from deviceData (primary inverter's data)
-                if self._runtime.deviceData is not None:
-                    new_runtime.off_grid = self._runtime.deviceData.isOffGrid
-                if not self._validate_runtime_energy(new_runtime):
-                    return  # keep cached runtime
-                now = datetime.now()
-                self._transport_runtime = new_runtime
-                self._runtime_cache_time = now
-                self._last_refresh = now
-            else:
-                _LOGGER.warning(
-                    "No transport or client available for MID device %s",
+                return
+            except Exception as err:
+                # Debug level: this fires every poll during a link outage.
+                # The link-down transition itself logs one warning (BaseDevice).
+                _LOGGER.debug(
+                    "Failed to fetch MID device runtime for %s via transport: %s",
                     self.serial_number,
+                    err,
                 )
+                if not (self.transport_link_down and self._cloud_fallback_available):
+                    return  # keep cached runtime (transient blip or local-only)
+                # Link down with cloud credentials: fall through to HTTP.
+
+        if self._client is not None:
+            await self._refresh_via_http()
+        else:
+            _LOGGER.warning(
+                "No transport or client available for MID device %s",
+                self.serial_number,
+            )
+
+    async def _refresh_via_http(self) -> None:
+        """Refresh runtime data from the cloud API.
+
+        Used in cloud-only mode and as the degraded fallback while an
+        attached local transport link is down.  Stores the converted data
+        in ``_transport_runtime`` (the canonical runtime slot for MID
+        devices regardless of source).
+        """
+        try:
+            from pylxpweb.transports.data import MidboxRuntimeData
+
+            self._runtime = await self._client.api.devices.get_midbox_runtime(self.serial_number)
+            new_runtime = MidboxRuntimeData.from_http_response(self._runtime.midboxData)
+            # Extract isOffGrid from deviceData (primary inverter's data)
+            if self._runtime.deviceData is not None:
+                new_runtime.off_grid = self._runtime.deviceData.isOffGrid
+            if not self._validate_runtime_energy(new_runtime):
+                return  # keep cached runtime
+            now = datetime.now()
+            self._transport_runtime = new_runtime
+            self._runtime_cache_time = now
+            self._last_refresh = now
         except Exception as err:
             _LOGGER.warning(
                 "Failed to fetch MID device runtime for %s: %s",
                 self.serial_number,
                 err,
             )
+
+    def _on_transport_link_down(self) -> None:
+        """Stop serving cached transport data once the link is declared down.
+
+        MID properties read ``_transport_runtime`` for both transport and
+        HTTP data; clearing it prevents a dead link from serving the last
+        local read forever.  In hybrid mode the HTTP fallback repopulates
+        it; in local-only mode ``has_data`` turns False so the consumer
+        marks the device unavailable (eg4-57g / integration #226).
+        """
+        self._transport_runtime = None
 
     # All properties are provided by MIDRuntimePropertiesMixin
 

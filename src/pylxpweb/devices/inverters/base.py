@@ -246,6 +246,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """Battery-bank data from the local transport, or None when not transport-backed."""
         return self._transport_battery
 
+    def _on_transport_link_down(self) -> None:
+        """Stop serving cached transport data once the link is declared down.
+
+        Runtime properties prefer ``_transport_*`` data whenever present, so
+        a dead link would otherwise keep serving the last local read forever
+        as if it were fresh (eg4-57g / integration #226).  Clearing the
+        caches makes the properties fall back to HTTP data in hybrid mode
+        (kept moving by ``_refresh_http_fallback``) and return None in
+        local-only mode (the consumer marks the device unavailable).  The
+        transport itself stays attached — reads keep being attempted every
+        cycle and a successful probe repopulates these caches immediately.
+        """
+        self._transport_runtime = None
+        self._transport_energy = None
+        self._transport_battery = None
+
     # ============================================================================
     # Factory Methods
     # ============================================================================
@@ -551,6 +567,14 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         This method fetches data concurrently for optimal performance.
         Results are cached with different TTLs based on update frequency.
 
+        When the local transport link is down (``transport_link_down``),
+        a transport read is still attempted every call — bypassing the
+        cache gate, since degraded HTTP fallback fetches stamp the same
+        cache timestamps — so the link can recover.  After the reads, if
+        the link is (still) down and cloud credentials exist, runtime,
+        energy, and battery are fetched via the HTTP API so values keep
+        moving instead of freezing on the last local read (eg4-57g).
+
         Args:
             force: If True, bypass cache and force fresh data from API
             include_parameters: If True, also refresh parameters (default: False)
@@ -558,8 +582,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # Prepare tasks to fetch only expired/missing data
         tasks: list[Awaitable[None]] = []
 
-        runtime_expired = self._is_cache_expired(
-            self._runtime_cache_time, self._runtime_cache_ttl, force
+        # While the link is down, probe the transport every cycle so the
+        # failure counter can reset the moment the link comes back.
+        link_down = self._transport is not None and self.transport_link_down
+
+        runtime_expired = (
+            self._is_cache_expired(self._runtime_cache_time, self._runtime_cache_ttl, force)
+            or link_down
         )
 
         # Combined read path: when transport supports read_all_input_data
@@ -595,38 +624,74 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+        # Degraded cloud fallback (hybrid only): re-check AFTER the reads so
+        # both an entry-time down link and a transition that happened during
+        # this cycle get HTTP data in the same cycle.  A successful probe
+        # above already reset the flag, in which case fresh local data was
+        # just stored and no cloud call is made.
+        if (
+            self._transport is not None
+            and self.transport_link_down
+            and self._cloud_fallback_available
+        ):
+            await self._refresh_http_fallback()
+
         self._last_refresh = datetime.now()
+
+    async def _refresh_http_fallback(self) -> None:
+        """Fetch runtime/energy/battery from the cloud while the link is down.
+
+        The transport data caches were cleared on the link-down transition
+        (``_on_transport_link_down``), so the runtime properties fall back
+        to the HTTP data refreshed here.  Client-level response caches keep
+        the actual cloud call rate bounded regardless of how often this
+        runs.
+        """
+        await asyncio.gather(
+            self._fetch_runtime_http(),
+            self._fetch_energy_http(),
+            self._fetch_battery_http(),
+            return_exceptions=True,
+        )
 
     async def _fetch_runtime(self) -> None:
         """Fetch runtime data with caching.
 
         Uses transport if available, otherwise falls back to HTTP API.
         """
+        if self._transport is None:
+            await self._fetch_runtime_http()
+            return
         async with self._runtime_cache_lock:
             try:
-                if self._transport is not None:
-                    # Use transport for direct local communication
-                    transport_data = await self._transport.read_runtime()
-                    if self.validate_data and transport_data.is_corrupt(
-                        max_power_watts=self._max_power_watts,
-                    ):
-                        _LOGGER.warning(
-                            "Corrupt runtime data for %s, keeping cached",
-                            self.serial_number,
-                        )
-                        return
-                    # Store transport data directly - we'll expose via properties
-                    self._transport_runtime = transport_data
-                    self._runtime_cache_time = datetime.now()
-                else:
-                    # Use HTTP API
-                    runtime_data = await self._client.api.devices.get_inverter_runtime(
-                        self.serial_number
+                # Use transport for direct local communication
+                transport_data = await self._tracked_transport_read(self._transport.read_runtime())
+                if self.validate_data and transport_data.is_corrupt(
+                    max_power_watts=self._max_power_watts,
+                ):
+                    _LOGGER.warning(
+                        "Corrupt runtime data for %s, keeping cached",
+                        self.serial_number,
                     )
-                    self._runtime = runtime_data
-                    self._runtime_cache_time = datetime.now()
+                    return
+                # Store transport data directly - we'll expose via properties
+                self._transport_runtime = transport_data
+                self._runtime_cache_time = datetime.now()
             except Exception as err:
-                # Keep existing cached data on API/connection/transport errors
+                # Keep existing cached data on transport errors
+                _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
+
+    async def _fetch_runtime_http(self) -> None:
+        """Fetch runtime data from the HTTP API with caching."""
+        async with self._runtime_cache_lock:
+            try:
+                runtime_data = await self._client.api.devices.get_inverter_runtime(
+                    self.serial_number
+                )
+                self._runtime = runtime_data
+                self._runtime_cache_time = datetime.now()
+            except Exception as err:
+                # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
 
     def _energy_elapsed_seconds(self) -> float | None:
@@ -641,60 +706,66 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Uses transport if available, otherwise falls back to HTTP API.
         Validates both lifetime monotonicity and daily energy bounds.
         """
+        if self._transport is None:
+            await self._fetch_energy_http()
+            return
         async with self._energy_cache_lock:
             try:
-                if self._transport is not None:
-                    # Use transport for direct local communication
-                    transport_data = await self._transport.read_energy()
-                    if self.validate_data and transport_data.is_corrupt():
-                        _LOGGER.warning(
-                            "Corrupt energy data for %s, keeping cached",
-                            self.serial_number,
-                        )
-                        return
-                    if self._transport_energy is not None and not self._is_energy_valid(
-                        self._transport_energy.lifetime_energy_values(),
-                        transport_data.lifetime_energy_values(),
-                    ):
-                        return  # keep cached energy data
-                    prev_daily = (
-                        self._transport_energy.daily_energy_values()
-                        if self._transport_energy is not None
-                        else None
+                # Use transport for direct local communication
+                transport_data = await self._tracked_transport_read(self._transport.read_energy())
+                if self.validate_data and transport_data.is_corrupt():
+                    _LOGGER.warning(
+                        "Corrupt energy data for %s, keeping cached",
+                        self.serial_number,
                     )
-                    if not self._is_daily_energy_valid(
-                        transport_data.daily_energy_values(),
-                        prev_daily,
-                    ):
-                        return  # keep cached energy data
-                    self._transport_energy = transport_data
-                    self._energy_cache_time = datetime.now()
-                else:
-                    # Use HTTP API
-                    energy_data = await self._client.api.devices.get_inverter_energy(
-                        self.serial_number
-                    )
-                    curr = InverterEnergyData.from_http_response(energy_data)
-                    prev = (
-                        InverterEnergyData.from_http_response(self._energy)
-                        if self._energy is not None
-                        else None
-                    )
-                    if prev is not None and not self._is_energy_valid(
-                        prev.lifetime_energy_values(),
-                        curr.lifetime_energy_values(),
-                    ):
-                        return  # keep cached energy data
-                    prev_daily = prev.daily_energy_values() if prev is not None else None
-                    if not self._is_daily_energy_valid(
-                        curr.daily_energy_values(),
-                        prev_daily,
-                    ):
-                        return  # keep cached energy data
-                    self._energy = energy_data
-                    self._energy_cache_time = datetime.now()
+                    return
+                if self._transport_energy is not None and not self._is_energy_valid(
+                    self._transport_energy.lifetime_energy_values(),
+                    transport_data.lifetime_energy_values(),
+                ):
+                    return  # keep cached energy data
+                prev_daily = (
+                    self._transport_energy.daily_energy_values()
+                    if self._transport_energy is not None
+                    else None
+                )
+                if not self._is_daily_energy_valid(
+                    transport_data.daily_energy_values(),
+                    prev_daily,
+                ):
+                    return  # keep cached energy data
+                self._transport_energy = transport_data
+                self._energy_cache_time = datetime.now()
             except Exception as err:
-                # Keep existing cached data on API/connection/transport errors
+                # Keep existing cached data on transport errors
+                _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
+
+    async def _fetch_energy_http(self) -> None:
+        """Fetch energy data from the HTTP API with caching and validation."""
+        async with self._energy_cache_lock:
+            try:
+                energy_data = await self._client.api.devices.get_inverter_energy(self.serial_number)
+                curr = InverterEnergyData.from_http_response(energy_data)
+                prev = (
+                    InverterEnergyData.from_http_response(self._energy)
+                    if self._energy is not None
+                    else None
+                )
+                if prev is not None and not self._is_energy_valid(
+                    prev.lifetime_energy_values(),
+                    curr.lifetime_energy_values(),
+                ):
+                    return  # keep cached energy data
+                prev_daily = prev.daily_energy_values() if prev is not None else None
+                if not self._is_daily_energy_valid(
+                    curr.daily_energy_values(),
+                    prev_daily,
+                ):
+                    return  # keep cached energy data
+                self._energy = energy_data
+                self._energy_cache_time = datetime.now()
+            except Exception as err:
+                # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
 
     async def _fetch_battery(self) -> None:
@@ -704,39 +775,48 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Note: Transport returns BatteryBankData with aggregate info only
         (individual battery data requires HTTP API).
         """
+        if self._transport is None:
+            await self._fetch_battery_http()
+            return
         async with self._battery_cache_lock:
             try:
-                if self._transport is not None:
-                    # Use transport for direct local communication
-                    # Transport returns BatteryBankData with both aggregate and
-                    # individual battery data from Modbus registers (5000+)
-                    transport_battery = await self._transport.read_battery()
-                    if transport_battery is not None:
-                        if self.validate_data and transport_battery.is_corrupt():
-                            _LOGGER.warning(
-                                "Corrupt battery data for %s, keeping cached",
-                                self.serial_number,
-                            )
-                            return
-                        self._transport_battery = transport_battery
-                        # Supplement with cloud metadata (battery type, model)
-                        await self._fetch_battery_metadata()
-                        self._apply_battery_metadata()
-                    self._battery_cache_time = datetime.now()
-                else:
-                    # Use HTTP API for full battery details
-                    battery_data = await self._client.api.devices.get_battery_info(
-                        self.serial_number
-                    )
+                # Use transport for direct local communication
+                # Transport returns BatteryBankData with both aggregate and
+                # individual battery data from Modbus registers (5000+)
+                transport_battery = await self._tracked_transport_read(
+                    self._transport.read_battery()
+                )
+                if transport_battery is not None:
+                    if self.validate_data and transport_battery.is_corrupt():
+                        _LOGGER.warning(
+                            "Corrupt battery data for %s, keeping cached",
+                            self.serial_number,
+                        )
+                        return
+                    self._transport_battery = transport_battery
+                    # Supplement with cloud metadata (battery type, model)
+                    await self._fetch_battery_metadata()
+                    self._apply_battery_metadata()
+                self._battery_cache_time = datetime.now()
+            except Exception as err:
+                # Keep existing cached data on transport errors.  Debug level:
+                # this fires every poll during a link outage.
+                _LOGGER.debug("Failed to fetch battery data for %s: %s", self.serial_number, err)
 
-                    # Create/update battery bank with aggregate data
-                    await self._update_battery_bank(battery_data)
+    async def _fetch_battery_http(self) -> None:
+        """Fetch full battery details from the HTTP API with caching."""
+        async with self._battery_cache_lock:
+            try:
+                battery_data = await self._client.api.devices.get_battery_info(self.serial_number)
 
-                    # Update individual batteries
-                    if battery_data.batteryArray:
-                        await self._update_batteries(battery_data.batteryArray)
+                # Create/update battery bank with aggregate data
+                await self._update_battery_bank(battery_data)
 
-                    self._battery_cache_time = datetime.now()
+                # Update individual batteries
+                if battery_data.batteryArray:
+                    await self._update_batteries(battery_data.batteryArray)
+
+                self._battery_cache_time = datetime.now()
             except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
                 # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch battery data for %s: %s", self.serial_number, err)
@@ -758,7 +838,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         shared snapshot.  Reduces Modbus transactions by ~33%.
         """
         try:
-            runtime, energy, battery = await self._transport.read_all_input_data()  # type: ignore[union-attr]
+            # refresh() only schedules this path when the transport exposes
+            # read_all_input_data — re-fetch via getattr for type narrowing
+            # (the method is not part of the InverterTransport protocol).
+            combined_fn = getattr(self._transport, "read_all_input_data", None)
+            if combined_fn is None:
+                return
+            runtime, energy, battery = await self._tracked_transport_read(combined_fn())
             if self.validate_data:
                 if runtime.is_corrupt(max_power_watts=self._max_power_watts):
                     _LOGGER.warning(

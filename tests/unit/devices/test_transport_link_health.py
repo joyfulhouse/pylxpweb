@@ -1,0 +1,460 @@
+"""Unit tests for transport link health tracking (eg4-57g / integration #226).
+
+When a local transport (Modbus TCP / WiFi dongle) is attached but the link
+dies mid-run, device refreshes used to fail silently (debug-logged) and keep
+serving cached transport data forever.  These tests cover the consecutive
+failure counter, the link-down threshold, the clear-on-transition behavior,
+the degraded HTTP fallback (hybrid), and recovery on both BaseInverter and
+MIDDevice.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from pylxpweb import LuxpowerClient
+from pylxpweb.devices.base import TRANSPORT_LINK_DOWN_THRESHOLD
+from pylxpweb.devices.inverters.generic import GenericInverter
+from pylxpweb.devices.mid_device import MIDDevice
+from pylxpweb.models import EnergyInfo, InverterRuntime, MidboxRuntime
+from pylxpweb.transports.data import (
+    BatteryBankData,
+    InverterEnergyData,
+    InverterRuntimeData,
+)
+
+_SAMPLES = Path(__file__).parent
+
+
+def _make_inverter(client: LuxpowerClient | None = None) -> GenericInverter:
+    """Create a GenericInverter (local-only when client is None)."""
+    return GenericInverter(client=client, serial_number="1234567890", model="TestModel")
+
+
+def _make_combined_data() -> tuple[Mock, Mock, Mock]:
+    """Create mock (runtime, energy, battery) for read_all_input_data."""
+    runtime = Mock(spec=InverterRuntimeData)
+    energy = Mock(spec=InverterEnergyData)
+    energy.lifetime_energy_values.return_value = {}
+    energy.daily_energy_values.return_value = {}
+    battery = Mock(spec=BatteryBankData)
+    battery.battery_count = 0
+    return runtime, energy, battery
+
+
+def _attach_failing_combined_transport(inverter: GenericInverter) -> AsyncMock:
+    """Attach a transport whose combined read always fails."""
+    transport = AsyncMock()
+    transport.read_all_input_data = AsyncMock(side_effect=OSError("link dead"))
+    inverter._transport = transport
+    return transport
+
+
+@pytest.fixture
+def mock_client() -> LuxpowerClient:
+    """Create a mock cloud client with credentials (hybrid mode)."""
+    client = Mock(spec=LuxpowerClient)
+    client.username = "user@example.com"
+    client.api = Mock()
+    client.api.devices = Mock()
+    return client
+
+
+@pytest.fixture
+def sample_runtime() -> InverterRuntime:
+    """Load sample HTTP runtime data."""
+    with open(_SAMPLES / "inverters" / "samples" / "runtime_44300E0585.json") as f:
+        return InverterRuntime.model_validate(json.load(f))
+
+
+@pytest.fixture
+def sample_energy() -> EnergyInfo:
+    """Create sample HTTP energy data."""
+    return EnergyInfo(
+        success=True,
+        serialNum="1234567890",
+        soc=85,
+        todayYielding=255,
+        todayCharging=100,
+        todayDischarging=80,
+        todayImport=50,
+        todayExport=30,
+        todayUsage=150,
+        totalYielding=50000,
+        totalCharging=20000,
+        totalDischarging=18000,
+        totalImport=10000,
+        totalExport=8000,
+        totalUsage=30000,
+    )
+
+
+@pytest.fixture
+def sample_midbox_runtime() -> MidboxRuntime:
+    """Load sample midbox runtime data."""
+    with open(_SAMPLES / "mid" / "samples" / "midbox_4524850115.json") as f:
+        return MidboxRuntime.model_validate(json.load(f))
+
+
+class TestInverterFailureCounter:
+    """Failure counter / threshold semantics on BaseInverter."""
+
+    @pytest.mark.asyncio
+    async def test_combined_read_failures_trip_threshold(self) -> None:
+        """N consecutive combined-read failures declare the link down."""
+        inverter = _make_inverter()
+        _attach_failing_combined_transport(inverter)
+
+        for i in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            assert inverter.transport_link_down is False
+            await inverter.refresh(force=True)
+            assert inverter.transport_consecutive_failures == i + 1
+
+        assert inverter.transport_link_down is True
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_keeps_cached_transport_data(self) -> None:
+        """Failures below the threshold do NOT clear cached transport data."""
+        inverter = _make_inverter()
+        runtime, energy, battery = _make_combined_data()
+        transport = AsyncMock()
+        transport.read_all_input_data = AsyncMock(return_value=(runtime, energy, battery))
+        inverter._transport = transport
+
+        await inverter.refresh(force=True)
+        assert inverter._transport_runtime is runtime
+
+        transport.read_all_input_data.side_effect = OSError("blip")
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD - 1):
+            await inverter.refresh(force=True)
+
+        # Transient blips: stale-but-recent cache still served
+        assert inverter.transport_link_down is False
+        assert inverter._transport_runtime is runtime
+
+    @pytest.mark.asyncio
+    async def test_transition_clears_transport_data(self) -> None:
+        """Crossing the threshold clears runtime/energy/battery caches."""
+        inverter = _make_inverter()
+        runtime, energy, battery = _make_combined_data()
+        battery.battery_count = 2
+        transport = AsyncMock()
+        transport.read_all_input_data = AsyncMock(return_value=(runtime, energy, battery))
+        inverter._transport = transport
+
+        await inverter.refresh(force=True)
+        assert inverter._transport_runtime is runtime
+        assert inverter._transport_energy is energy
+        assert inverter._transport_battery is battery
+
+        transport.read_all_input_data.side_effect = OSError("link dead")
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await inverter.refresh(force=True)
+
+        assert inverter.transport_link_down is True
+        assert inverter._transport_runtime is None
+        assert inverter._transport_energy is None
+        assert inverter._transport_battery is None
+
+    @pytest.mark.asyncio
+    async def test_success_resets_counter_before_threshold(self) -> None:
+        """A successful read wipes accumulated failures."""
+        inverter = _make_inverter()
+        runtime, energy, battery = _make_combined_data()
+        transport = AsyncMock()
+        transport.read_all_input_data = AsyncMock(side_effect=OSError("blip"))
+        inverter._transport = transport
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD - 1):
+            await inverter.refresh(force=True)
+        assert inverter.transport_consecutive_failures == TRANSPORT_LINK_DOWN_THRESHOLD - 1
+
+        transport.read_all_input_data.side_effect = None
+        transport.read_all_input_data.return_value = (runtime, energy, battery)
+        await inverter.refresh(force=True)
+
+        assert inverter.transport_consecutive_failures == 0
+        assert inverter.transport_link_down is False
+
+    @pytest.mark.asyncio
+    async def test_recovery_repopulates_transport_data(self) -> None:
+        """A successful probe after link-down restores local data serving."""
+        inverter = _make_inverter()
+        transport = _attach_failing_combined_transport(inverter)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await inverter.refresh(force=True)
+        assert inverter.transport_link_down is True
+
+        runtime, energy, battery = _make_combined_data()
+        transport.read_all_input_data.side_effect = None
+        transport.read_all_input_data.return_value = (runtime, energy, battery)
+        await inverter.refresh(force=True)
+
+        assert inverter.transport_link_down is False
+        assert inverter._transport_runtime is runtime
+        assert inverter._transport_energy is energy
+
+    @pytest.mark.asyncio
+    async def test_individual_read_path_tracks_failures(self) -> None:
+        """Transports without combined read still feed the counter."""
+        inverter = _make_inverter()
+        transport = AsyncMock(spec=["read_runtime", "read_energy", "read_battery"])
+        transport.read_runtime = AsyncMock(side_effect=OSError("dead"))
+        transport.read_energy = AsyncMock(side_effect=OSError("dead"))
+        transport.read_battery = AsyncMock(side_effect=OSError("dead"))
+        inverter._transport = transport
+
+        # One refresh = 3 failed reads (runtime + energy + battery), so a
+        # single fully-failed cycle already crosses the threshold.
+        await inverter.refresh(force=True)
+
+        assert inverter.transport_consecutive_failures >= TRANSPORT_LINK_DOWN_THRESHOLD
+        assert inverter.transport_link_down is True
+
+    @pytest.mark.asyncio
+    async def test_probe_attempted_every_cycle_while_down(self) -> None:
+        """While down, reads bypass the cache gate so recovery can happen."""
+        inverter = _make_inverter()
+        transport = _attach_failing_combined_transport(inverter)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await inverter.refresh(force=True)
+        calls_after_down = transport.read_all_input_data.await_count
+
+        # No force, no expired cache — the probe must still fire.
+        await inverter.refresh()
+        await inverter.refresh()
+
+        assert transport.read_all_input_data.await_count == calls_after_down + 2
+
+    @pytest.mark.asyncio
+    async def test_cloud_only_device_never_link_down(self, mock_client: LuxpowerClient) -> None:
+        """HTTP failures on cloud-only devices never touch the counter."""
+        inverter = _make_inverter(client=mock_client)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock(side_effect=OSError("API down"))
+        mock_client.api.devices.get_inverter_energy = AsyncMock(side_effect=OSError("API down"))
+        mock_client.api.devices.get_battery_info = AsyncMock(side_effect=OSError("API down"))
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD + 1):
+            await inverter.refresh(force=True)
+
+        assert inverter.transport_consecutive_failures == 0
+        assert inverter.transport_link_down is False
+
+
+class TestInverterLinkDownLogging:
+    """One-shot warning on transition, one-shot info on recovery."""
+
+    @pytest.mark.asyncio
+    async def test_single_warning_and_single_info(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The transition warns once; extra failures stay at debug; recovery infos once."""
+        inverter = _make_inverter()
+        transport = _attach_failing_combined_transport(inverter)
+
+        with caplog.at_level(logging.DEBUG, logger="pylxpweb.devices.base"):
+            # Two cycles past the threshold — still only ONE warning
+            for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD + 2):
+                await inverter.refresh(force=True)
+
+            warnings = [
+                r
+                for r in caplog.records
+                if r.levelno == logging.WARNING and "link down" in r.getMessage()
+            ]
+            assert len(warnings) == 1
+
+            runtime, energy, battery = _make_combined_data()
+            transport.read_all_input_data.side_effect = None
+            transport.read_all_input_data.return_value = (runtime, energy, battery)
+            await inverter.refresh(force=True)
+            await inverter.refresh(force=True)
+
+            infos = [
+                r
+                for r in caplog.records
+                if r.levelno == logging.INFO and "link restored" in r.getMessage()
+            ]
+            assert len(infos) == 1
+
+    @pytest.mark.asyncio
+    async def test_per_failure_logs_stay_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Individual read failures log at debug, not warning."""
+        inverter = _make_inverter()
+        _attach_failing_combined_transport(inverter)
+
+        with caplog.at_level(logging.DEBUG):
+            await inverter.refresh(force=True)  # first failure — below threshold
+
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+class TestInverterHttpFallback:
+    """Degraded cloud fallback while the link is down (hybrid mode)."""
+
+    @pytest.mark.asyncio
+    async def test_http_fallback_when_link_down(
+        self,
+        mock_client: LuxpowerClient,
+        sample_runtime: InverterRuntime,
+        sample_energy: EnergyInfo,
+    ) -> None:
+        """Once down, refresh() probes the transport AND fetches cloud data."""
+        inverter = _make_inverter(client=mock_client)
+        transport = _attach_failing_combined_transport(inverter)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
+        mock_client.api.devices.get_inverter_energy = AsyncMock(return_value=sample_energy)
+        mock_client.api.devices.get_battery_info = AsyncMock(side_effect=OSError("no batteries"))
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await inverter.refresh(force=True)
+        assert inverter.transport_link_down is True
+
+        # The transition cycle itself already ran the fallback
+        assert inverter._runtime is sample_runtime
+        assert inverter._energy is sample_energy
+        # Transport data cleared -> properties now serve the HTTP values
+        assert inverter._transport_runtime is None
+
+        # Next cycle: probe still attempted, fallback keeps fetching
+        probe_calls = transport.read_all_input_data.await_count
+        await inverter.refresh()
+        assert transport.read_all_input_data.await_count == probe_calls + 1
+        assert mock_client.api.devices.get_inverter_runtime.await_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_no_http_fallback_without_credentials(self) -> None:
+        """Local-only devices (client=None) cannot fall back to cloud."""
+        inverter = _make_inverter(client=None)
+        _attach_failing_combined_transport(inverter)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD + 1):
+            await inverter.refresh(force=True)
+
+        assert inverter.transport_link_down is True
+        assert inverter._runtime is None
+        assert inverter._transport_runtime is None
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_while_link_healthy(self, mock_client: LuxpowerClient) -> None:
+        """Healthy local link never triggers cloud runtime/energy fetches."""
+        inverter = _make_inverter(client=mock_client)
+        runtime, energy, battery = _make_combined_data()
+        transport = AsyncMock()
+        transport.read_all_input_data = AsyncMock(return_value=(runtime, energy, battery))
+        inverter._transport = transport
+        mock_client.api.devices.get_inverter_runtime = AsyncMock()
+        mock_client.api.devices.get_inverter_energy = AsyncMock()
+
+        await inverter.refresh(force=True)
+
+        mock_client.api.devices.get_inverter_runtime.assert_not_awaited()
+        mock_client.api.devices.get_inverter_energy.assert_not_awaited()
+
+
+class TestMIDDeviceLinkHealth:
+    """Failure counter, fallback, and recovery on MIDDevice."""
+
+    @staticmethod
+    def _make_mid(client: LuxpowerClient | None = None) -> MIDDevice:
+        return MIDDevice(client=client, serial_number="4524850115", model="GridBOSS")
+
+    @staticmethod
+    def _attach_failing_transport(mid: MIDDevice) -> AsyncMock:
+        transport = AsyncMock(spec=["read_midbox_runtime"])
+        transport.read_midbox_runtime = AsyncMock(side_effect=OSError("link dead"))
+        mid._transport = transport
+        return transport
+
+    @pytest.mark.asyncio
+    async def test_failures_trip_threshold_and_clear_runtime(self) -> None:
+        """MID runtime fetch failures count up and clear cached data at the threshold."""
+        mid = self._make_mid()
+        from pylxpweb.transports.data import MidboxRuntimeData
+
+        mid._transport_runtime = Mock(spec=MidboxRuntimeData)
+        transport = self._attach_failing_transport(mid)
+
+        for i in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await mid.refresh()
+            assert mid.transport_consecutive_failures == i + 1
+
+        assert mid.transport_link_down is True
+        assert mid._transport_runtime is None
+        assert transport.read_midbox_runtime.await_count == TRANSPORT_LINK_DOWN_THRESHOLD
+
+    @pytest.mark.asyncio
+    async def test_recovery_resets_counter_and_restores_data(self) -> None:
+        """A successful probe after link-down resumes local data."""
+        from pylxpweb.transports.data import MidboxRuntimeData
+
+        mid = self._make_mid()
+        transport = self._attach_failing_transport(mid)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await mid.refresh()
+        assert mid.transport_link_down is True
+
+        runtime = Mock(spec=MidboxRuntimeData)
+        runtime.lifetime_energy_values.return_value = {}
+        runtime.daily_energy_values.return_value = {}
+        transport.read_midbox_runtime.side_effect = None
+        transport.read_midbox_runtime.return_value = runtime
+        await mid.refresh()
+
+        assert mid.transport_link_down is False
+        assert mid._transport_runtime is runtime
+
+    @pytest.mark.asyncio
+    async def test_http_fallback_when_down(
+        self, mock_client: LuxpowerClient, sample_midbox_runtime: MidboxRuntime
+    ) -> None:
+        """A link-down MID with cloud credentials refreshes via HTTP."""
+        mid = self._make_mid(client=mock_client)
+        transport = self._attach_failing_transport(mid)
+        mock_client.api.devices.get_midbox_runtime = AsyncMock(return_value=sample_midbox_runtime)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await mid.refresh()
+
+        assert mid.transport_link_down is True
+        # The transition cycle fell through to HTTP — data keeps moving
+        assert mid._runtime is sample_midbox_runtime
+        assert mid._transport_runtime is not None
+        # And the transport probe keeps running on later cycles
+        probe_calls = transport.read_midbox_runtime.await_count
+        await mid.refresh()
+        assert transport.read_midbox_runtime.await_count == probe_calls + 1
+        assert mock_client.api.devices.get_midbox_runtime.await_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_below_threshold(
+        self, mock_client: LuxpowerClient, sample_midbox_runtime: MidboxRuntime
+    ) -> None:
+        """Transient blips below the threshold never hit the cloud."""
+        mid = self._make_mid(client=mock_client)
+        self._attach_failing_transport(mid)
+        mock_client.api.devices.get_midbox_runtime = AsyncMock(return_value=sample_midbox_runtime)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD - 1):
+            await mid.refresh()
+
+        mock_client.api.devices.get_midbox_runtime.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_local_only_mid_no_fallback(self) -> None:
+        """A local-only MID (client=None) goes data-less instead of crashing."""
+        mid = self._make_mid(client=None)
+        self._attach_failing_transport(mid)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD + 1):
+            await mid.refresh()
+
+        assert mid.transport_link_down is True
+        assert mid._transport_runtime is None
+        assert mid.has_data is False
