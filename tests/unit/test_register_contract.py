@@ -200,6 +200,29 @@ def test_battery_cloud_modbus_scale_parity() -> None:
     assert not offenders, "Battery cloud/modbus scale drift:\n  " + "\n  ".join(offenders)
 
 
+def test_battery_cell_number_offsets_not_crossed() -> None:
+    """Cell-number registers: offset 14 = TEMP numbers, offset 15 = VOLTAGE numbers.
+
+    Pins the eg4-4yg fix.  Proven by live cross-mode capture (2026-02-26):
+    cloud batMaxCellNumTemp/batMaxCellNumVolt vs local registers of the same
+    batteries showed the original map (14=voltage, 15=temp) was crossed.
+    Byte packing (low byte = max, high byte = min) was and remains correct.
+    """
+    by_name = {r.canonical_name: r for r in BATTERY_REGISTERS}
+
+    assert by_name["battery_max_cell_num_temp"].offset == 14
+    assert by_name["battery_min_cell_num_temp"].offset == 14
+    assert by_name["battery_max_cell_num_voltage"].offset == 15
+    assert by_name["battery_min_cell_num_voltage"].offset == 15
+
+    for max_name, min_name in (
+        ("battery_max_cell_num_temp", "battery_min_cell_num_temp"),
+        ("battery_max_cell_num_voltage", "battery_min_cell_num_voltage"),
+    ):
+        assert by_name[max_name].packed == "low_byte"
+        assert by_name[min_name].packed == "high_byte"
+
+
 def test_known_raw_unit_differences_yield_same_physical_value() -> None:
     """Each allow-listed field proves cloud_raw and modbus_raw decode equal.
 

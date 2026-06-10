@@ -351,3 +351,48 @@ class TestBatteryEnhancedProperties:
         assert battery.ambient_temp == ""
         assert battery.mos_temp == ""
         assert battery.notice_info == ""
+
+
+class TestCellNumberCrossPathConsistency:
+    """Cloud-parsed and register-parsed batteries must agree on cell numbers.
+
+    Regression for eg4-4yg: the local register map had the temp-number and
+    voltage-number registers (offsets 14/15 in the 5002+ block) crossed,
+    so LOCAL mode reported voltage cell numbers in the temp sensors and
+    vice versa while CLOUD mode (verified live against the API) was right.
+    """
+
+    def test_register_path_matches_cloud_path(
+        self, mock_client: LuxpowerClient, sample_battery_module: BatteryModule
+    ) -> None:
+        """Register block encoding the cloud fixture values parses identically."""
+        from pylxpweb.transports.data import BatteryData
+
+        # Cloud truth from samples/battery_44300E0585.json Battery_ID_01:
+        # batMaxCellNumTemp=3, batMinCellNumTemp=1,
+        # batMaxCellNumVolt=7, batMinCellNumVolt=1
+        assert sample_battery_module.batMaxCellNumTemp == 3
+        assert sample_battery_module.batMinCellNumTemp == 1
+        assert sample_battery_module.batMaxCellNumVolt == 7
+        assert sample_battery_module.batMinCellNumVolt == 1
+
+        # Encode the same battery as a local register block per the
+        # hardware layout proven in eg4-4yg: offset 14 = temp numbers,
+        # offset 15 = voltage numbers (low byte = max, high byte = min).
+        base = 5002
+        registers = dict.fromkeys(range(base, base + 30), 0)
+        registers[base + 0] = 0xC003
+        registers[base + 14] = (1 << 8) | 3  # min temp cell 1 / max temp cell 3
+        registers[base + 15] = (1 << 8) | 7  # min volt cell 1 / max volt cell 7
+
+        reg_parsed = BatteryData.from_modbus_registers(0, registers)
+        assert reg_parsed is not None
+
+        cloud_battery = Battery(client=mock_client, battery_data=sample_battery_module)
+
+        # Temp numbers land in temp fields on BOTH paths
+        assert reg_parsed.max_cell_num_temp == cloud_battery.max_cell_temp_num == 3
+        assert reg_parsed.min_cell_num_temp == cloud_battery.min_cell_temp_num == 1
+        # Voltage numbers land in voltage fields on BOTH paths
+        assert reg_parsed.max_cell_num_voltage == cloud_battery.max_cell_voltage_num == 7
+        assert reg_parsed.min_cell_num_voltage == cloud_battery.min_cell_voltage_num == 1
