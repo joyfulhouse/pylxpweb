@@ -12,13 +12,17 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from pylxpweb import LuxpowerClient
-from pylxpweb.devices.base import TRANSPORT_LINK_DOWN_THRESHOLD
+from pylxpweb.devices.base import (
+    LINK_PROBE_MIN_INTERVAL_SECONDS,
+    TRANSPORT_LINK_DOWN_THRESHOLD,
+)
 from pylxpweb.devices.inverters.generic import GenericInverter
 from pylxpweb.devices.mid_device import MIDDevice
 from pylxpweb.models import EnergyInfo, InverterRuntime, MidboxRuntime
@@ -218,20 +222,57 @@ class TestInverterFailureCounter:
         assert inverter.transport_link_down is True
 
     @pytest.mark.asyncio
-    async def test_probe_attempted_every_cycle_while_down(self) -> None:
-        """While down, reads bypass the cache gate so recovery can happen."""
+    async def test_same_tick_duplicate_refresh_collapses_to_one_probe(self) -> None:
+        """While down, probes rate-limit to one per LINK_PROBE_MIN_INTERVAL_SECONDS.
+
+        Coordinator paths call refresh() twice per tick (group refresh +
+        device processing); without the throttle each call would hit the
+        dead transport (review MEDIUM).  After the interval elapses (the
+        next real coordinator tick) the probe fires again.
+        """
         inverter = _make_inverter()
         transport = _attach_failing_combined_transport(inverter)
 
         for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
             await inverter.refresh(force=True)
+        assert inverter.transport_link_down is True
         calls_after_down = transport.read_all_input_data.await_count
 
-        # No force, no expired cache — the probe must still fire.
+        # First post-down refresh probes (no force, no expired cache needed)
         await inverter.refresh()
+        assert transport.read_all_input_data.await_count == calls_after_down + 1
+
+        # Same-tick duplicates collapse — no second dead-link read, even
+        # with force=True (force cannot exceed the probe rate while down).
+        await inverter.refresh()
+        await inverter.refresh(force=True)
+        assert transport.read_all_input_data.await_count == calls_after_down + 1
+
+        # Next coordinator tick (interval elapsed): probes again.
+        inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
+        await inverter.refresh()
+        assert transport.read_all_input_data.await_count == calls_after_down + 2
+
+    @pytest.mark.asyncio
+    async def test_probe_throttle_resets_on_recovery(self) -> None:
+        """A successful read clears the probe stamp so a future outage
+        probes immediately on its first post-transition cycle."""
+        inverter = _make_inverter()
+        transport = _attach_failing_combined_transport(inverter)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await inverter.refresh(force=True)
+        await inverter.refresh()  # engages the probe gate
+        assert inverter._last_link_probe_monotonic is not None
+
+        runtime, energy, battery = _make_combined_data()
+        transport.read_all_input_data.side_effect = None
+        transport.read_all_input_data.return_value = (runtime, energy, battery)
+        inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
         await inverter.refresh()
 
-        assert transport.read_all_input_data.await_count == calls_after_down + 2
+        assert inverter.transport_link_down is False
+        assert inverter._last_link_probe_monotonic is None
 
     @pytest.mark.asyncio
     async def test_cloud_only_device_never_link_down(self, mock_client: LuxpowerClient) -> None:
@@ -272,6 +313,9 @@ class TestInverterLinkDownLogging:
             runtime, energy, battery = _make_combined_data()
             transport.read_all_input_data.side_effect = None
             transport.read_all_input_data.return_value = (runtime, energy, battery)
+            # Age the probe gate: recovery happens on a later coordinator
+            # tick, not within the same-tick throttle window.
+            inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
             await inverter.refresh(force=True)
             await inverter.refresh(force=True)
 
@@ -458,3 +502,32 @@ class TestMIDDeviceLinkHealth:
         assert mid.transport_link_down is True
         assert mid._transport_runtime is None
         assert mid.has_data is False
+
+    @pytest.mark.asyncio
+    async def test_mid_same_tick_duplicate_skips_probe_keeps_fallback(
+        self, mock_client: LuxpowerClient, sample_midbox_runtime: MidboxRuntime
+    ) -> None:
+        """Same-tick duplicate refresh while down: one dead-link probe per
+        interval, but the HTTP fallback still serves data every call."""
+        mid = self._make_mid(client=mock_client)
+        transport = self._attach_failing_transport(mid)
+        mock_client.api.devices.get_midbox_runtime = AsyncMock(return_value=sample_midbox_runtime)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await mid.refresh()
+        assert mid.transport_link_down is True
+
+        # First post-down refresh engages the probe gate
+        await mid.refresh()
+        probe_calls = transport.read_midbox_runtime.await_count
+        http_calls = mock_client.api.devices.get_midbox_runtime.await_count
+
+        # Same-tick duplicate: no dead-link read, HTTP fallback still runs
+        await mid.refresh()
+        assert transport.read_midbox_runtime.await_count == probe_calls
+        assert mock_client.api.devices.get_midbox_runtime.await_count == http_calls + 1
+
+        # Next coordinator tick (interval elapsed): probes again
+        mid._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
+        await mid.refresh()
+        assert transport.read_midbox_runtime.await_count == probe_calls + 1

@@ -568,12 +568,16 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Results are cached with different TTLs based on update frequency.
 
         When the local transport link is down (``transport_link_down``),
-        a transport read is still attempted every call — bypassing the
-        cache gate, since degraded HTTP fallback fetches stamp the same
-        cache timestamps — so the link can recover.  After the reads, if
-        the link is (still) down and cloud credentials exist, runtime,
-        energy, and battery are fetched via the HTTP API so values keep
-        moving instead of freezing on the last local read (eg4-57g).
+        the transport is still probed — bypassing the cache gate, since
+        degraded HTTP fallback fetches stamp the same cache timestamps —
+        so the link can recover.  Probes are rate-limited to one per
+        LINK_PROBE_MIN_INTERVAL_SECONDS (coordinator paths can call
+        refresh() twice per tick); within the interval the call behaves
+        as if caches were fresh, and ``force`` cannot exceed the probe
+        rate against a dead link.  After the reads, if the link is
+        (still) down and cloud credentials exist, runtime, energy, and
+        battery are fetched via the HTTP API so values keep moving
+        instead of freezing on the last local read (eg4-57g).
 
         Args:
             force: If True, bypass cache and force fresh data from API
@@ -582,14 +586,25 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # Prepare tasks to fetch only expired/missing data
         tasks: list[Awaitable[None]] = []
 
-        # While the link is down, probe the transport every cycle so the
-        # failure counter can reset the moment the link comes back.
         link_down = self._transport is not None and self.transport_link_down
-
-        runtime_expired = (
-            self._is_cache_expired(self._runtime_cache_time, self._runtime_cache_ttl, force)
-            or link_down
-        )
+        if link_down:
+            # Every transport read against a down link is a probe: collapse
+            # same-tick duplicates to one and suppress the energy/battery
+            # reads entirely (one read is enough to detect recovery; the
+            # HTTP fallback below keeps data moving meanwhile).
+            runtime_expired = self._link_probe_due()
+            energy_expired = False
+            battery_expired = False
+        else:
+            runtime_expired = self._is_cache_expired(
+                self._runtime_cache_time, self._runtime_cache_ttl, force
+            )
+            energy_expired = self._is_cache_expired(
+                self._energy_cache_time, self._energy_cache_ttl, force
+            )
+            battery_expired = self._is_cache_expired(
+                self._battery_cache_time, self._battery_cache_ttl, force
+            )
 
         # Combined read path: when transport supports read_all_input_data
         # and runtime is expired, read all input registers in one shot
@@ -604,10 +619,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             if runtime_expired:
                 tasks.append(self._fetch_runtime())
 
-            if self._is_cache_expired(self._energy_cache_time, self._energy_cache_ttl, force):
+            if energy_expired:
                 tasks.append(self._fetch_energy())
 
-            if self._is_cache_expired(self._battery_cache_time, self._battery_cache_ttl, force):
+            if battery_expired:
                 should_fetch_battery = self._battery_bank is None or (
                     self._battery_bank and self._battery_bank.battery_count > 0
                 )

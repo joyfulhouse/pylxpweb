@@ -239,10 +239,21 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         Transport read failures are counted (see ``transport_link_down``);
         once the link is declared down AND cloud credentials exist, each
         refresh still probes the transport but falls back to the HTTP API
-        so values keep moving instead of freezing (eg4-57g).
+        so values keep moving instead of freezing (eg4-57g).  Probes are
+        rate-limited to one per LINK_PROBE_MIN_INTERVAL_SECONDS so
+        same-tick duplicate refresh() calls don't double-hit the dead
+        endpoint; within the interval the call goes straight to the HTTP
+        fallback (when available).
         """
         transport = self._transport
         if transport is not None and hasattr(transport, "read_midbox_runtime"):
+            if self.transport_link_down and not self._link_probe_due():
+                # Same-tick duplicate while down: skip the dead-link probe
+                # but keep the HTTP fallback serving data (client-level
+                # response caches bound the actual cloud call rate).
+                if self._cloud_fallback_available:
+                    await self._refresh_via_http()
+                return
             try:
                 runtime_data = await self._tracked_transport_read(transport.read_midbox_runtime())
                 if self.validate_data and runtime_data.is_corrupt(

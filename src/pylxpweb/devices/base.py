@@ -35,6 +35,14 @@ WARMUP_READS = 2
 # recovery, and any successful read resets the counter.
 TRANSPORT_LINK_DOWN_THRESHOLD = 3
 
+# Minimum seconds between link-down probes.  Coordinator code paths can
+# call refresh() more than once within the same update tick (e.g. a group
+# refresh followed by per-device processing); while the link is down every
+# transport read is a probe against a dead endpoint, so same-tick
+# duplicates collapse to one.  Just under the fastest 5s coordinator tick
+# so every real cycle still probes.
+LINK_PROBE_MIN_INTERVAL_SECONDS = 4.0
+
 _T = TypeVar("_T")
 
 if TYPE_CHECKING:
@@ -154,6 +162,9 @@ class BaseDevice(ABC):
         # One-shot logging guard: warn once on the down transition, info
         # once on recovery — per-failure logs stay at debug level.
         self._transport_link_down_logged: bool = False
+        # Rate limit for link-down probes (see _link_probe_due): collapses
+        # same-tick duplicate refresh() calls into one dead-link read.
+        self._last_link_probe_monotonic: float | None = None
 
     @property
     def model(self) -> str:
@@ -226,9 +237,33 @@ class BaseDevice(ABC):
         """
         return self._client is not None and bool(getattr(self._client, "username", ""))
 
+    def _link_probe_due(self) -> bool:
+        """Check-and-stamp the link-down probe rate limit.
+
+        While the link is down every transport read is a probe against a
+        dead endpoint, and coordinator code paths can call refresh() more
+        than once within the same update tick (e.g. a group refresh
+        followed by per-device processing).  Returns True — and stamps the
+        monotonic clock — at most once per LINK_PROBE_MIN_INTERVAL_SECONDS;
+        within the interval callers behave as if caches were fresh.  The
+        stamp resets on any successful read so a future outage probes
+        immediately.
+        """
+        now = time.monotonic()
+        if (
+            self._last_link_probe_monotonic is not None
+            and now - self._last_link_probe_monotonic < LINK_PROBE_MIN_INTERVAL_SECONDS
+        ):
+            return False
+        self._last_link_probe_monotonic = now
+        return True
+
     def _record_transport_read_success(self) -> None:
         """Reset the failure counter after a successful transport read."""
         self._transport_last_success_monotonic = time.monotonic()
+        # A healthy link needs no probe rate limit — reset so a future
+        # outage probes immediately on its first post-transition cycle.
+        self._last_link_probe_monotonic = None
         if self._transport_link_down_logged:
             _LOGGER.info(
                 "Local transport link restored for %s after %d consecutive read failures",

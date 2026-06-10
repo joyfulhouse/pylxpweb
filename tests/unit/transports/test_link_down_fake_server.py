@@ -130,6 +130,10 @@ async def test_link_down_and_recovery_against_fake_server() -> None:
         # read clears the link-down flag.
         await server.start(port=port)
         for _ in range(6):
+            # Each iteration represents a real coordinator tick (>= 5s
+            # apart): age the link-probe rate limit so the same-tick
+            # collapse doesn't suppress the loop's probes.
+            inverter._last_link_probe_monotonic = None
             if not transport.is_connected:
                 with contextlib.suppress(Exception):
                     await transport.connect()
