@@ -484,21 +484,71 @@ class BatteryBank(BaseDevice):
         return 0.0
 
     @property
+    def _bms_capacity_pair(self) -> tuple[int, float] | None:
+        """The complete BMS bank capacity pair (max Ah, current Ah).
+
+        ``full_capacity`` and ``remain_capacity`` switch sources TOGETHER on
+        this single gate so they can never mix (a BMS full against a
+        module-sum remaining would produce nonsense fill ratios).  Open-loop
+        systems (lead-acid / no BMS comms) report ``maxBatteryCharge`` as
+        0/None and keep the legacy fields for both; a half-present pair is
+        treated as absent for the same reason.
+
+        Returns:
+            (maxBatteryCharge, currentBatteryCharge) when both are present
+            and the bank is BMS-backed, otherwise None.
+        """
+        max_cap = self.data.maxBatteryCharge
+        current = self.data.currentBatteryCharge
+        if max_cap and current is not None:
+            return (max_cap, current)
+        return None
+
+    @property
     def remain_capacity(self) -> int | None:
         """Get remaining capacity in amp-hours.
+
+        Prefers ``currentBatteryCharge`` (the BMS-reported bank value) over
+        ``remainCapacity``: the cloud computes the latter by summing the
+        battery module array, and on banks whose master module mirrors
+        pack-level totals into its own fields the sum double-counts the bank
+        (live-observed: modules 487+162+173 -> remainCapacity=822 Ah on an
+        840 Ah bank whose true remaining was 495.6 Ah).
+
+        Source selection is paired with ``full_capacity`` via
+        ``_bms_capacity_pair``; ``currentBatteryCharge=0.0`` on a BMS-backed
+        bank is a genuine empty-bank reading.
 
         Returns:
             Remaining capacity in Ah, or None if not available.
         """
+        pair = self._bms_capacity_pair
+        if pair is not None:
+            return int(round(pair[1]))
         return self.data.remainCapacity
 
     @property
     def full_capacity(self) -> int | None:
         """Get full capacity in amp-hours.
 
+        Prefers ``maxBatteryCharge`` (the BMS-reported bank value) over
+        ``fullCapacity`` — the latter is the cloud's module-array sum, which
+        double-counts banks whose master module reports pack-level totals
+        (live-observed: 840+280+280 -> fullCapacity=1400 Ah on an 840 Ah
+        bank).  Matches the LOCAL register path, which reads the bank-level
+        value and reported 840 Ah for the same bank.
+
+        Source selection is paired with ``remain_capacity`` via
+        ``_bms_capacity_pair`` — on a half-present pair both properties keep
+        the (internally consistent) legacy fields rather than mixing
+        sources.
+
         Returns:
             Full capacity in Ah, or None if not available.
         """
+        pair = self._bms_capacity_pair
+        if pair is not None:
+            return pair[0]
         return self.data.fullCapacity
 
     @property
