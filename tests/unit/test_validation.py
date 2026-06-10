@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 from pylxpweb.devices.base import WARMUP_READS, BaseDevice
@@ -377,16 +378,30 @@ def _make_device(*, validate: bool = True) -> _StubDevice:
 
 
 class TestBaseDeviceWarmUp:
-    """Warm-up period bypasses energy validation for first N reads."""
+    """Warm-up applies to daily bounds only; monotonicity is always-on.
 
-    def test_first_reads_accepted_during_warmup(self) -> None:
-        """First WARMUP_READS calls accept data regardless of delta."""
+    Lifetime monotonicity cannot false-positive at startup (first reads
+    have no previous values), so it gets no warm-up bypass.  The warm-up
+    counter exists for the daily-bounds check, where the LOCAL static
+    first refresh can transition None/0 -> real mid-day values.
+    """
+
+    def test_monotonicity_active_during_warmup(self) -> None:
+        """Lifetime spike rejected even on the very first reads."""
         dev = _make_device()
         prev = {"grid_import_total": 2700.0}
-        # Huge jump that would normally be rejected
+        # Huge jump — corrupt regardless of how early it happens
         curr = {"grid_import_total": 202_000_000.0}
         for i in range(WARMUP_READS):
-            assert dev._is_energy_valid(prev, curr), f"Read {i + 1} should pass during warm-up"
+            assert not dev._is_energy_valid(prev, curr), (
+                f"Read {i + 1}: corrupt lifetime spike must be rejected during warm-up"
+            )
+
+    def test_first_read_with_no_prev_passes(self) -> None:
+        """Genuine first reads (no previous values) always pass."""
+        dev = _make_device()
+        curr = {"grid_import_total": 2700.0}
+        assert dev._is_energy_valid({}, curr)
 
     def test_validation_enforced_after_warmup(self) -> None:
         """After warm-up period, validation rejects corrupt data."""
@@ -406,26 +421,34 @@ class TestBaseDeviceWarmUp:
         assert dev._energy_validation_calls == 0
 
     def test_daily_energy_bypassed_during_warmup(self) -> None:
-        """_is_daily_energy_valid also bypassed during warm-up."""
+        """_is_daily_energy_valid is bypassed (and seeded) during warm-up."""
         dev = _make_device()
         corrupt_daily = {"charge_energy_today": 6549.2}
         # Call _is_energy_valid first to increment counter
         dev._is_energy_valid({}, {})
         assert dev._is_daily_energy_valid(corrupt_daily, None)
+        # Warm-up seeds the change clock so the first gated read has a
+        # bounded window instead of the lenient absolute cap.
+        assert dev._daily_energy_change_monotonic is not None
 
 
 class TestBaseDeviceValidateDataGating:
-    """validate_data=False disables all energy validation."""
+    """validate_data gates daily bounds, NOT lifetime monotonicity."""
 
-    def test_energy_valid_when_disabled(self) -> None:
-        """_is_energy_valid returns True when validate_data=False."""
+    def test_monotonicity_not_gated_by_validate_data(self) -> None:
+        """Lifetime monotonicity stays active with validate_data=False.
+
+        Lifetime counters feed HA total_increasing statistics; a corrupt
+        rollback or spike corrupts long-term stats permanently.  Users who
+        disable canary validation (which can false-positive) must not lose
+        this protection — monotonicity cannot false-positive.
+        """
         dev = _make_device(validate=False)
-        # Exhaust warm-up
         for _ in range(WARMUP_READS + 1):
             dev._is_energy_valid({}, {})
         prev = {"grid_import_total": 2700.0}
         curr = {"grid_import_total": 202_000_000.0}
-        assert dev._is_energy_valid(prev, curr)
+        assert not dev._is_energy_valid(prev, curr)
 
     def test_daily_energy_valid_when_disabled(self) -> None:
         """_is_daily_energy_valid returns True when validate_data=False."""
@@ -490,46 +513,70 @@ class TestDailyEnergyChangeTracking:
             dev._is_energy_valid({}, {})
         return dev
 
-    def test_first_read_no_prev_accepted(self) -> None:
-        """First read with no previous data uses absolute cap only."""
+    def test_first_gated_read_seeds_clock_and_accepts(self) -> None:
+        """First gated read with no window yet seeds the clock.
+
+        When warm-up never reached the daily helper, the first gated read
+        establishes the baseline window instead of falling back to the
+        lenient 24h absolute cap (review finding: a corrupt spike below
+        rated_kw*24h*2 would have been accepted on that read).
+        """
         dev = self._make()
         curr = {"charge_energy_today": 8.8}
         assert dev._is_daily_energy_valid(curr, None)
-        assert dev._daily_energy_change_time is None
+        assert dev._daily_energy_change_monotonic is not None
 
-    def test_unchanged_values_do_not_update_change_time(self) -> None:
-        """Unchanged daily values leave _daily_energy_change_time untouched."""
-        dev = self._make()
-        values = {"charge_energy_today": 5.0}
-        assert dev._is_daily_energy_valid(values, values)
-        assert dev._daily_energy_change_time is None
+    def test_spike_after_seeding_rejected(self) -> None:
+        """A corrupt spike right after the seeding read is rejected.
 
-    def test_increase_stamps_change_time(self) -> None:
-        """An accepted daily increase updates _daily_energy_change_time."""
+        The seed gives the next read a real (short) window, so the old
+        elapsed=None leniency no longer applies.
+        """
         dev = self._make()
         prev = {"charge_energy_today": 5.0}
+        assert dev._is_daily_energy_valid(prev, None)  # seeds clock
+        curr = {"charge_energy_today": 500.0}  # below 18*24*2=864 abs cap
+        assert not dev._is_daily_energy_valid(curr, prev)
+
+    def test_unchanged_values_do_not_update_change_time(self) -> None:
+        """Unchanged daily values leave the change clock untouched."""
+        dev = self._make()
+        values = {"charge_energy_today": 5.0}
+        assert dev._is_daily_energy_valid(values, values)  # seeds clock
+        seeded = dev._daily_energy_change_monotonic
+        assert dev._is_daily_energy_valid(values, values)
+        assert dev._daily_energy_change_monotonic == seeded
+
+    def test_increase_stamps_change_time(self) -> None:
+        """An accepted daily increase advances the change clock."""
+        dev = self._make()
+        prev = {"charge_energy_today": 5.0}
+        assert dev._is_daily_energy_valid(prev, None)  # seeds clock
+        seeded = dev._daily_energy_change_monotonic
+        assert seeded is not None
         curr = {"charge_energy_today": 5.1}
         assert dev._is_daily_energy_valid(curr, prev)
-        assert dev._daily_energy_change_time is not None
+        assert dev._daily_energy_change_monotonic is not None
+        assert dev._daily_energy_change_monotonic >= seeded
 
     def test_decrease_does_not_stamp_change_time(self) -> None:
-        """Midnight reset (decrease) does not update _daily_energy_change_time."""
+        """Midnight reset (decrease) does not advance the change clock."""
         dev = self._make()
         prev = {"charge_energy_today": 12.0}
+        assert dev._is_daily_energy_valid(prev, None)  # seeds clock
+        seeded = dev._daily_energy_change_monotonic
         curr = {"charge_energy_today": 0.0}
         assert dev._is_daily_energy_valid(curr, prev)
-        assert dev._daily_energy_change_time is None
+        assert dev._daily_energy_change_monotonic == seeded
 
     def test_elapsed_from_last_change_not_last_read(self) -> None:
-        """Elapsed is computed from _daily_energy_change_time, not read time.
+        """Elapsed is computed from the change clock, not read time.
 
         Simulates: register unchanged for 60s (6 polls), then ticks +0.1.
         The elapsed window should cover all 60s.
         """
-        from datetime import datetime, timedelta
-
         dev = self._make()
-        dev._daily_energy_change_time = datetime.now() - timedelta(seconds=60)
+        dev._daily_energy_change_monotonic = time.monotonic() - 60
 
         prev = {"charge_energy_today": 5.0}
         curr = {"charge_energy_today": 5.1}
@@ -537,12 +584,30 @@ class TestDailyEnergyChangeTracking:
         # 0.1 < 0.6 → accepted
         assert dev._is_daily_energy_valid(curr, prev)
 
+    def test_unchanged_polls_then_tick_through_helper(self) -> None:
+        """Production scenario: N unchanged polls, then a +0.1 tick.
+
+        Live on prod (v3.4.0-beta.3, 21 kW system at 8s polls):
+        'inverter_energy_today jumped 5.5 -> 5.6 (delta 0.1 > 0.1 max,
+        21 kW × 8.1s elapsed × 2x margin)' fired on every register tick.
+        With change-clock elapsed, the unchanged polls accumulate window
+        and the tick is accepted.
+        """
+        dev = self._make()
+        values = {"charge_energy_today": 5.5}
+        assert dev._is_daily_energy_valid(values, None)  # seeds clock
+        # Several polls with no change — window keeps growing
+        for _ in range(6):
+            assert dev._is_daily_energy_valid(values, values)
+        # Simulate 60s having passed since the seed
+        dev._daily_energy_change_monotonic = time.monotonic() - 60
+        tick = {"charge_energy_today": 5.6}
+        assert dev._is_daily_energy_valid(tick, values)
+
     def test_short_elapsed_with_min_delta_floor(self) -> None:
         """Very short elapsed (1s) still accepts 0.1 kWh due to floor."""
-        from datetime import datetime, timedelta
-
         dev = self._make()
-        dev._daily_energy_change_time = datetime.now() - timedelta(seconds=1)
+        dev._daily_energy_change_monotonic = time.monotonic() - 1
 
         prev = {"charge_energy_today": 5.0}
         curr = {"charge_energy_today": 5.1}
@@ -553,11 +618,45 @@ class TestDailyEnergyChangeTracking:
 
     def test_corrupt_spike_rejected_despite_long_elapsed(self) -> None:
         """Large corrupt spike still rejected even with generous elapsed."""
-        from datetime import datetime, timedelta
-
         dev = self._make()
-        dev._daily_energy_change_time = datetime.now() - timedelta(seconds=60)
+        dev._daily_energy_change_monotonic = time.monotonic() - 60
 
         prev = {"charge_energy_today": 0.0}
         curr = {"charge_energy_today": 6549.2}
         assert not dev._is_daily_energy_valid(curr, prev)
+
+
+class TestUpwardSelfHealCeiling:
+    """Upward self-heal must never accept an absurd lifetime baseline."""
+
+    def test_absurd_value_never_self_heals(self) -> None:
+        """Values above MAX_LIFETIME_KWH stay rejected past the threshold.
+
+        The HTTP path has no transport is_corrupt() canary in front of
+        monotonicity, so a persistently corrupt huge value (e.g. high-word
+        bit flip) must not become the baseline through repetition.
+        """
+        prev = {"grid_import_total": 2700.0}
+        curr = {"grid_import_total": 2_000_000.0}
+        count = 0
+        for _ in range(10):
+            result, count = validate_energy_monotonicity(prev, curr, count, "dev1")
+            assert result == "reject"
+
+    def test_plausible_jump_self_heals_at_threshold(self) -> None:
+        """A sub-ceiling stable jump re-baselines after 5 rejections.
+
+        A device offline for a week comes back with a large but plausible
+        jump — it must be able to re-baseline.  If the jump was actually
+        corrupt, the downward self-heal (3 rejections) restores the true
+        baseline once real values return.
+        """
+        prev = {"grid_import_total": 2700.0}
+        curr = {"grid_import_total": 5000.0}  # +2300 kWh, > max_delta, < ceiling
+        count = 0
+        results = []
+        for _ in range(5):
+            result, count = validate_energy_monotonicity(prev, curr, count, "dev1")
+            results.append(result)
+        assert results[:4] == ["reject"] * 4
+        assert results[4] == "self_healed"

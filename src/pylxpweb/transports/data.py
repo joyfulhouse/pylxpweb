@@ -43,6 +43,7 @@ from pylxpweb.transports._field_mappings import (
     RUNTIME_CATEGORIES,
     RUNTIME_FIELD,
 )
+from pylxpweb.validation import MAX_LIFETIME_KWH
 
 if TYPE_CHECKING:
     from pylxpweb.models import EnergyInfo, InverterRuntime, MidboxData
@@ -53,7 +54,9 @@ _LOGGER = logging.getLogger(__name__)
 # this indicate 32-bit register corruption (e.g. a high-word bit flip).  A
 # 21 kW inverter running continuously for 50 years accumulates ~9.2 GWh total,
 # so 1 GWh per individual counter is unreachable in any realistic service life.
-_MAX_LIFETIME_ENERGY_KWH = 999_999.0
+# Aliases validation.MAX_LIFETIME_KWH so the monotonicity self-heal ceiling
+# and this canary agree on what "absurd" means.
+_MAX_LIFETIME_ENERGY_KWH = MAX_LIFETIME_KWH
 
 # Fields on InverterRuntimeData that store raw int values (no ÷10/÷100 scaling).
 # Used by from_modbus_registers() to decide between read_raw() and read_scaled().

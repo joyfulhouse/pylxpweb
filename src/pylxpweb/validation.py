@@ -41,6 +41,16 @@ SELF_HEAL_THRESHOLD = 3
 # week-long outage).  At 30s polling, 5 rejections = ~2.5 minutes.
 UPWARD_SELF_HEAL_THRESHOLD = 5
 
+# Absolute ceiling for a self-healed lifetime baseline (kWh).  Matches the
+# transport-layer canary ceiling (1 GWh per counter) so a persistently
+# corrupt huge value can never become the accepted baseline via repetition —
+# the HTTP path has no is_corrupt() canary in front of this check.
+# Sub-ceiling stable jumps are accepted by design (a device offline for a
+# week MUST be able to re-baseline); if such a jump was actually corrupt,
+# the downward self-heal (3 rejections) restores the true baseline once
+# real values return, bounding the damage to a transient.
+MAX_LIFETIME_KWH = 999_999.0
+
 EnergyValidationResult = Literal["valid", "reject", "self_healed"]
 
 
@@ -84,7 +94,7 @@ def validate_energy_monotonicity(
         if curr > prev and (curr - prev) > max_delta:
             count = reject_count + 1
 
-            if count >= UPWARD_SELF_HEAL_THRESHOLD and curr >= MIN_LIFETIME_KWH:
+            if count >= UPWARD_SELF_HEAL_THRESHOLD and MIN_LIFETIME_KWH <= curr <= MAX_LIFETIME_KWH:
                 _LOGGER.warning(
                     "%s upward spike accepted after %d consecutive rejections: "
                     "%s was %.1f, accepting %.1f as new baseline",

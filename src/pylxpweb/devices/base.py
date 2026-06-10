@@ -8,6 +8,7 @@ and Home Assistant integration.
 from __future__ import annotations
 
 import logging
+import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -127,7 +128,8 @@ class BaseDevice(ABC):
         # Used for elapsed_seconds in daily bounds validation so the window
         # reflects the actual accumulation period, not the polling interval.
         # Only updated when an accepted read contains a daily value increase.
-        self._daily_energy_change_time: datetime | None = None
+        # Monotonic clock — wall-clock (DST/NTP) steps must not move the window.
+        self._daily_energy_change_monotonic: float | None = None
 
     @property
     def model(self) -> str:
@@ -177,12 +179,17 @@ class BaseDevice(ABC):
     ) -> bool:
         """Check whether new lifetime energy values pass monotonicity validation.
 
-        Gated by ``validate_data`` toggle.  When disabled, all energy data
-        is accepted without validation.  During the warm-up period (first
-        ``WARMUP_READS`` calls), data is accepted to establish baseline.
+        Always active — lifetime kWh counters physically cannot decrease,
+        so a decrease is always corruption regardless of the validate_data
+        toggle.  The validate_data flag controls canary-based is_corrupt()
+        checks which can have edge-case false positives; monotonicity
+        cannot false-positive at startup because first reads have no
+        previous values to compare against, so no warm-up bypass applies
+        here either.
 
         Updates ``_energy_reject_count`` and ``_energy_validation_calls``
-        as side-effects.
+        (the warm-up counter consumed by ``_is_daily_energy_valid``) as
+        side-effects.
 
         Args:
             prev_values: Previous cycle's lifetime energy dict.
@@ -192,15 +199,6 @@ class BaseDevice(ABC):
             True if the data should be accepted, False if it should be rejected.
         """
         self._energy_validation_calls += 1
-        if not self.validate_data:
-            return True
-        if self._energy_validation_calls <= WARMUP_READS:
-            _LOGGER.debug(
-                "Warm-up read %d/%d: accepting energy data",
-                self._energy_validation_calls,
-                WARMUP_READS,
-            )
-            return True
         result, self._energy_reject_count = validate_energy_monotonicity(
             prev_values,
             curr_values,
@@ -217,27 +215,39 @@ class BaseDevice(ABC):
     ) -> bool:
         """Check whether daily energy values are within plausible bounds.
 
-        Computes elapsed time from ``_daily_energy_change_time`` — the last
-        time a daily energy value *increased* — rather than from the last
-        accepted read.  This prevents false rejections when a register sits
-        unchanged for several polls and then ticks by the minimum resolution
-        (0.1 kWh).
+        Computes elapsed time from ``_daily_energy_change_monotonic`` — the
+        last time a daily energy value *increased* — rather than from the
+        last accepted read.  This prevents false rejections when a register
+        sits unchanged for several polls and then ticks by the minimum
+        resolution (0.1 kWh).
 
-        On acceptance, updates ``_daily_energy_change_time`` if any daily
-        value increased so the next window starts from this point.
+        On acceptance, updates ``_daily_energy_change_monotonic`` if any
+        daily value increased so the next window starts from this point.
 
         Gated by ``validate_data`` toggle and warm-up period (counter
-        already incremented by ``_is_energy_valid``).
+        incremented by ``_is_energy_valid``).  Warm-up and first post-gate
+        reads seed the change clock so the first real delta check always
+        has a bounded window instead of falling back to the lenient
+        absolute cap.
         """
         if not self.validate_data:
             return True
         if self._energy_validation_calls <= WARMUP_READS:
+            # Seed the change clock during warm-up so the first validated
+            # read after warm-up gets a real elapsed window.
+            if self._daily_energy_change_monotonic is None:
+                self._daily_energy_change_monotonic = time.monotonic()
+            return True
+
+        # First gated read with no window yet (e.g. warm-up consumed by a
+        # path that never reached this helper): establish the baseline now
+        # and accept — the next read gets a real window.
+        if self._daily_energy_change_monotonic is None:
+            self._daily_energy_change_monotonic = time.monotonic()
             return True
 
         # Compute elapsed from last value change, not last read.
-        elapsed: float | None = None
-        if self._daily_energy_change_time is not None:
-            elapsed = (datetime.now() - self._daily_energy_change_time).total_seconds()
+        elapsed = time.monotonic() - self._daily_energy_change_monotonic
 
         valid = validate_daily_energy_bounds(
             curr_values=curr_values,
@@ -254,7 +264,7 @@ class BaseDevice(ABC):
                     continue
                 prev = prev_values.get(key)
                 if prev is not None and curr > prev:
-                    self._daily_energy_change_time = datetime.now()
+                    self._daily_energy_change_monotonic = time.monotonic()
                     break
 
         return valid

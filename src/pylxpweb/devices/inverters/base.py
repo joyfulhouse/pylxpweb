@@ -783,26 +783,31 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             # corrupt first read, so energy_valid is unconditionally True
             # here.  When validate_data is disabled, first reads are always
             # accepted.
-            if self._transport_energy is None:
-                energy_valid = True
-            else:
-                energy_valid = self._is_energy_valid(
-                    self._transport_energy.lifetime_energy_values(),
-                    energy.lifetime_energy_values(),
-                )
-            if energy_valid:
-                prev_daily = (
-                    self._transport_energy.daily_energy_values()
-                    if self._transport_energy is not None
-                    else None
-                )
-                energy_valid = self._is_daily_energy_valid(
-                    energy.daily_energy_values(),
-                    prev_daily,
-                )
-            if energy_valid:
-                self._transport_energy = energy
-                self._energy_cache_time = datetime.now()
+            # The energy lock serializes the validate-then-assign sequence
+            # against _fetch_energy() from a concurrent external refresh()
+            # (e.g. a manual refresh button overlapping a poll), so the
+            # prev-baseline comparison and reject counters cannot interleave.
+            async with self._energy_cache_lock:
+                if self._transport_energy is None:
+                    energy_valid = True
+                else:
+                    energy_valid = self._is_energy_valid(
+                        self._transport_energy.lifetime_energy_values(),
+                        energy.lifetime_energy_values(),
+                    )
+                if energy_valid:
+                    prev_daily = (
+                        self._transport_energy.daily_energy_values()
+                        if self._transport_energy is not None
+                        else None
+                    )
+                    energy_valid = self._is_daily_energy_valid(
+                        energy.daily_energy_values(),
+                        prev_daily,
+                    )
+                if energy_valid:
+                    self._transport_energy = energy
+                    self._energy_cache_time = datetime.now()
             if battery is not None:
                 # Accept battery data only if it passes canary checks.
                 # Corrupt battery data is silently skipped, preserving the
