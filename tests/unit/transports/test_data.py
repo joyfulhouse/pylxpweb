@@ -337,6 +337,49 @@ class TestBatteryData:
         assert data.soc == 85
         assert data.cycle_count == 150
 
+    def test_from_modbus_registers_cell_numbers_not_crossed(self) -> None:
+        """Cell-number registers: offset 14 = temp numbers, offset 15 = voltage numbers.
+
+        Regression test for eg4-4yg: the original map had offsets 14/15
+        crossed (temp-number register parsed into the voltage-number fields
+        and vice versa).
+
+        Raw values reconstructed from the 2026-02-26 cross-mode capture of
+        18kPV 4512670118 battery 01 (scratchpad/snapshots in eg4_web_monitor):
+        the live cloud API reported batMaxCellNumTemp=1, batMinCellNumTemp=2,
+        batMaxCellNumVolt=3, batMinCellNumVolt=1 while the local register
+        read of the same battery held 0x0201 at offset 14 and 0x0103 at
+        offset 15.  Cell temp/voltage extreme VALUES (offsets 10-13) are
+        pinned too so an off-by-one cannot reintroduce the cross silently.
+        """
+        base = 5002  # battery slot 0
+        registers = dict.fromkeys(range(base, base + 30), 0)
+        registers[base + 0] = 0xC003  # status header: connected, 3 batteries
+        registers[base + 6] = 5305  # voltage 53.05 V
+        registers[base + 8] = (100 << 8) | 85  # SOH=100 / SOC=85
+        registers[base + 10] = 250  # max cell temp 25.0 °C
+        registers[base + 11] = 240  # min cell temp 24.0 °C
+        registers[base + 12] = 3364  # max cell voltage 3.364 V
+        registers[base + 13] = 3361  # min cell voltage 3.361 V
+        # Offset 14: TEMP cell numbers — low byte = max (1), high byte = min (2)
+        registers[base + 14] = 0x0201
+        # Offset 15: VOLTAGE cell numbers — low byte = max (3), high byte = min (1)
+        registers[base + 15] = 0x0103
+
+        data = BatteryData.from_modbus_registers(0, registers)
+
+        assert data is not None
+        # Cell numbers must land in the matching fields (cloud-verified truth)
+        assert data.max_cell_num_temp == 1
+        assert data.min_cell_num_temp == 2
+        assert data.max_cell_num_voltage == 3
+        assert data.min_cell_num_voltage == 1
+        # Neighboring extreme values stay on offsets 10-13
+        assert data.max_cell_temperature == pytest.approx(25.0)
+        assert data.min_cell_temperature == pytest.approx(24.0)
+        assert data.max_cell_voltage == pytest.approx(3.364)
+        assert data.min_cell_voltage == pytest.approx(3.361)
+
 
 class TestBatteryBankData:
     """Tests for BatteryBankData dataclass."""
