@@ -379,7 +379,12 @@ class TestBatteryBankEnhancedProperties:
         assert battery_bank.eps_power == 0
 
     def test_capacity_properties_extended(self, mock_client):
-        """Test extended capacity properties."""
+        """Extended capacity properties prefer the BMS bank pair.
+
+        When the BMS pair (maxBatteryCharge/currentBatteryCharge) disagrees
+        with the cloud's module-sum pair (fullCapacity/remainCapacity), the
+        BMS pair wins — see TestBankCapacityPrefersBmsValues.
+        """
         battery_info = BatteryInfo.model_construct(
             batStatus="Charging",
             soc=85,
@@ -400,8 +405,8 @@ class TestBatteryBankEnhancedProperties:
             battery_info=battery_info,
         )
 
-        assert battery_bank.remain_capacity == 618
-        assert battery_bank.full_capacity == 840
+        assert battery_bank.remain_capacity == 170
+        assert battery_bank.full_capacity == 200
         assert battery_bank.capacity_percent == 74
 
     def test_current_properties(self, mock_client):
@@ -1038,3 +1043,73 @@ class TestBatteryBankBatParallelNum:
 
         # Now should use the updated value
         assert battery_bank.battery_count == 3
+
+
+class TestBankCapacityPrefersBmsValues:
+    """full/remain capacity must prefer the BMS bank pair (cloud sum bug).
+
+    EG4's ``fullCapacity``/``remainCapacity`` aggregates sum the battery
+    module array; on banks whose MASTER module mirrors pack-level totals
+    into its own fields the sum double-counts the bank. Live 18kPV
+    (3x280 Ah): modules reported 840+280+280 -> fullCapacity=1400 on an
+    840 Ah bank, and 487+162+173 -> remainCapacity=822 vs the true 495.6.
+    ``maxBatteryCharge``/``currentBatteryCharge`` are BMS-reported bank
+    values and match the LOCAL register path exactly.
+    """
+
+    def test_corrupted_cloud_sums_are_ignored(self, mock_client):
+        """The live-observed 18kPV corruption shape resolves to BMS values."""
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=840,
+            currentBatteryCharge=495.6,
+            fullCapacity=1400,
+            remainCapacity=822,
+            capacityPercent=59,
+            batteryArray=[],
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="4512670118",
+            battery_info=battery_info,
+        )
+
+        assert bank.full_capacity == 840
+        assert bank.remain_capacity == 496  # round(495.6)
+        # EG4 derives capacityPercent from the good pair — passes through.
+        assert bank.capacity_percent == 59
+
+    def test_fallback_when_bms_pair_missing(self, mock_client):
+        """Older accounts without the BMS pair keep the legacy fields."""
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=None,
+            currentBatteryCharge=None,
+            fullCapacity=560,
+            remainCapacity=300,
+            batteryArray=[],
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+
+        assert bank.full_capacity == 560
+        assert bank.remain_capacity == 300
+
+    def test_zero_max_battery_charge_falls_back(self, mock_client):
+        """maxBatteryCharge=0 (no battery configured) is not trusted."""
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=0,
+            currentBatteryCharge=None,
+            fullCapacity=None,
+            remainCapacity=None,
+            batteryArray=[],
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="1234567890",
+            battery_info=battery_info,
+        )
+
+        assert bank.full_capacity is None
+        assert bank.remain_capacity is None

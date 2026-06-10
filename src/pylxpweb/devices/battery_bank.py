@@ -487,18 +487,36 @@ class BatteryBank(BaseDevice):
     def remain_capacity(self) -> int | None:
         """Get remaining capacity in amp-hours.
 
+        Prefers ``currentBatteryCharge`` (the BMS-reported bank value) over
+        ``remainCapacity``: the cloud computes the latter by summing the
+        battery module array, and on banks whose master module mirrors
+        pack-level totals into its own fields the sum double-counts the bank
+        (live-observed: modules 487+162+173 -> remainCapacity=822 Ah on an
+        840 Ah bank whose true remaining was 495.6 Ah).
+
         Returns:
             Remaining capacity in Ah, or None if not available.
         """
+        if self.data.currentBatteryCharge is not None:
+            return int(round(self.data.currentBatteryCharge))
         return self.data.remainCapacity
 
     @property
     def full_capacity(self) -> int | None:
         """Get full capacity in amp-hours.
 
+        Prefers ``maxBatteryCharge`` (the BMS-reported bank value) over
+        ``fullCapacity`` — the latter is the cloud's module-array sum, which
+        double-counts banks whose master module reports pack-level totals
+        (live-observed: 840+280+280 -> fullCapacity=1400 Ah on an 840 Ah
+        bank).  Matches the LOCAL register path, which reads the bank-level
+        value and reported 840 Ah for the same bank.
+
         Returns:
             Full capacity in Ah, or None if not available.
         """
+        if self.data.maxBatteryCharge:
+            return self.data.maxBatteryCharge
         return self.data.fullCapacity
 
     @property
