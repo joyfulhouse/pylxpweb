@@ -651,6 +651,20 @@ class TestUpwardSelfHealCeiling:
             result, count = validate_energy_monotonicity(prev, curr, count, "dev1")
             assert result == "reject"
 
+    def test_downward_to_absurd_value_never_self_heals(self) -> None:
+        """Downward self-heal also respects the ceiling.
+
+        If the previous baseline was already absurd (e.g. accepted via an
+        HTTP first read, which has no canary), a "drop" to a still-absurd
+        value must keep rejecting rather than re-baseline.
+        """
+        prev = {"grid_import_total": 90_000_000.0}
+        curr = {"grid_import_total": 5_000_000.0}  # lower, still absurd
+        count = 0
+        for _ in range(10):
+            result, count = validate_energy_monotonicity(prev, curr, count, "dev1")
+            assert result == "reject"
+
     def test_plausible_jump_self_heals_at_threshold(self) -> None:
         """A sub-ceiling stable jump re-baselines after 5 rejections.
 

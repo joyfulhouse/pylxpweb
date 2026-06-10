@@ -123,7 +123,10 @@ def validate_energy_monotonicity(
         if curr < prev:
             count = reject_count + 1
 
-            if count >= SELF_HEAL_THRESHOLD and curr >= MIN_LIFETIME_KWH:
+            # Ceiling applies here too: if the PREVIOUS baseline was already
+            # absurd (accepted via an HTTP first read with no canary), a
+            # "drop" to a still-absurd value must not re-baseline either.
+            if count >= SELF_HEAL_THRESHOLD and MIN_LIFETIME_KWH <= curr <= MAX_LIFETIME_KWH:
                 _LOGGER.warning(
                     "%s corrupt baseline detected after %d consecutive "
                     "rejections: %s was %.1f, resetting to %.1f",
