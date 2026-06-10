@@ -232,19 +232,26 @@ class BaseDevice(ABC):
         """
         if not self.validate_data:
             return True
-        if self._energy_validation_calls <= WARMUP_READS:
-            # Seed the change clock during warm-up so the first validated
-            # read after warm-up gets a real elapsed window.
+
+        # Warm-up reads and the first gated read with no window yet: skip
+        # the time-based delta check (its short windows were the false-
+        # rejection source — static-data transitions and unknown elapsed),
+        # but still enforce the absolute daily cap so a corrupt spike can
+        # never slip through unchecked.  Seeds the change clock so the
+        # next read gets a real elapsed window.
+        if (
+            self._energy_validation_calls <= WARMUP_READS
+            or self._daily_energy_change_monotonic is None
+        ):
             if self._daily_energy_change_monotonic is None:
                 self._daily_energy_change_monotonic = time.monotonic()
-            return True
-
-        # First gated read with no window yet (e.g. warm-up consumed by a
-        # path that never reached this helper): establish the baseline now
-        # and accept — the next read gets a real window.
-        if self._daily_energy_change_monotonic is None:
-            self._daily_energy_change_monotonic = time.monotonic()
-            return True
+            return validate_daily_energy_bounds(
+                curr_values=curr_values,
+                device_id=self.serial_number,
+                rated_power_kw=self._rated_power_kw,
+                elapsed_seconds=None,
+                prev_values=None,
+            )
 
         # Compute elapsed from last value change, not last read.
         elapsed = time.monotonic() - self._daily_energy_change_monotonic

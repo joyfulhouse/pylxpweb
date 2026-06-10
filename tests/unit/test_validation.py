@@ -420,16 +420,24 @@ class TestBaseDeviceWarmUp:
         dev = _make_device()
         assert dev._energy_validation_calls == 0
 
-    def test_daily_energy_bypassed_during_warmup(self) -> None:
-        """_is_daily_energy_valid is bypassed (and seeded) during warm-up."""
+    def test_daily_warmup_skips_delta_but_enforces_cap(self) -> None:
+        """Warm-up skips the delta check but keeps the absolute cap.
+
+        The short-window delta check was the false-rejection source, so
+        warm-up bypasses it — but an impossibly large daily value (above
+        rated*24h*2) is corrupt on any read and stays rejected.
+        """
         dev = _make_device()
-        corrupt_daily = {"charge_energy_today": 6549.2}
+        dev._rated_power_kw = 18.0
         # Call _is_energy_valid first to increment counter
         dev._is_energy_valid({}, {})
-        assert dev._is_daily_energy_valid(corrupt_daily, None)
+        plausible = {"charge_energy_today": 8.8}
+        assert dev._is_daily_energy_valid(plausible, None)
         # Warm-up seeds the change clock so the first gated read has a
         # bounded window instead of the lenient absolute cap.
         assert dev._daily_energy_change_monotonic is not None
+        corrupt_daily = {"charge_energy_today": 6549.2}  # > 18*24*2 = 864
+        assert not dev._is_daily_energy_valid(corrupt_daily, None)
 
 
 class TestBaseDeviceValidateDataGating:
