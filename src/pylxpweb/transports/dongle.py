@@ -844,6 +844,16 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 f"Modbus exception: function=0x{modbus_func:02x}, code={exception_code}"
             )
 
+        # Write ACKs (FC06/FC16) are not read frames: the dongle echoes
+        # action + func + serial + register + payload, where payload is the
+        # echoed value (FC06) or the written register count (FC16) — there
+        # is no byte_count header.  Parse the strict 16-byte ACK layout
+        # explicitly so ACK echo validation sees the real payload; any other
+        # length falls through to the read-layout parser below, covering
+        # firmwares that echo write ACKs read-style (byte_count + data).
+        if modbus_func in (MODBUS_WRITE_SINGLE, MODBUS_WRITE_MULTI) and len(data_frame) == 16:
+            return [int(struct.unpack("<H", data_frame[14:16])[0])]
+
         # byte_count is at offset 14 (after action + func + serial + start_reg)
         byte_count = data_frame[14]
 

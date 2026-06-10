@@ -313,6 +313,37 @@ def _build_mock_response(
     return response
 
 
+def _build_write_ack_frame(
+    modbus_func: int,
+    start_register: int,
+    payload: int,
+    inverter_serial: str = "CE12345678",
+    dongle_serial: str = "BA12345678",
+) -> bytes:
+    """Build a REAL-layout write ACK packet (FC06/FC16).
+
+    Unlike ``_build_mock_response`` (read layout: byte_count + data), a real
+    write ACK data frame is exactly 16 bytes:
+    action(1) + func(1) + serial(10) + register(2) + payload(2),
+    where payload is the echoed value (FC06) or register count (FC16).
+    """
+    inverter_bytes = inverter_serial.encode("ascii").ljust(10, b"\x00")[:10]
+    data_frame = bytes([0x00, modbus_func]) + inverter_bytes
+    data_frame += struct.pack("<H", start_register)
+    data_frame += struct.pack("<H", payload)
+    crc = compute_crc16(data_frame)
+
+    response = PACKET_PREFIX
+    response += struct.pack("<H", PROTOCOL_VERSION)
+    response += struct.pack("<H", 14 + len(data_frame) + 2)
+    response += bytes([0x01, TCP_FUNC_TRANSLATED])
+    response += dongle_serial.encode("ascii").ljust(10, b"\x00")[:10]
+    response += struct.pack("<H", len(data_frame) + 2)
+    response += data_frame
+    response += struct.pack("<H", crc)
+    return response
+
+
 class TestDongleResponseParsing:
     """Tests for response parsing."""
 
@@ -1355,6 +1386,52 @@ class TestWriteAckEchoValidation:
         )
         # First read = drain (empty), second read = the actual ACK frame.
         transport._reader.read = AsyncMock(side_effect=[b"", echo])
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError, match="count mismatch"),
+        ):
+            await transport._write_holding_registers(110, [1, 2])
+
+    @pytest.mark.asyncio
+    async def test_real_ack_fc06_echo_match_succeeds(self) -> None:
+        """Real-layout FC06 ACK (no byte_count header) echoing our value passes."""
+        transport = self._connected_transport()
+        ack = _build_write_ack_frame(MODBUS_WRITE_SINGLE, 110, 0x0100)
+        transport._reader.read = AsyncMock(side_effect=[b"", ack])
+
+        with patch("asyncio.sleep", AsyncMock()):
+            assert await transport._write_holding_registers(110, [0x0100]) is True
+
+    @pytest.mark.asyncio
+    async def test_real_ack_fc06_echo_mismatch_raises(self) -> None:
+        """Real-layout FC06 ACK with a different echoed value is rejected."""
+        transport = self._connected_transport()
+        ack = _build_write_ack_frame(MODBUS_WRITE_SINGLE, 110, 0x0BAD)
+        transport._reader.read = AsyncMock(side_effect=[b"", ack])
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError, match="echo mismatch"),
+        ):
+            await transport._write_holding_registers(110, [0x0100])
+
+    @pytest.mark.asyncio
+    async def test_real_ack_fc16_count_match_succeeds(self) -> None:
+        """Real-layout FC16 ACK echoing the written register count passes."""
+        transport = self._connected_transport()
+        ack = _build_write_ack_frame(MODBUS_WRITE_MULTI, 110, 2)
+        transport._reader.read = AsyncMock(side_effect=[b"", ack])
+
+        with patch("asyncio.sleep", AsyncMock()):
+            assert await transport._write_holding_registers(110, [1, 2]) is True
+
+    @pytest.mark.asyncio
+    async def test_real_ack_fc16_count_mismatch_raises(self) -> None:
+        """Real-layout FC16 ACK echoing a wrong register count is rejected."""
+        transport = self._connected_transport()
+        ack = _build_write_ack_frame(MODBUS_WRITE_MULTI, 110, 5)
+        transport._reader.read = AsyncMock(side_effect=[b"", ack])
 
         with (
             patch("asyncio.sleep", AsyncMock()),
