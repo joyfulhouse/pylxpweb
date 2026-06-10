@@ -12,6 +12,7 @@ from pylxpweb.transports.dongle import (
     DEFAULT_PORT,
     MODBUS_READ_HOLDING,
     MODBUS_READ_INPUT,
+    MODBUS_WRITE_MULTI,
     MODBUS_WRITE_SINGLE,
     PACKET_PREFIX,
     PROTOCOL_VERSION,
@@ -1071,12 +1072,17 @@ class TestDongleWriteVerification:
     """Post-write readback verification of named parameter writes."""
 
     @pytest.mark.asyncio
-    async def test_verification_mismatch_retries_then_raises(self) -> None:
-        """Write is ACKed but the value never sticks: retry, then typed error."""
+    async def test_verification_mismatch_accepts_with_warning(self) -> None:
+        """Readback difference is DIAGNOSTIC-only: accept, never re-write.
+
+        The inverter may clamp/round values, or a concurrent writer (cloud
+        server, parallel-group register propagation) may have changed the
+        register between ACK and readback. Re-writing would fight that
+        writer in a loop (review) — exactly one write, warn, accept.
+        """
         transport = _make_write_test_transport()
 
-        # Each sequence attempt: RMW read -> [0], verification read -> [0]
-        # (bit 0 never sticks).
+        # RMW read -> [0], verification read -> [0] (bit 0 "didn't stick").
         mock_read = AsyncMock(return_value=[0x0000])
         mock_write = AsyncMock(return_value=True)
         transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
@@ -1085,12 +1091,13 @@ class TestDongleWriteVerification:
             patch.object(transport, "_read_holding_registers", mock_read),
             patch.object(transport, "_write_holding_registers", mock_write),
             patch("asyncio.sleep", AsyncMock()),
-            pytest.raises(TransportWriteError, match="verification"),
         ):
-            await transport.write_named_parameters({"FUNC_EPS_EN": True})
+            result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
 
-        assert mock_write.call_count == 3
-        # Healthy connection: a verification mismatch must NOT force reconnect.
+        assert result is True
+        # Exactly ONE write — no rewrite war against a concurrent writer.
+        mock_write.assert_awaited_once()
+        # Healthy connection: a readback difference must NOT force reconnect.
         transport._force_reconnect.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -1276,6 +1283,148 @@ class TestDongleSendReceiveTimeoutRetry:
             await transport._send_receive(b"\x00" * 10)
 
         transport.connect.assert_not_awaited()
+
+
+class TestWriteAckEchoValidation:
+    """FC06/FC16 ACK payload validation in _write_holding_registers (review).
+
+    Serial/function/register cross-checks already reject most misrouted
+    responses; the echoed payload pin closes the residual hole where a
+    misrouted ACK for the SAME register carries a different value.
+    """
+
+    def _connected_transport(self) -> DongleTransport:
+        from pylxpweb.devices.inverters._features import InverterFamily
+
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+            write_step_delay=0,
+        )
+        transport._connected = True
+        reader = AsyncMock()
+        writer = AsyncMock()
+        writer.write = MagicMock()
+        writer.close = MagicMock()
+        transport._reader = reader
+        transport._writer = writer
+        return transport
+
+    @pytest.mark.asyncio
+    async def test_fc06_echo_match_succeeds(self) -> None:
+        transport = self._connected_transport()
+        echo = _build_mock_response(
+            modbus_func=MODBUS_WRITE_SINGLE,
+            start_register=110,
+            register_values=[0x0100],
+        )
+        # First read = drain (empty), second read = the actual ACK frame.
+        transport._reader.read = AsyncMock(side_effect=[b"", echo])
+
+        with patch("asyncio.sleep", AsyncMock()):
+            assert await transport._write_holding_registers(110, [0x0100]) is True
+
+    @pytest.mark.asyncio
+    async def test_fc06_echo_mismatch_raises(self) -> None:
+        """Misrouted same-register ACK with a different value is rejected."""
+        transport = self._connected_transport()
+        echo = _build_mock_response(
+            modbus_func=MODBUS_WRITE_SINGLE,
+            start_register=110,
+            register_values=[0x0BAD],
+        )
+        # First read = drain (empty), second read = the actual ACK frame.
+        transport._reader.read = AsyncMock(side_effect=[b"", echo])
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError, match="echo mismatch"),
+        ):
+            await transport._write_holding_registers(110, [0x0100])
+
+    @pytest.mark.asyncio
+    async def test_fc16_count_mismatch_raises(self) -> None:
+        """FC16 ACK echoing a wrong register count is rejected."""
+        transport = self._connected_transport()
+        echo = _build_mock_response(
+            modbus_func=MODBUS_WRITE_MULTI,
+            start_register=110,
+            register_values=[5],
+        )
+        # First read = drain (empty), second read = the actual ACK frame.
+        transport._reader.read = AsyncMock(side_effect=[b"", echo])
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError, match="count mismatch"),
+        ):
+            await transport._write_holding_registers(110, [1, 2])
+
+    @pytest.mark.asyncio
+    async def test_write_timeout_propagates_without_inner_resend(self) -> None:
+        """Write timeout tears down and raises — NO request-level resend.
+
+        Resending the same pre-built packet after a mute ACK could replay
+        stale bit-field values over a concurrent writer's change (review);
+        the sequence-level retry in write_named_parameters re-reads first.
+        """
+        transport = self._connected_transport()
+        transport._reader.read = AsyncMock(side_effect=TimeoutError())
+        transport.connect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportTimeoutError),
+        ):
+            await transport._write_holding_registers(110, [0x0100])
+
+        # No inner reconnect/resend — teardown only, sequence retry re-reads.
+        transport.connect.assert_not_awaited()
+        assert transport.is_connected is False
+
+
+class TestInheritedReadsHoldOpLock:
+    """Review: inherited multi-request reads must hold _op_lock too."""
+
+    def _transport(self) -> DongleTransport:
+        from pylxpweb.devices.inverters._features import InverterFamily
+
+        return DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+        )
+
+    @pytest.mark.asyncio
+    async def test_read_energy_holds_op_lock(self) -> None:
+        transport = self._transport()
+        held: list[bool] = []
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            held.append(transport._op_lock._owner is not None)
+            return [0] * count
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            await transport.read_energy()
+
+        assert held and all(held)
+
+    @pytest.mark.asyncio
+    async def test_read_serial_number_holds_op_lock(self) -> None:
+        transport = self._transport()
+        held: list[bool] = []
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            held.append(transport._op_lock._owner is not None)
+            return [0x4143] * count
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            await transport.read_serial_number()
+
+        assert held and all(held)
 
 
 class TestDongleForceReconnect:
