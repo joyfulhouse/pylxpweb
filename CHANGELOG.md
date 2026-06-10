@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.36b2] - 2026-06-10
+
+### Fixed
+
+- **WiFi dongle parameter writes survive TCP connection drops without write
+  wars** ([eg4_web_monitor#201](https://github.com/joyfulhouse/eg4_web_monitor/issues/201)):
+  the dongle drops its TCP link mid-sequence during parameter writes (firmware
+  timeout / cloud-connection priority), which previously failed the whole write
+  in LOCAL-only mode. `write_named_parameters` now retries the ENTIRE
+  read-modify-write sequence on transport errors — tearing down the dead
+  connection and RE-READING the register before re-writing, so a retry can
+  never replay stale bit-field values over a concurrent writer's change.
+  Request-level timeout resends were removed from the write path for the same
+  reason, and post-write verification mismatches are now diagnostic-only
+  (warn + accept) instead of triggering a re-write.
+- **Write ACK echo validation** — misrouted dongle responses for the SAME
+  register can no longer confirm a write they don't belong to: FC06 ACKs must
+  echo the written value and FC16 ACKs the register count.
+  `_parse_response()` now parses the real 16-byte write-ACK layout
+  (action + func + serial + register + payload, no byte_count header);
+  read-style ACK echoes still fall through to the read parser, so a
+  legitimate ACK can never false-positive into a write error.
+- **All multi-request reads serialized on the dongle's single TCP link**:
+  `read_runtime`, `read_energy`, `read_battery`, `read_all_input_data`,
+  `read_parameters`, `read_midbox_runtime`, and the device-info reads now hold
+  the operation lock, so a coordinator poll can no longer interleave with a
+  write retry/reconnect and misroute responses.
+- **Cloud battery bank full/remaining capacity double-counted banks whose
+  master module mirrors pack totals** (eg4_web_monitor live finding): the
+  cloud's `fullCapacity`/`remainCapacity` aggregates sum the module array, and
+  on banks where module 01 reports PACK-level values the sum double-counts
+  (live 18kPV 3x280 Ah: 840+280+280 -> 1400 Ah "full", 487+162+173 -> 822 Ah
+  "remaining" vs true 840/495.6). `BatteryBank.full_capacity` /
+  `remain_capacity` now prefer the BMS-reported bank pair
+  (`maxBatteryCharge`/`currentBatteryCharge`), switching sources TOGETHER on a
+  single complete-pair gate: open-loop systems (lead-acid / no BMS comms,
+  pair reads 0/None) and half-present pairs keep the legacy fields for BOTH
+  properties, so the displayed pair can never mix sources.
+
 ## [0.9.36b1] - 2026-06-08
 
 ### Added
