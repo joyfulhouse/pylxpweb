@@ -75,10 +75,12 @@ from .exceptions import (
 )
 from .models import (
     BatteryControlMode,
+    DailyEnergyHistoryEntry,
     DatalogListItem,
     DatalogListResponse,
     DongleStatus,
     FirmwareUpdateInfo,
+    MonthlyEnergyHistory,
     OperatingMode,
 )
 from .transports.data import (
@@ -110,10 +112,12 @@ __all__ = [
     "ExportEndpoints",
     "FirmwareEndpoints",
     # Models
+    "DailyEnergyHistoryEntry",
     "DatalogListItem",
     "DatalogListResponse",
     "DongleStatus",
     "FirmwareUpdateInfo",
+    "MonthlyEnergyHistory",
     # Enums
     "OperatingMode",
     "BatteryControlMode",

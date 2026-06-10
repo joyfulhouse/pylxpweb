@@ -13,9 +13,29 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from pylxpweb.endpoints.base import BaseEndpoint
+from pylxpweb.models import DailyEnergyHistoryEntry, MonthlyEnergyHistory
 
 if TYPE_CHECKING:
     from pylxpweb.client import LuxpowerClient
+
+# Energy fields carried by /WManage/api/inverterChart/monthColumn[Parallel] rows.
+# Derived from the EG4 mobile app's chart parser (decompiled) plus the standard
+# daily energy field family; unknown extra fields are ignored.
+_DAILY_HISTORY_FIELDS: tuple[str, ...] = (
+    "ePvDay",
+    "ePv1Day",
+    "ePv2Day",
+    "ePv3Day",
+    "eInvDay",
+    "eRecDay",
+    "eChgDay",
+    "eDisChgDay",
+    "eEpsDay",
+    "eToGridDay",
+    "eExportDay",
+    "eToUserDay",
+    "eConsumptionDay",
+)
 
 
 class AnalyticsEndpoints(BaseEndpoint):
@@ -194,6 +214,83 @@ class AnalyticsEndpoints(BaseEndpoint):
         )
 
         return dict(response)
+
+    async def get_month_daily_energy(
+        self,
+        serial_num: str,
+        year: int,
+        month: int,
+        *,
+        parallel: bool = False,
+    ) -> MonthlyEnergyHistory:
+        """Get typed daily energy history for one calendar month.
+
+        Wraps ``/WManage/api/inverterChart/monthColumn`` (single inverter) or
+        ``/WManage/api/inverterChart/monthColumnParallel`` (parallel-group
+        aggregate) — the endpoints the EG4 mobile app uses for its daily
+        energy bar charts. Unlike :meth:`get_energy_month_breakdown`, a
+        single request returns ALL energy series for the month (PV, yield,
+        charge, discharge, grid import/export, consumption), with known
+        0.1 kWh raw units.
+
+        Args:
+            serial_num: Inverter serial number. For ``parallel=True`` use the
+                serial of any inverter in the parallel group.
+            year: Year (e.g., 2025)
+            month: Month (1-12)
+            parallel: Query the parallel-group aggregate endpoint
+
+        Returns:
+            MonthlyEnergyHistory with one entry per returned day. Day numbers
+            come from each row's ``day`` field when present, otherwise from
+            the row position (1-based), matching the EG4 app's behavior.
+
+        Example:
+            history = await client.analytics.get_month_daily_energy(
+                "1234567890", 2025, 11
+            )
+            for entry in history.days:
+                print(f"{history.year}-{history.month:02d}-{entry.day:02d}: "
+                      f"{entry.inverter_kwh} kWh")
+        """
+        await self.client._ensure_authenticated()
+
+        endpoint = "/WManage/api/inverterChart/monthColumn"
+        if parallel:
+            endpoint = "/WManage/api/inverterChart/monthColumnParallel"
+
+        data = {
+            "serialNum": serial_num,
+            "year": year,
+            "month": month,
+        }
+
+        response = await self.client._request("POST", endpoint, data=data)
+
+        rows = response.get("data")
+        entries: list[DailyEnergyHistoryEntry] = []
+        if isinstance(rows, list):
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    continue
+                day_field = row.get("day")
+                if isinstance(day_field, int) and 1 <= day_field <= 31:
+                    day = day_field
+                else:
+                    day = index + 1
+                payload: dict[str, Any] = {"day": day}
+                for field in _DAILY_HISTORY_FIELDS:
+                    value = row.get(field)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        payload[field] = value
+                entries.append(DailyEnergyHistoryEntry.model_validate(payload))
+
+        return MonthlyEnergyHistory(
+            success=bool(response.get("success", False)),
+            year=year,
+            month=month,
+            days=entries,
+        )
 
     async def get_energy_year_breakdown(
         self,

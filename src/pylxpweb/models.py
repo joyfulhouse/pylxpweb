@@ -1614,3 +1614,120 @@ class DatalogListResponse(BaseModel):
             if item.datalogSn == datalog_sn:
                 return item.is_online
         return None
+
+
+# Historical Energy Models (inverterChart endpoints)
+
+
+class DailyEnergyHistoryEntry(BaseModel):
+    """One day of historical energy totals.
+
+    Source: rows of ``/WManage/api/inverterChart/monthColumn`` (single
+    inverter) or ``/WManage/api/inverterChart/monthColumnParallel``
+    (parallel-group aggregate) — the endpoints the EG4 mobile app uses for
+    its daily energy bar charts.
+
+    Raw fields use the cloud convention of 0.1 kWh units, consistent with
+    :class:`EnergyInfo` (confirmed by the EG4 app, which divides these
+    values by 10 before plotting them on kWh axes). Use the ``*_kwh``
+    properties for scaled values.
+
+    Field availability differs between the two endpoint variants:
+
+    - Single inverter rows carry per-string PV (``ePv1Day``..``ePv3Day``)
+      and ``eToGridDay``.
+    - Parallel rows carry aggregated ``ePvDay`` and ``eExportDay``.
+    - ``eDisChgDay`` and ``eConsumptionDay`` appear in both variants.
+    - The remaining fields mirror the standard daily energy family and may
+      be absent depending on server/firmware version; absent fields are
+      ``None`` and the corresponding ``*_kwh`` property returns ``None``.
+    """
+
+    day: int
+    """1-based day of month."""
+
+    ePvDay: float | None = None
+    ePv1Day: float | None = None
+    ePv2Day: float | None = None
+    ePv3Day: float | None = None
+    eInvDay: float | None = None
+    eRecDay: float | None = None
+    eChgDay: float | None = None
+    eDisChgDay: float | None = None
+    eEpsDay: float | None = None
+    eToGridDay: float | None = None
+    eExportDay: float | None = None
+    eToUserDay: float | None = None
+    eConsumptionDay: float | None = None
+
+    @staticmethod
+    def _scaled(value: float | None) -> float | None:
+        """Convert a raw 0.1 kWh value to kWh (None-safe)."""
+        return None if value is None else value / 10.0
+
+    @property
+    def pv_kwh(self) -> float | None:
+        """PV generation in kWh (aggregate field or sum of PV strings)."""
+        if self.ePvDay is not None:
+            return self._scaled(self.ePvDay)
+        strings = [v for v in (self.ePv1Day, self.ePv2Day, self.ePv3Day) if v is not None]
+        if not strings:
+            return None
+        return self._scaled(sum(strings))
+
+    @property
+    def inverter_kwh(self) -> float | None:
+        """Inverter output energy (yield) in kWh."""
+        return self._scaled(self.eInvDay)
+
+    @property
+    def ac_charge_kwh(self) -> float | None:
+        """AC charge (rectifier) energy in kWh."""
+        return self._scaled(self.eRecDay)
+
+    @property
+    def charge_kwh(self) -> float | None:
+        """Battery charge energy in kWh."""
+        return self._scaled(self.eChgDay)
+
+    @property
+    def discharge_kwh(self) -> float | None:
+        """Battery discharge energy in kWh."""
+        return self._scaled(self.eDisChgDay)
+
+    @property
+    def eps_kwh(self) -> float | None:
+        """EPS/backup output energy in kWh."""
+        return self._scaled(self.eEpsDay)
+
+    @property
+    def export_kwh(self) -> float | None:
+        """Grid export energy in kWh (``eToGridDay``, else ``eExportDay``)."""
+        if self.eToGridDay is not None:
+            return self._scaled(self.eToGridDay)
+        return self._scaled(self.eExportDay)
+
+    @property
+    def import_kwh(self) -> float | None:
+        """Grid import energy in kWh."""
+        return self._scaled(self.eToUserDay)
+
+    @property
+    def consumption_kwh(self) -> float | None:
+        """Load consumption energy in kWh."""
+        return self._scaled(self.eConsumptionDay)
+
+
+class MonthlyEnergyHistory(BaseModel):
+    """Daily energy history for one calendar month.
+
+    Returned by
+    :meth:`pylxpweb.endpoints.analytics.AnalyticsEndpoints.get_month_daily_energy`.
+    ``days`` is ordered by day of month; for the current month the server
+    may return fewer rows than calendar days, or zero-filled trailing rows.
+    """
+
+    success: bool
+    year: int
+    month: int
+    days: list[DailyEnergyHistoryEntry]
