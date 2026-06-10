@@ -21,7 +21,10 @@ from pylxpweb.transports.dongle import (
 )
 from pylxpweb.transports.exceptions import (
     TransportConnectionError,
+    TransportError,
     TransportReadError,
+    TransportTimeoutError,
+    TransportWriteError,
 )
 
 
@@ -822,3 +825,504 @@ class TestDongleReadRuntimeSerialization:
         assert all(held for _, held in reads), (
             "pv4-6 supplementary read was not serialised under _op_lock"
         )
+
+
+def _make_write_test_transport(**kwargs: object) -> DongleTransport:
+    """Build a dongle transport suitable for write-sequence tests.
+
+    Uses EG4_HYBRID family (FUNC_EPS_EN -> reg 21 bit 0,
+    FUNC_GREEN_EN -> reg 110 bit 8, HOLD_AC_CHARGE_SOC_LIMIT -> reg 67)
+    and disables the inter-step delay so tests run fast.
+    """
+    from pylxpweb.devices.inverters._features import InverterFamily
+
+    defaults: dict[str, object] = {
+        "host": "192.168.1.100",
+        "dongle_serial": "BA12345678",
+        "inverter_serial": "CE12345678",
+        "inverter_family": InverterFamily.EG4_HYBRID,
+        "write_step_delay": 0.0,
+    }
+    defaults.update(kwargs)
+    transport = DongleTransport(**defaults)  # type: ignore[arg-type]
+    transport._connected = True
+    return transport
+
+
+class TestDongleWriteSequenceResilience:
+    """Sequence-level retry for the read-modify-write parameter write cycle.
+
+    The WiFi dongle drops its TCP connection mid-sequence during parameter
+    writes (firmware timeout / cloud-connection priority).  The write path
+    must reconnect, RE-READ the register (never reuse a stale pre-drop value
+    for the modify step), re-apply the modification, and retry the write —
+    bounded retries with a clear typed error on permanent failure.
+
+    Regression tests for joyfulhouse/eg4_web_monitor#201.
+    """
+
+    @pytest.mark.asyncio
+    async def test_drop_on_read_rereads_and_writes(self) -> None:
+        """Connection drop on the RMW read step: reconnect, re-read, write."""
+        transport = _make_write_test_transport()
+
+        read_results: list[object] = [
+            TransportReadError("Socket error: Connection lost"),  # RMW read drops
+            [0x0000],  # fresh re-read after reconnect
+            [0x0001],  # post-write verification read
+        ]
+        mock_read = AsyncMock(side_effect=read_results)
+        mock_write = AsyncMock(return_value=True)
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        assert result is True
+        mock_write.assert_called_once_with(21, [0x0001])
+        transport._force_reconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_drop_on_write_never_reuses_stale_read(self) -> None:
+        """Connection drop on the write step: the retry must RE-READ the register.
+
+        The register value changes between the first read and the retry
+        (e.g. the cloud server wrote concurrently while we reconnected).
+        The retried write must be based on the FRESH value, not the stale
+        pre-drop value.
+        """
+        transport = _make_write_test_transport()
+
+        read_results: list[object] = [
+            [0x0000],  # first RMW read (becomes stale)
+            [0x0100],  # fresh re-read: bit 8 was set concurrently
+            [0x0101],  # post-write verification read
+        ]
+        write_results: list[object] = [
+            TransportWriteError("Socket error: Connection lost"),  # write drops
+            True,  # retried write succeeds
+        ]
+        mock_read = AsyncMock(side_effect=read_results)
+        mock_write = AsyncMock(side_effect=write_results)
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        assert result is True
+        assert mock_read.call_count == 3
+        # Stale write used 0x0001; the retried write MUST use 0x0101.
+        assert mock_write.call_args_list[0].args == (21, [0x0001])
+        assert mock_write.call_args_list[1].args == (21, [0x0101])
+        transport._force_reconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_drop_twice_then_succeed(self) -> None:
+        """Two consecutive drops (read then timeout) recover on third attempt."""
+        transport = _make_write_test_transport()
+
+        read_results: list[object] = [
+            TransportReadError("Socket error: Connection lost"),  # attempt 1
+            TransportTimeoutError("Timeout waiting for dongle response"),  # attempt 2
+            [0x0010],  # attempt 3: fresh read
+            [0x0011],  # verification read
+        ]
+        mock_read = AsyncMock(side_effect=read_results)
+        mock_write = AsyncMock(return_value=True)
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        assert result is True
+        mock_write.assert_called_once_with(21, [0x0011])
+        assert transport._force_reconnect.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_permanent_read_failure_raises_typed_error(self) -> None:
+        """Permanent connection failure raises TransportWriteError, bounded."""
+        transport = _make_write_test_transport()
+
+        mock_read = AsyncMock(side_effect=TransportReadError("Socket error: Connection lost"))
+        mock_write = AsyncMock(return_value=True)
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError) as exc_info,
+        ):
+            await transport.write_named_parameters({"FUNC_GREEN_EN": True})
+
+        # Bounded: default write_retries=2 -> 3 sequence attempts
+        assert mock_read.call_count == 3
+        mock_write.assert_not_called()
+        assert "FUNC_GREEN_EN" in str(exc_info.value)
+        assert "3 attempts" in str(exc_info.value)
+        # Chained for diagnostics, and still a TransportError so the hybrid
+        # transport's cloud fallback dispatch keeps working.
+        assert isinstance(exc_info.value.__cause__, TransportReadError)
+        assert isinstance(exc_info.value, TransportError)
+
+    @pytest.mark.asyncio
+    async def test_permanent_write_failure_rereads_each_attempt(self) -> None:
+        """Write step fails permanently: each retry re-reads, then typed error."""
+        transport = _make_write_test_transport()
+
+        mock_read = AsyncMock(return_value=[0x0000])
+        mock_write = AsyncMock(side_effect=TransportWriteError("Socket error: Connection lost"))
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError),
+        ):
+            await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        # Every sequence attempt must re-read before re-writing.
+        assert mock_read.call_count == 3
+        assert mock_write.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_reconnect_failure_counts_as_attempt(self) -> None:
+        """TransportConnectionError from a failed reconnect is retried too."""
+        transport = _make_write_test_transport()
+
+        read_results: list[object] = [
+            TransportConnectionError("Failed to connect after 3 attempts"),
+            [0x0000],  # fresh read after successful reconnect
+            [0x0001],  # verification read
+        ]
+        mock_read = AsyncMock(side_effect=read_results)
+        mock_write = AsyncMock(return_value=True)
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        assert result is True
+        mock_write.assert_called_once_with(21, [0x0001])
+
+    @pytest.mark.asyncio
+    async def test_plain_value_parameter_drop_on_write(self) -> None:
+        """Non-bit-field parameter (no RMW read) retries the write after a drop."""
+        transport = _make_write_test_transport()
+
+        write_results: list[object] = [
+            TransportWriteError("Socket error: Connection lost"),
+            True,
+        ]
+        mock_read = AsyncMock(return_value=[80])  # verification read
+        mock_write = AsyncMock(side_effect=write_results)
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            result = await transport.write_named_parameters({"HOLD_AC_CHARGE_SOC_LIMIT": 80})
+
+        assert result is True
+        assert mock_write.call_args_list[0].args == (67, [80])
+        assert mock_write.call_args_list[1].args == (67, [80])
+
+    @pytest.mark.asyncio
+    async def test_unknown_parameter_raises_immediately_no_retry(self) -> None:
+        """ValueError for an unknown parameter is not retried or wrapped."""
+        transport = _make_write_test_transport()
+
+        mock_read = AsyncMock(return_value=[0x0000])
+        mock_write = AsyncMock(return_value=True)
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            pytest.raises(ValueError, match="Unknown parameter name"),
+        ):
+            await transport.write_named_parameters({"FUNC_DOES_NOT_EXIST": True})
+
+        mock_read.assert_not_called()
+        mock_write.assert_not_called()
+        transport._force_reconnect.assert_not_awaited()
+
+
+class TestDongleWriteVerification:
+    """Post-write readback verification of named parameter writes."""
+
+    @pytest.mark.asyncio
+    async def test_verification_mismatch_retries_then_raises(self) -> None:
+        """Write is ACKed but the value never sticks: retry, then typed error."""
+        transport = _make_write_test_transport()
+
+        # Each sequence attempt: RMW read -> [0], verification read -> [0]
+        # (bit 0 never sticks).
+        mock_read = AsyncMock(return_value=[0x0000])
+        mock_write = AsyncMock(return_value=True)
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError, match="verification"),
+        ):
+            await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        assert mock_write.call_count == 3
+        # Healthy connection: a verification mismatch must NOT force reconnect.
+        transport._force_reconnect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_verification_read_failure_is_lenient(self) -> None:
+        """If the verification read itself fails, the ACKed write is accepted."""
+        transport = _make_write_test_transport()
+
+        read_results: list[object] = [
+            [0x0000],  # RMW read
+            TransportReadError("Socket error: Connection lost"),  # verify read fails
+        ]
+        mock_read = AsyncMock(side_effect=read_results)
+        mock_write = AsyncMock(return_value=True)
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        assert result is True
+        mock_write.assert_called_once_with(21, [0x0001])
+
+    @pytest.mark.asyncio
+    async def test_verification_disabled(self) -> None:
+        """verify_writes=False skips the readback entirely."""
+        transport = _make_write_test_transport(verify_writes=False)
+
+        mock_read = AsyncMock(return_value=[0x0000])
+        mock_write = AsyncMock(return_value=True)
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+        ):
+            result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        assert result is True
+        # Only the RMW read — no verification read.
+        assert mock_read.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_verification_passes_multibit_field(self) -> None:
+        """Multi-bit MIDBOX field (2 bits/port) verifies via masked compare."""
+        transport = _make_write_test_transport()
+        transport._device_type = "MIDBOX"  # type: ignore[attr-defined]
+
+        # Reg 20 current value 0b0100 (port 2 = smart_load); set port 1 = 2
+        # (ac_couple) -> expect write of 0b0110.
+        read_results: list[object] = [
+            [0b0100],  # RMW read
+            [0b0110],  # verification read
+        ]
+        mock_read = AsyncMock(side_effect=read_results)
+        mock_write = AsyncMock(return_value=True)
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            result = await transport.write_named_parameters({"BIT_MIDBOX_SP_MODE_1": 2})
+
+        assert result is True
+        mock_write.assert_called_once_with(20, [0b0110])
+
+    @pytest.mark.asyncio
+    async def test_verification_skipped_when_not_cheap(self) -> None:
+        """Writes spanning many registers skip the readback (not cheap)."""
+        transport = _make_write_test_transport()
+
+        mock_read = AsyncMock(return_value=[0x0000])
+        mock_write = AsyncMock(return_value=True)
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_write_holding_registers", mock_write),
+        ):
+            result = await transport.write_named_parameters(
+                {
+                    "HOLD_AC_CHARGE_SOC_LIMIT": 80,  # reg 67
+                    "HOLD_DISCHG_CUT_OFF_SOC_EOD": 20,  # reg 105
+                    "HOLD_SOC_LOW_LIMIT_EPS_DISCHG": 10,  # reg 125
+                    "HOLD_FORCED_CHG_POWER_CMD": 50,  # reg 74
+                }
+            )
+
+        assert result is True
+        # No RMW reads (plain values) and no verification reads.
+        mock_read.assert_not_called()
+
+
+class TestDongleSendReceiveTimeoutRetry:
+    """Request-level timeout retry for write operations in _send_receive."""
+
+    def _connected_transport(self) -> DongleTransport:
+        transport = _make_write_test_transport()
+        transport._reader = AsyncMock()
+        writer = AsyncMock()
+        writer.write = MagicMock()
+        writer.close = MagicMock()
+        transport._writer = writer
+        return transport
+
+    @pytest.mark.asyncio
+    async def test_write_timeout_reconnects_and_retries(self) -> None:
+        """A write request that times out tears down, reconnects, and retries."""
+        transport = self._connected_transport()
+        assert transport._reader is not None
+        transport._reader.read = AsyncMock(side_effect=TimeoutError())
+
+        write_echo = _build_mock_response(
+            modbus_func=MODBUS_WRITE_SINGLE,
+            start_register=110,
+            register_values=[0x0100],
+        )
+
+        second_reader = AsyncMock()
+        second_reader.read = AsyncMock(side_effect=[b"", write_echo])
+        second_writer = AsyncMock()
+        second_writer.write = MagicMock()
+        second_writer.close = MagicMock()
+
+        async def mock_connect() -> None:
+            transport._connected = True
+            transport._reader = second_reader
+            transport._writer = second_writer
+
+        transport.connect = AsyncMock(side_effect=mock_connect)  # type: ignore[method-assign]
+
+        with patch("asyncio.sleep", AsyncMock()):
+            result = await transport._send_receive(
+                b"\x00" * 10,
+                expected_func=MODBUS_WRITE_SINGLE,
+                expected_register=110,
+                retry_on_timeout=True,
+            )
+
+        assert result  # parsed echo
+        transport.connect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_write_timeout_exhausted_raises_timeout_error(self) -> None:
+        """Persistent timeouts still raise TransportTimeoutError after retries."""
+        transport = self._connected_transport()
+        assert transport._reader is not None
+        transport._reader.read = AsyncMock(side_effect=TimeoutError())
+
+        async def mock_connect() -> None:
+            transport._connected = True
+            reader = AsyncMock()
+            reader.read = AsyncMock(side_effect=TimeoutError())
+            transport._reader = reader
+            writer = AsyncMock()
+            writer.write = MagicMock()
+            writer.close = MagicMock()
+            transport._writer = writer
+
+        transport.connect = AsyncMock(side_effect=mock_connect)  # type: ignore[method-assign]
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportTimeoutError),
+        ):
+            await transport._send_receive(
+                b"\x00" * 10,
+                max_retries=2,
+                retry_on_timeout=True,
+            )
+
+        assert transport.connect.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_read_timeout_still_fails_fast(self) -> None:
+        """Read requests keep fail-fast timeout behavior (no retry)."""
+        transport = self._connected_transport()
+        assert transport._reader is not None
+        transport._reader.read = AsyncMock(side_effect=TimeoutError())
+        transport.connect = AsyncMock()  # type: ignore[method-assign]
+
+        with pytest.raises(TransportTimeoutError):
+            await transport._send_receive(b"\x00" * 10)
+
+        transport.connect.assert_not_awaited()
+
+
+class TestDongleForceReconnect:
+    """Teardown semantics of _force_reconnect."""
+
+    @pytest.mark.asyncio
+    async def test_force_reconnect_tears_down_connection(self) -> None:
+        """_force_reconnect closes the socket and marks disconnected."""
+        transport = _make_write_test_transport()
+        writer = MagicMock()
+        writer.close = MagicMock()
+        transport._writer = writer
+        transport._reader = AsyncMock()
+
+        await transport._force_reconnect()
+
+        assert transport.is_connected is False
+        assert transport._reader is None
+        assert transport._writer is None
+        writer.close.assert_called_once()
+
+    def test_write_resilience_defaults(self) -> None:
+        """Constructor exposes configurable write resilience knobs."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        assert transport._write_retries == 2
+        assert transport._write_step_delay == pytest.approx(0.2)
+        assert transport._verify_writes is True
+
+    @pytest.mark.asyncio
+    async def test_write_step_delay_applied_before_write(self) -> None:
+        """The configurable inter-step delay runs before each write request."""
+        transport = _make_write_test_transport(write_step_delay=0.05, verify_writes=False)
+
+        mock_read = AsyncMock(return_value=[0x0000])
+        mock_send = AsyncMock(return_value=[])
+        sleep_mock = AsyncMock()
+
+        with (
+            patch.object(transport, "_read_holding_registers", mock_read),
+            patch.object(transport, "_send_receive", mock_send),
+            patch("pylxpweb.transports.dongle.asyncio.sleep", sleep_mock),
+        ):
+            result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        assert result is True
+        assert any(call.args == (0.05,) for call in sleep_mock.await_args_list)

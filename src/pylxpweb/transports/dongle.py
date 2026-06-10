@@ -35,6 +35,7 @@ from ._register_data import RegisterDataMixin
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .exceptions import (
     TransportConnectionError,
+    TransportError,
     TransportReadError,
     TransportTimeoutError,
     TransportWriteError,
@@ -66,6 +67,15 @@ MODBUS_WRITE_MULTI = 0x10  # Write multiple holding registers
 DEFAULT_PORT = 8000
 DEFAULT_TIMEOUT = 10.0
 RECV_BUFFER_SIZE = 4096
+
+# Write resilience settings (joyfulhouse/eg4_web_monitor#201)
+# The dongle drops its TCP connection mid-sequence during parameter writes
+# (firmware timeout / cloud-connection priority), so the read-modify-write
+# cycle is retried at the sequence level with a fresh register read.
+DEFAULT_WRITE_RETRIES = 2  # sequence-level retries (3 attempts total)
+DEFAULT_WRITE_STEP_DELAY = 0.2  # settle delay before write/verify steps (s)
+WRITE_RETRY_DELAY = 0.5  # base backoff between sequence attempts (s)
+VERIFY_MAX_REGISTERS = 3  # skip readback verification above this many registers
 
 
 def compute_crc16(data: bytes) -> int:
@@ -126,6 +136,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         timeout: float = DEFAULT_TIMEOUT,
         inverter_family: InverterFamily | None = None,
         connection_retries: int = 3,
+        write_retries: int = DEFAULT_WRITE_RETRIES,
+        write_step_delay: float = DEFAULT_WRITE_STEP_DELAY,
+        verify_writes: bool = True,
     ) -> None:
         """Initialize WiFi Dongle transport.
 
@@ -139,6 +152,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 If None, defaults to PV_SERIES (EG4-18KPV) for backward
                 compatibility.
             connection_retries: Number of connection retry attempts with backoff
+            write_retries: Sequence-level retries for named parameter writes.
+                On a connection drop mid read-modify-write, the transport
+                reconnects, re-reads the register, and retries the write.
+            write_step_delay: Settle delay (seconds) before write requests and
+                verification reads.  Reduces connection pressure on dongles
+                that drop the TCP link on rapid function-code changes.
+            verify_writes: Read back written registers to confirm the values
+                were applied (named parameter writes only, when cheap).
         """
         super().__init__(inverter_serial)
         self._host = host
@@ -150,6 +171,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._pv_string_count: int = 3
         self._connection_retries = connection_retries
         self._inter_register_delay = 0.5  # Dongle needs slower pace than Modbus
+        self._write_retries = write_retries
+        self._write_step_delay = write_step_delay
+        self._verify_writes = verify_writes
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
@@ -471,12 +495,36 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         except Exception as err:
             _LOGGER.debug("Error draining buffer: %s", err)
 
+    def _teardown_connection(self) -> None:
+        """Mark the connection broken and close the socket without handshake.
+
+        Used after socket errors and suspected-dead connections so the next
+        request (or retry attempt) re-establishes a fresh TCP connection.
+        """
+        self._connected = False
+        self._reader = None
+        if self._writer is not None:
+            with contextlib.suppress(Exception):
+                self._writer.close()
+        self._writer = None
+
+    async def _force_reconnect(self) -> None:
+        """Tear down the (possibly broken) connection for a fresh start.
+
+        Acquires the per-transaction lock so an in-flight request on another
+        task is never yanked mid-transaction.  Reconnection itself is lazy —
+        ``_send_receive`` re-establishes the connection on the next request.
+        """
+        async with self._lock:
+            self._teardown_connection()
+
     async def _send_receive(
         self,
         packet: bytes,
         max_retries: int = 2,
         expected_func: int | None = None,
         expected_register: int | None = None,
+        retry_on_timeout: bool = False,
     ) -> list[int]:
         """Send a packet and receive response with retry logic.
 
@@ -493,6 +541,10 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 Handles exception responses (high bit set) by masking to base code.
             expected_register: Expected starting register address.
                 When provided, rejects responses for a different register range.
+            retry_on_timeout: Treat a response timeout as a transient error:
+                tear down the (likely dead) connection, reconnect, and resend.
+                Safe for idempotent requests (register writes resend the same
+                absolute values).  Reads keep fail-fast timeout behavior.
 
         Returns:
             List of register values from response
@@ -567,6 +619,19 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     return self._parse_response(response, expected_func, expected_register)
 
                 except TimeoutError as err:
+                    if retry_on_timeout and attempt < max_retries:
+                        # The connection is likely dead (dongle went mute or
+                        # dropped the link without RST).  Tear down and let
+                        # the top-of-loop guard reconnect for the resend.
+                        self._teardown_connection()
+                        _LOGGER.warning(
+                            "Timeout on attempt %d/%d, will reconnect and resend",
+                            attempt + 1,
+                            max_retries + 1,
+                        )
+                        await asyncio.sleep(0.5)
+                        continue
+
                     _LOGGER.error("Timeout waiting for dongle response")
                     raise TransportTimeoutError(
                         "Timeout waiting for dongle response. "
@@ -576,12 +641,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 except OSError as err:
                     # Tear down the broken connection; next iteration
                     # will reconnect via the top-of-loop guard.
-                    self._connected = False
-                    self._reader = None
-                    if self._writer:
-                        with contextlib.suppress(Exception):
-                            self._writer.close()
-                    self._writer = None
+                    self._teardown_connection()
 
                     if attempt < max_retries:
                         _LOGGER.warning(
@@ -887,11 +947,18 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             values=values,
         )
 
+        # Settle delay before the write: dongles can drop the TCP link on
+        # rapid function-code changes (e.g. the read step of a
+        # read-modify-write cycle immediately followed by the write).
+        if self._write_step_delay > 0:
+            await asyncio.sleep(self._write_step_delay)
+
         try:
             await self._send_receive(
                 packet,
                 expected_func=modbus_func,
                 expected_register=address,
+                retry_on_timeout=True,
             )
             return True
         except TransportReadError as err:
@@ -964,11 +1031,166 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self,
         parameters: dict[str, Any],
     ) -> bool:
-        """Serialised read-modify-write of named parameters.
+        """Resilient, serialised read-modify-write of named parameters.
 
         Acquires op_lock for the full call so the RMW is atomic relative to
         concurrent reads.  The internal calls to read_parameters /
         write_parameters re-enter the reentrant lock without blocking.
+
+        The WiFi dongle drops its TCP connection mid-sequence during
+        parameter writes (firmware timeout / cloud-connection priority),
+        which previously failed the whole write in LOCAL-only mode
+        (joyfulhouse/eg4_web_monitor#201).  This method retries the ENTIRE
+        sequence on transport errors:
+
+        1. Tear down the broken connection (reconnect happens lazily on
+           the next request).
+        2. RE-READ the register — the modify step never reuses a stale
+           pre-drop value (the register may have changed while we were
+           disconnected, e.g. a concurrent cloud write).
+        3. Re-apply the bit/field modification and retry the write.
+        4. After a successful write, read the register back to verify the
+           value was applied (when cheap; see ``verify_writes``).
+
+        Retries are bounded by ``write_retries`` with a short backoff.
+
+        Raises:
+            TransportWriteError: If the write sequence fails after all
+                attempts, or the written value persistently fails readback
+                verification.  A ``TransportError`` subclass, so HYBRID-mode
+                consumers can still dispatch their cloud API fallback.
+            ValueError: If a parameter name is not recognized (not retried).
         """
         async with self._op_lock:
-            return await super().write_named_parameters(parameters)
+            attempts = self._write_retries + 1
+            last_error: TransportError | None = None
+
+            for attempt in range(1, attempts + 1):
+                try:
+                    result = await super().write_named_parameters(parameters)
+                except (
+                    TransportConnectionError,
+                    TransportReadError,
+                    TransportTimeoutError,
+                    TransportWriteError,
+                ) as err:
+                    last_error = err
+                    if attempt < attempts:
+                        _LOGGER.warning(
+                            "Parameter write sequence failed (attempt %d/%d) for %s: %s "
+                            "— reconnecting and retrying with a fresh register read",
+                            attempt,
+                            attempts,
+                            sorted(parameters),
+                            err,
+                        )
+                        await self._force_reconnect()
+                        await asyncio.sleep(WRITE_RETRY_DELAY * attempt)
+                    continue
+
+                if not self._verify_writes:
+                    return result
+
+                try:
+                    mismatches = await self._verify_named_parameters(parameters)
+                except TransportError as err:
+                    # The write itself was acknowledged by the inverter; a
+                    # failed verification READ must not fail the operation.
+                    _LOGGER.debug(
+                        "Post-write verification read failed for %s (%s); "
+                        "write was acknowledged — accepting",
+                        sorted(parameters),
+                        err,
+                    )
+                    return result
+
+                if not mismatches:
+                    return result
+
+                last_error = TransportWriteError(
+                    f"Post-write verification mismatch: {'; '.join(mismatches)}"
+                )
+                if attempt < attempts:
+                    # Connection is healthy (the readback succeeded) — retry
+                    # the sequence without forcing a reconnect.
+                    _LOGGER.warning(
+                        "Post-write verification mismatch (attempt %d/%d): %s — retrying",
+                        attempt,
+                        attempts,
+                        "; ".join(mismatches),
+                    )
+                    await asyncio.sleep(WRITE_RETRY_DELAY)
+
+            raise TransportWriteError(
+                f"Parameter write failed after {attempts} attempts for "
+                f"{sorted(parameters)}: {last_error}"
+            ) from last_error
+
+    async def _verify_named_parameters(
+        self,
+        parameters: dict[str, Any],
+    ) -> list[str]:
+        """Read back written registers and compare against requested values.
+
+        Decodes bit fields, multi-bit fields, and plain values using the same
+        register mappings the write path used, so a write that the inverter
+        acknowledged but silently dropped (or that a concurrent cloud write
+        clobbered) is detected.
+
+        Args:
+            parameters: The named parameters that were just written.
+
+        Returns:
+            List of human-readable mismatch descriptions (empty = verified).
+            Returns an empty list without reading when verification would
+            not be cheap (more than ``VERIFY_MAX_REGISTERS`` registers).
+
+        Raises:
+            TransportReadError: If the readback read fails.
+            TransportTimeoutError: If the readback read times out.
+            TransportConnectionError: If reconnecting for the readback fails.
+        """
+        from pylxpweb.constants.registers import MULTI_BIT_FIELDS
+
+        register_to_params, param_to_register = self._resolve_register_mappings(
+            param_names=list(parameters.keys()),
+        )
+
+        registers = sorted({param_to_register[p] for p in parameters if p in param_to_register})
+        if not registers or len(registers) > VERIFY_MAX_REGISTERS:
+            return []
+
+        # Settle delay before switching from write back to read function codes.
+        if self._write_step_delay > 0:
+            await asyncio.sleep(self._write_step_delay)
+
+        readback: dict[int, int] = {}
+        for register in registers:
+            readback.update(await self.read_parameters(register, 1))
+
+        mismatches: list[str] = []
+        for name, value in parameters.items():
+            param_register = param_to_register.get(name)
+            if param_register is None:
+                continue
+            if param_register not in readback:
+                mismatches.append(f"{name}: register {param_register} missing from readback")
+                continue
+
+            raw = readback[param_register]
+            param_keys = register_to_params.get(param_register, [])
+
+            if self._is_bit_field_register(param_keys):
+                if name in MULTI_BIT_FIELDS:
+                    offset, width = MULTI_BIT_FIELDS[name]
+                    got_field = (raw >> offset) & ((1 << width) - 1)
+                    if got_field != int(value):
+                        mismatches.append(f"{name}: wrote {int(value)}, read back {got_field}")
+                elif name in param_keys:
+                    got_bit = bool((raw >> param_keys.index(name)) & 1)
+                    if got_bit is not bool(value):
+                        mismatches.append(f"{name}: wrote {bool(value)}, read back {got_bit}")
+            elif (int(value) & 0xFFFF) != raw:
+                mismatches.append(f"{name}: wrote {int(value)}, read back {raw}")
+
+        return mismatches
