@@ -1618,14 +1618,21 @@ class TestForcedDischargeOperations:
         assert REGISTER_TO_PARAM_KEYS[83] == ["HOLD_FORCED_DISCHG_SOC_LIMIT"]
 
     def test_register_map_names_full_64_to_83_window(self) -> None:
-        """Every register in the 64-83 block resolves to an API name —
-        no raw numeric keys can leak into parameter caches from reads
-        spanning the window (codex review of the regs-82/83 addition)."""
+        """Every register in the 64-83 block resolves to an API name that
+        matches the canonical holding table — no raw numeric keys can leak
+        into parameter caches and no single-value name can drift from
+        canonical (codex r1 LOW: leakage; r2 LOW: per-register pinning)."""
         from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
+        from pylxpweb.registers.inverter_holding import BY_ADDRESS
 
-        missing = [reg for reg in range(64, 84) if reg not in REGISTER_TO_PARAM_KEYS]
-        assert not missing, f"unnamed registers in 64-83 window: {missing}"
-        # The 75-81 forced-charge schedule names match the canonical table.
-        assert REGISTER_TO_PARAM_KEYS[75] == ["HOLD_FORCED_CHG_SOC_LIMIT"]
-        assert REGISTER_TO_PARAM_KEYS[80] == ["HOLD_FORCED_CHARGE_TIME_2_START"]
-        assert REGISTER_TO_PARAM_KEYS[81] == ["HOLD_FORCED_CHARGE_TIME_2_END"]
+        for reg in range(64, 84):
+            assert reg in REGISTER_TO_PARAM_KEYS, f"unnamed register {reg}"
+            names = REGISTER_TO_PARAM_KEYS[reg]
+            if len(names) != 1:
+                continue  # bitfield registers are pinned elsewhere
+            canonical = BY_ADDRESS.get(reg)
+            if not canonical:
+                continue  # no canonical definition to compare against
+            assert names[0] == canonical[0].api_param_key, (
+                f"reg {reg}: map name {names[0]!r} != canonical {canonical[0].api_param_key!r}"
+            )
