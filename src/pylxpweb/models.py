@@ -1641,7 +1641,10 @@ class DailyEnergyHistoryEntry(BaseModel):
 
     - Single inverter rows carry per-string PV (``ePv1Day``..``ePv3Day``)
       and ``eToGridDay``.
-    - Parallel rows carry aggregated ``ePvDay`` and ``eExportDay``.
+    - Parallel rows carry aggregated ``ePvDay`` and ``eExportDay``, plus
+      ``eImportDay`` (grid import) and ``eGenDay`` (generator-port energy —
+      AC-coupled PV on gen-port sites).  Live-verified 2026-06-11 on plant
+      19147: ``eGenDay`` matched the GridBOSS AC-couple daily exactly.
     - ``eDisChgDay`` and ``eConsumptionDay`` appear in both variants.
     - The remaining fields mirror the standard daily energy family and may
       be absent depending on server/firmware version; absent fields are
@@ -1663,7 +1666,9 @@ class DailyEnergyHistoryEntry(BaseModel):
     eToGridDay: float | None = None
     eExportDay: float | None = None
     eToUserDay: float | None = None
+    eImportDay: float | None = None
     eConsumptionDay: float | None = None
+    eGenDay: float | None = None
 
     @staticmethod
     def _scaled(value: float | None) -> float | None:
@@ -1714,13 +1719,29 @@ class DailyEnergyHistoryEntry(BaseModel):
 
     @property
     def import_kwh(self) -> float | None:
-        """Grid import energy in kWh."""
+        """Grid import energy in kWh (``eImportDay``, else ``eToUserDay``).
+
+        The parallel endpoint names this field ``eImportDay`` while the
+        single-inverter endpoint uses ``eToUserDay`` — same dual-name
+        situation as :attr:`export_kwh`.
+        """
+        if self.eImportDay is not None:
+            return self._scaled(self.eImportDay)
         return self._scaled(self.eToUserDay)
 
     @property
     def consumption_kwh(self) -> float | None:
         """Load consumption energy in kWh."""
         return self._scaled(self.eConsumptionDay)
+
+    @property
+    def generator_kwh(self) -> float | None:
+        """Generator-port energy in kWh (``eGenDay``, parallel endpoint).
+
+        On systems with AC-coupled PV wired to the generator port this is
+        the daily AC-couple production.
+        """
+        return self._scaled(self.eGenDay)
 
 
 class MonthlyEnergyHistory(BaseModel):

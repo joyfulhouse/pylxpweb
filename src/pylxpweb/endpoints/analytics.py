@@ -34,7 +34,9 @@ _DAILY_HISTORY_FIELDS: tuple[str, ...] = (
     "eToGridDay",
     "eExportDay",
     "eToUserDay",
+    "eImportDay",
     "eConsumptionDay",
+    "eGenDay",
 )
 
 

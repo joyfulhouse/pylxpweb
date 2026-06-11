@@ -262,6 +262,43 @@ class TestDailyEnergyHistoryEntryScaling:
         entry = DailyEnergyHistoryEntry(day=1, eExportDay=40)
         assert entry.export_kwh == 4.0
 
+    def test_import_prefers_parallel_import_field(self) -> None:
+        """eImportDay (parallel) wins over eToUserDay (single-inverter).
+
+        Live-found during 3.4.0-beta.4 verification: the parallel endpoint
+        names grid import ``eImportDay``, which the model didn't know, so
+        plant-level import parsed as no-data while every other series worked.
+        """
+        entry = DailyEnergyHistoryEntry(day=10, eImportDay=911, eToUserDay=30)
+        assert entry.import_kwh == 91.1
+
+        entry = DailyEnergyHistoryEntry(day=10, eToUserDay=30)
+        assert entry.import_kwh == 3.0
+
+    def test_parallel_row_real_shape_june_10(self) -> None:
+        """Exact live parallel row (plant 19147, 2026-06-10) parses fully.
+
+        eGenDay carries the generator-port energy — AC-coupled PV on this
+        site; 80.2 kWh matched the GridBOSS ac_couple daily exactly.
+        """
+        entry = DailyEnergyHistoryEntry(
+            day=10,
+            ePvDay=530,
+            eChgDay=303,
+            eDisChgDay=323,
+            eExportDay=825,
+            eImportDay=911,
+            eConsumptionDay=1395,
+            eGenDay=802,
+        )
+        assert entry.pv_kwh == 53.0
+        assert entry.charge_kwh == 30.3
+        assert entry.discharge_kwh == 32.3
+        assert entry.export_kwh == 82.5
+        assert entry.import_kwh == 91.1
+        assert entry.consumption_kwh == 139.5
+        assert entry.generator_kwh == 80.2
+
     def test_zero_values_are_not_none(self) -> None:
         """Zero raw values scale to 0.0, not None."""
         entry = DailyEnergyHistoryEntry(day=1, eInvDay=0, eToGridDay=0)
