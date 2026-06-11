@@ -187,7 +187,7 @@ if inverter.is_lost:
 |----------|------|------|-------------|-------------------|
 | `total_energy_today` | `float` | kWh | Today's total energy production | 0.0 |
 | `total_energy_lifetime` | `float` | kWh | Lifetime total energy production | 0.0 |
-| `power_output` | `int` | W | Current power output | 0 |
+| `power_output` | `float` | W | Load output power (reg 170 Pload / cloud `pLoad170`) | None |
 
 **Example**:
 ```python

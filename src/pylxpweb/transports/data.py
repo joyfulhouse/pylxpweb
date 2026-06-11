@@ -20,6 +20,7 @@ values (SOC, SOH) to valid 0-100 range and log warnings for out-of-range values.
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -153,7 +154,10 @@ class InverterRuntimeData:
     grid_current_s: float | None = None  # A
     grid_current_t: float | None = None  # A
     grid_frequency: float | None = None  # Hz
-    grid_power: float | None = None  # W (positive = import, negative = export)
+    # Reg 17 (Prec) — AC-charging RECTIFIER power (grid-to-battery), NOT net
+    # grid flow.  Renamed from the misleading ``grid_power`` (eg4-9wf); compute
+    # net grid power as ``power_from_grid - power_to_grid``.
+    rectifier_power: float | None = None  # W (reg 17 Prec)
     power_to_grid: float | None = None  # W (export)
     power_from_grid: float | None = None  # W (import)
 
@@ -281,6 +285,22 @@ class InverterRuntimeData:
         self._raw_soh = self.battery_soh
         self.battery_soc = _clamp_percentage(self.battery_soc, "battery_soc")
         self.battery_soh = _clamp_percentage(self.battery_soh, "battery_soh")
+
+    @property
+    def grid_power(self) -> float | None:
+        """Deprecated read-only alias for :attr:`rectifier_power`.
+
+        Register 17 (Prec) is the AC-charging rectifier power, not net grid
+        flow, so the field was renamed (eg4-9wf).  Compute net grid power as
+        ``power_from_grid - power_to_grid`` (positive = import).
+        """
+        warnings.warn(
+            "InverterRuntimeData.grid_power is deprecated; use rectifier_power "
+            "(reg 17 Prec is rectifier power, not net grid flow)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.rectifier_power
 
     def is_corrupt(self, max_power_watts: float = 0.0) -> bool:
         """Check if runtime data contains physically impossible values.
@@ -450,9 +470,12 @@ class InverterRuntimeData:
             grid_voltage_s=scale_runtime_value("vacs", runtime.vacs),
             grid_voltage_t=scale_runtime_value("vact", runtime.vact),
             grid_frequency=scale_runtime_value("fac", runtime.fac),
-            grid_power=float(runtime.prec or 0),
+            rectifier_power=float(runtime.prec or 0),
             power_to_grid=float(runtime.pToGrid or 0),
-            power_from_grid=float(runtime.prec or 0),
+            # Grid import is pToUser (reg 27 mirror) — the old prec assignment
+            # here was the same reg-17 misnaming as grid_power (eg4-9wf); the
+            # Modbus path has always fed power_from_grid from reg 27.
+            power_from_grid=float(runtime.pToUser or 0),
             # Inverter
             inverter_power=float(runtime.pinv or 0),
             # EPS
@@ -464,6 +487,10 @@ class InverterRuntimeData:
             eps_apparent_power=runtime.seps or 0,
             # Load
             load_power=float(runtime.pToUser or 0),
+            # Reg-170 mirror (canonical output_power ↔ cloud pLoad170,
+            # eg4-9e4).  Preserve None when the payload omits the field so
+            # HTTP-sourced data matches a Modbus snapshot without reg 170.
+            output_power=(float(runtime.pLoad170) if runtime.pLoad170 is not None else None),
             # Internal
             bus_voltage_1=scale_runtime_value("vBus1", runtime.vBus1),
             bus_voltage_2=scale_runtime_value("vBus2", runtime.vBus2),

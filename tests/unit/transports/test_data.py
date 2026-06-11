@@ -65,6 +65,7 @@ class TestInverterRuntimeData:
         runtime.prec = 100
         runtime.pToGrid = 200
         runtime.pinv = 2300
+        runtime.pLoad170 = 1800
         runtime.vepsr = 2400
         runtime.vepss = 2405
         runtime.vepst = 2410
@@ -92,6 +93,20 @@ class TestInverterRuntimeData:
         assert data.grid_frequency == 59.98
         assert data.eps_apparent_power == 1
         assert data.bus_voltage_1 == 370.0
+        # Reg-17 semantics (eg4-9wf): prec is RECTIFIER power; grid import
+        # comes from pToUser, matching the Modbus path (reg 27).
+        assert data.rectifier_power == 100.0
+        assert data.power_from_grid == 1500.0
+        assert data.power_to_grid == 200.0
+        # Reg-170 mirror (eg4-9e4): pLoad170 feeds output_power.
+        assert data.output_power == 1800.0
+
+    def test_grid_power_deprecated_alias(self) -> None:
+        """grid_power is a deprecated read-only alias for rectifier_power."""
+        data = InverterRuntimeData(rectifier_power=100.0)
+
+        with pytest.warns(DeprecationWarning, match="rectifier_power"):
+            assert data.grid_power == 100.0
 
     def test_from_modbus_registers(self) -> None:
         """Test conversion from Modbus registers.
@@ -160,6 +175,11 @@ class TestInverterRuntimeData:
         assert data.bus_voltage_1 == 370.0
         assert data.internal_temperature == 25.0
         assert data.fault_code == 35  # From regs 60-61 (32-bit)
+        # Reg 17 lands on rectifier_power (renamed from grid_power, eg4-9wf);
+        # regs 26/27 carry the real grid flows.
+        assert data.rectifier_power == 100.0
+        assert data.power_to_grid == 200.0
+        assert data.power_from_grid == 1500.0
 
 
 class TestInverterEnergyData:
