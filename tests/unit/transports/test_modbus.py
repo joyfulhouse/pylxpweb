@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pymodbus.exceptions import ConnectionException
 
 from pylxpweb.registers.battery import (
     BATTERY_BASE_ADDRESS,
@@ -14,6 +15,7 @@ from pylxpweb.registers.battery import (
 from pylxpweb.transports.exceptions import (
     TransportConnectionError,
     TransportReadError,
+    TransportTimeoutError,
     TransportWriteError,
 )
 from pylxpweb.transports.modbus import ModbusTransport
@@ -1159,3 +1161,167 @@ class TestBatteryRoundRobinAccumulator:
 
         # No accumulator or last_seen created for <=4 batteries
         assert not getattr(transport, "_battery_last_seen", {})
+
+
+class TestWriteConnectionException:
+    """ConnectionException during writes surfaces typed and heals (eg4-1cxn).
+
+    Mirrors the eg4-57g read-path fix for the write path: pymodbus
+    ``ConnectionException`` ("Not connected") is a SIBLING of
+    ``ModbusIOException``, so it previously escaped ``_write_holding_registers``
+    raw — bypassing the typed ``TransportWriteError`` contract that upstream
+    retry/fallback machinery (#201, hybrid HTTP fallback) keys on — and never
+    advanced ``_consecutive_errors``, so the ``_reconnect()`` gate never fired.
+    """
+
+    def _make_transport(self) -> ModbusTransport:
+        return ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+    def _make_client(self) -> MagicMock:
+        """Build a mock pymodbus client that connects successfully."""
+        client = MagicMock()
+        client.connect = AsyncMock(return_value=True)
+        return client
+
+    @staticmethod
+    def _ok_response() -> MagicMock:
+        response = MagicMock()
+        response.isError.return_value = False
+        return response
+
+    @pytest.mark.asyncio
+    async def test_single_register_write_connection_exception(self) -> None:
+        """FC06 path: ConnectionException -> TransportWriteError, counter +1."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_register = AsyncMock(
+            side_effect=ConnectionException("Not connected"),
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            with pytest.raises(TransportWriteError) as exc_info:
+                await transport.write_parameters({66: 50})
+
+        assert isinstance(exc_info.value.__cause__, ConnectionException)
+        assert transport._consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_multi_register_write_connection_exception(self) -> None:
+        """FC16 path: ConnectionException -> TransportWriteError, counter +1."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_registers = AsyncMock(
+            side_effect=ConnectionException("Not connected"),
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            # Consecutive addresses batch into a single FC16 write
+            with pytest.raises(TransportWriteError) as exc_info:
+                await transport.write_parameters({66: 50, 67: 80})
+
+        assert isinstance(exc_info.value.__cause__, ConnectionException)
+        mock_client.write_registers.assert_awaited_once()
+        assert transport._consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_write_named_parameters_connection_exception(self) -> None:
+        """Named-parameter writes surface ConnectionException typed too."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_register = AsyncMock(
+            side_effect=ConnectionException("Not connected"),
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            # Plain (non-bit-field) parameter: no read-modify-write read step
+            with pytest.raises(TransportWriteError) as exc_info:
+                await transport.write_named_parameters({"HOLD_AC_CHARGE_POWER_CMD": 50})
+
+        assert isinstance(exc_info.value.__cause__, ConnectionException)
+        assert transport._consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_connection_exception_with_timeout_message(self) -> None:
+        """Timeout-flavoured ModbusException maps to TransportTimeoutError."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_register = AsyncMock(
+            side_effect=ConnectionException("Connection timeout to device"),
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            with pytest.raises(TransportTimeoutError):
+                await transport.write_parameters({66: 50})
+
+        assert transport._consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_write_failures_trigger_reconnect_on_next_write(self) -> None:
+        """3 failed writes reach the gate; the next write reconnects first."""
+        transport = self._make_transport()
+        dead_client = self._make_client()
+        dead_client.write_register = AsyncMock(
+            side_effect=ConnectionException("Not connected"),
+        )
+        healthy_client = self._make_client()
+        healthy_client.write_register = AsyncMock(return_value=self._ok_response())
+
+        with patch(
+            "pymodbus.client.AsyncModbusTcpClient",
+            side_effect=[dead_client, healthy_client],
+        ) as mock_client_class:
+            await transport.connect()
+
+            for _ in range(transport._max_consecutive_errors):
+                with pytest.raises(TransportWriteError):
+                    await transport.write_parameters({66: 50})
+
+            assert transport._consecutive_errors == transport._max_consecutive_errors
+
+            # Next write call: reconnect gate fires, fresh client, write lands
+            assert await transport.write_parameters({66: 50}) is True
+
+        assert mock_client_class.call_count == 2
+        healthy_client.write_register.assert_awaited_once()
+        assert transport._consecutive_errors == 0
+
+    @pytest.mark.asyncio
+    async def test_write_success_resets_consecutive_errors(self) -> None:
+        """A successful write proves the link is alive and resets the counter."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_register = AsyncMock(return_value=self._ok_response())
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+            transport._consecutive_errors = 2
+
+            assert await transport.write_parameters({66: 50}) is True
+
+        assert transport._consecutive_errors == 0
+
+    @pytest.mark.asyncio
+    async def test_functional_exception_response_not_counted(self) -> None:
+        """Modbus exception responses are NOT transport failures: no counting."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        error_response = MagicMock()
+        error_response.isError.return_value = True
+        mock_client.write_register = AsyncMock(return_value=error_response)
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            with pytest.raises(TransportWriteError, match="Modbus write error"):
+                await transport.write_parameters({66: 50})
+
+        # Device responded — link is fine, reconnect accounting untouched
+        assert transport._consecutive_errors == 0
