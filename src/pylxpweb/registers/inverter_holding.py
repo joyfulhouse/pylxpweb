@@ -1365,6 +1365,27 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         description="Maximum generator charge battery current.",
     ),
     # =========================================================================
+    # STOP DISCHARGE VOLTAGE (reg 202, live-verified 2026-06-11)
+    # =========================================================================
+    HoldingRegisterDefinition(
+        address=202,
+        canonical_name="stop_discharge_voltage",
+        api_param_key="_12K_HOLD_STOP_DISCHG_VOLT",
+        unit="V",
+        min_value=40,
+        max_value=56,
+        category=HoldingCategory.BATTERY,
+        description=(
+            "Forced-discharge stop voltage — the voltage-regime counterpart of "
+            "the reg-83 stop SOC (cloud UI gates it with disChgVoltEnable). "
+            "Register located by single-register cloud window bisection and "
+            "confirmed by write/readback/revert on an 18kPV and a FlexBOSS21 "
+            "(40 -> 41.5 -> 40 V). Cloud read/write uses float volts [40, 56]; "
+            "raw register encoding presumed decivolts per family convention "
+            "(not yet verified via local transport)."
+        ),
+    ),
+    # =========================================================================
     # SYSTEM CHARGE SOC LIMIT (reg 227, verified)
     # =========================================================================
     HoldingRegisterDefinition(

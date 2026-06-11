@@ -571,6 +571,10 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
     169: ["HOLD_ON_GRID_EOD_VOLTAGE"],  # On-grid EOD voltage (V, ×10; cloud-confirmed name)
     190: ["HOLD_P2"],
+    # Forced-discharge stop voltage (voltage-regime counterpart of reg 83).
+    # Located via single-register cloud window reads and confirmed by
+    # write/readback/revert on an 18kPV and a FlexBOSS21 (2026-06-11).
+    202: ["_12K_HOLD_STOP_DISCHG_VOLT"],
     # Register 179: Extended function enable bit field (verified via Modbus probe 2026-02-13)
     # API returns 16 FUNC_* params for this register (alphabetical, NOT bit order).
     # Bit 7 (FUNC_GRID_PEAK_SHAVING) confirmed via live toggle test.

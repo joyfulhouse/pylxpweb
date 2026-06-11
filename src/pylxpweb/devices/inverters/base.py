@@ -2313,9 +2313,15 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     def forced_discharge_power(self) -> float | None:
         """Get current forced discharge power command from cached parameters.
 
+        The value reflects however ``parameters`` was populated: the cloud
+        API returns kilowatts, while a local transport surfaces the raw
+        100W register value (25 = 2.5 kW). Callers reading through a local
+        transport must scale by 0.1 themselves — the same caveat as
+        :attr:`pv_charge_power_limit` / :attr:`ac_charge_power_limit`.
+
         Returns:
-            Power limit in kilowatts, or None if parameters not loaded
-            or parameter not found
+            Power limit in kilowatts when cloud-populated, or None if
+            parameters not loaded or parameter not found
 
         Example:
             >>> inverter.forced_discharge_power
