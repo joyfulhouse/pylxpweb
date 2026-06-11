@@ -19,7 +19,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from pymodbus.exceptions import ModbusIOException
+from pymodbus.exceptions import ModbusException, ModbusIOException
 
 from ._register_data import INPUT_REGISTER_GROUPS, RegisterDataMixin
 from .exceptions import (
@@ -207,7 +207,13 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     self._consecutive_errors = 0
                     return list(result.registers)
 
-                except ModbusIOException as err:
+                except ModbusException as err:
+                    # Catch the pymodbus BASE class: ConnectionException
+                    # ("Not connected") is a SIBLING of ModbusIOException,
+                    # not a subclass.  Before this, a fast-fail disconnected
+                    # client bypassed the consecutive-error accounting, so
+                    # the _reconnect() gate never fired and the transport
+                    # stayed dead even after the network recovered (eg4-57g).
                     self._consecutive_errors += 1
                     if "timeout" in str(err).lower():
                         last_err = TransportTimeoutError(

@@ -11,7 +11,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from pylxpweb.validation import (
     MAX_ENERGY_DELTA,
@@ -28,7 +28,26 @@ _LOGGER = logging.getLogger(__name__)
 # real data arrives with no previous values to compare against.
 WARMUP_READS = 2
 
+# Consecutive transport-read failures after which the local link is
+# considered down (``transport_link_down`` becomes True).  Reads keep
+# being attempted every cycle — the transports' own reconnect logic
+# (Modbus ``_reconnect()``, dongle reconnect-on-timeout) handles
+# recovery, and any successful read resets the counter.
+TRANSPORT_LINK_DOWN_THRESHOLD = 3
+
+# Minimum seconds between link-down probes.  Coordinator code paths can
+# call refresh() more than once within the same update tick (e.g. a group
+# refresh followed by per-device processing); while the link is down every
+# transport read is a probe against a dead endpoint, so same-tick
+# duplicates collapse to one.  Just under the fastest 5s coordinator tick
+# so every real cycle still probes.
+LINK_PROBE_MIN_INTERVAL_SECONDS = 4.0
+
+_T = TypeVar("_T")
+
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from pylxpweb import LuxpowerClient
     from pylxpweb.transports.protocol import InverterTransport
 
@@ -131,6 +150,22 @@ class BaseDevice(ABC):
         # Monotonic clock — wall-clock (DST/NTP) steps must not move the window.
         self._daily_energy_change_monotonic: float | None = None
 
+        # ===== Transport link health (eg4-57g / integration #226) =====
+        # Consecutive transport-read failures and last-success timestamp.
+        # When the counter crosses TRANSPORT_LINK_DOWN_THRESHOLD, the link
+        # is declared down: cached transport data stops being served (see
+        # _on_transport_link_down) so consumers don't mistake stale local
+        # reads for fresh data.  Reads keep being attempted every cycle;
+        # any success resets the counter.
+        self._transport_consecutive_failures: int = 0
+        self._transport_last_success_monotonic: float | None = None
+        # One-shot logging guard: warn once on the down transition, info
+        # once on recovery — per-failure logs stay at debug level.
+        self._transport_link_down_logged: bool = False
+        # Rate limit for link-down probes (see _link_probe_due): collapses
+        # same-tick duplicate refresh() calls into one dead-link read.
+        self._last_link_probe_monotonic: float | None = None
+
     @property
     def model(self) -> str:
         """Get device model name.
@@ -171,6 +206,115 @@ class BaseDevice(ABC):
             cloud API credentials, False otherwise.
         """
         return self._local_transport is not None and not self._client.username
+
+    # ------------------------------------------------------------------
+    # Transport link health (eg4-57g / integration #226)
+    # ------------------------------------------------------------------
+
+    @property
+    def transport_consecutive_failures(self) -> int:
+        """Number of consecutive failed transport reads for this device."""
+        return self._transport_consecutive_failures
+
+    @property
+    def transport_link_down(self) -> bool:
+        """True when the local transport link is considered down.
+
+        The link is declared down after TRANSPORT_LINK_DOWN_THRESHOLD
+        consecutive transport-read failures.  The transport stays attached
+        and reads keep being attempted every refresh cycle — any successful
+        read clears this flag.  Always False for devices that have never
+        had a transport read fail (including cloud-only devices).
+        """
+        return self._transport_consecutive_failures >= TRANSPORT_LINK_DOWN_THRESHOLD
+
+    @property
+    def _cloud_fallback_available(self) -> bool:
+        """True when a usable cloud client exists for degraded HTTP fallback.
+
+        Local-only devices are constructed with ``client=None`` (or a
+        credential-less placeholder), so they can never fall back to HTTP.
+        """
+        return self._client is not None and bool(getattr(self._client, "username", ""))
+
+    def _link_probe_due(self) -> bool:
+        """Check-and-stamp the link-down probe rate limit.
+
+        While the link is down every transport read is a probe against a
+        dead endpoint, and coordinator code paths can call refresh() more
+        than once within the same update tick (e.g. a group refresh
+        followed by per-device processing).  Returns True — and stamps the
+        monotonic clock — at most once per LINK_PROBE_MIN_INTERVAL_SECONDS;
+        within the interval callers behave as if caches were fresh.  The
+        stamp resets on any successful read so a future outage probes
+        immediately.
+        """
+        now = time.monotonic()
+        if (
+            self._last_link_probe_monotonic is not None
+            and now - self._last_link_probe_monotonic < LINK_PROBE_MIN_INTERVAL_SECONDS
+        ):
+            return False
+        self._last_link_probe_monotonic = now
+        return True
+
+    def _record_transport_read_success(self) -> None:
+        """Reset the failure counter after a successful transport read."""
+        self._transport_last_success_monotonic = time.monotonic()
+        # A healthy link needs no probe rate limit — reset so a future
+        # outage probes immediately on its first post-transition cycle.
+        self._last_link_probe_monotonic = None
+        if self._transport_link_down_logged:
+            _LOGGER.info(
+                "Local transport link restored for %s after %d consecutive read failures",
+                self.serial_number,
+                self._transport_consecutive_failures,
+            )
+            self._transport_link_down_logged = False
+        self._transport_consecutive_failures = 0
+
+    def _record_transport_read_failure(self) -> None:
+        """Count a failed transport read; escalate once on the down transition."""
+        self._transport_consecutive_failures += 1
+        if self.transport_link_down and not self._transport_link_down_logged:
+            self._transport_link_down_logged = True
+            _LOGGER.warning(
+                "Local transport link down for %s after %d consecutive read "
+                "failures; reads keep retrying every cycle and cached local "
+                "data is no longer served",
+                self.serial_number,
+                self._transport_consecutive_failures,
+            )
+            self._on_transport_link_down()
+
+    def _on_transport_link_down(self) -> None:
+        """Hook invoked exactly once when the link transitions to down.
+
+        Subclasses clear their cached transport data here so properties
+        stop serving stale local reads (and, in hybrid mode, fall back to
+        HTTP data instead).  The base implementation only records the
+        transition at debug level.
+        """
+        _LOGGER.debug(
+            "Transport link down for %s: no transport data caches to clear",
+            self.serial_number,
+        )
+
+    async def _tracked_transport_read(self, coro: Awaitable[_T]) -> _T:
+        """Await a transport read, recording link health.
+
+        Any exception increments the consecutive-failure counter (the
+        transition past the threshold logs one warning); a successful
+        return resets it (recovery logs one info).  The exception is
+        re-raised for the caller's existing error handling.
+        """
+        try:
+            result = await coro
+        except Exception:
+            self._record_transport_read_failure()
+            raise
+        self._record_transport_read_success()
+        return result
 
     def _is_energy_valid(
         self,
