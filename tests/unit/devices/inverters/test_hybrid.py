@@ -1616,3 +1616,16 @@ class TestForcedDischargeOperations:
 
         assert REGISTER_TO_PARAM_KEYS[82] == ["HOLD_FORCED_DISCHG_POWER_CMD"]
         assert REGISTER_TO_PARAM_KEYS[83] == ["HOLD_FORCED_DISCHG_SOC_LIMIT"]
+
+    def test_register_map_names_full_64_to_83_window(self) -> None:
+        """Every register in the 64-83 block resolves to an API name —
+        no raw numeric keys can leak into parameter caches from reads
+        spanning the window (codex review of the regs-82/83 addition)."""
+        from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
+
+        missing = [reg for reg in range(64, 84) if reg not in REGISTER_TO_PARAM_KEYS]
+        assert not missing, f"unnamed registers in 64-83 window: {missing}"
+        # The 75-81 forced-charge schedule names match the canonical table.
+        assert REGISTER_TO_PARAM_KEYS[75] == ["HOLD_FORCED_CHG_SOC_LIMIT"]
+        assert REGISTER_TO_PARAM_KEYS[80] == ["HOLD_FORCED_CHARGE_TIME_2_START"]
+        assert REGISTER_TO_PARAM_KEYS[81] == ["HOLD_FORCED_CHARGE_TIME_2_END"]
