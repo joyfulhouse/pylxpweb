@@ -1112,20 +1112,27 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
     @property
     def power_output(self) -> float | None:
-        """Get current power output in watts.
+        """Get current load output power (Pload) in watts.
+
+        Unified LOAD-OUTPUT semantics on both paths (eg4-9e4): the Modbus
+        source is input register 170 (``output_power``) and the cloud source
+        is its reliable mirror ``pLoad170``.  Previously the cloud path read
+        ``pinv`` (reg 16), which duplicated :attr:`inverter_power` /
+        the ``ac_power`` sensor.
 
         Returns:
-            Current AC power output in watts, or None if unavailable.
+            Load output power in watts, or None if unavailable.
         """
         # Check transport data first
         if self._transport_runtime is not None:
-            val = self._transport_runtime.inverter_power
+            val = self._transport_runtime.output_power
             return float(val) if val is not None else None
 
-        # Fall back to HTTP data
+        # Fall back to HTTP data (pLoad170 — older payloads may omit it)
         if self._runtime is None:
             return None
-        return float(getattr(self._runtime, "pinv", 0))
+        cloud_val = self._runtime.pLoad170
+        return float(cloud_val) if cloud_val is not None else None
 
     @property
     def total_energy_today(self) -> float | None:

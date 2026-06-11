@@ -373,7 +373,7 @@ class InverterRuntimePropertiesMixin:
         This is the power from grid used specifically for AC battery charging,
         NOT the total grid import power. See power_to_user for grid import.
         """
-        return self._raw_int("grid_power", "prec")
+        return self._raw_int("rectifier_power", "prec")
 
     # ===========================================
     # Battery Properties

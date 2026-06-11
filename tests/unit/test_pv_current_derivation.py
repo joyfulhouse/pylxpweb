@@ -121,6 +121,7 @@ class TestHttpPVCurrentDerived:
         runtime.vBus1 = runtime.vBus2 = 3700
         runtime.vpv4 = runtime.vpv5 = runtime.vpv6 = None
         runtime.ppv3 = runtime.ppv4 = runtime.ppv5 = runtime.ppv6 = None
+        runtime.pLoad170 = None  # optional reg-170 mirror (eg4-9e4)
         for attr in [
             "soc",
             "pCharge",

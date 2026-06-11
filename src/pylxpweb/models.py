@@ -552,6 +552,11 @@ class InverterRuntime(BaseModel):
     # Consumption
     consumptionPower114: int = 0
     consumptionPower: int = 0
+    # Load output power — cloud mirror of input register 170 (Pload).  Reliable
+    # on both 18kPV and FlexBOSS21, unlike consumptionPower114 which reads 0 on
+    # FlexBOSS21 (live capture 2026-06-10, eg4-9e4).  Optional: older payloads
+    # may omit it.
+    pLoad170: int | None = None
     pEpsL1N: int = 0
     pEpsL2N: int = 0
     haspEpsLNValue: bool = False

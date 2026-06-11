@@ -1553,9 +1553,13 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=233,
         bit_position=1,
         canonical_name="battery_backup_enable",
-        api_param_key="FUNC_BATT_BACKUP_EN",
+        # Live-verified API param name (toggle test): the cloud/local API key
+        # for reg 233 bit 1 is FUNC_BATTERY_BACKUP_CTRL, matching the transport
+        # REGISTER_TO_PARAM_KEYS table (eg4-6ag2; the earlier
+        # FUNC_BATT_BACKUP_EN placeholder was a guess).
+        api_param_key="FUNC_BATTERY_BACKUP_CTRL",
         category=HoldingCategory.FUNCTION,
-        description="Battery backup enable.",
+        description="Battery backup control (distinct from EPS enable, reg 21 bit 0).",
     ),
     HoldingRegisterDefinition(
         address=233,
