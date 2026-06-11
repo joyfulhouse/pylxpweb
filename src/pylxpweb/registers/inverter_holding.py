@@ -670,11 +670,18 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=82,
         canonical_name="forced_discharge_power_command",
         api_param_key="HOLD_FORCED_DISCHG_POWER_CMD",
-        unit="%",
+        unit="W",
         min_value=0,
-        max_value=100,
+        max_value=25500,
         category=HoldingCategory.SCHEDULE,
-        description="Forced discharge power command percentage.",
+        description=(
+            "Forced discharge power command. Raw value in 100W units "
+            "(0-255 = 0-25.5kW), same encoding as AC charge power (reg 66) and "
+            "forced charge power (reg 74). Hardware-verified in eg4_web_monitor "
+            "PR #249: panel entry 2.5kW reads back raw 25. Cloud UI 'Forced "
+            "Discharge Power 1(kW)' accepts float kW in [0, 25.5] (the 18KPV "
+            "PDF's percent claim is wrong for this register)."
+        ),
     ),
     HoldingRegisterDefinition(
         address=83,

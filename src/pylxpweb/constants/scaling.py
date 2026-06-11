@@ -312,7 +312,7 @@ PARAMETER_SCALING: dict[str, ScaleFactor] = {
     # Power Parameters (direct Watts or percentage)
     "HOLD_AC_CHARGE_POWER_CMD": ScaleFactor.SCALE_NONE,  # Watts
     "HOLD_FORCED_CHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # 100W units (0-150=0-15kW); caller scales
-    "HOLD_FORCED_DISCHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # Percentage (0-100)
+    "HOLD_FORCED_DISCHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # 100W units like reg 74; caller scales
     "HOLD_FEED_IN_GRID_POWER_PERCENT": ScaleFactor.SCALE_NONE,  # Percentage
     # SOC Parameters (percentage, no scaling)
     "HOLD_AC_CHARGE_SOC_LIMIT": ScaleFactor.SCALE_NONE,

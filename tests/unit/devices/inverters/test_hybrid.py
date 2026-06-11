@@ -1492,7 +1492,11 @@ class TestForcedDischargeOperations:
 
     @pytest.mark.asyncio
     async def test_set_forced_discharge_power(self, mock_client: LuxpowerClient) -> None:
-        """Setter writes HOLD_FORCED_DISCHG_POWER_CMD as percent string."""
+        """Setter writes HOLD_FORCED_DISCHG_POWER_CMD as a kW string.
+
+        Fractional kW is real hardware behavior: PR #249 verified panel
+        entry 2.5 kW reads back raw 25 (100W units, the reg-74 encoding).
+        """
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
@@ -1502,10 +1506,10 @@ class TestForcedDischargeOperations:
         mock_write_response.success = True
         mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
 
-        result = await inverter.set_forced_discharge_power(50)
+        result = await inverter.set_forced_discharge_power(2.5)
 
         mock_client.api.control.write_parameter.assert_called_once_with(
-            "1234567890", "HOLD_FORCED_DISCHG_POWER_CMD", "50"
+            "1234567890", "HOLD_FORCED_DISCHG_POWER_CMD", "2.5"
         )
         assert result is True
         # Successful write invalidates the parameter cache
@@ -1515,15 +1519,15 @@ class TestForcedDischargeOperations:
     async def test_set_forced_discharge_power_out_of_range(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Percent outside 0-100 raises ValueError (both directions)."""
+        """kW outside 0.0-25.5 raises ValueError (both directions)."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        with pytest.raises(ValueError, match="between 0 and 100"):
-            await inverter.set_forced_discharge_power(101)
-        with pytest.raises(ValueError, match="between 0 and 100"):
-            await inverter.set_forced_discharge_power(-1)
+        with pytest.raises(ValueError, match="between 0.0 and 25.5"):
+            await inverter.set_forced_discharge_power(25.6)
+        with pytest.raises(ValueError, match="between 0.0 and 25.5"):
+            await inverter.set_forced_discharge_power(-0.1)
 
     @pytest.mark.asyncio
     async def test_set_forced_discharge_power_failure_keeps_cache(
@@ -1540,7 +1544,7 @@ class TestForcedDischargeOperations:
         mock_write_response.success = False
         mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
 
-        assert await inverter.set_forced_discharge_power(40) is False
+        assert await inverter.set_forced_discharge_power(4.0) is False
         assert inverter._parameters_cache_time == stamp
 
     @pytest.mark.asyncio
@@ -1584,26 +1588,26 @@ class TestForcedDischargeOperations:
         assert inverter.forced_discharge_soc_limit is None
 
     def test_properties_read_cached_parameters(self, mock_client: LuxpowerClient) -> None:
-        """Getters read the cached HOLD_* values with 0-100 validation."""
+        """Power getter returns cloud kW as float; SOC getter validates 0-100."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
         inverter.parameters = {
-            "HOLD_FORCED_DISCHG_POWER_CMD": 50,
+            "HOLD_FORCED_DISCHG_POWER_CMD": 2.5,
             "HOLD_FORCED_DISCHG_SOC_LIMIT": 20,
         }
 
-        assert inverter.forced_discharge_power == 50
+        assert inverter.forced_discharge_power == 2.5
         assert inverter.forced_discharge_soc_limit == 20
 
-    def test_properties_reject_out_of_range_cache_values(self, mock_client: LuxpowerClient) -> None:
-        """Garbage cached values (>100) read as None, not as numbers."""
+    def test_properties_reject_garbage_cache_values(self, mock_client: LuxpowerClient) -> None:
+        """Unparseable power and out-of-range SOC read as None, not numbers."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
         inverter.parameters = {
-            "HOLD_FORCED_DISCHG_POWER_CMD": 250,
-            "HOLD_FORCED_DISCHG_SOC_LIMIT": "garbage",
+            "HOLD_FORCED_DISCHG_POWER_CMD": "garbage",
+            "HOLD_FORCED_DISCHG_SOC_LIMIT": 250,
         }
 
         assert inverter.forced_discharge_power is None

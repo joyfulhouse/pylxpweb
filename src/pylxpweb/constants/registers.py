@@ -145,7 +145,7 @@ HOLD_FORCED_CHARGE_TIME_2_END = 81  # Period 2 end
 
 # Forced Discharge Parameters
 # Cloud API names: HOLD_FORCED_DISCHG_POWER_CMD, HOLD_FORCED_DISCHG_SOC_LIMIT
-HOLD_FORCED_DISCHG_POWER_CMD = 82  # Forced discharge power command (0-100%)
+HOLD_FORCED_DISCHG_POWER_CMD = 82  # Forced discharge power, 100W units (0-255 = 0-25.5kW)
 HOLD_FORCED_DISCHG_SOC_LIMIT = 83  # Forced discharge SOC limit (0-100%)
 
 # Forced Discharge Time Schedule (regs 84-89) - packed time format (Modbus)
@@ -522,10 +522,11 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     79: ["HOLD_FORCED_CHARGE_TIME_1_END"],
     80: ["HOLD_FORCED_CHARGE_TIME_2_START"],
     81: ["HOLD_FORCED_CHARGE_TIME_2_END"],
-    # Forced discharge (percent on BOTH regs, unlike the reg-74 100W encoding):
-    # the canonical holding table pins 82/83 as 0-100 %, matching the cloud
-    # parameter names and GH #207's "(%)" title.  Hardware-tested on an EG4
-    # hybrid via the dongle in PR #249 (DevTodd).
+    # Forced discharge: reg 82 follows the reg-74/66 100W-unit encoding
+    # (0-255 = 0-25.5 kW); reg 83 is a 0-100 % stop SOC.  Hardware-verified on
+    # an EG4 hybrid via the dongle in PR #249 (DevTodd): panel entry 2.5 kW
+    # reads back raw 25, while SOC 18 % reads back raw 18.  Cloud UI takes
+    # float kW [0, 25.5] for reg 82 and int % [0, 100] for reg 83.
     82: ["HOLD_FORCED_DISCHG_POWER_CMD"],
     83: ["HOLD_FORCED_DISCHG_SOC_LIMIT"],
     # Battery protection
