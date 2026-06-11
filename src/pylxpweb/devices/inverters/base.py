@@ -2270,6 +2270,118 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         except (ValueError, TypeError):
             return None
 
+    async def set_forced_discharge_power(self, percent: int) -> bool:
+        """Set forced discharge power command percentage (register 82).
+
+        Controls the discharge power level used while forced discharge
+        (``FUNC_FORCED_DISCHG_EN``) is active, as a percentage of rated
+        power.  Percent units per the canonical holding table and the
+        cloud parameter; hardware-tested via dongle in
+        eg4_web_monitor PR #249 (GH #207).
+
+        Args:
+            percent: Forced discharge power (0 to 100 %)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If percent is out of valid range (0-100)
+
+        Example:
+            >>> await inverter.set_forced_discharge_power(50)
+            True
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError(f"Forced discharge power must be between 0 and 100%, got {percent}")
+
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, "HOLD_FORCED_DISCHG_POWER_CMD", str(percent)
+        )
+
+        if result.success:
+            self._parameters_cache_time = None
+
+        return result.success
+
+    @property
+    def forced_discharge_power(self) -> int | None:
+        """Get current forced discharge power command from cached parameters.
+
+        Returns:
+            Forced discharge power percentage (0-100), or None if parameters
+            not loaded or parameter not found
+
+        Example:
+            >>> inverter.forced_discharge_power
+            50
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_FORCED_DISCHG_POWER_CMD")
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+            return int_value if 0 <= int_value <= 100 else None
+        except (ValueError, TypeError):
+            return None
+
+    async def set_forced_discharge_soc_limit(self, soc_percent: int) -> bool:
+        """Set forced discharge stop SOC limit (register 83).
+
+        Forced discharge stops when the battery reaches this SOC.
+
+        Args:
+            soc_percent: SOC percentage (0 to 100)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If soc_percent is out of valid range (0-100)
+
+        Example:
+            >>> await inverter.set_forced_discharge_soc_limit(20)
+            True
+        """
+        if not 0 <= soc_percent <= 100:
+            raise ValueError(
+                f"Forced discharge SOC limit must be between 0 and 100%, got {soc_percent}"
+            )
+
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, "HOLD_FORCED_DISCHG_SOC_LIMIT", str(soc_percent)
+        )
+
+        if result.success:
+            self._parameters_cache_time = None
+
+        return result.success
+
+    @property
+    def forced_discharge_soc_limit(self) -> int | None:
+        """Get current forced discharge stop SOC limit from cached parameters.
+
+        Returns:
+            SOC limit percentage (0-100), or None if parameters not loaded
+            or parameter not found
+
+        Example:
+            >>> inverter.forced_discharge_soc_limit
+            20
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_FORCED_DISCHG_SOC_LIMIT")
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+            return int_value if 0 <= int_value <= 100 else None
+        except (ValueError, TypeError):
+            return None
+
     @property
     def system_charge_soc_limit(self) -> int | None:
         """Get current system charge SOC limit from cached parameters.

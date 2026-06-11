@@ -511,6 +511,23 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # 100W units (0-150 = 0.0-15.0 kW), same encoding as AC charge power (reg 66).
     # Hardware-verified: FlexBOSS reg74=20 -> 2.0 kW, 18kPV reg74=120 -> 12.0 kW.
     74: ["HOLD_FORCED_CHG_POWER_CMD"],
+    # Forced charge stop SOC + time windows (75-81, from the canonical
+    # holding table).  Named so reads spanning the 64-83 block resolve every
+    # register to its API name instead of leaking raw numeric keys into the
+    # parameter cache (codex review of the regs-82/83 addition).
+    75: ["HOLD_FORCED_CHG_SOC_LIMIT"],
+    76: ["HOLD_FORCED_CHARGE_TIME_0_START"],
+    77: ["HOLD_FORCED_CHARGE_TIME_0_END"],
+    78: ["HOLD_FORCED_CHARGE_TIME_1_START"],
+    79: ["HOLD_FORCED_CHARGE_TIME_1_END"],
+    80: ["HOLD_FORCED_CHARGE_TIME_2_START"],
+    81: ["HOLD_FORCED_CHARGE_TIME_2_END"],
+    # Forced discharge (percent on BOTH regs, unlike the reg-74 100W encoding):
+    # the canonical holding table pins 82/83 as 0-100 %, matching the cloud
+    # parameter names and GH #207's "(%)" title.  Hardware-tested on an EG4
+    # hybrid via the dongle in PR #249 (DevTodd).
+    82: ["HOLD_FORCED_DISCHG_POWER_CMD"],
+    83: ["HOLD_FORCED_DISCHG_SOC_LIMIT"],
     # Battery protection
     100: ["HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT"],
     # Battery charge/discharge current limits (A, confirmed 2026-02-18)

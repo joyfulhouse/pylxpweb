@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -1484,3 +1485,154 @@ class TestBatteryControlModeHelpers:
         result = await inverter.get_active_discharge_cutoff()
 
         assert result == {"mode": BatteryControlMode.SOC, "value": 20, "unit": "%"}
+
+
+class TestForcedDischargeOperations:
+    """Forced discharge power/SOC controls (regs 82/83, GH #207 / PR #249)."""
+
+    @pytest.mark.asyncio
+    async def test_set_forced_discharge_power(self, mock_client: LuxpowerClient) -> None:
+        """Setter writes HOLD_FORCED_DISCHG_POWER_CMD as percent string."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter._parameters_cache_time = datetime.now()
+
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        result = await inverter.set_forced_discharge_power(50)
+
+        mock_client.api.control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_FORCED_DISCHG_POWER_CMD", "50"
+        )
+        assert result is True
+        # Successful write invalidates the parameter cache
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_set_forced_discharge_power_out_of_range(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Percent outside 0-100 raises ValueError (both directions)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            await inverter.set_forced_discharge_power(101)
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            await inverter.set_forced_discharge_power(-1)
+
+    @pytest.mark.asyncio
+    async def test_set_forced_discharge_power_failure_keeps_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A failed write returns False and does NOT invalidate the cache."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        stamp = datetime.now()
+        inverter._parameters_cache_time = stamp
+
+        mock_write_response = Mock()
+        mock_write_response.success = False
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        assert await inverter.set_forced_discharge_power(40) is False
+        assert inverter._parameters_cache_time == stamp
+
+    @pytest.mark.asyncio
+    async def test_set_forced_discharge_soc_limit(self, mock_client: LuxpowerClient) -> None:
+        """Setter writes HOLD_FORCED_DISCHG_SOC_LIMIT as percent string."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        result = await inverter.set_forced_discharge_soc_limit(20)
+
+        mock_client.api.control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_FORCED_DISCHG_SOC_LIMIT", "20"
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_forced_discharge_soc_limit_out_of_range(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """SOC outside 0-100 raises ValueError."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            await inverter.set_forced_discharge_soc_limit(101)
+
+    def test_properties_none_before_parameter_load(self, mock_client: LuxpowerClient) -> None:
+        """Both getters return None until parameters are loaded."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        assert inverter.parameters is None
+        assert inverter.forced_discharge_power is None
+        assert inverter.forced_discharge_soc_limit is None
+
+    def test_properties_read_cached_parameters(self, mock_client: LuxpowerClient) -> None:
+        """Getters read the cached HOLD_* values with 0-100 validation."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.parameters = {
+            "HOLD_FORCED_DISCHG_POWER_CMD": 50,
+            "HOLD_FORCED_DISCHG_SOC_LIMIT": 20,
+        }
+
+        assert inverter.forced_discharge_power == 50
+        assert inverter.forced_discharge_soc_limit == 20
+
+    def test_properties_reject_out_of_range_cache_values(self, mock_client: LuxpowerClient) -> None:
+        """Garbage cached values (>100) read as None, not as numbers."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.parameters = {
+            "HOLD_FORCED_DISCHG_POWER_CMD": 250,
+            "HOLD_FORCED_DISCHG_SOC_LIMIT": "garbage",
+        }
+
+        assert inverter.forced_discharge_power is None
+        assert inverter.forced_discharge_soc_limit is None
+
+    def test_register_map_carries_forced_discharge_params(self) -> None:
+        """REGISTER_TO_PARAM_KEYS resolves regs 82/83 to the canonical names
+        so transport read_named_parameters() populates the param cache."""
+        from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
+
+        assert REGISTER_TO_PARAM_KEYS[82] == ["HOLD_FORCED_DISCHG_POWER_CMD"]
+        assert REGISTER_TO_PARAM_KEYS[83] == ["HOLD_FORCED_DISCHG_SOC_LIMIT"]
+
+    def test_register_map_names_full_64_to_83_window(self) -> None:
+        """Every register in the 64-83 block resolves to an API name that
+        matches the canonical holding table — no raw numeric keys can leak
+        into parameter caches and no single-value name can drift from
+        canonical (codex r1 LOW: leakage; r2 LOW: per-register pinning)."""
+        from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
+        from pylxpweb.registers.inverter_holding import BY_ADDRESS
+
+        for reg in range(64, 84):
+            assert reg in REGISTER_TO_PARAM_KEYS, f"unnamed register {reg}"
+            names = REGISTER_TO_PARAM_KEYS[reg]
+            if len(names) != 1:
+                continue  # bitfield registers are pinned elsewhere
+            canonical = BY_ADDRESS.get(reg)
+            if not canonical:
+                continue  # no canonical definition to compare against
+            assert names[0] == canonical[0].api_param_key, (
+                f"reg {reg}: map name {names[0]!r} != canonical {canonical[0].api_param_key!r}"
+            )
