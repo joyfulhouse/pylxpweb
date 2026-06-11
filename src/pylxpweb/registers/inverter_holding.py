@@ -1382,7 +1382,10 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
             "confirmed by write/readback/revert on an 18kPV and a FlexBOSS21 "
             "(40 -> 41.5 -> 40 V). Cloud read/write uses float volts [40, 56]; "
             "raw register encoding presumed decivolts per family convention "
-            "(not yet verified via local transport)."
+            "(not yet verified via local transport). Deliberately NOT in "
+            "REGISTER_TO_PARAM_KEYS until the raw encoding is verified — the "
+            "local parameter refresh spans this register and would surface "
+            "unscaled values."
         ),
     ),
     # =========================================================================
