@@ -670,11 +670,18 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=82,
         canonical_name="forced_discharge_power_command",
         api_param_key="HOLD_FORCED_DISCHG_POWER_CMD",
-        unit="%",
+        unit="W",
         min_value=0,
-        max_value=100,
+        max_value=25500,
         category=HoldingCategory.SCHEDULE,
-        description="Forced discharge power command percentage.",
+        description=(
+            "Forced discharge power command. Raw value in 100W units "
+            "(0-255 = 0-25.5kW), same encoding as AC charge power (reg 66) and "
+            "forced charge power (reg 74). Hardware-verified in eg4_web_monitor "
+            "PR #249: panel entry 2.5kW reads back raw 25. Cloud UI 'Forced "
+            "Discharge Power 1(kW)' accepts float kW in [0, 25.5] (the 18KPV "
+            "PDF's percent claim is wrong for this register)."
+        ),
     ),
     HoldingRegisterDefinition(
         address=83,
@@ -1356,6 +1363,30 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         max_value=60,
         category=HoldingCategory.GENERATOR,
         description="Maximum generator charge battery current.",
+    ),
+    # =========================================================================
+    # STOP DISCHARGE VOLTAGE (reg 202, live-verified 2026-06-11)
+    # =========================================================================
+    HoldingRegisterDefinition(
+        address=202,
+        canonical_name="stop_discharge_voltage",
+        api_param_key="_12K_HOLD_STOP_DISCHG_VOLT",
+        unit="V",
+        min_value=40,
+        max_value=56,
+        category=HoldingCategory.BATTERY,
+        description=(
+            "Forced-discharge stop voltage — the voltage-regime counterpart of "
+            "the reg-83 stop SOC (cloud UI gates it with disChgVoltEnable). "
+            "Register located by single-register cloud window bisection and "
+            "confirmed by write/readback/revert on an 18kPV and a FlexBOSS21 "
+            "(40 -> 41.5 -> 40 V). Cloud read/write uses float volts [40, 56]; "
+            "raw register encoding presumed decivolts per family convention "
+            "(not yet verified via local transport). Deliberately NOT in "
+            "REGISTER_TO_PARAM_KEYS until the raw encoding is verified — the "
+            "local parameter refresh spans this register and would surface "
+            "unscaled values."
+        ),
     ),
     # =========================================================================
     # SYSTEM CHARGE SOC LIMIT (reg 227, verified)

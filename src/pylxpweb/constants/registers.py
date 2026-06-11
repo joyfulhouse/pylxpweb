@@ -145,7 +145,7 @@ HOLD_FORCED_CHARGE_TIME_2_END = 81  # Period 2 end
 
 # Forced Discharge Parameters
 # Cloud API names: HOLD_FORCED_DISCHG_POWER_CMD, HOLD_FORCED_DISCHG_SOC_LIMIT
-HOLD_FORCED_DISCHG_POWER_CMD = 82  # Forced discharge power command (0-100%)
+HOLD_FORCED_DISCHG_POWER_CMD = 82  # Forced discharge power, 100W units (0-255 = 0-25.5kW)
 HOLD_FORCED_DISCHG_SOC_LIMIT = 83  # Forced discharge SOC limit (0-100%)
 
 # Forced Discharge Time Schedule (regs 84-89) - packed time format (Modbus)
@@ -522,10 +522,11 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     79: ["HOLD_FORCED_CHARGE_TIME_1_END"],
     80: ["HOLD_FORCED_CHARGE_TIME_2_START"],
     81: ["HOLD_FORCED_CHARGE_TIME_2_END"],
-    # Forced discharge (percent on BOTH regs, unlike the reg-74 100W encoding):
-    # the canonical holding table pins 82/83 as 0-100 %, matching the cloud
-    # parameter names and GH #207's "(%)" title.  Hardware-tested on an EG4
-    # hybrid via the dongle in PR #249 (DevTodd).
+    # Forced discharge: reg 82 follows the reg-74/66 100W-unit encoding
+    # (0-255 = 0-25.5 kW); reg 83 is a 0-100 % stop SOC.  Hardware-verified on
+    # an EG4 hybrid via the dongle in PR #249 (DevTodd): panel entry 2.5 kW
+    # reads back raw 25, while SOC 18 % reads back raw 18.  Cloud UI takes
+    # float kW [0, 25.5] for reg 82 and int % [0, 100] for reg 83.
     82: ["HOLD_FORCED_DISCHG_POWER_CMD"],
     83: ["HOLD_FORCED_DISCHG_SOC_LIMIT"],
     # Battery protection
@@ -570,6 +571,11 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
     169: ["HOLD_ON_GRID_EOD_VOLTAGE"],  # On-grid EOD voltage (V, ×10; cloud-confirmed name)
     190: ["HOLD_P2"],
+    # Register 202 (_12K_HOLD_STOP_DISCHG_VOLT) is deliberately NOT mapped yet:
+    # the local parameter refresh reads 125-249, so naming it would surface a
+    # raw value whose encoding (decivolts vs volts) is unverified — add the
+    # mapping together with the raw-encoding verification (codex r2 MEDIUM).
+    # Cloud-side location/semantics are confirmed; see the canonical table.
     # Register 179: Extended function enable bit field (verified via Modbus probe 2026-02-13)
     # API returns 16 FUNC_* params for this register (alphabetical, NOT bit order).
     # Bit 7 (FUNC_GRID_PEAK_SHAVING) confirmed via live toggle test.
