@@ -12,6 +12,7 @@ from pylxpweb.constants import (
     DEVICE_TYPE_CODE_LXP_EU,
     DEVICE_TYPE_CODE_PV_SERIES,
     DEVICE_TYPE_CODE_SNA,
+    DEVICE_TYPE_CODE_SNA_6000XP,
 )
 from pylxpweb.transports.discovery import (
     HOLD_DEVICE_TYPE_CODE,
@@ -66,6 +67,11 @@ class TestGetModelFamilyName:
     def test_sna_family(self) -> None:
         """Test SNA family name."""
         assert get_model_family_name(DEVICE_TYPE_CODE_SNA) == "EG4_OFFGRID"
+
+    def test_sna_6000xp_variant_family(self) -> None:
+        """Code 38 (6000XP variant, GH eg4_web_monitor#222) is EG4_OFFGRID."""
+        assert get_model_family_name(DEVICE_TYPE_CODE_SNA_6000XP) == "EG4_OFFGRID"
+        assert get_model_family_name(38) == "EG4_OFFGRID"
 
     def test_pv_series_family(self) -> None:
         """Test PV Series family name."""

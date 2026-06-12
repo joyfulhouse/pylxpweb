@@ -1312,6 +1312,10 @@ LXP_EU_PARAMETERS = [
 # Device Type Code Constants (HOLD_DEVICE_TYPE_CODE register 19)
 # These identify the specific inverter model/variant
 DEVICE_TYPE_CODE_SNA = 54  # SNA Series (e.g., SNA12K-US, 12000XP, 6000XP)
+# 6000XP variant reporting code 38 instead of 54 — field-confirmed twice on an
+# EG4 6000XP via WiFi dongle (joyfulhouse/eg4_web_monitor#222).  Same
+# EG4 Off-Grid register layout/feature set as code 54.
+DEVICE_TYPE_CODE_SNA_6000XP = 38
 DEVICE_TYPE_CODE_PV_SERIES = 2092  # PV Series (e.g., 12KPV, 18KPV)
 DEVICE_TYPE_CODE_LXP_EU = 12  # LXP-EU Series (e.g., LXP-EU 12K)
 DEVICE_TYPE_CODE_LXP_LB = 44  # LXP-LB Low-voltage Battery (LXP-US 8-10K)

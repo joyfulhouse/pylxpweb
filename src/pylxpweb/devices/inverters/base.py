@@ -561,6 +561,23 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         return self._transport is not None
 
+    @property
+    def _wants_hybrid_supplemental_runtime(self) -> bool:
+        """True when cloud-only live runtime fields need HTTP refreshes in hybrid.
+
+        The EG4 Off-Grid family carries live cloud-only runtime fields — the
+        smart-load split (``smartLoadPower`` / ``gridLoadPower``, GH
+        eg4_web_monitor#222) — that have no Modbus register, so a healthy
+        transport-only refresh loop would freeze them at the setup-time
+        ``_runtime`` snapshot.  Families without cloud-only live fields
+        return False so hybrid operation stays purely local for them.
+        Extend this consciously if another family grows cloud-only fields.
+        """
+        features = getattr(self, "_features", None)
+        if features is None:
+            return False
+        return features.model_family is InverterFamily.EG4_OFFGRID
+
     async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
         """Refresh runtime, energy, battery, and optionally parameters from API.
 
@@ -629,6 +646,25 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 if should_fetch_battery:
                     tasks.append(self._fetch_battery())
 
+        # Hybrid supplemental cloud runtime (GH eg4_web_monitor#222): with a
+        # healthy transport attached the read paths above only ever touch
+        # _transport_runtime, so cloud-only live fields (the EG4 Off-Grid
+        # smart-load split: smartLoadPower / gridLoadPower) would freeze at
+        # their setup-time _runtime snapshot.  Ride the same runtime TTL so
+        # the cloud call rate matches pure-cloud mode (client-level response
+        # caching bounds it further).  The link-down case is covered by
+        # _refresh_http_fallback() below, and pure-cloud devices refresh
+        # _runtime through _fetch_runtime() already.
+        supplemental_http_runtime = (
+            runtime_expired
+            and self._transport is not None
+            and not link_down
+            and self._cloud_fallback_available
+            and self._wants_hybrid_supplemental_runtime
+        )
+        if supplemental_http_runtime:
+            tasks.append(self._fetch_runtime_http())
+
         # Parameters (1hr TTL) - only fetch if explicitly requested
         if include_parameters and self._is_cache_expired(
             self._parameters_cache_time, self._parameters_cache_ttl, force
@@ -649,11 +685,15 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             and self.transport_link_down
             and self._cloud_fallback_available
         ):
-            await self._refresh_http_fallback()
+            # On the cycle that TRANSITIONS to link-down, the hybrid
+            # supplemental fetch above already refreshed the cloud runtime —
+            # skip the runtime leg so one cycle never fetches it twice
+            # (codex r2 MEDIUM on eg4-1d0).
+            await self._refresh_http_fallback(skip_runtime=supplemental_http_runtime)
 
         self._last_refresh = datetime.now()
 
-    async def _refresh_http_fallback(self) -> None:
+    async def _refresh_http_fallback(self, skip_runtime: bool = False) -> None:
         """Fetch runtime/energy/battery from the cloud while the link is down.
 
         The transport data caches were cleared on the link-down transition
@@ -661,13 +701,19 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         to the HTTP data refreshed here.  Client-level response caches keep
         the actual cloud call rate bounded regardless of how often this
         runs.
+
+        Args:
+            skip_runtime: Skip the runtime leg.  Set on the link-down
+                TRANSITION cycle when the hybrid supplemental fetch already
+                refreshed the cloud runtime this cycle (codex r2 MEDIUM).
         """
-        await asyncio.gather(
-            self._fetch_runtime_http(),
+        fetches: list[Awaitable[None]] = [
             self._fetch_energy_http(),
             self._fetch_battery_http(),
-            return_exceptions=True,
-        )
+        ]
+        if not skip_runtime:
+            fetches.append(self._fetch_runtime_http())
+        await asyncio.gather(*fetches, return_exceptions=True)
 
     async def _fetch_runtime(self) -> None:
         """Fetch runtime data with caching.

@@ -401,6 +401,134 @@ class TestInverterHttpFallback:
         mock_client.api.devices.get_inverter_energy.assert_not_awaited()
 
 
+class TestHybridSupplementalRuntime:
+    """Cloud-only smart-load fields stay fresh in healthy hybrid (GH #222).
+
+    The EG4 Off-Grid smart-load split (smartLoadPower/gridLoadPower) exists
+    only in the cloud runtime.  With a healthy transport the regular refresh
+    paths never touch ``_runtime``, so refresh() schedules a supplemental
+    ``_fetch_runtime_http()`` for EG4_OFFGRID devices — and ONLY for them —
+    riding the runtime TTL (cloud call rate == pure-cloud mode).
+    """
+
+    @staticmethod
+    def _healthy_transport(inverter: GenericInverter) -> AsyncMock:
+        runtime, energy, battery = _make_combined_data()
+        transport = AsyncMock()
+        transport.read_all_input_data = AsyncMock(return_value=(runtime, energy, battery))
+        inverter._transport = transport
+        return transport
+
+    @staticmethod
+    def _offgrid_features():
+        from pylxpweb.devices.inverters._features import InverterFeatures
+
+        return InverterFeatures.from_device_type_code(38)  # 6000XP variant
+
+    @pytest.mark.asyncio
+    async def test_offgrid_healthy_hybrid_refreshes_cloud_runtime(
+        self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
+    ) -> None:
+        """OFFGRID + healthy transport + credentials → cloud runtime refreshed.
+
+        This is the reporter's configuration (6000XP, dongle, HYBRID): without
+        the supplemental fetch the smart-load sensors freeze at the setup-time
+        cloud snapshot (codex review HIGH on eg4-1d0).
+        """
+        inverter = _make_inverter(client=mock_client)
+        inverter._features = self._offgrid_features()
+        transport = self._healthy_transport(inverter)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
+
+        await inverter.refresh(force=True)
+
+        transport.read_all_input_data.assert_awaited()  # local read still primary
+        mock_client.api.devices.get_inverter_runtime.assert_awaited_once()
+        assert inverter._runtime is sample_runtime
+        assert inverter.transport_link_down is False
+
+    @pytest.mark.asyncio
+    async def test_non_offgrid_family_stays_purely_local(self, mock_client: LuxpowerClient) -> None:
+        """EG4_HYBRID family has no cloud-only live fields → no cloud call."""
+        from pylxpweb.devices.inverters._features import InverterFeatures
+
+        inverter = _make_inverter(client=mock_client)
+        inverter._features = InverterFeatures.from_device_type_code(2092)
+        self._healthy_transport(inverter)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock()
+
+        await inverter.refresh(force=True)
+
+        mock_client.api.devices.get_inverter_runtime.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unknown_family_stays_purely_local(self, mock_client: LuxpowerClient) -> None:
+        """No detected features → conservative: no supplemental cloud call."""
+        inverter = _make_inverter(client=mock_client)
+        self._healthy_transport(inverter)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock()
+
+        await inverter.refresh(force=True)
+
+        mock_client.api.devices.get_inverter_runtime.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_offgrid_local_only_makes_no_cloud_call(self) -> None:
+        """OFFGRID without credentials (pure LOCAL) cannot fetch cloud data."""
+        inverter = _make_inverter(client=None)
+        inverter._features = self._offgrid_features()
+        self._healthy_transport(inverter)
+
+        await inverter.refresh(force=True)
+
+        assert inverter._runtime is None  # nothing fetched, nothing raised
+
+    @pytest.mark.asyncio
+    async def test_transition_cycle_fetches_cloud_runtime_once(
+        self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
+    ) -> None:
+        """The link-down TRANSITION cycle must not double-fetch the runtime.
+
+        Entry state: link still healthy (threshold-1 failures) → the
+        supplemental fetch is scheduled.  The transport read fails and
+        crosses the threshold during the same cycle → the post-read
+        fallback fires; it must skip the runtime leg the supplemental
+        already performed (codex r2 MEDIUM on eg4-1d0).
+        """
+        inverter = _make_inverter(client=mock_client)
+        inverter._features = self._offgrid_features()
+        _attach_failing_combined_transport(inverter)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
+        mock_client.api.devices.get_inverter_energy = AsyncMock(side_effect=OSError("cloud"))
+        mock_client.api.devices.get_battery_info = AsyncMock(side_effect=OSError("cloud"))
+
+        inverter._transport_consecutive_failures = TRANSPORT_LINK_DOWN_THRESHOLD - 1
+
+        await inverter.refresh(force=True)
+
+        assert inverter.transport_link_down is True
+        mock_client.api.devices.get_inverter_runtime.assert_awaited_once()
+        assert inverter._runtime is sample_runtime
+        # Energy/battery fallback legs still ran on the transition cycle
+        mock_client.api.devices.get_inverter_energy.assert_awaited_once()
+        mock_client.api.devices.get_battery_info.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_offgrid_rides_runtime_ttl_not_every_call(
+        self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
+    ) -> None:
+        """Within the runtime TTL a second refresh() makes no extra call."""
+        inverter = _make_inverter(client=mock_client)
+        inverter._features = self._offgrid_features()
+        self._healthy_transport(inverter)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
+
+        await inverter.refresh(force=True)
+        await inverter.refresh()  # cache fresh → runtime_expired False
+
+        mock_client.api.devices.get_inverter_runtime.assert_awaited_once()
+
+
 class TestMIDDeviceLinkHealth:
     """Failure counter, fallback, and recovery on MIDDevice."""
 

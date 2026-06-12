@@ -23,6 +23,7 @@ from pylxpweb.constants import (
     DEVICE_TYPE_CODE_LXP_LB,
     DEVICE_TYPE_CODE_PV_SERIES,
     DEVICE_TYPE_CODE_SNA,
+    DEVICE_TYPE_CODE_SNA_6000XP,
 )
 from pylxpweb.registers.inverter_input import pv_string_count_for_model
 
@@ -48,7 +49,7 @@ class InverterFamily(StrEnum):
 
     # EG4 Off-Grid Series - Off-grid capable, no grid sellback
     # Models: 12000XP, 6000XP
-    # Device type code: 54
+    # Device type codes: 54, 38 (6000XP variant, GH eg4_web_monitor#222)
     EG4_OFFGRID = "EG4_OFFGRID"
 
     # EG4 Hybrid Series - Grid-tied hybrid with sellback capability
@@ -142,6 +143,8 @@ def resolve_family(name: str | InverterFamily) -> InverterFamily:
 DEVICE_TYPE_CODE_TO_FAMILY: dict[int, InverterFamily] = {
     # EG4 Off-Grid Series (12000XP, 6000XP)
     DEVICE_TYPE_CODE_SNA: InverterFamily.EG4_OFFGRID,
+    # 6000XP variant reporting type code 38 (field-confirmed, GH eg4_web_monitor#222)
+    DEVICE_TYPE_CODE_SNA_6000XP: InverterFamily.EG4_OFFGRID,
     # EG4 Hybrid Series (18kPV, 12kPV, FlexBOSS21, FlexBOSS18)
     DEVICE_TYPE_CODE_PV_SERIES: InverterFamily.EG4_HYBRID,  # 18KPV, 12kPV
     DEVICE_TYPE_CODE_FLEXBOSS: InverterFamily.EG4_HYBRID,  # FlexBOSS21, FlexBOSS18
@@ -487,8 +490,8 @@ class InverterModelInfo:
                 self.power_rating, f"FlexBOSS{kw}" if kw else "FlexBOSS-Unknown"
             )
 
-        # EG4 Off-Grid Series
-        if device_type_code == DEVICE_TYPE_CODE_SNA:
+        # EG4 Off-Grid Series (54 = SNA12K/12000XP/6000XP, 38 = 6000XP variant)
+        if device_type_code in (DEVICE_TYPE_CODE_SNA, DEVICE_TYPE_CODE_SNA_6000XP):
             return f"EG4-{kw}KXP" if kw else "EG4-XP"
 
         # Luxpower EU Series

@@ -446,3 +446,51 @@ class TestBmsPermissionProperties:
         assert inverter_without_runtime.bms_allow_charge is None
         assert inverter_without_runtime.bms_allow_discharge is None
         assert inverter_without_runtime.bms_force_charge is None
+
+
+class TestSmartLoadProperties:
+    """Tests for cloud-only smart load split properties (GH eg4_web_monitor#222).
+
+    On the EG4 Off-Grid family (6000XP/12000XP) the GEN terminal can be a
+    smart-load output.  The cloud splits the backup-path output into
+    smartLoadPower + epsLoadPower + gridLoadPower while peps carries the
+    combined value.  No validated local register exists, so the properties
+    must read the HTTP runtime even when a transport is attached (HYBRID).
+    """
+
+    def test_cloud_values_returned(self, inverter_with_runtime):
+        """Cloud runtime present → raw watt values returned."""
+        inverter = inverter_with_runtime
+        inverter._runtime.smartLoadPower = 2999
+        inverter._runtime.gridLoadPower = 0
+        assert inverter.smart_load_power == 2999
+        assert inverter.grid_load_power == 0
+
+    def test_none_without_runtime(self, inverter_without_runtime):
+        """No cloud runtime → None (sensor unavailable, not a false 0)."""
+        assert inverter_without_runtime.smart_load_power is None
+        assert inverter_without_runtime.grid_load_power is None
+
+    def test_hybrid_transport_does_not_mask_cloud_value(self, inverter_with_transport):
+        """HYBRID: attached transport must NOT short-circuit the cloud read.
+
+        This is the reporter's exact configuration (6000XP via WiFi dongle in
+        HYBRID mode): _transport_runtime is populated but the smart load split
+        only exists in the cloud runtime.  A transport-first helper would
+        return None here — the properties must read the HTTP runtime directly.
+        """
+        inverter = inverter_with_transport
+        inverter._runtime = InverterRuntime.model_construct(
+            smartLoadPower=2999,
+            gridLoadPower=0,
+            epsLoadPower=365,
+        )
+        assert inverter.smart_load_power == 2999
+        assert inverter.grid_load_power == 0
+
+    def test_hybrid_transport_without_cloud_is_none(self, inverter_with_transport):
+        """Transport attached but no cloud runtime yet → None, not 0."""
+        inverter = inverter_with_transport
+        inverter._runtime = None
+        assert inverter.smart_load_power is None
+        assert inverter.grid_load_power is None
