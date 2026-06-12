@@ -257,6 +257,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         Some dongles send unsolicited packets immediately after connection.
         This data must be discarded to avoid confusing subsequent protocol
         exchanges. We wait up to 1 second for any initial data.
+
+        Raises:
+            ConnectionResetError: If the dongle closed the connection during
+                the initial-data window (``read`` returned EOF).  Treated as
+                a failed connect attempt so the retry/backoff cycle dials
+                again — typically the dongle's single client slot was still
+                held by a previous session (codex review: without this,
+                ``connect()`` declared an accept-then-close socket usable).
         """
         if not self._reader:
             return
@@ -267,15 +275,23 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 self._reader.read(512),
                 timeout=1.0,
             )
-            if initial_data:
-                _LOGGER.debug(
-                    "Discarded %d bytes of initial data from dongle: %s",
-                    len(initial_data),
-                    initial_data.hex()[:100],  # Log first 50 bytes
-                )
         except TimeoutError:
             # No initial data - this is fine
             _LOGGER.debug("No initial data from dongle (expected for some models)")
+            return
+
+        if not initial_data:
+            # read(n>0) returns b'' only at EOF: the dongle accepted the
+            # TCP connection and immediately closed it.
+            raise ConnectionResetError(
+                "Dongle closed the connection during the initial-data window"
+            )
+
+        _LOGGER.debug(
+            "Discarded %d bytes of initial data from dongle: %s",
+            len(initial_data),
+            initial_data.hex()[:100],  # Log first 50 bytes
+        )
 
     async def connect(self) -> None:
         """Establish TCP connection to the WiFi dongle with retry and backoff.
@@ -1014,14 +1030,18 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             await asyncio.sleep(self._write_step_delay)
 
         try:
-            # No request-level timeout resend (review): resending the same
-            # pre-built packet after a mute ACK could replay STALE bit-field
-            # values over a concurrent writer's change. A write timeout
-            # tears down inside _send_receive and propagates to
-            # write_named_parameters' sequence-level retry, which RE-READS
-            # before re-writing.
+            # No request-level resend AT ALL for writes (review + codex):
+            # after ANY ACK loss — mute timeout, EOF before the reply, or a
+            # socket error — the inverter may have already applied the
+            # write, and resending the same pre-built packet could replay
+            # STALE bit-field values over a concurrent writer's change.
+            # max_retries=0 disables the empty-response/OSError resend
+            # paths; every failure tears down inside _send_receive and
+            # propagates to write_named_parameters' sequence-level retry,
+            # which RE-READS before re-writing.
             ack = await self._send_receive(
                 packet,
+                max_retries=0,
                 expected_func=modbus_func,
                 expected_register=address,
             )
