@@ -122,6 +122,7 @@ from .registers import (
     # Extended function enable register (179)
     FUNC_EXT_BIT_BAT_CHARGE_CONTROL,
     FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL,
+    FUNC_EXT_BIT_PV_SELL_TO_GRID,
     FUNC_EXT_REGISTER,
     # System function register (110)
     FUNC_SYS_BIT_CHARGE_LAST,
@@ -389,6 +390,7 @@ __all__ = [
     "FUNC_EXT_REGISTER",
     "FUNC_EXT_BIT_BAT_CHARGE_CONTROL",
     "FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL",
+    "FUNC_EXT_BIT_PV_SELL_TO_GRID",
     "FUNC_SYS_REGISTER",
     "FUNC_SYS_BIT_CHARGE_LAST",
     "HOLD_AC_CHARGE_POWER_CMD",

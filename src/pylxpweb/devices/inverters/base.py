@@ -2566,9 +2566,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     async def enable_pv_sell_to_grid(self) -> bool:
         """Enable PV sell to grid ("Export PV Only" in the EG4 web UI).
 
-        Cloud-only control: FUNC_PV_SELL_TO_GRID_EN lives in the register 179
-        family, but its bit position is unpinned, so there is no local Modbus
-        write path.
+        Cloud (HTTP) path: FUNC_PV_SELL_TO_GRID_EN — register 179 bit 3,
+        pinned 2026-06-12 via live cloud toggles raw-verified on both a
+        FlexBOSS21 (52842P0581) and an 18kPV (4512670118): raw 0x104c <->
+        0x1044, single-bit-3 XOR.  :class:`HybridInverter` overrides this
+        with the dual-path read-modify-write that also supports local
+        transports; local register decode surfaces the bit by name either
+        way.
 
         Returns:
             True if successful
@@ -2583,6 +2587,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     async def disable_pv_sell_to_grid(self) -> bool:
         """Disable PV sell to grid ("Export PV Only" in the EG4 web UI).
 
+        Cloud (HTTP) path; see :meth:`enable_pv_sell_to_grid` for the
+        register 179 bit 3 pin and the HybridInverter dual-path override.
+
         Returns:
             True if successful
 
@@ -2595,6 +2602,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
     async def get_pv_sell_to_grid_status(self) -> bool:
         """Get current PV sell to grid (Export PV Only) status.
+
+        Cloud (HTTP) path; see :meth:`enable_pv_sell_to_grid` for the
+        register 179 bit 3 pin and the HybridInverter dual-path override.
 
         Returns:
             True if Export PV Only is enabled, False otherwise
