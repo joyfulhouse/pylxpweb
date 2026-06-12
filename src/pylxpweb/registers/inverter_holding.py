@@ -809,13 +809,27 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     HoldingRegisterDefinition(
         address=103,
         canonical_name="max_backflow_power_percent",
-        api_param_key="HOLD_MAX_BACKFLOW_POWER_PERCENT",
+        api_param_key="HOLD_FEED_IN_GRID_POWER_PERCENT",  # verified
         unit="%",
         min_value=0,
         max_value=100,
         category=HoldingCategory.POWER,
-        description="Maximum export (backflow) power percentage.",
+        description=(
+            "Maximum export (sell-back) power percentage — 'Grid Sell Back "
+            "Power' in the EG4 web UI.  The protocol spec calls reg 103 "
+            "'MaxBackflowPower', but live single-register named reads "
+            "(2026-06-12, 18kPV + FlexBOSS21, GH eg4_web_monitor#135) prove "
+            "the cloud API key is HOLD_FEED_IN_GRID_POWER_PERCENT; "
+            "HOLD_MAX_BACKFLOW_POWER_PERCENT does not exist on this "
+            "hardware.  canonical_name retained for API stability."
+        ),
     ),
+    # Register 268 (HOLD_EXPORT_LOCK_POWER) is deliberately NOT mapped:
+    # cloud-pinned via a single-register named read on an 18kPV 2026-06-12
+    # (value '25.5', plausibly kW with reg-66/74-style 100W raw units) but
+    # absent on FlexBOSS21, outside the local parameter read span (0-249),
+    # and its raw encoding is unverified — add together with a local
+    # read/write verification (reg-202 precedent).
     HoldingRegisterDefinition(
         address=116,
         canonical_name="ptouser_start_discharge",

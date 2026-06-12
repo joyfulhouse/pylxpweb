@@ -2438,6 +2438,156 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         except (ValueError, TypeError):
             return None
 
+    # ============================================================================
+    # Grid Sell Back / Export Controls (GH eg4_web_monitor#135)
+    # ============================================================================
+
+    async def enable_feed_in_grid(self) -> bool:
+        """Enable feed-in to grid ("Grid Sell Back" in the EG4 web UI).
+
+        Register 21 bit 15 (FUNC_FEED_IN_GRID_EN), live-verified.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_feed_in_grid()
+            True
+        """
+        result = await self._client.api.control.enable_feed_in_grid(self.serial_number)
+        return result.success
+
+    async def disable_feed_in_grid(self) -> bool:
+        """Disable feed-in to grid ("Grid Sell Back" in the EG4 web UI).
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_feed_in_grid()
+            True
+        """
+        result = await self._client.api.control.disable_feed_in_grid(self.serial_number)
+        return result.success
+
+    async def get_feed_in_grid_status(self) -> bool:
+        """Get current feed-in grid (Grid Sell Back) status.
+
+        Returns:
+            True if feed-in to grid is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_feed_in_grid_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_feed_in_grid_status(self.serial_number)
+
+    async def enable_pv_sell_to_grid(self) -> bool:
+        """Enable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Cloud-only control: FUNC_PV_SELL_TO_GRID_EN lives in the register 179
+        family, but its bit position is unpinned, so there is no local Modbus
+        write path.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_pv_sell_to_grid()
+            True
+        """
+        result = await self._client.api.control.enable_pv_sell_to_grid(self.serial_number)
+        return result.success
+
+    async def disable_pv_sell_to_grid(self) -> bool:
+        """Disable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_pv_sell_to_grid()
+            True
+        """
+        result = await self._client.api.control.disable_pv_sell_to_grid(self.serial_number)
+        return result.success
+
+    async def get_pv_sell_to_grid_status(self) -> bool:
+        """Get current PV sell to grid (Export PV Only) status.
+
+        Returns:
+            True if Export PV Only is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_pv_sell_to_grid_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_pv_sell_to_grid_status(self.serial_number)
+
+    async def set_feed_in_grid_power_percent(self, percent: int) -> bool:
+        """Set the maximum sell-back (feed-in) power percentage (register 103).
+
+        "Grid Sell Back Power" in the EG4 web UI: caps export power as a
+        percentage of rated output.  Whole percent on both paths — the cloud
+        named reads return 0-100 and the raw register is documented 0-100
+        (no scale ambiguity), live-pinned via single-register named reads
+        on 18kPV + FlexBOSS21 (GH eg4_web_monitor#135).
+
+        Args:
+            percent: Maximum sell-back power percentage (0 to 100)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If percent is out of valid range (0-100)
+
+        Example:
+            >>> await inverter.set_feed_in_grid_power_percent(50)
+            True
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError(
+                f"Feed-in grid power percent must be between 0 and 100%, got {percent}"
+            )
+
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, "HOLD_FEED_IN_GRID_POWER_PERCENT", str(percent)
+        )
+
+        if result.success:
+            self._parameters_cache_time = None
+
+        return result.success
+
+    @property
+    def feed_in_grid_power_percent(self) -> int | None:
+        """Get current maximum sell-back (feed-in) power percentage.
+
+        Whole percent on both the cloud and local paths (register 103 stores
+        0-100 directly), so no transport-dependent scaling caveat applies.
+
+        Returns:
+            Maximum sell-back power percentage (0-100), or None if parameters
+            not loaded or parameter not found
+
+        Example:
+            >>> inverter.feed_in_grid_power_percent
+            16
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_FEED_IN_GRID_POWER_PERCENT")
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+            return int_value if 0 <= int_value <= 100 else None
+        except (ValueError, TypeError):
+            return None
+
     @property
     def system_charge_soc_limit(self) -> int | None:
         """Get current system charge SOC limit from cached parameters.

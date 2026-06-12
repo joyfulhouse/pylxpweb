@@ -912,6 +912,141 @@ class ControlEndpoints(BaseEndpoint):
         """
         return await self._get_function_status(inverter_sn, 21, "FUNC_FORCED_DISCHG_EN")
 
+    async def enable_feed_in_grid(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable feed-in to grid ("Grid Sell Back" in the EG4 web UI).
+
+        Convenience wrapper for control_function(..., "FUNC_FEED_IN_GRID_EN", True).
+        Register 21 bit 15, live-verified (GH eg4_web_monitor#135).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_feed_in_grid("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_FEED_IN_GRID_EN", True, client_type=client_type
+        )
+
+    async def disable_feed_in_grid(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable feed-in to grid ("Grid Sell Back" in the EG4 web UI).
+
+        Convenience wrapper for control_function(..., "FUNC_FEED_IN_GRID_EN", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_feed_in_grid("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_FEED_IN_GRID_EN", False, client_type=client_type
+        )
+
+    async def get_feed_in_grid_status(self, inverter_sn: str) -> bool:
+        """Get current feed-in grid (Grid Sell Back) status.
+
+        Reads register 21 (function enable) and extracts FUNC_FEED_IN_GRID_EN
+        (bit 15).
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if feed-in to grid is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_feed_in_grid_status("1234567890")
+            >>> if enabled:
+            >>>     print("Grid sell back is active")
+        """
+        return await self._get_function_status(inverter_sn, 21, "FUNC_FEED_IN_GRID_EN")
+
+    async def enable_pv_sell_to_grid(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Convenience wrapper for control_function(..., "FUNC_PV_SELL_TO_GRID_EN", True).
+        Cloud-only control: the parameter lives in the register 179 family
+        (confirmed via named reads), but its bit position is unpinned, so
+        there is no local Modbus write path (GH eg4_web_monitor#135).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_pv_sell_to_grid("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_PV_SELL_TO_GRID_EN", True, client_type=client_type
+        )
+
+    async def disable_pv_sell_to_grid(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Convenience wrapper for control_function(..., "FUNC_PV_SELL_TO_GRID_EN", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_pv_sell_to_grid("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_PV_SELL_TO_GRID_EN", False, client_type=client_type
+        )
+
+    async def get_pv_sell_to_grid_status(self, inverter_sn: str) -> bool:
+        """Get current PV sell to grid (Export PV Only) status.
+
+        Reads register 179 (extended function enable) and extracts
+        FUNC_PV_SELL_TO_GRID_EN — live single-register reads confirm the
+        cloud returns it for that window (18kPV + FlexBOSS21, 2026-06-12).
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if Export PV Only is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_pv_sell_to_grid_status("1234567890")
+            >>> if enabled:
+            >>>     print("Export PV Only is active")
+        """
+        return await self._get_function_status(inverter_sn, 179, "FUNC_PV_SELL_TO_GRID_EN")
+
     async def enable_peak_shaving_mode(
         self, inverter_sn: str, client_type: str = "WEB"
     ) -> SuccessResponse:
