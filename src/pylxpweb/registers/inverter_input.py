@@ -1120,7 +1120,14 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
-        description="Generator energy today (Egen_day).",
+        description="Generator energy today (Egen_day). EG4_OFFGRID caveat: "
+        "the withdrawn eg4_web_monitor PR #220 claimed regs 124-126 hold "
+        "AC-couple energy in raw Wh (DIV_1000) on the 12000XP, but the "
+        "reporter's own earlier sweep (#196) read I124 == holding 179 "
+        "exactly (0x0800, the AC-couple enable bit) and successive captures "
+        "moved by exact powers of two — bit-field behavior, not energy "
+        "accrual. Semantics on the SNA platform are UNVERIFIED; do not "
+        "surface as a sensor for that family without a fresh capture.",
     ),
     RegisterDefinition(
         address=125,
@@ -1131,7 +1138,9 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_LIFETIME,
-        description="Generator cumulative energy (Egen_all, 32-bit).",
+        description="Generator cumulative energy (Egen_all, 32-bit). "
+        "EG4_OFFGRID caveat: unverified on the SNA platform — see the "
+        "register-124 note (PR #220 adjudication).",
     ),
     # =========================================================================
     # SPLIT-PHASE EPS L1/L2 (regs 127-138) — US models

@@ -182,7 +182,16 @@ FAMILY_DEFAULT_FEATURES: dict[InverterFamily, dict[str, bool]] = {
         "three_phase_capable": False,
         "parallel_support": False,  # Single inverter typically
         "volt_watt_curve": False,
-        "grid_peak_shaving": True,
+        # GRID peak shaving needs grid-parallel operation (cap grid import by
+        # blending battery output) — the SNA platform is bypass-or-invert with
+        # no sellback/blending.  Field data agrees: stock SNA12K-US cloud dump
+        # has FUNC_GEN_PEAK_SHAVING=True (the generator-overload variant the
+        # platform actually uses) with FUNC_GRID_PEAK_SHAVING=False, and the
+        # 6000XP capture in eg4_web_monitor #222 also reads False.  The True
+        # default here dated to the original v0.4.0 feature-table bulk fill,
+        # not hardware evidence (adjudicated in eg4_web_monitor PR #220 /
+        # issue #197 follow-up).
+        "grid_peak_shaving": False,
         "drms_support": False,
     },
     InverterFamily.EG4_HYBRID: {

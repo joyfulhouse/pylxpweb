@@ -652,13 +652,18 @@ class TestRegisterMappingFunctions:
         """Test get_register_to_param_mapping accepts family parameter."""
         from pylxpweb.constants.registers import get_register_to_param_mapping
 
-        # All families currently use the same mapping
         mapping_eg4_hybrid = get_register_to_param_mapping("EG4_HYBRID")
         mapping_eg4_offgrid = get_register_to_param_mapping("EG4_OFFGRID")
         mapping_none = get_register_to_param_mapping(None)
 
-        # All should return the same mapping currently
-        assert mapping_eg4_hybrid == mapping_eg4_offgrid == mapping_none
+        # Hybrid and the no-family default share the 18kPV mapping.
+        assert mapping_eg4_hybrid == mapping_none
+        # EG4_OFFGRID overrides register 110 (SNA bit layout, eg4-juzg) but
+        # shares everything else.
+        assert mapping_eg4_offgrid != mapping_none
+        assert {k: v for k, v in mapping_eg4_offgrid.items() if k != 110} == {
+            k: v for k, v in mapping_none.items() if k != 110
+        }
 
     def test_get_param_to_register_mapping_returns_dict(self) -> None:
         """Test get_param_to_register_mapping returns reverse mapping."""
@@ -718,3 +723,182 @@ class TestRegisterMappingFunctions:
         assert inverter_mapping[20] == ["HOLD_PV_INPUT_MODE"]
         # MIDBOX register 20 = smart port modes (multi-bit)
         assert midbox_mapping[20][0] == "BIT_MIDBOX_SP_MODE_1"
+
+
+class TestOffgridRegister110Override:
+    """EG4_OFFGRID (SNA) register-110 family override (eg4-juzg, PR #220).
+
+    12000XP hardware evidence: raw reg 110 toggles 0x0080 <-> 0x8080 with
+    Battery ECO (bit 15, not the 18kPV bit 9), and the stock SNA cloud
+    decode reports FUNC_BUZZER_EN as the only set function while raw reads
+    show only bit 7 set (buzzer at 7, not the 18kPV bit 6).
+    """
+
+    @pytest.fixture
+    def offgrid_transport(self) -> ModbusTransport:
+        """ModbusTransport with EG4_OFFGRID family."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="5200000068",
+            inverter_family=InverterFamily.EG4_OFFGRID,
+        )
+        transport._connected = True
+        transport.write_parameters = AsyncMock(return_value=True)
+        return transport
+
+    @pytest.fixture
+    def hybrid_transport(self) -> ModbusTransport:
+        """ModbusTransport with EG4_HYBRID family (regression reference)."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+        )
+        transport._connected = True
+        transport.write_parameters = AsyncMock(return_value=True)
+        return transport
+
+    # ------------------------------------------------------------------
+    # Mapping-level checks
+    # ------------------------------------------------------------------
+
+    def test_offgrid_mapping_register_110_layout(self) -> None:
+        """EG4_OFFGRID maps ECO to bit 15, buzzer to bit 7."""
+        from pylxpweb.constants.registers import get_register_to_param_mapping
+
+        mapping = get_register_to_param_mapping("EG4_OFFGRID")
+        layout = mapping[110]
+
+        assert len(layout) == 16
+        assert layout.index("FUNC_BATTERY_ECO_EN") == 15
+        assert layout.index("FUNC_BUZZER_EN") == 7
+        # Green deliberately keeps the 18kPV position until SNA-verified.
+        assert layout.index("FUNC_GREEN_EN") == 8
+        # Displaced 18kPV names become placeholders, not silent reuse.
+        assert layout[6] == "FUNC_110_BIT6"
+        assert layout[9] == "FUNC_110_BIT9"
+        assert layout[14] == "FUNC_110_BIT14"
+        assert "FUNC_GO_TO_OFFGRID" not in layout
+
+    def test_offgrid_mapping_agreed_low_bits_unchanged(self) -> None:
+        """Bits 0-4 agree across all sources and stay identical."""
+        from pylxpweb.constants.registers import get_register_to_param_mapping
+
+        base = get_register_to_param_mapping()[110]
+        offgrid = get_register_to_param_mapping("EG4_OFFGRID")[110]
+        assert offgrid[:5] == base[:5]
+
+    def test_default_and_hybrid_mappings_unchanged(self) -> None:
+        """Non-offgrid families keep the 18kPV layout (ECO at bit 9)."""
+        from pylxpweb.constants.registers import get_register_to_param_mapping
+
+        for family in (None, "EG4_HYBRID", "LXP", "UNKNOWN"):
+            layout = get_register_to_param_mapping(family)[110]
+            assert len(layout) == 14
+            assert layout.index("FUNC_BATTERY_ECO_EN") == 9
+            assert layout.index("FUNC_BUZZER_EN") == 6
+            assert layout.index("FUNC_GO_TO_OFFGRID") == 7
+
+    def test_offgrid_mapping_does_not_mutate_base_table(self) -> None:
+        """The override returns a copy; the shared base table stays intact."""
+        from pylxpweb.constants.registers import (
+            REGISTER_TO_PARAM_KEYS,
+            get_register_to_param_mapping,
+        )
+
+        offgrid = get_register_to_param_mapping("EG4_OFFGRID")
+        assert offgrid is not REGISTER_TO_PARAM_KEYS
+        assert REGISTER_TO_PARAM_KEYS[110].index("FUNC_BATTERY_ECO_EN") == 9
+        # Other registers are shared content-wise.
+        assert offgrid[21] == REGISTER_TO_PARAM_KEYS[21]
+
+    def test_offgrid_param_to_register_resolves_eco(self) -> None:
+        """Reverse mapping still resolves ECO to register 110 for offgrid."""
+        from pylxpweb.constants.registers import get_param_to_register_mapping
+
+        mapping = get_param_to_register_mapping("EG4_OFFGRID")
+        assert mapping["FUNC_BATTERY_ECO_EN"] == 110
+        assert mapping["FUNC_BUZZER_EN"] == 110
+
+    # ------------------------------------------------------------------
+    # Write path (read-modify-write) — the PR #220 hardware scenario
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_offgrid_eco_enable_writes_bit_15(
+        self, offgrid_transport: ModbusTransport
+    ) -> None:
+        """Enabling ECO from the stock state writes 0x0080 -> 0x8080."""
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x0080})
+
+        result = await offgrid_transport.write_named_parameters({"FUNC_BATTERY_ECO_EN": True})
+
+        assert result is True
+        offgrid_transport.write_parameters.assert_called_once_with({110: 0x8080})
+
+    @pytest.mark.asyncio
+    async def test_offgrid_eco_disable_writes_bit_15(
+        self, offgrid_transport: ModbusTransport
+    ) -> None:
+        """Disabling ECO writes 0x8080 -> 0x0080 (buzzer bit preserved)."""
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x8080})
+
+        result = await offgrid_transport.write_named_parameters({"FUNC_BATTERY_ECO_EN": False})
+
+        assert result is True
+        offgrid_transport.write_parameters.assert_called_once_with({110: 0x0080})
+
+    @pytest.mark.asyncio
+    async def test_hybrid_eco_still_writes_bit_9(self, hybrid_transport: ModbusTransport) -> None:
+        """EG4_HYBRID keeps the 18kPV-verified bit 9 (regression pin)."""
+        hybrid_transport.read_parameters = AsyncMock(return_value={110: 0x0000})
+
+        result = await hybrid_transport.write_named_parameters({"FUNC_BATTERY_ECO_EN": True})
+
+        assert result is True
+        hybrid_transport.write_parameters.assert_called_once_with({110: 0x0200})
+
+    @pytest.mark.asyncio
+    async def test_offgrid_charge_last_unaffected(self, offgrid_transport: ModbusTransport) -> None:
+        """Bit 4 (charge last) is in the agreed range and stays put."""
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x0080})
+
+        result = await offgrid_transport.write_named_parameters({"FUNC_CHARGE_LAST": True})
+
+        assert result is True
+        offgrid_transport.write_parameters.assert_called_once_with({110: 0x0090})
+
+    # ------------------------------------------------------------------
+    # Read path (decode)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_offgrid_decode_eco_on(self, offgrid_transport: ModbusTransport) -> None:
+        """Raw 0x8080 decodes as ECO on + buzzer on for offgrid."""
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x8080})
+
+        result = await offgrid_transport.read_named_parameters(110, 1)
+
+        assert result["FUNC_BATTERY_ECO_EN"] is True
+        assert result["FUNC_BUZZER_EN"] is True
+        assert result["FUNC_GREEN_EN"] is False
+
+    @pytest.mark.asyncio
+    async def test_offgrid_decode_eco_off(self, offgrid_transport: ModbusTransport) -> None:
+        """Raw 0x0080 (stock 12000XP) decodes as buzzer-only for offgrid."""
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x0080})
+
+        result = await offgrid_transport.read_named_parameters(110, 1)
+
+        assert result["FUNC_BATTERY_ECO_EN"] is False
+        assert result["FUNC_BUZZER_EN"] is True
+
+    @pytest.mark.asyncio
+    async def test_hybrid_decode_unchanged(self, hybrid_transport: ModbusTransport) -> None:
+        """The same raw value decodes with 18kPV semantics for hybrids."""
+        hybrid_transport.read_parameters = AsyncMock(return_value={110: 0x0080})
+
+        result = await hybrid_transport.read_named_parameters(110, 1)
+
+        assert result["FUNC_GO_TO_OFFGRID"] is True
+        assert result["FUNC_BATTERY_ECO_EN"] is False
