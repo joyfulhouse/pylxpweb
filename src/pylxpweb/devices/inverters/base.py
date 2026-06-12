@@ -2244,16 +2244,28 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         Universal control: Most inverters support peak shaving.
 
+        Returns None — never a fabricated 0.0 — when the parameter key is
+        absent. This matters in HYBRID mode (eg4-gfu5 codex HIGH): parameters
+        are refreshed through the local transport, whose name map deliberately
+        does not include ``_12K_HOLD_GRID_PEAK_SHAVING_POWER`` (the PS1
+        register's raw encoding is unverified), so a key-miss means "value
+        unavailable locally", not "setpoint is 0 kW".
+
         Returns:
-            Current power limit in kilowatts, or None if parameters not loaded
+            Current power limit in kilowatts, or None if parameters are not
+            loaded or do not contain the cloud-named key.
 
         Example:
             >>> power = inverter.grid_peak_shaving_power_limit
             >>> power
             7.0
         """
-        value = self._get_parameter("_12K_HOLD_GRID_PEAK_SHAVING_POWER", 0.0, float)
-        return float(value) if value is not None else None
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("_12K_HOLD_GRID_PEAK_SHAVING_POWER")
+        if value is None:
+            return None
+        return float(value)
 
     # ============================================================================
     # AC Charge SOC Limit Control (Issue #12)
