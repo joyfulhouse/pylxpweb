@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Device type code 38 mapped to the EG4 6000XP (EG4_OFFGRID)**
+  ([eg4_web_monitor#222](https://github.com/joyfulhouse/eg4_web_monitor/issues/222)):
+  feature detection, transport discovery, model naming, and the network
+  scanner all resolve code 38 directly instead of falling back to
+  model-name heuristics (field-reported by two 6000XP systems).
+- **Cloud smart-load split exposed for the EG4 Off-Grid family**:
+  `smart_load_power` / `grid_load_power` properties surface the cloud-only
+  `smartLoadPower`/`gridLoadPower` runtime fields (the GEN-as-smart-load
+  port draw; `peps` is the combined backup output). In hybrid mode these
+  fields ride a supplemental HTTP runtime refresh on the normal runtime
+  TTL — gated to EG4_OFFGRID with a healthy link and cloud credentials —
+  so they keep updating instead of freezing at the setup-time snapshot.
+  No Modbus register source is known; pure-local operation does not carry
+  these fields.
+
 ### Fixed
 
 - **WiFi dongle transport reconnects after silent path loss**
