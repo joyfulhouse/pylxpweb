@@ -1396,12 +1396,11 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
             "the reg-83 stop SOC (cloud UI gates it with disChgVoltEnable). "
             "Register located by single-register cloud window bisection and "
             "confirmed by write/readback/revert on an 18kPV and a FlexBOSS21 "
-            "(40 -> 41.5 -> 40 V). Cloud read/write uses float volts [40, 56]; "
-            "raw register encoding presumed decivolts per family convention "
-            "(not yet verified via local transport). Deliberately NOT in "
-            "REGISTER_TO_PARAM_KEYS until the raw encoding is verified — the "
-            "local parameter refresh spans this register and would surface "
-            "unscaled values."
+            "(40 -> 41.5 -> 40 V). Cloud read/write uses float volts [40, 56]. "
+            "Raw encoding verified DECIVOLTS 2026-06-11 (local read raw 400 vs "
+            "cloud 40 V on an 18kPV), so the register is mapped in "
+            "REGISTER_TO_PARAM_KEYS; local reads surface the raw decivolt "
+            "value and callers normalize by magnitude (>=100 -> /10)."
         ),
     ),
     # =========================================================================

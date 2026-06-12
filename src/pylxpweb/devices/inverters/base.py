@@ -2450,6 +2450,74 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         except (ValueError, TypeError):
             return None
 
+    async def set_stop_discharge_voltage(self, voltage: float) -> bool:
+        """Set forced-discharge stop voltage (register 202).
+
+        The voltage-regime counterpart of the reg-83 stop SOC: forced
+        discharge stops when the battery voltage drops to this level while
+        the discharge control mode is Voltage (the cloud maintain page
+        gates "Stop Discharge Volt 1(V)" with ``disChgVoltEnable``).
+        Register 202 stores decivolts — raw-verified live 2026-06-11
+        (raw 400 vs cloud 40 V on an 18kPV). The cloud field accepts
+        float volts in [40, 56] (live round-trip 40 -> 41.5 -> 40 V on an
+        18kPV and a FlexBOSS21).
+
+        Args:
+            voltage: Stop voltage in volts (40.0 to 56.0)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If voltage is out of valid range
+
+        Example:
+            >>> await inverter.set_stop_discharge_voltage(41.5)
+            True
+        """
+        if not 40.0 <= voltage <= 56.0:
+            raise ValueError(
+                f"Stop discharge voltage must be between 40.0 and 56.0 V, got {voltage}"
+            )
+
+        # API accepts volt values directly (fractional volts allowed)
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, "_12K_HOLD_STOP_DISCHG_VOLT", str(voltage)
+        )
+
+        if result.success:
+            self._parameters_cache_time = None
+
+        return result.success
+
+    @property
+    def stop_discharge_voltage(self) -> float | None:
+        """Get current forced-discharge stop voltage from cached parameters.
+
+        The value reflects however ``parameters`` was populated: the cloud
+        API returns volts (41.5), while a local transport surfaces the raw
+        decivolt register value (415 = 41.5 V). Callers reading through a
+        local transport must scale by 0.1 themselves — the same caveat as
+        :attr:`forced_discharge_power`.
+
+        Returns:
+            Stop voltage in volts when cloud-populated, or None if
+            parameters not loaded or parameter not found
+
+        Example:
+            >>> inverter.stop_discharge_voltage
+            41.5
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("_12K_HOLD_STOP_DISCHG_VOLT")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+
     # ============================================================================
     # Grid Sell Back / Export Controls (GH eg4_web_monitor#135)
     # ============================================================================

@@ -581,11 +581,11 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
     169: ["HOLD_ON_GRID_EOD_VOLTAGE"],  # On-grid EOD voltage (V, ×10; cloud-confirmed name)
     190: ["HOLD_P2"],
-    # Register 202 (_12K_HOLD_STOP_DISCHG_VOLT) is deliberately NOT mapped yet:
-    # the local parameter refresh reads 125-249, so naming it would surface a
-    # raw value whose encoding (decivolts vs volts) is unverified — add the
-    # mapping together with the raw-encoding verification (codex r2 MEDIUM).
-    # Cloud-side location/semantics are confirmed; see the canonical table.
+    # Forced-discharge stop voltage — the voltage-regime counterpart of
+    # HOLD_FORCED_DISCHG_SOC_LIMIT (reg 83). Raw encoding verified DECIVOLTS
+    # 2026-06-11: local read raw 400 vs cloud 40 V on an 18kPV. Cloud
+    # read/write uses float volts [40, 56]; see the canonical table.
+    202: ["_12K_HOLD_STOP_DISCHG_VOLT"],
     # Register 179: Extended function enable bit field (verified via Modbus probe 2026-02-13)
     # API returns 16 FUNC_* params for this register (alphabetical, NOT bit order).
     # Bit 7 (FUNC_GRID_PEAK_SHAVING) confirmed via live toggle test.

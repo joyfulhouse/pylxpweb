@@ -1792,3 +1792,110 @@ class TestGridSellBackOperations:
         from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
 
         assert "FUNC_PV_SELL_TO_GRID_EN" not in REGISTER_TO_PARAM_KEYS[179]
+
+
+class TestStopDischargeVoltageOperations:
+    """Forced-discharge stop voltage (reg 202, eg4-aa3t).
+
+    The voltage-regime counterpart of the reg-83 stop SOC. Cloud accepts
+    float volts in [40, 56] (live round-trip 40 -> 41.5 -> 40 V on an 18kPV
+    and a FlexBOSS21); the register stores decivolts (raw 400 == 40 V,
+    raw-verified 2026-06-11).
+    """
+
+    @pytest.mark.asyncio
+    async def test_set_stop_discharge_voltage(self, mock_client: LuxpowerClient) -> None:
+        """Setter writes _12K_HOLD_STOP_DISCHG_VOLT as a float-volt string
+        and invalidates the parameter cache on success."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter._parameters_cache_time = datetime.now()
+
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        result = await inverter.set_stop_discharge_voltage(41.5)
+
+        mock_client.api.control.write_parameter.assert_called_once_with(
+            "1234567890", "_12K_HOLD_STOP_DISCHG_VOLT", "41.5"
+        )
+        assert result is True
+        # Successful write invalidates the parameter cache
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_set_stop_discharge_voltage_out_of_range(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Volts outside 40.0-56.0 raise ValueError (both directions)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="between 40.0 and 56.0"):
+            await inverter.set_stop_discharge_voltage(39.9)
+        with pytest.raises(ValueError, match="between 40.0 and 56.0"):
+            await inverter.set_stop_discharge_voltage(56.1)
+
+    @pytest.mark.asyncio
+    async def test_set_stop_discharge_voltage_failure_keeps_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A failed write returns False and does NOT invalidate the cache."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        stamp = datetime.now()
+        inverter._parameters_cache_time = stamp
+
+        mock_write_response = Mock()
+        mock_write_response.success = False
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        assert await inverter.set_stop_discharge_voltage(41.5) is False
+        assert inverter._parameters_cache_time == stamp
+
+    def test_property_none_before_parameter_load(self, mock_client: LuxpowerClient) -> None:
+        """Getter returns None until parameters are loaded."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        assert inverter.parameters is None
+        assert inverter.stop_discharge_voltage is None
+
+    def test_property_reads_cached_parameters(self, mock_client: LuxpowerClient) -> None:
+        """Getter passes the cached value through unscaled: cloud volts read
+        as volts; a local-transport cache surfaces raw decivolts (415) and
+        the caller normalizes — mirroring forced_discharge_power."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.parameters = {"_12K_HOLD_STOP_DISCHG_VOLT": 41.5}
+        assert inverter.stop_discharge_voltage == 41.5
+
+        inverter.parameters = {"_12K_HOLD_STOP_DISCHG_VOLT": 415}
+        assert inverter.stop_discharge_voltage == 415.0
+
+    def test_property_rejects_garbage_cache_values(self, mock_client: LuxpowerClient) -> None:
+        """Unparseable values read as None, not numbers."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.parameters = {"_12K_HOLD_STOP_DISCHG_VOLT": "garbage"}
+
+        assert inverter.stop_discharge_voltage is None
+
+    def test_register_map_carries_stop_discharge_voltage(self) -> None:
+        """REGISTER_TO_PARAM_KEYS resolves reg 202 to the canonical name so
+        transport read_named_parameters() populates the param cache and
+        write_named_parameters() can target the register by name."""
+        from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
+        from pylxpweb.registers.inverter_holding import BY_ADDRESS
+
+        assert REGISTER_TO_PARAM_KEYS[202] == ["_12K_HOLD_STOP_DISCHG_VOLT"]
+        # And the transport map agrees with the canonical holding table.
+        canonical = BY_ADDRESS[202]
+        assert canonical[0].api_param_key == "_12K_HOLD_STOP_DISCHG_VOLT"
