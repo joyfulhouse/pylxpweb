@@ -322,6 +322,14 @@ PARAMETER_SCALING: dict[str, ScaleFactor] = {
     "HOLD_SOC_LOW_LIMIT_EPS_DISCHG": ScaleFactor.SCALE_NONE,
     "HOLD_AC_CHARGE_START_BATTERY_SOC": ScaleFactor.SCALE_NONE,
     "HOLD_AC_CHARGE_END_BATTERY_SOC": ScaleFactor.SCALE_NONE,
+    # Battery voltage limits with transport-dependent encoding: the cloud API
+    # returns already-scaled volts (40.0) while local transports surface the
+    # raw decivolt register value (400). A blind SCALE_10 here would break
+    # cloud reads (the PVStartVoltage failure class), so this stays
+    # SCALE_NONE and callers normalize by magnitude (>=100 -> /10) — the same
+    # convention as the reg-228/169/158/159 voltage family, which is
+    # deliberately absent from this table.
+    "_12K_HOLD_STOP_DISCHG_VOLT": ScaleFactor.SCALE_NONE,  # reg 202, decivolts raw
 }
 
 
