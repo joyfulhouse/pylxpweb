@@ -1096,7 +1096,11 @@ class ControlEndpoints(BaseEndpoint):
     async def get_peak_shaving_mode_status(self, inverter_sn: str) -> bool:
         """Get current peak shaving mode status.
 
-        Reads register 21 (function enable) and extracts FUNC_GRID_PEAK_SHAVING bit.
+        Reads register 179 (extended function enable) and extracts
+        FUNC_GRID_PEAK_SHAVING (bit 7).  Previously this read register 21,
+        which never returns the key — live single-register named reads
+        (18kPV + FlexBOSS21, 2026-06-12) show FUNC_GRID_PEAK_SHAVING only
+        in the (179, 1) response, so the old read always reported False.
 
         Args:
             inverter_sn: Inverter serial number
@@ -1109,7 +1113,9 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("Peak shaving mode is active")
         """
-        return await self._get_function_status(inverter_sn, 21, "FUNC_GRID_PEAK_SHAVING")
+        return await self._get_function_status(
+            inverter_sn, 179, "FUNC_GRID_PEAK_SHAVING"
+        )
 
     # ============================================================================
     # Green Mode Controls (Off-Grid Mode in Web Monitor)

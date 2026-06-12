@@ -95,7 +95,9 @@ class TestFunctionStatusHelpers:
             ("get_ac_charge_mode_status", 21, "FUNC_AC_CHARGE"),
             ("get_pv_charge_priority_status", 21, "FUNC_FORCED_CHG_EN"),
             ("get_forced_discharge_status", 21, "FUNC_FORCED_DISCHG_EN"),
-            ("get_peak_shaving_mode_status", 21, "FUNC_GRID_PEAK_SHAVING"),
+            # Reg 179, NOT 21: live named reads (2026-06-12) show the key
+            # only appears in the (179, 1) response on EG4 hardware.
+            ("get_peak_shaving_mode_status", 179, "FUNC_GRID_PEAK_SHAVING"),
             ("get_green_mode_status", 110, "FUNC_GREEN_EN"),
             ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
             ("get_feed_in_grid_status", 21, "FUNC_FEED_IN_GRID_EN"),
