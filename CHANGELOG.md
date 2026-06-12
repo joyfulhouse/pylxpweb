@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.36b5] - 2026-06-12
+
+### Fixed
+
+- **Off-grid `consumption_power` falls back to the cloud load split**
+  ([eg4_web_monitor#226](https://github.com/joyfulhouse/eg4_web_monitor/issues/226)
+  residual): the cloud does not populate `consumptionPower` for the EG4
+  Off-Grid family (it reads a false 0 under load), so with no transport
+  data the property returned a useless value and the integration's Loads
+  sensor went unknown during hybrid link-down windows. The HTTP branch is
+  now family-aware: for EG4_OFFGRID it returns
+  `epsLoadPower + smartLoadPower + gridLoadPower` (the authoritative
+  split, live-confirmed on a 6000XP). The transport energy-balance path
+  and all other families are unchanged.
+
 ## [0.9.36b4] - 2026-06-12
 
 ### Added
