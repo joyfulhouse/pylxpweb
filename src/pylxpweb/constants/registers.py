@@ -534,6 +534,16 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # Battery charge/discharge current limits (A, confirmed 2026-02-18)
     101: ["HOLD_LEAD_ACID_CHARGE_RATE"],
     102: ["HOLD_LEAD_ACID_DISCHARGE_RATE"],
+    # Max export (sell-back) power percent.  Cloud-pinned via single-register
+    # named window reads 2026-06-12 (GH eg4_web_monitor#135): remoteRead of
+    # (103, 1) returns exactly HOLD_FEED_IN_GRID_POWER_PERCENT on both an
+    # 18kPV (value 16) and a FlexBOSS21 (value 14).  The protocol-spec name
+    # for reg 103 is "MaxBackflowPower" but the cloud API key is the FEED_IN
+    # one; HOLD_MAX_BACKFLOW_POWER_PERCENT is absent from every named window
+    # on this hardware.  Raw encoding is whole percent (0-100): the spec, the
+    # cloud value and the canonical bounds all agree, and unlike reg 202
+    # there is no plausible alternative scale for a 0-100 percent field.
+    103: ["HOLD_FEED_IN_GRID_POWER_PERCENT"],
     # SOC limits
     105: ["HOLD_DISCHG_CUT_OFF_SOC_EOD"],  # On-grid discharge cutoff SOC (10-90%)
     116: ["HOLD_PTOUSER_START_DISCHARGE"],  # Power-to-user start-discharge threshold (W)
@@ -585,6 +595,14 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # FUNC_GEN_PEAK_SHAVING, FUNC_ON_GRID_ALWAYS_ON, FUNC_PV_ARC, FUNC_PV_ARC_FAULT_CLEAR,
     # FUNC_PV_SELL_TO_GRID_EN, FUNC_RSD_DISABLE, FUNC_SMART_LOAD_ENABLE,
     # FUNC_TOTAL_LOAD_COMPENSATION_EN, FUNC_TRIP_TIME_UNIT, FUNC_WATT_VOLT_EN
+    #
+    # FUNC_PV_SELL_TO_GRID_EN ("Export PV Only" in the EG4 web UI, GH
+    # eg4_web_monitor#135): membership in this register re-confirmed via live
+    # single-register named reads 2026-06-12 — remoteRead (179, 1) returns it
+    # on both an 18kPV (True) and a FlexBOSS21 (False).  Its BIT POSITION is
+    # still unpinned (named responses are alphabetical), so it stays a
+    # cloud-only control; do NOT replace a FUNC_179_BIT* placeholder below
+    # without a local before/after register probe.
     179: [
         "FUNC_179_BIT0",  # Bit 0: unknown
         "FUNC_179_BIT1",  # Bit 1: unknown

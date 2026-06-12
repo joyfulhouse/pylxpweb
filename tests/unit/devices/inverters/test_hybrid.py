@@ -1640,3 +1640,155 @@ class TestForcedDischargeOperations:
             assert names[0] == canonical[0].api_param_key, (
                 f"reg {reg}: map name {names[0]!r} != canonical {canonical[0].api_param_key!r}"
             )
+
+
+class TestGridSellBackOperations:
+    """Grid Sell Back / Export PV Only controls (reg 21 bit 15, reg 103,
+    reg-179-family FUNC_PV_SELL_TO_GRID_EN — GH eg4_web_monitor#135)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("inverter_method", "control_method"),
+        [
+            ("enable_feed_in_grid", "enable_feed_in_grid"),
+            ("disable_feed_in_grid", "disable_feed_in_grid"),
+            ("enable_pv_sell_to_grid", "enable_pv_sell_to_grid"),
+            ("disable_pv_sell_to_grid", "disable_pv_sell_to_grid"),
+        ],
+    )
+    async def test_toggle_delegates_to_control_endpoint(
+        self, mock_client: LuxpowerClient, inverter_method: str, control_method: str
+    ) -> None:
+        """Device-level toggles delegate to the control endpoint by serial."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        mock_response = Mock()
+        mock_response.success = True
+        setattr(mock_client.api.control, control_method, AsyncMock(return_value=mock_response))
+
+        assert await getattr(inverter, inverter_method)() is True
+        getattr(mock_client.api.control, control_method).assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("inverter_method", "control_method"),
+        [
+            ("get_feed_in_grid_status", "get_feed_in_grid_status"),
+            ("get_pv_sell_to_grid_status", "get_pv_sell_to_grid_status"),
+        ],
+    )
+    async def test_status_delegates_to_control_endpoint(
+        self, mock_client: LuxpowerClient, inverter_method: str, control_method: str
+    ) -> None:
+        """Device-level status getters delegate to the control endpoint."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        setattr(mock_client.api.control, control_method, AsyncMock(return_value=True))
+
+        assert await getattr(inverter, inverter_method)() is True
+        getattr(mock_client.api.control, control_method).assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    async def test_set_feed_in_grid_power_percent(self, mock_client: LuxpowerClient) -> None:
+        """Setter writes HOLD_FEED_IN_GRID_POWER_PERCENT as a percent string."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter._parameters_cache_time = datetime.now()
+
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        result = await inverter.set_feed_in_grid_power_percent(50)
+
+        mock_client.api.control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_FEED_IN_GRID_POWER_PERCENT", "50"
+        )
+        assert result is True
+        # Successful write invalidates the parameter cache
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_set_feed_in_grid_power_percent_out_of_range(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Percent outside 0-100 raises ValueError (both directions)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            await inverter.set_feed_in_grid_power_percent(101)
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            await inverter.set_feed_in_grid_power_percent(-1)
+
+    @pytest.mark.asyncio
+    async def test_set_feed_in_grid_power_percent_failure_keeps_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A failed write returns False and does NOT invalidate the cache."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        stamp = datetime.now()
+        inverter._parameters_cache_time = stamp
+
+        mock_write_response = Mock()
+        mock_write_response.success = False
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        assert await inverter.set_feed_in_grid_power_percent(40) is False
+        assert inverter._parameters_cache_time == stamp
+
+    def test_property_none_before_parameter_load(self, mock_client: LuxpowerClient) -> None:
+        """Percent getter returns None until parameters are loaded."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        assert inverter.parameters is None
+        assert inverter.feed_in_grid_power_percent is None
+
+    def test_property_reads_cached_parameters(self, mock_client: LuxpowerClient) -> None:
+        """Percent getter returns the cached value (whole percent both paths)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.parameters = {"HOLD_FEED_IN_GRID_POWER_PERCENT": "16"}
+
+        assert inverter.feed_in_grid_power_percent == 16
+
+    def test_property_rejects_garbage_cache_values(self, mock_client: LuxpowerClient) -> None:
+        """Unparseable or out-of-range percent reads as None, not a number."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter.parameters = {"HOLD_FEED_IN_GRID_POWER_PERCENT": "garbage"}
+        assert inverter.feed_in_grid_power_percent is None
+
+        inverter.parameters = {"HOLD_FEED_IN_GRID_POWER_PERCENT": 250}
+        assert inverter.feed_in_grid_power_percent is None
+
+    def test_register_map_carries_feed_in_grid_power_percent(self) -> None:
+        """REGISTER_TO_PARAM_KEYS resolves reg 103 to the cloud-pinned name
+        (single-register named reads, 18kPV + FlexBOSS21, 2026-06-12) and it
+        agrees with the canonical holding table."""
+        from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
+        from pylxpweb.registers.inverter_holding import BY_ADDRESS
+
+        assert REGISTER_TO_PARAM_KEYS[103] == ["HOLD_FEED_IN_GRID_POWER_PERCENT"]
+        canonical = BY_ADDRESS[103]
+        assert canonical[0].api_param_key == "HOLD_FEED_IN_GRID_POWER_PERCENT"
+        assert canonical[0].min_value == 0
+        assert canonical[0].max_value == 100
+
+    def test_pv_sell_to_grid_bit_remains_unpinned(self) -> None:
+        """FUNC_PV_SELL_TO_GRID_EN must NOT appear in the reg-179 local bit
+        map until a before/after register probe pins its bit position —
+        named cloud responses are alphabetical and cannot pin bits."""
+        from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
+
+        assert "FUNC_PV_SELL_TO_GRID_EN" not in REGISTER_TO_PARAM_KEYS[179]
