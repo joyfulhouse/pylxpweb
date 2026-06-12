@@ -872,8 +872,16 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         description="Off-grid/EPS discharge SOC low limit.",
     ),
     # =========================================================================
-    # SYSTEM FUNCTION BITFIELD — Register 110 (14 bits, verified)
+    # SYSTEM FUNCTION BITFIELD — Register 110 (14 bits, verified on 18kPV)
     # =========================================================================
+    # FAMILY CAVEAT: these bit positions are 18kPV/EG4_HYBRID-derived.  On
+    # EG4_OFFGRID (SNA platform) hardware the upper bits differ — the buzzer
+    # is bit 7 and Battery ECO is bit 15 (12000XP live evidence,
+    # eg4_web_monitor PR #220; corroborated by the SNA12K-US cloud decode in
+    # docs/inverters/ and the ant0nkr lxp_modbus reference).  Local
+    # transports apply the family override via
+    # constants.registers.OFFGRID_REGISTER_110_PARAM_KEYS; the definitions
+    # below intentionally stay 18kPV-canonical.
     HoldingRegisterDefinition(
         address=110,
         bit_position=0,
@@ -951,9 +959,12 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=110,
         bit_position=9,
         canonical_name="battery_eco_enable",
-        api_param_key="FUNC_BATTERY_ECO_EN",  # verified
+        api_param_key="FUNC_BATTERY_ECO_EN",  # verified on 18kPV
         category=HoldingCategory.FUNCTION,
-        description="Battery eco mode — reduce battery cycling for longevity.",
+        description="Battery eco mode — reduce battery cycling for longevity. "
+        "Bit 9 is the 18kPV/EG4_HYBRID position; EG4_OFFGRID (12000XP/6000XP) "
+        "uses bit 15 (hardware-verified, eg4_web_monitor PR #220) — local "
+        "transports apply OFFGRID_REGISTER_110_PARAM_KEYS for that family.",
     ),
     HoldingRegisterDefinition(
         address=110,

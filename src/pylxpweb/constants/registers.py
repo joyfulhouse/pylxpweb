@@ -537,7 +537,10 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # SOC limits
     105: ["HOLD_DISCHG_CUT_OFF_SOC_EOD"],  # On-grid discharge cutoff SOC (10-90%)
     116: ["HOLD_PTOUSER_START_DISCHARGE"],  # Power-to-user start-discharge threshold (W)
-    # System functions (Register 110: 14 bit fields, verified)
+    # System functions (Register 110: 14 bit fields, verified on 18kPV).
+    # WARNING: this layout is 18kPV/EG4_HYBRID-derived.  EG4_OFFGRID (SNA)
+    # hardware evidence contradicts the upper bits (buzzer at 7, ECO at 15) —
+    # see OFFGRID_REGISTER_110_PARAM_KEYS for the family-specific override.
     110: [
         "FUNC_PV_GRID_OFF_EN",  # Bit 0
         "FUNC_RUN_WITHOUT_GRID",  # Bit 1
@@ -634,6 +637,67 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "FUNC_233_BIT15",  # Bit 15: unknown
     ],
 }
+
+# ============================================================================
+# EG4_OFFGRID (SNA PLATFORM) FAMILY OVERRIDES
+# ============================================================================
+# Register 110 bit layout for the EG4 Off-Grid series (12000XP/6000XP).
+#
+# The base REGISTER_TO_PARAM_KEYS table above was verified on 18kPV
+# (EG4_HYBRID) hardware only.  Three independent sources show the SNA
+# platform packs register 110 differently in the upper bits:
+#
+#   1. 12000XP live evidence (eg4_web_monitor PR #220, jesserobbins):
+#      raw reg 110 = 0x8080 with Battery ECO enabled, 0x0080 with it
+#      disabled — only bit 15 toggles.  Raw bit-15 writes enable/disable
+#      ECO in both directions (verified on hardware); writing the base
+#      table's bit 9 returns success but changes nothing on the inverter.
+#   2. EG4 cloud decode of a stock SNA12K-US (docs/inverters/
+#      SNA12KUS_52XXXXXX68.md, reg 110): FUNC_BUZZER_EN=True is the ONLY
+#      set function.  Combined with the constant raw 0x0080 (bit 7) from
+#      the same model line, the buzzer lives at bit 7 on this family —
+#      not bit 6 as on 18kPV.
+#   3. ant0nkr/luxpower-ha-integration (LXP firmware lineage shared by the
+#      SNA platform) documents H_FUNCTION_ENABLE_3 (110) with BuzzerEn at
+#      bit 7, GreenModeEn at bit 14 and EcoModeEn at bit 15, with 2-bit
+#      CT/PVCT sample fields at 5-6/8-9/12-13.
+#
+# Only the relocations that are directly evidenced are applied here
+# (buzzer -> bit 7, Battery ECO -> bit 15).  Displaced or unverifiable
+# slots become FUNC_110_BITn placeholders (same convention as register
+# 179/233 unknowns) rather than inheriting unproven 18kPV names.
+# FUNC_GREEN_EN deliberately KEEPS the 18kPV position (bit 8) for
+# continuity: no SNA hardware toggle test exists yet, and consumers
+# (green mode controls) would otherwise lose local read/write entirely.
+# If the lxp_modbus layout fully applies, green may actually be bit 14 —
+# a community toggle test (read 110, toggle Green in the EG4 cloud UI,
+# read 110 again) settles it; see eg4_web_monitor issue #197 follow-ups.
+OFFGRID_REGISTER_110_PARAM_KEYS: list[str] = [
+    "FUNC_PV_GRID_OFF_EN",  # Bit 0 (all sources agree on bits 0-4)
+    "FUNC_RUN_WITHOUT_GRID",  # Bit 1
+    "FUNC_MICRO_GRID_EN",  # Bit 2
+    "FUNC_BAT_SHARED",  # Bit 3
+    "FUNC_CHARGE_LAST",  # Bit 4
+    "FUNC_TAKE_LOAD_TOGETHER",  # Bit 5 (UNVERIFIED on SNA; lxp_modbus: CT ratio low bit)
+    "FUNC_110_BIT6",  # Bit 6: unknown (18kPV buzzer slot; lxp_modbus: CT ratio high bit)
+    "FUNC_BUZZER_EN",  # Bit 7 (SNA cloud decode + raw 0x0080; lxp_modbus agrees)
+    "FUNC_GREEN_EN",  # Bit 8 (UNVERIFIED on SNA — kept from 18kPV; lxp_modbus puts green at 14)
+    "FUNC_110_BIT9",  # Bit 9: unknown (18kPV ECO slot; lxp_modbus: PVCT sample type high bit)
+    "BIT_WORKING_MODE",  # Bit 10 (UNVERIFIED on SNA)
+    "BIT_PVCT_SAMPLE_TYPE",  # Bit 11 (UNVERIFIED on SNA)
+    "BIT_PVCT_SAMPLE_RATIO",  # Bit 12 (UNVERIFIED on SNA)
+    "BIT_CT_SAMPLE_RATIO",  # Bit 13 (UNVERIFIED on SNA)
+    "FUNC_110_BIT14",  # Bit 14: unknown (lxp_modbus green candidate — needs SNA toggle test)
+    "FUNC_BATTERY_ECO_EN",  # Bit 15 (12000XP live toggle, PR #220; lxp_modbus agrees)
+]
+
+
+def _offgrid_register_to_param_keys() -> dict[int, list[str]]:
+    """Return the EG4_OFFGRID register→param mapping (base + overrides)."""
+    mapping = dict(REGISTER_TO_PARAM_KEYS)
+    mapping[110] = OFFGRID_REGISTER_110_PARAM_KEYS
+    return mapping
+
 
 # ============================================================================
 # MIDBOX (GRIDBOSS) REGISTER MAPPINGS
@@ -1429,15 +1493,18 @@ def get_register_to_param_mapping(
 ) -> dict[int, list[str]]:
     """Get the register-to-parameter mapping for an inverter family.
 
-    Currently all families share the same 18KPV-based mapping.  The *family*
-    parameter is accepted for forward compatibility but has no effect yet.
+    Most families share the 18KPV-based mapping.  ``EG4_OFFGRID`` (SNA
+    platform — 12000XP/6000XP) overrides register 110, whose bit layout is
+    hardware-verified to differ from 18kPV (Battery ECO at bit 15, buzzer
+    at bit 7).  See ``OFFGRID_REGISTER_110_PARAM_KEYS``.
 
     For GridBOSS/MID devices, pass ``device_type="MIDBOX"`` to get the
     MIDBOX-specific register mapping (e.g., register 20 smart port modes).
 
     Args:
         family: Inverter family string (from InverterFamily enum value).
-            Currently unused — all families return the same mapping.
+            ``"EG4_OFFGRID"`` selects the SNA register-110 override; all
+            other values (or None) return the 18KPV-based mapping.
         device_type: Device type string. Pass ``"MIDBOX"`` for GridBOSS
             devices to include GridBOSS-specific register mappings.
 
@@ -1454,13 +1521,13 @@ def get_register_to_param_mapping(
         midbox_mapping = get_register_to_param_mapping(device_type="MIDBOX")
         param_keys = midbox_mapping.get(20)  # ["BIT_MIDBOX_SP_MODE_1", ...]
     """
-    # Currently all families use the 18KPV mapping as the base
-    # The HTTP transport handles family-specific differences on the server side
-    # For local transports, the 18KPV mapping covers most common parameters
-    _ = family  # Reserved for future family-specific mappings
-
+    # The HTTP transport handles family-specific differences on the server
+    # side; this mapping only drives LOCAL (Modbus/dongle) named access.
     if device_type == "MIDBOX":
         return MIDBOX_REGISTER_TO_PARAM_KEYS
+
+    if family == "EG4_OFFGRID":
+        return _offgrid_register_to_param_keys()
 
     return REGISTER_TO_PARAM_KEYS
 
@@ -1480,7 +1547,8 @@ def get_param_to_register_mapping(
 
     Args:
         family: Inverter family string (from InverterFamily enum value).
-            Currently unused — all families return the same mapping.
+            ``"EG4_OFFGRID"`` selects the SNA register-110 override; all
+            other values (or None) use the 18KPV-based mapping.
         device_type: Device type string. Pass ``"MIDBOX"`` for GridBOSS
             devices to include GridBOSS-specific register mappings.
 

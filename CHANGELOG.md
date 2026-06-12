@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **EG4_OFFGRID register-110 layout corrected: Battery ECO is bit 15, buzzer is bit 7**
+  (adjudication of eg4_web_monitor [PR #220](https://github.com/joyfulhouse/eg4_web_monitor/pull/220)
+  / [#197](https://github.com/joyfulhouse/eg4_web_monitor/issues/197) follow-up):
+  the shared `REGISTER_TO_PARAM_KEYS[110]` table is 18kPV-derived; on the SNA
+  platform (12000XP/6000XP) live hardware evidence shows `FUNC_BATTERY_ECO_EN`
+  toggling raw bit 15 (`0x0080`↔`0x8080`, bidirectional write test) while the
+  bit-9 named write returns success without changing the inverter, and the
+  stock SNA cloud decode places the buzzer at bit 7 (sole set flag with raw
+  `0x0080`), matching the ant0nkr lxp_modbus reference. Local Modbus/dongle
+  transports now resolve register 110 through a family-specific layout
+  (`OFFGRID_REGISTER_110_PARAM_KEYS`) for `EG4_OFFGRID`: ECO=15, buzzer=7,
+  displaced/unverified slots as `FUNC_110_BITn` placeholders. `FUNC_GREEN_EN`
+  intentionally keeps the 18kPV bit-8 position pending an SNA toggle test
+  (lxp_modbus suggests bit 14). All other families are byte-for-byte
+  unchanged; cloud writes were always correct (server-side bit mapping).
+
+### Changed
+
+- **`grid_peak_shaving` family default for EG4_OFFGRID is now `False`**
+  (same adjudication): GRID peak shaving requires grid-parallel
+  import/export blending, which the no-sellback SNA platform does not do —
+  it uses `FUNC_GEN_PEAK_SHAVING` (generator overload protection) instead.
+  Field data: stock SNA12K-US cloud dump reads `FUNC_GEN_PEAK_SHAVING=True`
+  / `FUNC_GRID_PEAK_SHAVING=False` and exposes no
+  `_12K_HOLD_GRID_PEAK_SHAVING_POWER` parameter, so the register probe
+  cannot re-enable the flag on this family either. The old `True` dated to
+  the v0.4.0 feature-table bulk fill, not hardware evidence. Generator
+  input-register definitions 124/125 (Egen) gained documentation caveats
+  recording why PR #220's raw-Wh AC-couple-energy reinterpretation was
+  rejected (the reporter's own sweep shows bit-field behavior, not energy).
+
 ## [0.9.36b5] - 2026-06-12
 
 ### Fixed

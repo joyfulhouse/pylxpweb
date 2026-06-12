@@ -757,7 +757,12 @@ class TestBaseInverterFeatureDetection:
         assert sna_inverter.supports_off_grid is True
         assert sna_inverter.supports_parallel is False
         assert sna_inverter.supports_volt_watt_curve is False
-        assert sna_inverter.supports_grid_peak_shaving is True
+        # GRID peak shaving is a grid-parallel (hybrid) function; the SNA
+        # platform uses GEN peak shaving instead.  Family default flipped to
+        # False in the PR #220 / issue #197 adjudication (eg4-juzg); the real
+        # SNA12K-US cloud dump exposes no _12K_HOLD_GRID_PEAK_SHAVING_POWER,
+        # so the register probe cannot re-enable it on this family either.
+        assert sna_inverter.supports_grid_peak_shaving is False
         assert sna_inverter.supports_drms is True  # FUNC_DRMS_EN exists
         assert sna_inverter.supports_discharge_recovery_hysteresis is True
 
