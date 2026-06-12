@@ -177,6 +177,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
+        # Serialises connect() itself: _send_receive reconnects under
+        # self._lock, but external callers (e.g. a coordinator write path
+        # doing "if not is_connected: connect()") can race it — and the
+        # dongle has exactly ONE TCP slot, so two parallel dials corrupt
+        # each other.  Lock order is always _lock -> _connect_lock; nothing
+        # under _connect_lock ever takes _lock, so no cycle.
+        self._connect_lock = asyncio.Lock()
         self._transaction_id = 0
 
     @property
@@ -277,68 +284,94 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         retries with exponential backoff (1s, 2s, 4s, ...) to handle cases where
         a previous connection wasn't properly released.
 
+        State guarantee: ``_connected`` is set True only after the connection
+        is fully usable (socket open AND initial data discarded).  Every
+        failure path — including a partially-succeeded attempt where the
+        socket opened but the initial-data read errored — tears the
+        connection down, so connect() can never exit with ``_connected``
+        True on a dead socket (#226 state-corruption guard).
+
+        Concurrency: serialised on ``_connect_lock`` (the dongle has ONE
+        TCP slot — two parallel dials corrupt each other).  A caller that
+        lost the race to another task's successful connect returns
+        immediately instead of tearing down the fresh connection.
+
         Raises:
             TransportConnectionError: If all connection attempts fail
         """
-        last_error: Exception | None = None
-        retry_delay = 1.0  # Start with 1 second delay
+        async with self._connect_lock:
+            if self._connected:
+                return  # another task already (re)connected
 
-        for attempt in range(self._connection_retries):
-            try:
-                if attempt > 0:
+            last_error: Exception | None = None
+            retry_delay = 1.0  # Start with 1 second delay
+
+            # Clean slate: drop any stale half-open socket from a previous
+            # session before dialing a new one (the dongle has ONE TCP slot).
+            self._teardown_connection()
+
+            for attempt in range(self._connection_retries):
+                try:
+                    if attempt > 0:
+                        _LOGGER.info(
+                            "Connection retry %d/%d to %s:%s (waiting %.1fs)...",
+                            attempt,
+                            self._connection_retries - 1,
+                            self._host,
+                            self._port,
+                            retry_delay,
+                        )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+
+                    self._reader, self._writer = await asyncio.wait_for(
+                        asyncio.open_connection(self._host, self._port),
+                        timeout=self._timeout,
+                    )
+
+                    # Discard any initial data the dongle sends after
+                    # connection (some dongles send unsolicited packets that
+                    # can confuse subsequent reads) BEFORE declaring the
+                    # connection usable — an OSError here fails this attempt
+                    # instead of leaking a connected-looking transport with
+                    # a broken socket.
+                    await self._discard_initial_data()
+
+                    self._connected = True
                     _LOGGER.info(
-                        "Connection retry %d/%d to %s:%s (waiting %.1fs)...",
-                        attempt,
-                        self._connection_retries - 1,
+                        "Dongle transport connected to %s:%s (dongle=%s, inverter=%s)%s",
                         self._host,
                         self._port,
-                        retry_delay,
+                        self._dongle_serial,
+                        self._serial,
+                        f" after {attempt} retries" if attempt > 0 else "",
                     )
-                    await asyncio.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
+                    return  # Success!
 
-                self._reader, self._writer = await asyncio.wait_for(
-                    asyncio.open_connection(self._host, self._port),
-                    timeout=self._timeout,
-                )
+                except TimeoutError as err:
+                    last_error = err
+                    self._teardown_connection()
+                    _LOGGER.warning(
+                        "Timeout connecting to dongle at %s:%s (attempt %d/%d)",
+                        self._host,
+                        self._port,
+                        attempt + 1,
+                        self._connection_retries,
+                    )
+                except OSError as err:
+                    last_error = err
+                    self._teardown_connection()
+                    _LOGGER.warning(
+                        "Connection failed to %s:%s: %s (attempt %d/%d)",
+                        self._host,
+                        self._port,
+                        err,
+                        attempt + 1,
+                        self._connection_retries,
+                    )
 
-                self._connected = True
-                _LOGGER.info(
-                    "Dongle transport connected to %s:%s (dongle=%s, inverter=%s)%s",
-                    self._host,
-                    self._port,
-                    self._dongle_serial,
-                    self._serial,
-                    f" after {attempt} retries" if attempt > 0 else "",
-                )
-
-                # Discard any initial data the dongle sends after connection
-                # Some dongles send unsolicited packets that can confuse subsequent reads
-                # This is a known behavior documented in luxpower-ha-integration
-                await self._discard_initial_data()
-                return  # Success!
-
-            except TimeoutError as err:
-                last_error = err
-                _LOGGER.warning(
-                    "Timeout connecting to dongle at %s:%s (attempt %d/%d)",
-                    self._host,
-                    self._port,
-                    attempt + 1,
-                    self._connection_retries,
-                )
-            except (OSError, ConnectionRefusedError) as err:
-                last_error = err
-                _LOGGER.warning(
-                    "Connection failed to %s:%s: %s (attempt %d/%d)",
-                    self._host,
-                    self._port,
-                    err,
-                    attempt + 1,
-                    self._connection_retries,
-                )
-
-        # All retries exhausted
+            # All retries exhausted
+            self._teardown_connection()
         if isinstance(last_error, TimeoutError):
             raise TransportConnectionError(
                 f"Timeout connecting to {self._host}:{self._port} after "
@@ -532,6 +565,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         network glitch).  On socket error, tears down the connection,
         reconnects, and retries — up to ``max_retries`` times.
 
+        Connection-health invariant (#226): EVERY failure that makes the
+        socket suspect — response timeout, empty read (EOF), socket error —
+        tears the connection down, so the next request (or in-call retry)
+        dials a FRESH TCP connection.  Silent path loss (VPN drop, NAT/
+        conntrack flush) delivers no RST: the old socket stays ESTABLISHED,
+        writes buffer into a black hole, and reads only ever time out.
+        Recovery is only possible on a new connection, never on the old one.
+
         Args:
             packet: Packet bytes to send
             max_retries: Number of retry attempts for transient errors
@@ -541,10 +582,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 Handles exception responses (high bit set) by masking to base code.
             expected_register: Expected starting register address.
                 When provided, rejects responses for a different register range.
-            retry_on_timeout: Treat a response timeout as a transient error:
-                tear down the (likely dead) connection, reconnect, and resend.
-                Safe for idempotent requests (register writes resend the same
-                absolute values).  Reads keep fail-fast timeout behavior.
+            retry_on_timeout: Resend the request in-call after a response
+                timeout (the connection is torn down on every timeout
+                regardless of this flag).  Safe for idempotent requests
+                (register writes resend the same absolute values).  Reads
+                keep fail-fast behavior: raise on the first timeout and let
+                the caller's next poll reconnect.
 
         Returns:
             List of register values from response
@@ -552,33 +595,30 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         Raises:
             TransportReadError: If send/receive fails after retries
             TransportTimeoutError: If operation times out
-            TransportConnectionError: If socket not initialized
+            TransportConnectionError: If connecting (or reconnecting) fails
         """
-        if not self._connected:
-            _LOGGER.info(
-                "Dongle %s:%s disconnected, attempting reconnect",
-                self._host,
-                self._port,
-            )
-            await self.connect()
-
-        if self._writer is None or self._reader is None:
-            raise TransportConnectionError("Socket not initialized")
-
         last_error: TransportReadError | None = None
 
         async with self._lock:
             for attempt in range(max_retries + 1):
                 try:
-                    # Reconnect if socket was torn down (e.g. after OSError)
-                    if self._writer is None or self._reader is None:
-                        try:
-                            await self.connect()
-                        except Exception:
-                            if attempt >= max_retries:
-                                raise TransportConnectionError("Socket not initialized") from None
-                            await asyncio.sleep(0.5)
-                            continue
+                    # (Re)connect when there is no live connection: first
+                    # use, after _teardown_connection(), or an external
+                    # disconnect().  Serialised under self._lock so two
+                    # concurrent requests can never race parallel connect()
+                    # calls at the dongle's single TCP slot.  connect()
+                    # already retries internally with backoff — if it still
+                    # fails there is no connectivity, so fail this request
+                    # fast instead of burning the remaining attempts on
+                    # more connect cycles (keeps link-down probe cycles
+                    # bounded to ONE connect sequence).
+                    if self._writer is None or self._reader is None or not self._connected:
+                        _LOGGER.info(
+                            "Dongle %s:%s disconnected, attempting reconnect",
+                            self._host,
+                            self._port,
+                        )
+                        await self.connect()
                     if self._writer is None or self._reader is None:
                         raise TransportConnectionError("Socket not initialized")
 
@@ -596,7 +636,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     )
 
                     if not response:
-                        # Empty response - dongle may be slow or blocking requests
+                        # recv returned b'' = EOF: the dongle closed the
+                        # connection (or the transport died locally).  This
+                        # socket can never yield a response again — tear it
+                        # down so the retry below (or the next request)
+                        # reconnects instead of re-reading a dead socket.
+                        self._teardown_connection()
                         if attempt < max_retries:
                             _LOGGER.debug(
                                 "Empty response from dongle (attempt %d/%d), retrying...",
@@ -619,11 +664,16 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     return self._parse_response(response, expected_func, expected_register)
 
                 except TimeoutError as err:
+                    # The connection is suspect after ANY response timeout:
+                    # the dongle went mute, or the path dropped silently
+                    # (VPN break, NAT/conntrack flush) — half-open TCP
+                    # delivers no RST, so writes keep "succeeding" into a
+                    # black hole and reads only ever time out.  Tear down
+                    # unconditionally so the next request — or the resend
+                    # below — dials a fresh connection instead of polling
+                    # the dead flow forever (#226).
+                    self._teardown_connection()
                     if retry_on_timeout and attempt < max_retries:
-                        # The connection is likely dead (dongle went mute or
-                        # dropped the link without RST).  Tear down and let
-                        # the top-of-loop guard reconnect for the resend.
-                        self._teardown_connection()
                         _LOGGER.warning(
                             "Timeout on attempt %d/%d, will reconnect and resend",
                             attempt + 1,
@@ -967,18 +1017,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             # No request-level timeout resend (review): resending the same
             # pre-built packet after a mute ACK could replay STALE bit-field
             # values over a concurrent writer's change. A write timeout
-            # tears down below and propagates to write_named_parameters'
-            # sequence-level retry, which RE-READS before re-writing.
+            # tears down inside _send_receive and propagates to
+            # write_named_parameters' sequence-level retry, which RE-READS
+            # before re-writing.
             ack = await self._send_receive(
                 packet,
                 expected_func=modbus_func,
                 expected_register=address,
             )
-        except TransportTimeoutError:
-            # The connection is likely dead (dongle went mute). Tear down so
-            # the next attempt reconnects; the sequence retry re-reads first.
-            self._teardown_connection()
-            raise
         except TransportReadError as err:
             raise TransportWriteError(str(err)) from err
 
