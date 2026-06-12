@@ -178,6 +178,17 @@ class TestInverterModelInfo:
         assert model.power_rating == 6  # bits 5-7 of low byte 0xC1
         assert model.get_model_name(54) == "EG4-12KXP"
 
+    def test_model_name_6000xp_type_code_38(self) -> None:
+        """Type code 38 (6000XP variant) uses the EG4 Off-Grid naming scheme."""
+        # power_rating=4 -> 6 kW in the SNA legacy mapping
+        model = InverterModelInfo(power_rating=4)
+        assert model.get_power_rating_kw(38) == 6
+        assert model.get_model_name(38) == "EG4-6KXP"
+
+        # Unknown rating falls back to the generic Off-Grid name, not Unknown-38
+        unrated = InverterModelInfo()
+        assert unrated.get_model_name(38) == "EG4-XP"
+
     def test_from_registers_lxp_eu_12k(self) -> None:
         """Test from_registers decodes LXP-EU 12K from real diagnostic data."""
         # LXP-EU 12K: HOLD_MODEL=0x19AC0, powerRating=6
@@ -367,6 +378,38 @@ class TestInverterFeatures:
         assert features.volt_watt_curve is False
         assert features.drms_support is False
 
+    def test_from_device_type_code_sna_6000xp_variant(self) -> None:
+        """Code 38 (6000XP variant, GH eg4_web_monitor#222) matches code 54 features."""
+        features = InverterFeatures.from_device_type_code(38)
+
+        assert features.device_type_code == 38
+        assert features.model_family == InverterFamily.EG4_OFFGRID
+        assert features.grid_type == GridType.SPLIT_PHASE
+        assert features.split_phase is True
+        assert features.off_grid_capable is True
+        assert features.discharge_recovery_hysteresis is True
+        assert features.quick_charge_minute is True
+        assert features.three_phase_capable is False
+        assert features.parallel_support is False
+
+        # Identical capability set to the canonical SNA code (54) except the code
+        reference = InverterFeatures.from_device_type_code(54)
+        for attr in (
+            "model_family",
+            "grid_type",
+            "split_phase",
+            "off_grid_capable",
+            "discharge_recovery_hysteresis",
+            "quick_charge_minute",
+            "three_phase_capable",
+            "parallel_support",
+            "volt_watt_curve",
+            "grid_peak_shaving",
+            "drms_support",
+            "pv_string_count",
+        ):
+            assert getattr(features, attr) == getattr(reference, attr), attr
+
     def test_from_device_type_code_pv_series(self) -> None:
         """Test creating features from PV Series device type code (2092).
 
@@ -513,6 +556,11 @@ class TestHelperFunctions:
     def test_get_inverter_family_sna(self) -> None:
         """Test getting SNA family from device type code."""
         family = get_inverter_family(54)
+        assert family == InverterFamily.EG4_OFFGRID
+
+    def test_get_inverter_family_sna_6000xp_variant(self) -> None:
+        """Code 38 (6000XP variant) maps to EG4_OFFGRID (GH eg4_web_monitor#222)."""
+        family = get_inverter_family(38)
         assert family == InverterFamily.EG4_OFFGRID
 
     def test_get_inverter_family_pv_series(self) -> None:
