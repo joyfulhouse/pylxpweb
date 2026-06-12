@@ -824,12 +824,14 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
             "hardware.  canonical_name retained for API stability."
         ),
     ),
-    # Register 268 (HOLD_EXPORT_LOCK_POWER) is deliberately NOT mapped:
-    # cloud-pinned via a single-register named read on an 18kPV 2026-06-12
-    # (value '25.5', plausibly kW with reg-66/74-style 100W raw units) but
-    # absent on FlexBOSS21, outside the local parameter read span (0-249),
-    # and its raw encoding is unverified — add together with a local
-    # read/write verification (reg-202 precedent).
+    # HOLD_EXPORT_LOCK_POWER is deliberately NOT mapped: its register is
+    # MODEL-DEPENDENT — single-register named reads pin it at 268 on an
+    # 18kPV (2026-06-12, value '25.5', plausibly kW with reg-66/74-style
+    # 100W raw units), while the 12KPV scanner dump
+    # (docs/inverters/12KPV_43XXXXXX39.json) shows it at 261, and it is
+    # absent on FlexBOSS21.  Also outside the local parameter read span
+    # (0-249) with unverified raw encoding — add only together with a
+    # per-model local read/write verification (reg-202 precedent).
     HoldingRegisterDefinition(
         address=116,
         canonical_name="ptouser_start_discharge",
