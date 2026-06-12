@@ -670,6 +670,10 @@ class InverterRuntimePropertiesMixin:
     # different codebase.  These properties therefore intentionally read the
     # HTTP runtime even when a local transport is attached (HYBRID
     # supplemental data) instead of using the transport-first helpers.
+    # Freshness in hybrid: BaseInverter.refresh() schedules a supplemental
+    # _fetch_runtime_http() for EG4_OFFGRID devices with a healthy transport
+    # (see _wants_hybrid_supplemental_runtime), so _runtime tracks the cloud
+    # on the runtime TTL instead of freezing at its setup-time snapshot.
 
     @property
     def smart_load_power(self) -> int | None:

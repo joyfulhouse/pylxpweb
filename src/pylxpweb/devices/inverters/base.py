@@ -561,6 +561,23 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         return self._transport is not None
 
+    @property
+    def _wants_hybrid_supplemental_runtime(self) -> bool:
+        """True when cloud-only live runtime fields need HTTP refreshes in hybrid.
+
+        The EG4 Off-Grid family carries live cloud-only runtime fields — the
+        smart-load split (``smartLoadPower`` / ``gridLoadPower``, GH
+        eg4_web_monitor#222) — that have no Modbus register, so a healthy
+        transport-only refresh loop would freeze them at the setup-time
+        ``_runtime`` snapshot.  Families without cloud-only live fields
+        return False so hybrid operation stays purely local for them.
+        Extend this consciously if another family grows cloud-only fields.
+        """
+        features = getattr(self, "_features", None)
+        if features is None:
+            return False
+        return features.model_family is InverterFamily.EG4_OFFGRID
+
     async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
         """Refresh runtime, energy, battery, and optionally parameters from API.
 
@@ -628,6 +645,24 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 )
                 if should_fetch_battery:
                     tasks.append(self._fetch_battery())
+
+        # Hybrid supplemental cloud runtime (GH eg4_web_monitor#222): with a
+        # healthy transport attached the read paths above only ever touch
+        # _transport_runtime, so cloud-only live fields (the EG4 Off-Grid
+        # smart-load split: smartLoadPower / gridLoadPower) would freeze at
+        # their setup-time _runtime snapshot.  Ride the same runtime TTL so
+        # the cloud call rate matches pure-cloud mode (client-level response
+        # caching bounds it further).  The link-down case is covered by
+        # _refresh_http_fallback() below, and pure-cloud devices refresh
+        # _runtime through _fetch_runtime() already.
+        if (
+            runtime_expired
+            and self._transport is not None
+            and not link_down
+            and self._cloud_fallback_available
+            and self._wants_hybrid_supplemental_runtime
+        ):
+            tasks.append(self._fetch_runtime_http())
 
         # Parameters (1hr TTL) - only fetch if explicitly requested
         if include_parameters and self._is_cache_expired(
