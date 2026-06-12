@@ -655,13 +655,14 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # caching bounds it further).  The link-down case is covered by
         # _refresh_http_fallback() below, and pure-cloud devices refresh
         # _runtime through _fetch_runtime() already.
-        if (
+        supplemental_http_runtime = (
             runtime_expired
             and self._transport is not None
             and not link_down
             and self._cloud_fallback_available
             and self._wants_hybrid_supplemental_runtime
-        ):
+        )
+        if supplemental_http_runtime:
             tasks.append(self._fetch_runtime_http())
 
         # Parameters (1hr TTL) - only fetch if explicitly requested
@@ -684,11 +685,15 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             and self.transport_link_down
             and self._cloud_fallback_available
         ):
-            await self._refresh_http_fallback()
+            # On the cycle that TRANSITIONS to link-down, the hybrid
+            # supplemental fetch above already refreshed the cloud runtime —
+            # skip the runtime leg so one cycle never fetches it twice
+            # (codex r2 MEDIUM on eg4-1d0).
+            await self._refresh_http_fallback(skip_runtime=supplemental_http_runtime)
 
         self._last_refresh = datetime.now()
 
-    async def _refresh_http_fallback(self) -> None:
+    async def _refresh_http_fallback(self, skip_runtime: bool = False) -> None:
         """Fetch runtime/energy/battery from the cloud while the link is down.
 
         The transport data caches were cleared on the link-down transition
@@ -696,13 +701,19 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         to the HTTP data refreshed here.  Client-level response caches keep
         the actual cloud call rate bounded regardless of how often this
         runs.
+
+        Args:
+            skip_runtime: Skip the runtime leg.  Set on the link-down
+                TRANSITION cycle when the hybrid supplemental fetch already
+                refreshed the cloud runtime this cycle (codex r2 MEDIUM).
         """
-        await asyncio.gather(
-            self._fetch_runtime_http(),
+        fetches: list[Awaitable[None]] = [
             self._fetch_energy_http(),
             self._fetch_battery_http(),
-            return_exceptions=True,
-        )
+        ]
+        if not skip_runtime:
+            fetches.append(self._fetch_runtime_http())
+        await asyncio.gather(*fetches, return_exceptions=True)
 
     async def _fetch_runtime(self) -> None:
         """Fetch runtime data with caching.

@@ -484,6 +484,36 @@ class TestHybridSupplementalRuntime:
         assert inverter._runtime is None  # nothing fetched, nothing raised
 
     @pytest.mark.asyncio
+    async def test_transition_cycle_fetches_cloud_runtime_once(
+        self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
+    ) -> None:
+        """The link-down TRANSITION cycle must not double-fetch the runtime.
+
+        Entry state: link still healthy (threshold-1 failures) → the
+        supplemental fetch is scheduled.  The transport read fails and
+        crosses the threshold during the same cycle → the post-read
+        fallback fires; it must skip the runtime leg the supplemental
+        already performed (codex r2 MEDIUM on eg4-1d0).
+        """
+        inverter = _make_inverter(client=mock_client)
+        inverter._features = self._offgrid_features()
+        _attach_failing_combined_transport(inverter)
+        mock_client.api.devices.get_inverter_runtime = AsyncMock(return_value=sample_runtime)
+        mock_client.api.devices.get_inverter_energy = AsyncMock(side_effect=OSError("cloud"))
+        mock_client.api.devices.get_battery_info = AsyncMock(side_effect=OSError("cloud"))
+
+        inverter._transport_consecutive_failures = TRANSPORT_LINK_DOWN_THRESHOLD - 1
+
+        await inverter.refresh(force=True)
+
+        assert inverter.transport_link_down is True
+        mock_client.api.devices.get_inverter_runtime.assert_awaited_once()
+        assert inverter._runtime is sample_runtime
+        # Energy/battery fallback legs still ran on the transition cycle
+        mock_client.api.devices.get_inverter_energy.assert_awaited_once()
+        mock_client.api.devices.get_battery_info.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_offgrid_rides_runtime_ttl_not_every_call(
         self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
     ) -> None:
