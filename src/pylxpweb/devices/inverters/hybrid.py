@@ -1024,6 +1024,89 @@ class HybridInverter(GenericInverter):
         return {"mode": mode, "value": soc_value, "unit": "%"}
 
     # ============================================================================
+    # PV Sell to Grid / Export PV Only Operations (GH eg4_web_monitor#135)
+    # ============================================================================
+    # Register 179 bit 3 (FUNC_PV_SELL_TO_GRID_EN, "Export PV Only" in the EG4
+    # web UI).  Bit pinned 2026-06-12 ~16:05-16:07 PT via authorized live
+    # cloud toggles with raw verification (remoteRead (179,1) valueFrame,
+    # base64 LE uint16) on BOTH 12K-hybrid models: FlexBOSS21 52842P0581 and
+    # 18kPV 4512670118 each toggled raw 0x104c <-> 0x1044 (XOR 0x0008 =
+    # single bit 3) in lockstep with the named param, restores verified by
+    # re-read.  These overrides replace the cloud-only BaseInverter
+    # implementations with the same dual-path dispatch the battery
+    # charge/discharge control bits (9/10) use.
+
+    async def get_pv_sell_to_grid_status(self) -> bool:
+        """Get current PV sell to grid (Export PV Only) status.
+
+        Reads register 179 bit 3 via the transport when one is attached,
+        otherwise via the cloud named-parameter read.
+
+        Returns:
+            True if Export PV Only is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_pv_sell_to_grid_status()
+            >>> is_enabled
+            True
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_PV_SELL_TO_GRID, FUNC_EXT_REGISTER
+
+        return await self._get_register_bit(FUNC_EXT_REGISTER, FUNC_EXT_BIT_PV_SELL_TO_GRID)
+
+    async def set_pv_sell_to_grid(self, enabled: bool) -> bool:
+        """Enable or disable PV sell to grid ("Export PV Only").
+
+        Transport mode performs a read-modify-write on register 179 that
+        preserves the other function bits from the read value (a read
+        followed by a write — the same non-atomic sequence as bits 9/10);
+        cloud mode applies the bit server-side via the function-control API.
+
+        Args:
+            enabled: True to only export PV surplus (never battery)
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_pv_sell_to_grid(True)
+            True
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_PV_SELL_TO_GRID, FUNC_EXT_REGISTER
+
+        return await self._set_modbus_register_bit(
+            FUNC_EXT_REGISTER, FUNC_EXT_BIT_PV_SELL_TO_GRID, enabled
+        )
+
+    async def enable_pv_sell_to_grid(self) -> bool:
+        """Enable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Dual-path override of the cloud-only BaseInverter method: register
+        179 bit 3 read-modify-write over the transport, or the atomic cloud
+        function-control update without one.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_pv_sell_to_grid()
+            True
+        """
+        return await self.set_pv_sell_to_grid(True)
+
+    async def disable_pv_sell_to_grid(self) -> bool:
+        """Disable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_pv_sell_to_grid()
+            True
+        """
+        return await self.set_pv_sell_to_grid(False)
+
+    # ============================================================================
     # Battery Charge/Discharge Current Limit Operations (Modbus)
     # ============================================================================
     # Register 101: charge current limit in amps (no scaling)

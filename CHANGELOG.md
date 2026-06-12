@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`FUNC_PV_SELL_TO_GRID_EN` pinned to holding register 179 bit 3 and wired
+  for local Modbus** ("Export PV Only" in the EG4 web UI, GH
+  [eg4_web_monitor#135](https://github.com/joyfulhouse/eg4_web_monitor/issues/135)):
+  pinned 2026-06-12 ~16:05–16:07 PT via authorized live cloud
+  functionControl toggles with raw verification through `remoteRead`
+  (179, 1) valueFrame (base64, little-endian uint16) on BOTH 12K-hybrid
+  models — FlexBOSS21 52842P0581 (`disable_pv_sell_to_grid` toggled raw
+  `0x104c` → `0x1044`, XOR `0x0008` = single bit 3, named param True→False
+  in lockstep; re-enable restored `0x104c`, verified) and 18kPV 4512670118
+  (same toggle, same `0x104c` → `0x1044` → restored `0x104c`, verified).
+  Register-level evidence equivalent to a local before/after probe, proven
+  directly on both family models — no extrapolation needed. The
+  `FUNC_179_BIT3` placeholder in `REGISTER_TO_PARAM_KEYS[179]`
+  is replaced by the real name, so local/dongle parameter decode now surfaces
+  the bit and `write_named_parameters({"FUNC_PV_SELL_TO_GRID_EN": ...})`
+  performs the read-modify-write locally. `HybridInverter` gains dual-path
+  `enable_pv_sell_to_grid` / `disable_pv_sell_to_grid` /
+  `get_pv_sell_to_grid_status` / `set_pv_sell_to_grid` overrides (transport
+  RMW on reg 179 bit 3, atomic cloud function-control without a transport —
+  the same pattern as the battery charge/discharge control bits 9/10), plus
+  the `FUNC_EXT_BIT_PV_SELL_TO_GRID = 3` constant. The canonical holding
+  table's spec name for the same bit (`FUNC_BAT_WAKEUP_EN`, "Battery wakeup /
+  PV sell first enable") corroborates the pin and is cross-referenced.
+
 ### Fixed
 
 - **EG4_OFFGRID register-110 layout corrected: Battery ECO is bit 15, buzzer is bit 7**

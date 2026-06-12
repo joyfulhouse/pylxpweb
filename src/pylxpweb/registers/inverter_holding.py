@@ -1598,7 +1598,14 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         canonical_name="battery_wakeup_enable",
         api_param_key="FUNC_BAT_WAKEUP_EN",
         category=HoldingCategory.FUNCTION,
-        description="Battery wakeup / PV sell first enable.",
+        description=(
+            "Battery wakeup / PV sell first enable.  The cloud names this "
+            "bit FUNC_PV_SELL_TO_GRID_EN ('Export PV Only', GH "
+            "eg4_web_monitor#135) — pinned to bit 3 by 2026-06-12 live "
+            "cloud toggles raw-verified on both a FlexBOSS21 and an 18kPV "
+            "(raw 0x104c <-> 0x1044, single bit 3); the transport map "
+            "(REGISTER_TO_PARAM_KEYS) carries the cloud name."
+        ),
     ),
     HoldingRegisterDefinition(
         address=179,

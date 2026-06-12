@@ -984,9 +984,10 @@ class ControlEndpoints(BaseEndpoint):
         """Enable PV sell to grid ("Export PV Only" in the EG4 web UI).
 
         Convenience wrapper for control_function(..., "FUNC_PV_SELL_TO_GRID_EN", True).
-        Cloud-only control: the parameter lives in the register 179 family
-        (confirmed via named reads), but its bit position is unpinned, so
-        there is no local Modbus write path (GH eg4_web_monitor#135).
+        Register 179 bit 3, pinned 2026-06-12 via live cloud toggles
+        raw-verified on both a FlexBOSS21 and an 18kPV (raw 0x104c <->
+        0x1044, single bit 3); the local Modbus write path is
+        HybridInverter.set_pv_sell_to_grid (GH eg4_web_monitor#135).
 
         Args:
             inverter_sn: Inverter serial number
@@ -1113,9 +1114,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("Peak shaving mode is active")
         """
-        return await self._get_function_status(
-            inverter_sn, 179, "FUNC_GRID_PEAK_SHAVING"
-        )
+        return await self._get_function_status(inverter_sn, 179, "FUNC_GRID_PEAK_SHAVING")
 
     # ============================================================================
     # Green Mode Controls (Off-Grid Mode in Web Monitor)

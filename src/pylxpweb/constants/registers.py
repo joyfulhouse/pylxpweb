@@ -76,6 +76,7 @@ FUNC_SYS_BIT_CHARGE_LAST = 4  # Charge last: charge battery after loads satisfie
 
 # Extended Function Enable Register (Address 179) - Bit Field
 FUNC_EXT_REGISTER = 179
+FUNC_EXT_BIT_PV_SELL_TO_GRID = 3  # Export PV Only (pinned 2026-06-12 live cloud toggle)
 FUNC_EXT_BIT_BAT_CHARGE_CONTROL = 9  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
 FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL = 10  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
 
@@ -600,17 +601,33 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # FUNC_TOTAL_LOAD_COMPENSATION_EN, FUNC_TRIP_TIME_UNIT, FUNC_WATT_VOLT_EN
     #
     # FUNC_PV_SELL_TO_GRID_EN ("Export PV Only" in the EG4 web UI, GH
-    # eg4_web_monitor#135): membership in this register re-confirmed via live
-    # single-register named reads 2026-06-12 — remoteRead (179, 1) returns it
-    # on both an 18kPV (True) and a FlexBOSS21 (False).  Its BIT POSITION is
-    # still unpinned (named responses are alphabetical), so it stays a
-    # cloud-only control; do NOT replace a FUNC_179_BIT* placeholder below
-    # without a local before/after register probe.
+    # eg4_web_monitor#135): BIT 3, PINNED 2026-06-12 ~16:05-16:07 PT via
+    # authorized live cloud functionControl toggles with raw verification
+    # through remoteRead (179, 1) valueFrame (base64, little-endian uint16)
+    # on BOTH 12K-hybrid models:
+    #   - FlexBOSS21 52842P0581: disable toggled raw 0x104c -> 0x1044
+    #     (XOR 0x0008 = single bit 3) with the named FUNC_PV_SELL_TO_GRID_EN
+    #     flipping True->False in lockstep; re-enable restored 0x104c,
+    #     verified by re-read.
+    #   - 18kPV 4512670118: same toggle, same 0x104c -> 0x1044 -> restored
+    #     0x104c, verified.
+    # Register-level evidence equivalent to a local before/after probe,
+    # proven directly on both family models — no extrapolation needed.
+    # Membership in this register had been re-confirmed via live
+    # single-register named reads 2026-06-12 (remoteRead (179, 1) returns it
+    # on both inverters).  The canonical holding table's spec name for bit 3
+    # is FUNC_BAT_WAKEUP_EN ("Battery wakeup / PV sell first enable") — the
+    # "PV sell first" wording corroborates the pin.  EG4_OFFGRID inherits
+    # this entry like the other reg-179 bits (7, 9, 10, 11 — all 12K-pinned):
+    # per the eg4-juzg adjudication, family overrides are reserved for
+    # hardware-PROVEN divergence (reg 110); no SNA evidence contradicts the
+    # shared reg-179 layout, and consumers suppress sell-back controls on
+    # that no-sellback family.
     179: [
         "FUNC_179_BIT0",  # Bit 0: unknown
         "FUNC_179_BIT1",  # Bit 1: unknown
         "FUNC_179_BIT2",  # Bit 2: unknown
-        "FUNC_179_BIT3",  # Bit 3: unknown (set on FlexBOSS21)
+        "FUNC_PV_SELL_TO_GRID_EN",  # Bit 3: Export PV Only (pinned 2026-06-12, see above)
         "FUNC_179_BIT4",  # Bit 4: unknown
         "FUNC_179_BIT5",  # Bit 5: unknown
         "FUNC_179_BIT6",  # Bit 6: unknown (set on FlexBOSS21)

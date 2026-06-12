@@ -1652,14 +1652,16 @@ class TestGridSellBackOperations:
         [
             ("enable_feed_in_grid", "enable_feed_in_grid"),
             ("disable_feed_in_grid", "disable_feed_in_grid"),
-            ("enable_pv_sell_to_grid", "enable_pv_sell_to_grid"),
-            ("disable_pv_sell_to_grid", "disable_pv_sell_to_grid"),
         ],
     )
     async def test_toggle_delegates_to_control_endpoint(
         self, mock_client: LuxpowerClient, inverter_method: str, control_method: str
     ) -> None:
-        """Device-level toggles delegate to the control endpoint by serial."""
+        """Device-level toggles delegate to the control endpoint by serial.
+
+        Export PV Only is no longer in this list: HybridInverter overrides
+        it with the reg-179 bit-3 dual-path (see TestPVSellToGridDualPath).
+        """
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
@@ -1671,24 +1673,15 @@ class TestGridSellBackOperations:
         getattr(mock_client.api.control, control_method).assert_called_once_with("1234567890")
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("inverter_method", "control_method"),
-        [
-            ("get_feed_in_grid_status", "get_feed_in_grid_status"),
-            ("get_pv_sell_to_grid_status", "get_pv_sell_to_grid_status"),
-        ],
-    )
-    async def test_status_delegates_to_control_endpoint(
-        self, mock_client: LuxpowerClient, inverter_method: str, control_method: str
-    ) -> None:
+    async def test_status_delegates_to_control_endpoint(self, mock_client: LuxpowerClient) -> None:
         """Device-level status getters delegate to the control endpoint."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-        setattr(mock_client.api.control, control_method, AsyncMock(return_value=True))
+        mock_client.api.control.get_feed_in_grid_status = AsyncMock(return_value=True)
 
-        assert await getattr(inverter, inverter_method)() is True
-        getattr(mock_client.api.control, control_method).assert_called_once_with("1234567890")
+        assert await inverter.get_feed_in_grid_status() is True
+        mock_client.api.control.get_feed_in_grid_status.assert_called_once_with("1234567890")
 
     @pytest.mark.asyncio
     async def test_set_feed_in_grid_power_percent(self, mock_client: LuxpowerClient) -> None:
@@ -1785,13 +1778,155 @@ class TestGridSellBackOperations:
         assert canonical[0].min_value == 0
         assert canonical[0].max_value == 100
 
-    def test_pv_sell_to_grid_bit_remains_unpinned(self) -> None:
-        """FUNC_PV_SELL_TO_GRID_EN must NOT appear in the reg-179 local bit
-        map until a before/after register probe pins its bit position —
-        named cloud responses are alphabetical and cannot pin bits."""
-        from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
+    def test_pv_sell_to_grid_bit_pinned_at_bit3(self) -> None:
+        """FUNC_PV_SELL_TO_GRID_EN is register 179 bit 3.
 
-        assert "FUNC_PV_SELL_TO_GRID_EN" not in REGISTER_TO_PARAM_KEYS[179]
+        Pinned 2026-06-12 ~16:05-16:07 PT via authorized live cloud toggles
+        with raw verification (remoteRead (179,1) valueFrame, base64 LE
+        uint16) on BOTH 12K-hybrid models: FlexBOSS21 52842P0581 and 18kPV
+        4512670118 each toggled raw 0x104c <-> 0x1044 (XOR 0x0008 = single
+        bit 3) in lockstep with the named param; restores verified by
+        re-read.  The list index in REGISTER_TO_PARAM_KEYS IS the bit
+        position, and the FUNC_EXT_BIT constant must agree.
+        """
+        from pylxpweb.constants import (
+            FUNC_EXT_BIT_PV_SELL_TO_GRID,
+            FUNC_EXT_REGISTER,
+            REGISTER_TO_PARAM_KEYS,
+        )
+
+        assert FUNC_EXT_REGISTER == 179
+        assert FUNC_EXT_BIT_PV_SELL_TO_GRID == 3
+        assert (
+            REGISTER_TO_PARAM_KEYS[179].index("FUNC_PV_SELL_TO_GRID_EN")
+            == FUNC_EXT_BIT_PV_SELL_TO_GRID
+        )
+
+    def test_pv_sell_to_grid_canonical_table_agrees_on_bit3(self) -> None:
+        """The canonical holding table's bit-3 entry (spec name
+        FUNC_BAT_WAKEUP_EN, "Battery wakeup / PV sell first enable") sits at
+        the same (address, bit) the live pin established for the cloud name
+        — the two tables must never drift apart on this bit."""
+        from pylxpweb.registers.inverter_holding import BY_API_KEY
+
+        canonical = BY_API_KEY["FUNC_BAT_WAKEUP_EN"]
+        assert canonical.address == 179
+        assert canonical.bit_position == 3
+
+
+class TestPVSellToGridDualPath:
+    """Export PV Only (FUNC_PV_SELL_TO_GRID_EN) — reg 179 bit 3 dual-path.
+
+    Bit pinned 2026-06-12 ~16:05-16:07 PT via authorized live cloud toggles
+    raw-verified on BOTH 12K-hybrid models — FlexBOSS21 52842P0581 and
+    18kPV 4512670118 each toggled reg-179 raw 0x104c <-> 0x1044 (XOR 0x0008
+    = single bit 3), restores verified by re-read.  The transport tests
+    below use those exact live frames as vectors.
+    """
+
+    def _transport_inverter(self, client: LuxpowerClient) -> HybridInverter:
+        return HybridInverter(
+            client=client,
+            serial_number="52842P0581",
+            model="FlexBOSS21",
+            transport=Mock(),  # non-None → dual-path helpers take the transport branch
+        )
+
+    @pytest.mark.asyncio
+    async def test_transport_enable_replays_live_frames(self, mock_client: LuxpowerClient) -> None:
+        """Enable over Modbus: RMW 0x1044 -> 0x104c, preserving bits 2/6/12."""
+        inverter = self._transport_inverter(mock_client)
+        inverter.read_transport_register = AsyncMock(return_value=0x1044)
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        assert await inverter.enable_pv_sell_to_grid() is True
+
+        inverter.read_transport_register.assert_awaited_once_with(179)
+        inverter.write_transport_register.assert_awaited_once_with(179, 0x104C)
+
+    @pytest.mark.asyncio
+    async def test_transport_disable_replays_live_frames(self, mock_client: LuxpowerClient) -> None:
+        """Disable over Modbus: RMW 0x104c -> 0x1044 (the live toggle)."""
+        inverter = self._transport_inverter(mock_client)
+        inverter.read_transport_register = AsyncMock(return_value=0x104C)
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        assert await inverter.disable_pv_sell_to_grid() is True
+
+        inverter.read_transport_register.assert_awaited_once_with(179)
+        inverter.write_transport_register.assert_awaited_once_with(179, 0x1044)
+
+    @pytest.mark.asyncio
+    async def test_transport_status_reads_bit3(self, mock_client: LuxpowerClient) -> None:
+        """Status over Modbus reads bit 3 of register 179."""
+        inverter = self._transport_inverter(mock_client)
+
+        inverter.read_transport_register = AsyncMock(return_value=0x104C)
+        assert await inverter.get_pv_sell_to_grid_status() is True
+
+        inverter.read_transport_register = AsyncMock(return_value=0x1044)
+        assert await inverter.get_pv_sell_to_grid_status() is False
+
+    @pytest.mark.asyncio
+    async def test_cloud_enable_uses_function_control(self, mock_client: LuxpowerClient) -> None:
+        """Without a transport, enable routes through the atomic
+        function-control API with the named parameter (same server-side
+        update the cloud-only BaseInverter wrapper performs)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="52842P0581", model="FlexBOSS21"
+        )
+        mock_client.api.control.control_function = AsyncMock(return_value=_cloud_success())
+
+        assert await inverter.enable_pv_sell_to_grid() is True
+
+        mock_client.api.control.control_function.assert_awaited_once_with(
+            "52842P0581", "FUNC_PV_SELL_TO_GRID_EN", True
+        )
+
+    @pytest.mark.asyncio
+    async def test_cloud_disable_uses_function_control(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="52842P0581", model="FlexBOSS21"
+        )
+        mock_client.api.control.control_function = AsyncMock(return_value=_cloud_success())
+
+        assert await inverter.disable_pv_sell_to_grid() is True
+
+        mock_client.api.control.control_function.assert_awaited_once_with(
+            "52842P0581", "FUNC_PV_SELL_TO_GRID_EN", False
+        )
+
+    @pytest.mark.asyncio
+    async def test_cloud_status_reads_named_parameter(self, mock_client: LuxpowerClient) -> None:
+        """Without a transport, status reads the named param from reg 179."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="52842P0581", model="FlexBOSS21"
+        )
+        mock_client.api.control.read_parameters = AsyncMock(
+            return_value=_cloud_read_response(FUNC_PV_SELL_TO_GRID_EN=True)
+        )
+
+        assert await inverter.get_pv_sell_to_grid_status() is True
+
+        mock_client.api.control.read_parameters.assert_awaited_once_with("52842P0581", 179, 1)
+
+    @pytest.mark.asyncio
+    async def test_generic_inverter_keeps_cloud_endpoint_delegation(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Station discovery instantiates GenericInverter (not Hybrid) — its
+        inherited BaseInverter methods must keep delegating to the dedicated
+        cloud endpoint helpers so the HTTP flow is unchanged."""
+        from pylxpweb.devices.inverters.generic import GenericInverter
+
+        inverter = GenericInverter(
+            client=mock_client, serial_number="52842P0581", model="FlexBOSS21"
+        )
+        mock_client.api.control.enable_pv_sell_to_grid = AsyncMock(return_value=_cloud_success())
+
+        assert await inverter.enable_pv_sell_to_grid() is True
+
+        mock_client.api.control.enable_pv_sell_to_grid.assert_called_once_with("52842P0581")
 
 
 class TestStopDischargeVoltageOperations:
