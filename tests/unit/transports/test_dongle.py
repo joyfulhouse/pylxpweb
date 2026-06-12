@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -118,8 +120,9 @@ class TestDongleConnection:
         )
 
         mock_reader = AsyncMock()
-        # Simulate no initial data (returns empty bytes)
-        mock_reader.read = AsyncMock(return_value=b"")
+        # Simulate no initial data (read never returns; wait_for times out).
+        # b'' would mean EOF — an accept-then-close — which fails connect().
+        mock_reader.read = AsyncMock(side_effect=TimeoutError())
         mock_writer = MagicMock()
         mock_writer.close = MagicMock()
         mock_writer.wait_closed = AsyncMock()
@@ -176,7 +179,7 @@ class TestDongleConnection:
         )
 
         mock_reader = AsyncMock()
-        mock_reader.read = AsyncMock(return_value=b"")
+        mock_reader.read = AsyncMock(side_effect=TimeoutError())
         mock_writer = MagicMock()
         mock_writer.close = MagicMock()
         mock_writer.wait_closed = AsyncMock()
@@ -198,7 +201,7 @@ class TestDongleConnection:
         )
 
         mock_reader = AsyncMock()
-        mock_reader.read = AsyncMock(return_value=b"")
+        mock_reader.read = AsyncMock(side_effect=TimeoutError())
         mock_writer = MagicMock()
         mock_writer.close = MagicMock()
         mock_writer.wait_closed = AsyncMock()
@@ -533,7 +536,9 @@ class TestDongleRegisterOperations:
         """Test that _send_receive auto-reconnects on next call after disconnect.
 
         Simulates: previous call left _connected=False, next _send_receive
-        reconnects before attempting the transaction.
+        reconnects before attempting the transaction.  Every empty response
+        (EOF) now tears the connection down, so each retry attempt dials a
+        fresh connection — three attempts, three connects.
         """
         transport = DongleTransport(
             host="192.168.1.100",
@@ -559,10 +564,13 @@ class TestDongleRegisterOperations:
         transport.connect = AsyncMock(side_effect=mock_connect)
 
         # This should call connect() before attempting the transaction
-        with pytest.raises(TransportReadError):
+        with patch("asyncio.sleep", AsyncMock()), pytest.raises(TransportReadError):
             await transport._send_receive(b"\x00" * 10)
 
-        transport.connect.assert_called_once()
+        # One reconnect per attempt: EOF tears down, each retry dials fresh.
+        assert transport.connect.call_count == 3
+        # Final EOF also tore down, so the NEXT request reconnects too.
+        assert transport.is_connected is False
 
     @pytest.mark.asyncio
     async def test_oserror_reconnect_retry_succeeds(self) -> None:
@@ -654,13 +662,17 @@ class TestDongleRegisterOperations:
         assert transport.connect.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_oserror_reconnect_failure_continues_retries(self) -> None:
-        """Test that failed reconnect continues to next retry attempt.
+    async def test_oserror_reconnect_failure_fails_fast(self) -> None:
+        """A failed in-loop reconnect aborts the request immediately.
 
-        With max_retries=2 (3 attempts total):
+        connect() already retries internally with backoff — if a full
+        connect cycle fails there is no connectivity, so burning the
+        remaining request attempts on more connect cycles only multiplies
+        dead-endpoint latency (bad for link-down probe cadence, #226).
+
+        With max_retries=2:
         - Attempt 0: OSError → teardown → sleep → continue
-        - Attempt 1: top-of-loop reconnect → fails → sleep → continue
-        - Attempt 2: top-of-loop reconnect → fails → raise (final attempt)
+        - Attempt 1: top-of-loop reconnect → fails → raise immediately
         """
         transport = DongleTransport(
             host="192.168.1.100",
@@ -674,14 +686,17 @@ class TestDongleRegisterOperations:
         transport._writer.write = MagicMock()
         transport._writer.close = MagicMock()
 
-        # Reconnect always fails — but retries should still be attempted
+        # Reconnect fails — the request must fail fast with the real error
         transport.connect = AsyncMock(side_effect=TransportConnectionError("Cannot connect"))
 
-        with pytest.raises(TransportConnectionError, match="Socket not initialized"):
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportConnectionError, match="Cannot connect"),
+        ):
             await transport._send_receive(b"\x00" * 10, max_retries=2)
 
-        # Both retry attempts should have tried to reconnect
-        assert transport.connect.call_count == 2
+        # Exactly ONE reconnect cycle — no repeat connect() per attempt
+        assert transport.connect.call_count == 1
 
     @pytest.mark.asyncio
     async def test_write_parameters(self) -> None:
@@ -710,10 +725,11 @@ class TestDongleRegisterOperations:
         response += struct.pack("<H", crc)
 
         mock_reader = AsyncMock()
-        # First call returns empty (during connect's _discard_initial_data)
+        # First call times out (connect's _discard_initial_data: no initial
+        # data; b'' would mean EOF and fail the connect attempt)
         # Second call is for _drain_buffer (returns empty to stop draining)
         # Third call returns the actual response
-        mock_reader.read = AsyncMock(side_effect=[b"", b"", response])
+        mock_reader.read = AsyncMock(side_effect=[TimeoutError(), b"", response])
 
         mock_writer = MagicMock()
         mock_writer.write = MagicMock()
@@ -1304,7 +1320,11 @@ class TestDongleSendReceiveTimeoutRetry:
 
     @pytest.mark.asyncio
     async def test_read_timeout_still_fails_fast(self) -> None:
-        """Read requests keep fail-fast timeout behavior (no retry)."""
+        """Read requests keep fail-fast timeout behavior (no in-call retry).
+
+        The connection must still be torn down (#226): the next request —
+        not this one — reconnects on a fresh socket.
+        """
         transport = self._connected_transport()
         assert transport._reader is not None
         transport._reader.read = AsyncMock(side_effect=TimeoutError())
@@ -1314,6 +1334,12 @@ class TestDongleSendReceiveTimeoutRetry:
             await transport._send_receive(b"\x00" * 10)
 
         transport.connect.assert_not_awaited()
+        # Timeout tears down even without in-call retry: the socket is
+        # suspect (half-open path loss delivers no RST) and must never be
+        # reused by the next request.
+        assert transport.is_connected is False
+        assert transport._writer is None
+        assert transport._reader is None
 
 
 class TestWriteAckEchoValidation:
@@ -1552,3 +1578,394 @@ class TestDongleForceReconnect:
 
         assert result is True
         assert any(call.args == (0.05,) for call in sleep_mock.await_args_list)
+
+
+class _ScriptedDongleServer:
+    """Local TCP server emulating a WiFi dongle for path-loss scenarios.
+
+    Modes:
+        "reply":  respond to every request with a valid register frame.
+        "mute":   swallow requests and never respond, keeping the socket
+                  open — the application-level equivalent of silent path
+                  loss (writes succeed, reads only ever time out; no RST
+                  or FIN is ever delivered).
+        "reject": accept the TCP connection and close it immediately —
+                  the dongle's single-client-slot conflict shape.
+    """
+
+    def __init__(self, response: bytes) -> None:
+        self._response = response
+        self._server: asyncio.Server | None = None
+        self.mode = "reply"
+        self.accepted = 0
+        self.requests_received = 0
+
+    async def start(self) -> int:
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        sockets = self._server.sockets
+        assert sockets
+        return int(sockets[0].getsockname()[1])
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.accepted += 1
+        if self.mode == "reject":
+            writer.close()
+            return
+        try:
+            while True:
+                data = await reader.read(4096)
+                if not data:
+                    break
+                self.requests_received += 1
+                if self.mode == "reply":
+                    writer.write(self._response)
+                    await writer.drain()
+                # mode == "mute": swallow the request, never respond
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            with contextlib.suppress(Exception):
+                writer.close()
+
+
+class TestDongleSilentPathLoss:
+    """Half-open / silent path loss scenarios (#226, eg4-mu7o).
+
+    A VPN drop or NAT/conntrack flush kills the path WITHOUT delivering a
+    RST or FIN: the established socket stays ESTABLISHED, writes buffer
+    into a black hole, and reads only ever time out.  Recovery is only
+    possible on a FRESH connection — the transport must tear down on
+    timeout and reconnect on the next request, never reuse the dead flow.
+    """
+
+    def _transport(self, port: int, timeout: float = 0.2) -> DongleTransport:
+        return DongleTransport(
+            host="127.0.0.1",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            port=port,
+            timeout=timeout,
+            connection_retries=1,
+        )
+
+    @pytest.mark.asyncio
+    async def test_half_open_read_timeout_tears_down(self) -> None:
+        """(a) Half-open socket: read times out, write succeeds.
+
+        The request must fail fast with TransportTimeoutError AND tear the
+        connection down (old code kept the dead socket installed forever).
+        The per-transaction lock must be released.
+        """
+        response = _build_mock_response(start_register=0, register_values=[1, 2])
+        server = _ScriptedDongleServer(response)
+        port = await server.start()
+        transport = self._transport(port)
+        try:
+            await transport.connect()
+            assert transport.is_connected is True
+
+            # Path loss: server goes mute (socket stays open, no RST/FIN)
+            server.mode = "mute"
+
+            with pytest.raises(TransportTimeoutError):
+                await transport._read_input_registers(0, 2)
+
+            # The write DID reach the socket (half-open: writes succeed)
+            assert server.requests_received >= 1
+            # Teardown: the dead flow must never be reused
+            assert transport.is_connected is False
+            assert transport._writer is None
+            assert transport._reader is None
+            # Lock released — no leak on the timeout exception path
+            assert transport._lock.locked() is False
+        finally:
+            await transport.disconnect()
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_recovery_after_path_restoration(self) -> None:
+        """(d) After restoration the next poll dials a FRESH connection.
+
+        Healthy poll → silent loss (timeout, teardown) → path restored →
+        next poll reconnects (server sees a SECOND accept) and succeeds
+        without any reload/external intervention.
+        """
+        response = _build_mock_response(start_register=0, register_values=[7, 8])
+        server = _ScriptedDongleServer(response)
+        port = await server.start()
+        transport = self._transport(port)
+        try:
+            await transport.connect()
+            assert await transport._read_input_registers(0, 2) == [7, 8]
+            assert server.accepted == 1
+
+            # Silent path loss
+            server.mode = "mute"
+            with pytest.raises(TransportTimeoutError):
+                await transport._read_input_registers(0, 2)
+            assert transport.is_connected is False
+
+            # Path restored
+            server.mode = "reply"
+
+            # Next poll reconnects on a fresh socket and succeeds
+            assert await transport._read_input_registers(0, 2) == [7, 8]
+            assert server.accepted == 2
+            assert transport.is_connected is True
+        finally:
+            await transport.disconnect()
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_connect_hang_times_out_and_releases_lock(self) -> None:
+        """(b) A hanging connect() (SYN black hole) is bounded by timeout.
+
+        asyncio.open_connection never completes; the wait_for wrapper must
+        bound each attempt, the failure must leave clean state, and the
+        per-transaction lock must be released so a later request (after
+        restoration) succeeds.
+        """
+        transport = DongleTransport(
+            host="127.0.0.1",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            port=1,
+            timeout=0.05,
+            connection_retries=2,
+        )
+        # Simulate a prior teardown (e.g. after a read timeout)
+        transport._connected = False
+        transport._reader = None
+        transport._writer = None
+
+        async def hang(*args: object, **kwargs: object) -> object:
+            await asyncio.Event().wait()
+
+        with (
+            patch("asyncio.open_connection", side_effect=hang),
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportConnectionError, match="Timeout"),
+        ):
+            await transport._send_receive(b"\x00" * 10)
+
+        assert transport.is_connected is False
+        assert transport._writer is None
+        assert transport._lock.locked() is False
+
+        # Restoration: a later request connects and completes normally
+        response = _build_mock_response(start_register=0, register_values=[5])
+        server = _ScriptedDongleServer(response)
+        port = await server.start()
+        transport._port = port
+        try:
+            assert await transport._read_input_registers(0, 1) == [5]
+        finally:
+            await transport.disconnect()
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_connect_refused_fails_fast_with_clean_state(self) -> None:
+        """(c) Connection refused: bounded fail-fast, clean state, no leak."""
+        transport = DongleTransport(
+            host="127.0.0.1",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            port=1,
+            timeout=0.05,
+            connection_retries=2,
+        )
+        transport._connected = False
+
+        open_mock = AsyncMock(side_effect=ConnectionRefusedError("refused"))
+        with (
+            patch("asyncio.open_connection", open_mock),
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportConnectionError, match="Failed to connect"),
+        ):
+            await transport._send_receive(b"\x00" * 10)
+
+        # connect() did its own bounded retries; the request failed fast
+        # after ONE connect cycle (no outer retry multiplication).
+        assert open_mock.await_count == 2
+        assert transport.is_connected is False
+        assert transport._lock.locked() is False
+
+    @pytest.mark.asyncio
+    async def test_partial_connect_failure_leaves_clean_state(self) -> None:
+        """connect(): socket opens but initial-data discard hits OSError.
+
+        Old code marked _connected=True BEFORE the initial-data read, so a
+        partial failure could exit connect() via TransportConnectionError
+        with _connected still True and a stale reader/writer installed —
+        subsequent requests then skipped reconnection and used the dead
+        socket.  Now every failure path tears down.
+        """
+        transport = DongleTransport(
+            host="127.0.0.1",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            timeout=0.05,
+            connection_retries=2,
+        )
+
+        bad_reader = AsyncMock()
+        bad_reader.read = AsyncMock(side_effect=OSError("reset during initial read"))
+        bad_writer = MagicMock()
+        bad_writer.close = MagicMock()
+
+        open_mock = AsyncMock(
+            side_effect=[(bad_reader, bad_writer), ConnectionRefusedError("refused")]
+        )
+
+        with (
+            patch("asyncio.open_connection", open_mock),
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportConnectionError),
+        ):
+            await transport.connect()
+
+        assert transport.is_connected is False
+        assert transport._reader is None
+        assert transport._writer is None
+        # The partially-opened socket was closed, not leaked
+        bad_writer.close.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_response_reconnects_between_retries(self) -> None:
+        """EOF (b'') tears down so every in-call retry dials fresh.
+
+        recv returning b'' means the peer closed the connection — the old
+        code re-read the same dead socket for all retries and left it
+        installed on the final failure.
+        """
+        transport = DongleTransport(
+            host="127.0.0.1",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        transport._connected = True
+        eof_reader = AsyncMock()
+        eof_reader.read = AsyncMock(return_value=b"")
+        writer = AsyncMock()
+        writer.write = MagicMock()
+        writer.close = MagicMock()
+        transport._reader = eof_reader
+        transport._writer = writer
+
+        reconnects = 0
+
+        async def mock_connect() -> None:
+            nonlocal reconnects
+            reconnects += 1
+            transport._connected = True
+            fresh_reader = AsyncMock()
+            fresh_reader.read = AsyncMock(return_value=b"")
+            fresh_writer = AsyncMock()
+            fresh_writer.write = MagicMock()
+            fresh_writer.close = MagicMock()
+            transport._reader = fresh_reader
+            transport._writer = fresh_writer
+
+        transport.connect = AsyncMock(side_effect=mock_connect)  # type: ignore[method-assign]
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportReadError, match="Empty response"),
+        ):
+            await transport._send_receive(b"\x00" * 10, max_retries=2)
+
+        # Attempt 0 used the initial socket; attempts 1 and 2 reconnected
+        assert reconnects == 2
+        # Final EOF tore down: the next request will reconnect
+        assert transport.is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_concurrent_connect_calls_dial_once(self) -> None:
+        """Parallel connect() calls serialise on the dongle's single slot.
+
+        _send_receive reconnects under the per-transaction lock, but
+        external callers (coordinator write paths) can call connect()
+        directly and concurrently.  The loser of the race must return
+        the winner's fresh connection, not dial a second TCP connection
+        (the dongle allows exactly ONE) and not tear the winner down.
+        """
+        response = _build_mock_response(start_register=0, register_values=[3])
+        server = _ScriptedDongleServer(response)
+        port = await server.start()
+        transport = self._transport(port)
+        try:
+            await asyncio.gather(transport.connect(), transport.connect())
+            assert transport.is_connected is True
+
+            # The surviving connection actually works.  The full request/
+            # response round trip also guarantees the server's accept
+            # handler ran for every dialed connection — a deterministic
+            # ordering point for the accept-count assertion below (codex
+            # review: no bare sleep).
+            assert await transport._read_input_registers(0, 1) == [3]
+            assert server.accepted == 1
+        finally:
+            await transport.disconnect()
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_accept_then_close_fails_connect(self) -> None:
+        """A dongle that accepts and immediately closes must fail connect().
+
+        Codex review: read(512) returning b'' in the initial-data window is
+        EOF, not "no initial data" — declaring such a socket connected
+        violates the "_connected implies live socket" invariant (the
+        connect-race short-circuit would then hand the dead socket to the
+        other caller too).
+        """
+        server = _ScriptedDongleServer(b"")
+        server.mode = "reject"
+        port = await server.start()
+        transport = self._transport(port)
+        try:
+            with (
+                patch("asyncio.sleep", AsyncMock()),
+                pytest.raises(TransportConnectionError),
+            ):
+                await transport.connect()
+
+            assert transport.is_connected is False
+            assert transport._reader is None
+            assert transport._writer is None
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_write_eof_never_resends_packet(self) -> None:
+        """ACK loss via EOF must NOT replay the pre-built write packet.
+
+        Codex review (HIGH): the inverter may have applied the write before
+        the connection died — resending the same packet could replay stale
+        bit-field values over a concurrent writer's change.  The failure
+        must propagate (TransportWriteError) so write_named_parameters'
+        sequence-level retry RE-READS before re-writing.
+        """
+        transport = _make_write_test_transport()
+        reader = AsyncMock()
+        reader.read = AsyncMock(return_value=b"")  # EOF on the ACK read
+        writer = AsyncMock()
+        writer.write = MagicMock()
+        writer.close = MagicMock()
+        transport._reader = reader
+        transport._writer = writer
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError, match="Empty response"),
+        ):
+            await transport._write_holding_registers(21, [0x0001])
+
+        # Exactly one transmission of the write packet — no resend
+        assert writer.write.call_count == 1
+        # Connection torn down so the sequence retry reconnects fresh
+        assert transport.is_connected is False

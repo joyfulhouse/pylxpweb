@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **WiFi dongle transport reconnects after silent path loss**
+  ([eg4_web_monitor#226](https://github.com/joyfulhouse/eg4_web_monitor/issues/226)):
+  a response timeout never tore down the TCP connection, so after a silent
+  path drop (VPN tunnel break, NAT/conntrack flush — no RST/FIN delivered)
+  every poll re-used the same dead ESTABLISHED flow forever and only an
+  integration reload could recover. Every response timeout and EOF now
+  tears the connection down; the next request (or link-down probe) dials a
+  fresh TCP connection, so polling self-restores within a poll cycle of the
+  path returning. The 0.9.36b3 reconnect gate covered pymodbus transports
+  only; this closes the same gap for the raw-TCP dongle transport.
+- **Dongle connection state can no longer be corrupted by partial
+  connects**: `_connected` is set only after the socket is fully usable
+  (open AND initial-data window handled); every connect failure path tears
+  down, and a dongle that accepts then immediately closes (single-client
+  slot conflict) now fails the attempt into the retry/backoff cycle instead
+  of being declared connected.
+- **Concurrent dongle connects serialized**: `connect()` now holds a
+  dedicated lock and the loser of a connect race returns the winner's
+  fresh connection — two parallel dials can no longer fight over the
+  dongle's single TCP slot. Request-path reconnection happens only under
+  the per-transaction lock.
+- **Write requests never resend the same packet on ACK loss** (codex
+  review): after a timeout, EOF, or socket error during a write, the
+  pre-built packet is not retransmitted in-call (the inverter may have
+  already applied it — a resend could replay stale bit-field values over a
+  concurrent writer's change). All write failures propagate to
+  `write_named_parameters`' sequence-level retry, which re-reads the
+  register before re-writing.
+
 ## [0.9.36b2] - 2026-06-10
 
 ### Fixed
