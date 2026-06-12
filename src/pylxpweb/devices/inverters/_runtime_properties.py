@@ -43,6 +43,8 @@ from typing import TYPE_CHECKING
 
 from pylxpweb.constants import derive_pv_current, scale_runtime_value
 
+from ._features import InverterFamily
+
 if TYPE_CHECKING:
     from pylxpweb.models import InverterRuntime
     from pylxpweb.transports.data import InverterRuntimeData
@@ -615,7 +617,15 @@ class InverterRuntimePropertiesMixin:
     def consumption_power(self) -> int | None:
         """Get consumption power in watts.
 
-        For HTTP data, uses the server-computed consumptionPower field.
+        For HTTP data, uses the server-computed consumptionPower field —
+        except on the EG4 Off-Grid family, where the cloud does not populate
+        consumptionPower (it would read a false 0 under load) and the
+        authoritative figure is the backup-path split:
+            consumption = epsLoadPower + smartLoadPower + gridLoadPower
+        (live-confirmed on a 6000XP, GH eg4_web_monitor#226: the split is
+        what keeps the Loads sensor honest during a hybrid link-down
+        cloud-fallback window).
+
         For local transport data (Modbus/Dongle), computes from energy balance:
             consumption = pv + battery_power + grid_import - grid_export
 
@@ -644,6 +654,13 @@ class InverterRuntimePropertiesMixin:
             return max(0, consumption)
         if self._runtime is None:
             return None
+        features = getattr(self, "_features", None)
+        if features is not None and features.model_family is InverterFamily.EG4_OFFGRID:
+            return (
+                self._runtime.epsLoadPower
+                + self._runtime.smartLoadPower
+                + self._runtime.gridLoadPower
+            )
         return self._runtime.consumptionPower
 
     @property
