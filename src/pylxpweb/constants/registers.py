@@ -607,8 +607,24 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     227: ["HOLD_SYSTEM_CHARGE_SOC_LIMIT"],
     # System charge voltage limit (V, ×10, confirmed 2026-02-18)
     228: ["HOLD_SYSTEM_CHARGE_VOLT_LIMIT"],
-    # Grid peak shaving power (2 registers, 32-bit value in kW)
-    231: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER"],
+    # Grid peak shaving family (eg4-gfu5, located 2026-06-12 via single-register
+    # cloud window reads on an 18kPV AND a FlexBOSS21 — both devices agree):
+    #   206 = _12K_HOLD_GRID_PEAK_SHAVING_POWER   (PS1; raw kW encoding UNVERIFIED)
+    #   207 = _12K_HOLD_GRID_PEAK_SHAVING_SOC     (%, raw 1:1: raw 80 -> "80")
+    #   208 = _12K_HOLD_GRID_PEAK_SHAVING_VOLT    (decivolts: raw 520 -> "52")
+    #   218 = _12K_HOLD_GRID_PEAK_SHAVING_SOC_2   (%, raw 1:1: raw 50 -> "50")
+    #   219 = _12K_HOLD_GRID_PEAK_SHAVING_VOLT_2  (decivolts: raw 520 -> "52")
+    #   232 = _12K_HOLD_GRID_PEAK_SHAVING_POWER_2 (PS2; raw kW encoding UNVERIFIED)
+    # The old `231: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER"]` entry here was WRONG:
+    # single-register cloud reads of (231,1) return ZERO named parameters on both
+    # inverters while (206,1) names PS1.  Local name-writes through the old entry
+    # landed in register 231 — a real but UNKNOWN field (raw 0; a past raw write
+    # quantized 55 -> 54, i.e. even values only).  None of the family is mapped
+    # here yet: the local parameter refresh spans these registers and would
+    # surface raw values (decivolts / unverified kW encoding) as engineering
+    # units.  Map them together with raw-encoding verification + scaling support
+    # (same discipline as register 202 above).  See the canonical table rows in
+    # registers/inverter_holding.py for the full evidence trail.
     # Register 233: Extended function enable 2 bit field (verified via Modbus probe 2026-02-13)
     # API returns 9 params for this register (alphabetical, NOT bit order).
     # Bit 1 (FUNC_BATTERY_BACKUP_CTRL) confirmed via live toggle test.

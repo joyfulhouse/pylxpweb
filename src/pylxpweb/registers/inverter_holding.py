@@ -1422,17 +1422,122 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         ),
     ),
     # =========================================================================
-    # GRID PEAK SHAVING (reg 231, 32-bit)
+    # GRID PEAK SHAVING (regs 206-208 / 218-219 / 232, located 2026-06-12)
     # =========================================================================
+    # eg4-gfu5: the family was located by single-register cloud window reads
+    # ((reg, 1) named-parameter reads) on an 18kPV AND a FlexBOSS21 — both
+    # devices return identical name placements.  The previous row mapped PS1
+    # to register 231 (claimed 32-bit) — WRONG on both counts: (231,1) returns
+    # ZERO named parameters on either inverter, and 232 is the time-period-2
+    # power (PS2), not a high word.  Register 231 itself is a real but UNKNOWN
+    # field (raw 0; a past authorized raw write quantized 55 -> 54, i.e. even
+    # values only) — deliberately left unmapped.
     HoldingRegisterDefinition(
-        address=231,
+        address=206,
         canonical_name="grid_peak_shaving_power",
-        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_POWER",  # verified
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_POWER",  # verified at 206
         ha_entity_key="grid_peak_shaving_power",
-        bit_width=32,
         unit="kW",
+        min_value=0,
+        max_value=25.5,
         category=HoldingCategory.GRID,
-        description="Grid peak shaving power limit (32-bit, kW).",
+        description=(
+            "Grid peak shaving power limit, time period 1.  Cloud read/write "
+            "uses float kW [0, 25.5].  Register located 2026-06-12 by "
+            "single-register cloud window reads on an 18kPV and a FlexBOSS21 "
+            "((206,1) names this key; (231,1) names nothing).  Raw register "
+            "encoding presumed deci-kW (sibling _12K_HOLD_START_PV_POWER at "
+            "reg 217 reads raw 5 for '0.5' kW, and 25.5 kW max fits one byte "
+            "at 0.1 kW/LSB) but UNVERIFIED — live setpoint was 0 on both "
+            "devices.  Deliberately NOT in REGISTER_TO_PARAM_KEYS until the "
+            "raw encoding is write-verified — the local parameter refresh "
+            "spans this register and would surface unscaled values.  "
+            "`writable` describes the register itself (cloud NAME-writes "
+            "work); do NOT construct local raw writes from this row while "
+            "the encoding is unverified."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=207,
+        canonical_name="grid_peak_shaving_soc",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_SOC",  # verified at 207
+        unit="%",
+        min_value=0,
+        max_value=100,
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving SOC threshold, time period 1.  Located "
+            "2026-06-12 via (207,1) cloud reads on an 18kPV and a FlexBOSS21; "
+            "raw 1:1 percent proven by raw-vs-named cross-check in the same "
+            "responses (raw 80 -> '80').  Not in REGISTER_TO_PARAM_KEYS yet — "
+            "added together with the rest of the family once the power "
+            "members' raw encodings are verified."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=208,
+        canonical_name="grid_peak_shaving_volt",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_VOLT",  # verified at 208
+        scale=ScaleFactor.DIV_10,
+        unit="V",
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving battery voltage threshold, time period 1.  "
+            "Located 2026-06-12 via (208,1) cloud reads on an 18kPV and a "
+            "FlexBOSS21; decivolt raw encoding proven by raw-vs-named "
+            "cross-check in the same responses (raw 520 -> '52' V).  Not in "
+            "REGISTER_TO_PARAM_KEYS yet — see grid_peak_shaving_power."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=218,
+        canonical_name="grid_peak_shaving_soc_2",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_SOC_2",  # verified at 218
+        unit="%",
+        min_value=0,
+        max_value=100,
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving SOC threshold, time period 2.  Located "
+            "2026-06-12 via (218,1) cloud reads on an 18kPV and a FlexBOSS21; "
+            "raw 1:1 percent proven by raw-vs-named cross-check (raw 50 -> "
+            "'50').  Not in REGISTER_TO_PARAM_KEYS yet — see "
+            "grid_peak_shaving_power."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=219,
+        canonical_name="grid_peak_shaving_volt_2",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2",  # verified at 219
+        scale=ScaleFactor.DIV_10,
+        unit="V",
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving battery voltage threshold, time period 2.  "
+            "Located 2026-06-12 via (219,1) cloud reads on an 18kPV and a "
+            "FlexBOSS21; decivolt raw encoding proven by raw-vs-named "
+            "cross-check (raw 520 -> '52' V).  Not in REGISTER_TO_PARAM_KEYS "
+            "yet — see grid_peak_shaving_power."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=232,
+        canonical_name="grid_peak_shaving_power_2",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_POWER_2",  # verified at 232
+        unit="kW",
+        min_value=0,
+        max_value=25.5,
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving power limit, time period 2.  Located "
+            "2026-06-12 via (232,1) cloud reads on an 18kPV and a FlexBOSS21 "
+            "(this single-register read naming PS2 also disproves the old "
+            "'PS1 is 32-bit across 231-232' claim).  Raw encoding presumed "
+            "deci-kW like grid_peak_shaving_power but UNVERIFIED (live "
+            "setpoint 0).  Not in REGISTER_TO_PARAM_KEYS yet; `writable` "
+            "describes the register itself (cloud name-writes) — no local "
+            "raw writes until the encoding is verified."
+        ),
     ),
     # =========================================================================
     # EXTENDED FUNCTION ENABLE 4 (reg 179) — 16-bit bitfield
