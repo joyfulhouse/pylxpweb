@@ -5,10 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.36b4] - 2026-06-12
 
 ### Added
 
+- **Forced discharge controls** (regs 82/83,
+  [eg4_web_monitor#207](https://github.com/joyfulhouse/eg4_web_monitor/issues/207),
+  co-authored with DevTodd): `set_forced_discharge_power(power_kw)` (cloud
+  float kW, 0–25.5) and `set_forced_discharge_soc_limit(percent)` setters
+  plus the matching properties. **Register 82 stores 100 W units (kW
+  scale), not percent** — hardware set-2.5kW-read-raw-25 verification and
+  the cloud maintain page (float field, [0, 25.5] = the raw uint8 ceiling)
+  falsified the 18KPV PDF's percent claim; the canonical table and scaling
+  map are corrected accordingly. Live-verified by cloud
+  write/readback/revert on an 18kPV and a FlexBOSS21.
+- **Register 202 located and documented** (`_12K_HOLD_STOP_DISCHG_VOLT`,
+  Stop Discharge Voltage, 40–56 V, raw decivolts — confirmed by
+  single-register cloud window reads plus a raw read of 400 against the
+  cloud's 40 V): canonical row added; the `REGISTER_TO_PARAM_KEYS` entry
+  is deliberately deferred to the release that ships the entity.
 - **Device type code 38 mapped to the EG4 6000XP (EG4_OFFGRID)**
   ([eg4_web_monitor#222](https://github.com/joyfulhouse/eg4_web_monitor/issues/222)):
   feature detection, transport discovery, model naming, and the network
@@ -54,6 +69,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concurrent writer's change). All write failures propagate to
   `write_named_parameters`' sequence-level retry, which re-reads the
   register before re-writing.
+- **Parallel-group history: `eImportDay`/`eGenDay` parsed from
+  monthColumn** (live-found during the 3.4.0-beta.4 verification): the
+  parallel endpoint names grid import `eImportDay` (not `eToUserDay`), so
+  the `grid_import` history series came back empty; generator energy is
+  now exposed as `generator_kwh` alongside it. Re-running a historical
+  import after upgrading backfills the affected series (idempotent).
+
+## [0.9.36b3] - 2026-06-11
+
+Backfilled summary — see the
+[GitHub release notes](https://github.com/joyfulhouse/pylxpweb/releases/tag/v0.9.36b3)
+for full detail.
+
+### Added
+
+- **Transport link health**: after 3 consecutive failed local reads the
+  link is declared down — stale transport data stops being served, the
+  dead link is probed every cycle (rate-limited), and everything
+  self-restores on reconnection.
+- **Typed monthly daily-energy history API** (`inverterChart`
+  monthColumn) powering the integration's `import_historical_data`
+  service.
+- **Energy value sanity checks**: physical-bounds validation with
+  always-on monotonicity, self-heal ceilings in both directions, and an
+  absolute daily cap on warm-up/seed reads.
+
+### Fixed
+
+- **Modbus write/read paths widened to `ModbusException`** so
+  `ConnectionException` reaches the reconnect gate (previously only
+  `ModbusIOException` counted and a dropped TCP session wedged the
+  pymodbus transport).
+- **Register-semantics cluster**: `output_power` load semantics, net
+  `grid_power` flow, canonical yield pairing, and battery cell-number
+  registers uncrossed (offset 14 = temp, 15 = voltage).
 
 ## [0.9.36b2] - 2026-06-10
 
