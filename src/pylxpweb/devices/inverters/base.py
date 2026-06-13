@@ -45,7 +45,7 @@ _LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
-    from pylxpweb.models import EnergyInfo, InverterRuntime
+    from pylxpweb.models import EnergyInfo, InverterRuntime, QuickChargeStatus
     from pylxpweb.transports.protocol import InverterTransport
 
 
@@ -2953,11 +2953,16 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     # Quick Charge Control (Issue #14)
     # ============================================================================
 
-    async def enable_quick_charge(self) -> bool:
+    async def enable_quick_charge(self, minute: int | None = None) -> bool:
         """Enable quick charge function.
 
         Quick charge is a function control (not an operating mode) that
         can be active alongside Normal or Standby operating modes.
+
+        Args:
+            minute: Optional charge duration in minutes. Newer EG4 firmware
+                supports a fixed-duration quick charge; omitting it preserves
+                the legacy behaviour (charge until manually stopped).
 
         Returns:
             True if successful
@@ -2965,8 +2970,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Example:
             >>> await inverter.enable_quick_charge()
             True
+            >>> await inverter.enable_quick_charge(minute=30)
+            True
         """
-        result = await self._client.api.control.start_quick_charge(self.serial_number)
+        result = await self._client.api.control.start_quick_charge(
+            self.serial_number, minute=minute
+        )
         return result.success
 
     async def disable_quick_charge(self) -> bool:
@@ -2995,6 +3004,24 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         status = await self._client.api.control.get_quick_charge_status(self.serial_number)
         return status.hasUnclosedQuickChargeTask
+
+    async def get_quick_charge_detail(self) -> QuickChargeStatus:
+        """Get the full quick charge status model.
+
+        Unlike :meth:`get_quick_charge_status` (which returns only the boolean
+        ``hasUnclosedQuickChargeTask`` for backwards compatibility), this returns
+        the complete ``QuickChargeStatus`` model including remaining time and
+        task metadata reported by newer firmware.
+
+        Returns:
+            QuickChargeStatus: Full quick charge status
+
+        Example:
+            >>> detail = await inverter.get_quick_charge_detail()
+            >>> detail.remaining_minutes
+            10
+        """
+        return await self._client.api.control.get_quick_charge_status(self.serial_number)
 
     # ============================================================================
     # Quick Discharge Control (Issue #14)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from pylxpweb.constants import SCHEDULE_CONFIGS, ScheduleType
 from pylxpweb.endpoints.base import BaseEndpoint
@@ -336,7 +337,11 @@ class ControlEndpoints(BaseEndpoint):
         return result
 
     async def start_quick_charge(
-        self, inverter_sn: str, client_type: str = "WEB"
+        self,
+        inverter_sn: str,
+        client_type: str = "WEB",
+        *,
+        minute: int | None = None,
     ) -> SuccessResponse:
         """Start quick charge operation.
 
@@ -344,24 +349,46 @@ class ControlEndpoints(BaseEndpoint):
 
         Args:
             inverter_sn: Inverter serial number
+            minute: Optional charge duration in minutes. The newer EG4 firmware
+                accepts a ``minute`` parameter to run a fixed-duration quick
+                charge (confirmed on an 18kPV via the cloud API). Omitting it
+                preserves the legacy behaviour (charge until manually stopped).
             client_type: Client type (WEB/APP)
 
         Returns:
             SuccessResponse: Operation result
 
+        Raises:
+            ValueError: If minute is provided and is not a positive integer
+
         Example:
             result = await client.control.start_quick_charge("1234567890")
             if result.success:
                 print("Quick charge started successfully")
+
+            # Run a fixed 30-minute quick charge (new firmware)
+            await client.control.start_quick_charge("1234567890", minute=30)
         """
+        if minute is not None and (
+            not isinstance(minute, int) or isinstance(minute, bool) or minute <= 0
+        ):
+            raise ValueError(f"minute must be a positive integer, got {minute!r}")
+
         await self.client._ensure_authenticated()
 
-        data = {"inverterSn": inverter_sn, "clientType": client_type}
+        data: dict[str, Any] = {"inverterSn": inverter_sn, "clientType": client_type}
+        if minute is not None:
+            data["minute"] = minute
 
         response = await self.client._request(
             "POST", "/WManage/web/config/quickCharge/start", data=data
         )
-        return SuccessResponse.model_validate(response)
+        result = SuccessResponse.model_validate(response)
+        # The status endpoint is cached (~1 min); refresh it so a freshly
+        # started charge is reflected immediately instead of after expiry.
+        if result.success:
+            self.client.invalidate_cache_for_device(inverter_sn)
+        return result
 
     async def stop_quick_charge(
         self, inverter_sn: str, client_type: str = "WEB"
@@ -389,7 +416,12 @@ class ControlEndpoints(BaseEndpoint):
         response = await self.client._request(
             "POST", "/WManage/web/config/quickCharge/stop", data=data
         )
-        return SuccessResponse.model_validate(response)
+        result = SuccessResponse.model_validate(response)
+        # Shares the cached status endpoint with start; refresh so the stop
+        # is reflected immediately.
+        if result.success:
+            self.client.invalidate_cache_for_device(inverter_sn)
+        return result
 
     async def get_quick_charge_status(self, inverter_sn: str) -> QuickChargeStatus:
         """Get current quick charge operation status.

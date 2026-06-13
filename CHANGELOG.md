@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Minute-based Quick Charge** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  the newer EG4 firmware accepts a fixed-duration quick charge. `start_quick_charge`
+  now takes an optional `minute` parameter (sent in the `quickCharge/start` body;
+  omitting it preserves legacy "charge until stopped" behaviour, `minute <= 0`
+  raises `ValueError`), and `BaseInverter.enable_quick_charge(minute=...)` forwards
+  it. `QuickChargeStatus` gained the rich fields the new `getStatusInfo` returns
+  (`remainTimeBeforeQuickChargeStop` in seconds, `unclosedQuickChargeTaskId`,
+  `unclosedQuickChargeTaskStatus`, `lowVoltProtect`, all with safe defaults for
+  older API versions) plus a `remaining_minutes` convenience property (seconds
+  rounded up). New `BaseInverter.get_quick_charge_detail()` returns the full
+  `QuickChargeStatus` (the existing boolean `get_quick_charge_status()` is
+  unchanged for compatibility). Reverse-engineered live on an 18kPV via cloud,
+  2026-06-13.
+
 ### Fixed
 
 - **System Charge SOC Limit register metadata now allows 101** (consistency

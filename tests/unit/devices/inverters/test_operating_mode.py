@@ -102,7 +102,39 @@ class TestQuickChargeControl:
         result = await inverter.enable_quick_charge()
 
         assert result is True
-        mock_client.api.control.start_quick_charge.assert_called_once_with("1234567890")
+        mock_client.api.control.start_quick_charge.assert_called_once_with(
+            "1234567890", minute=None
+        )
+
+    @pytest.mark.asyncio
+    async def test_enable_quick_charge_with_minute(self, inverter, mock_client):
+        """Test enabling quick charge with a fixed duration."""
+        mock_client.api.control.start_quick_charge = AsyncMock(
+            return_value=SuccessResponse(success=True)
+        )
+
+        result = await inverter.enable_quick_charge(minute=30)
+
+        assert result is True
+        mock_client.api.control.start_quick_charge.assert_called_once_with("1234567890", minute=30)
+
+    @pytest.mark.asyncio
+    async def test_get_quick_charge_detail(self, inverter, mock_client):
+        """Test get_quick_charge_detail returns the full status model."""
+        status = QuickChargeStatus(
+            success=True,
+            hasUnclosedQuickChargeTask=True,
+            remainTimeBeforeQuickChargeStop=598,
+            unclosedQuickChargeTaskId=42,
+            unclosedQuickChargeTaskStatus="WAIT_CHARGE",
+        )
+        mock_client.api.control.get_quick_charge_status = AsyncMock(return_value=status)
+
+        result = await inverter.get_quick_charge_detail()
+
+        assert result is status
+        assert result.remaining_minutes == 10
+        mock_client.api.control.get_quick_charge_status.assert_called_once_with("1234567890")
 
     @pytest.mark.asyncio
     async def test_disable_quick_charge(self, inverter, mock_client):
