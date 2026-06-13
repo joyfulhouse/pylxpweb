@@ -100,7 +100,7 @@ response = await client.write_parameter(
 #### System Charge SOC Limit
 - **Parameter Name**: `HOLD_SYSTEM_CHARGE_SOC_LIMIT`
 - **Type**: Write
-- **Range**: 0-100 %
+- **Range**: 0-101 % (101 = top balancing — charge to full with LiFePO4 cell balancing)
 - **Unit**: Percent
 - **Purpose**: Sets the target SOC for battery charging from solar/AC
 - **Default**: Typically 95-100%

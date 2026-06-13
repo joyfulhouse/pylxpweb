@@ -1428,9 +1428,16 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         ha_entity_key="system_charge_soc_limit",
         unit="%",
         min_value=0,
-        max_value=100,
+        # 101% = "never stop / top balancing" (the stop threshold is
+        # unreachable since SOC can't exceed 100), the LiFePO4 cell-balance
+        # trigger — same semantics as AC charge SOC (reg 67). The read
+        # property, the cloud setter (set_system_charge_soc_limit), and the HA
+        # entity already use 101; this metadata was the lone stale 100.
+        # Cloud-confirmed accepting 101 on an 18kPV (2026-06-13, reg 227 write
+        # 80->101->restore). GH eg4_web_monitor#158.
+        max_value=101,
         category=HoldingCategory.BATTERY,
-        description="System-level charge SOC limit (stops all charging at this SOC).",
+        description="System charge SOC limit (0-101%; 101 = top balancing / never stop).",
     ),
     # =========================================================================
     # SYSTEM CHARGE VOLTAGE LIMIT (reg 228, confirmed 2026-02-18)

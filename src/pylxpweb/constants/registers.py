@@ -187,7 +187,7 @@ HOLD_ON_GRID_EOD_VOLTAGE = 169  # On-grid discharge cutoff voltage (V, ×10, con
 HOLD_P_TO_USER_START_DISCHG = 116  # Start discharge when import exceeds this
 
 # System Charge Limits (regs 227-228)
-HOLD_SYSTEM_CHARGE_SOC_LIMIT = 227  # System charge SOC limit (0-100%, verified 2026-01-27)
+HOLD_SYSTEM_CHARGE_SOC_LIMIT = 227  # System charge SOC limit (0-101%; 101 = top balancing)
 HOLD_SYSTEM_CHARGE_VOLT_LIMIT = 228  # System charge voltage limit (V, ×10, confirmed 2026-02-18)
 
 # Grid Protection Parameters
