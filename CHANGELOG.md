@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.36b6] - 2026-06-12
+
 ### Added
 
 - **`FUNC_PV_SELL_TO_GRID_EN` pinned to holding register 179 bit 3 and wired
