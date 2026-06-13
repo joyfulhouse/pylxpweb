@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.36b9] - 2026-06-13
+
 ### Added
 
 - **Quick Charge over local transport** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
