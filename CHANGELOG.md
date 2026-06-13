@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **System Charge SOC Limit register metadata now allows 101** (consistency
+  follow-up to [eg4_web_monitor#158](https://github.com/joyfulhouse/eg4_web_monitor/issues/158)):
+  reg 227 (`HOLD_SYSTEM_CHARGE_SOC_LIMIT`) `max_value` was a stale 100 while the
+  read property, the cloud setter (`set_system_charge_soc_limit`, documented for
+  top balancing), and the HA entity already used 101. Aligned the metadata (and
+  the parameter-reference docs) to 0-101, where 101 = LiFePO4 top balancing.
+  Cloud-confirmed accepting 101 on an 18kPV (reg 227 write 80 → 101 → restore,
+  2026-06-13). No behaviour change — `max_value` is documentary; this removes
+  the last inconsistency.
+
 ## [0.9.36b7] - 2026-06-13
 
 ### Fixed

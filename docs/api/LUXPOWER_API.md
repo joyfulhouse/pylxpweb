@@ -796,7 +796,7 @@ serialNum=1234567890&paramIds=21,22,23
 
 | ID | Name | Description | Range | Unit |
 |----|------|-------------|-------|------|
-| 21 | System Charge SOC Limit | Maximum battery charge level | 0-100 | % |
+| 21 | System Charge SOC Limit | Maximum battery charge level (101 = top balancing) | 0-101 | % |
 | 22 | AC Charge Power | AC charging power limit | 0-max rated | W |
 | 23 | PV Charge Power | PV charging power limit | 0-max rated | W |
 | 64 | Operating Mode | 0=Normal, 1=Standby | 0-1 | enum |

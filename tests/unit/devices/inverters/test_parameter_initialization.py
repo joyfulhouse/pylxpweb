@@ -259,6 +259,17 @@ class TestParameterInitialization:
         inverter.parameters = {"OTHER_PARAM": 50}
         assert inverter.system_charge_soc_limit is None  # No default, returns None
 
+    def test_system_charge_soc_limit_register_max_is_101(self) -> None:
+        """Reg 227 metadata allows 101 (top balancing), matching the property,
+        the cloud setter, and the HA entity. GH eg4_web_monitor#158 — this was
+        the lone stale 100; cloud-confirmed accepting 101 on an 18kPV."""
+        from pylxpweb.registers.inverter_holding import BY_NAME
+
+        reg = BY_NAME["system_charge_soc_limit"]
+        assert reg.address == 227
+        assert reg.min_value == 0
+        assert reg.max_value == 101
+
     def test_discharge_power_limit_property(self, mock_client: LuxpowerClient) -> None:
         """Test discharge_power_limit property returns correct values.
 
