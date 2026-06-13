@@ -376,9 +376,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> print(f"SOC: {inverter.battery_soc}%")
 
         Note:
-            Control operations (enable_quick_charge, set_ac_charge_power, etc.)
-            are not available when using transport mode, as they require the
-            HTTP API. Use transport mode for read-only monitoring.
+            Most control operations (e.g. set_ac_charge_power) require the
+            HTTP API and are not available in transport mode. Quick charge is
+            an exception — enable_quick_charge/disable_quick_charge/
+            set_quick_charge_minute write registers 233/234 directly over the
+            transport. Use transport mode primarily for monitoring.
         """
         # Import here to avoid circular dependency
         from pylxpweb.devices.inverters.generic import GenericInverter
@@ -2959,13 +2961,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Quick charge is a function control (not an operating mode) that
         can be active alongside Normal or Standby operating modes.
 
+        With a local transport (Modbus/Dongle, including HYBRID — which
+        prefers local) this writes the duration to holding register 234 when
+        given and sets the quick-charge enable bit (register 233 bit 0).
+        Without a transport it uses the cloud Quick Charge start endpoint.
+
         Args:
             minute: Optional charge duration in minutes. Newer EG4 firmware
                 supports a fixed-duration quick charge; omitting it preserves
-                the legacy behaviour (charge until manually stopped).
+                the legacy behaviour (charge until manually stopped). Must be
+                a positive integer when provided.
 
         Returns:
             True if successful
+
+        Raises:
+            ValueError: If minute is provided and is not a positive integer.
 
         Example:
             >>> await inverter.enable_quick_charge()
@@ -2973,6 +2984,31 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> await inverter.enable_quick_charge(minute=30)
             True
         """
+        if minute is not None and (
+            not isinstance(minute, int) or isinstance(minute, bool) or minute <= 0
+        ):
+            raise ValueError(f"minute must be a positive integer, got {minute!r}")
+
+        if self._transport is not None:
+            # LOCAL/HYBRID: write the duration (reg 234) first so the firmware
+            # starts the timed charge with the requested length rather than
+            # its default 60 minutes, then set the enable bit (reg 233 bit 0).
+            local_ok = True
+            if minute is not None:
+                local_ok = await self.write_transport_register(234, minute)
+            if local_ok:
+                local_ok = await self.write_transport_bit(233, 0, True)
+            if local_ok:
+                return True
+            # Local write failed. HYBRID (real cloud client) falls back to the
+            # cloud endpoint; local-only (client is None) fails honestly.
+            if self._client is None:
+                return False
+            _LOGGER.warning(
+                "Local quick charge enable failed for %s; falling back to cloud",
+                self.serial_number,
+            )
+
         result = await self._client.api.control.start_quick_charge(
             self.serial_number, minute=minute
         )
@@ -2981,6 +3017,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     async def disable_quick_charge(self) -> bool:
         """Disable quick charge function.
 
+        Clears the quick-charge enable bit (register 233 bit 0) via the local
+        transport when available (HYBRID falls back to the cloud stop endpoint
+        if the local write fails), otherwise uses the cloud stop endpoint.
+
         Returns:
             True if successful
 
@@ -2988,11 +3028,50 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> await inverter.disable_quick_charge()
             True
         """
+        if self._transport is not None:
+            if await self.write_transport_bit(233, 0, False):
+                return True
+            if self._client is None:
+                return False
+            _LOGGER.warning(
+                "Local quick charge disable failed for %s; falling back to cloud",
+                self.serial_number,
+            )
         result = await self._client.api.control.stop_quick_charge(self.serial_number)
         return result.success
 
+    async def set_quick_charge_minute(self, minute: int) -> bool:
+        """Set the quick charge duration (holding register 234, minutes).
+
+        While a quick charge is running this register holds the remaining
+        time, so raising it extends the charge (e.g. to keep cells balancing
+        once SOC reaches 100%). LOCAL/HYBRID only — register 234 is not
+        exposed by the cloud control API.
+
+        Args:
+            minute: Duration in minutes (positive integer).
+
+        Returns:
+            True if successful, False if no local transport is available.
+
+        Raises:
+            ValueError: If minute is not a positive integer.
+        """
+        if not isinstance(minute, int) or isinstance(minute, bool) or minute <= 0:
+            raise ValueError(f"minute must be a positive integer, got {minute!r}")
+        if self._transport is None:
+            _LOGGER.warning(
+                "set_quick_charge_minute() requires a local transport for %s",
+                self.serial_number,
+            )
+            return False
+        return await self.write_transport_register(234, minute)
+
     async def get_quick_charge_status(self) -> bool:
         """Get quick charge function status.
+
+        Reads the enable bit (register 233 bit 0) via the local transport
+        when available, otherwise queries the cloud getStatusInfo endpoint.
 
         Returns:
             True if quick charge is active, False otherwise
@@ -3002,6 +3081,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> is_active
             False
         """
+        if self._transport is not None:
+            values = await self._transport.read_parameters(233, 1)
+            reg = values.get(233)
+            return bool(reg & 0x1) if reg is not None else False
         status = await self._client.api.control.get_quick_charge_status(self.serial_number)
         return status.hasUnclosedQuickChargeTask
 
@@ -3010,8 +3093,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         Unlike :meth:`get_quick_charge_status` (which returns only the boolean
         ``hasUnclosedQuickChargeTask`` for backwards compatibility), this returns
-        the complete ``QuickChargeStatus`` model including remaining time and
-        task metadata reported by newer firmware.
+        the complete ``QuickChargeStatus`` model including remaining time.
+
+        With a local transport the model is reconstructed from registers:
+        register 233 bit 0 (active) and register 234, which holds the live
+        remaining-minutes countdown while a charge runs. Otherwise it returns
+        the cloud getStatusInfo model with its task metadata.
 
         Returns:
             QuickChargeStatus: Full quick charge status
@@ -3021,6 +3108,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> detail.remaining_minutes
             10
         """
+        if self._transport is not None:
+            from pylxpweb.models import QuickChargeStatus
+
+            # Read regs 233 (enable bit) + 234 (remaining minutes) LIVE in one
+            # call — reg 234 is the live countdown, so reading it from the
+            # cached parameter dict could report a stale/zero value right after
+            # enable/set. Reg 234 doubles as the duration setpoint + remaining.
+            values = await self._transport.read_parameters(233, 2)
+            enable = values.get(233)
+            active = bool(enable & 0x1) if enable is not None else False
+            minutes = int(values.get(234, 0) or 0)
+            return QuickChargeStatus(
+                success=True,
+                hasUnclosedQuickChargeTask=active,
+                remainTimeBeforeQuickChargeStop=minutes * 60 if active else 0,
+            )
         return await self._client.api.control.get_quick_charge_status(self.serial_number)
 
     # ============================================================================
@@ -3369,6 +3472,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if has_recovery_lag or has_quick_charge:
             self._features.has_sna_registers = True
             self._features.discharge_recovery_hysteresis = True
+        if has_quick_charge:
+            # Minute-based quick charge (reg 234) is detected by register
+            # presence, not just the SNA family default — it is also present
+            # on EG4_HYBRID (18kPV/FlexBOSS) and LXP firmware, enabling the
+            # LOCAL/HYBRID quick-charge control + remaining-time sensor.
+            self._features.quick_charge_minute = True
 
         # Check for PV series registers (volt-watt curve parameters)
         if "_12K_HOLD_GRID_PEAK_SHAVING_POWER" in self.parameters:

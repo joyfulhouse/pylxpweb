@@ -708,6 +708,25 @@ class TestBaseInverterFeatureDetection:
         assert features.grid_peak_shaving is True
         assert features.volt_watt_curve is True
         assert features.drms_support is True
+        # 18kPV without the quick-charge register present -> flag stays False.
+        assert features.quick_charge_minute is False
+
+    @pytest.mark.asyncio
+    async def test_quick_charge_minute_detected_on_hybrid(
+        self, pv_series_inverter: ConcreteInverter
+    ) -> None:
+        """EG4_HYBRID gains quick_charge_minute when reg 234 (param) is present.
+
+        This is the LOCAL path: a Modbus read of reg 234 populates
+        SNA_HOLD_QUICK_CHARGE_MINUTE, and detection flips the flag on even
+        though the EG4_HYBRID family default is False.
+        """
+        pv_series_inverter.parameters["SNA_HOLD_QUICK_CHARGE_MINUTE"] = 60
+
+        features = await pv_series_inverter.detect_features()
+
+        assert features.model_family == InverterFamily.EG4_HYBRID
+        assert features.quick_charge_minute is True
 
     @pytest.mark.asyncio
     async def test_detect_features_caching(self, sna_inverter: ConcreteInverter) -> None:
