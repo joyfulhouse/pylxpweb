@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from aioresponses import aioresponses
 
 from pylxpweb import LuxpowerClient
+from pylxpweb.endpoints.control import ControlEndpoints
 from pylxpweb.models import QuickChargeStatus, SuccessResponse
 
 # Base URL for all tests
 BASE_URL = "https://monitor.eg4electronics.com"
+
+
+@pytest.fixture
+def mock_client() -> Mock:
+    """Create a mocked LuxpowerClient with an async _request."""
+    client = Mock(spec=LuxpowerClient)
+    client._request = AsyncMock(return_value={"success": True})
+    client._ensure_authenticated = AsyncMock()
+    return client
 
 
 class TestQuickChargeEndpoints:
@@ -110,6 +121,90 @@ class TestQuickChargeEndpoints:
 
             assert result.hasUnclosedQuickChargeTask is True
             assert result.hasUnclosedQuickDischargeTask is False
+
+
+class TestStartQuickChargeMinute:
+    """Test the minute-based duration support on start_quick_charge."""
+
+    @pytest.mark.asyncio
+    async def test_start_quick_charge_with_minute_sends_minute(self, mock_client: Mock) -> None:
+        """A provided minute is sent in the POST body."""
+        control = ControlEndpoints(mock_client)
+
+        result = await control.start_quick_charge("1234567890", minute=10)
+
+        assert result.success is True
+        call_data = mock_client._request.call_args[1]["data"]
+        assert call_data["minute"] == 10
+        assert call_data["inverterSn"] == "1234567890"
+
+    @pytest.mark.asyncio
+    async def test_start_quick_charge_without_minute_omits_minute(self, mock_client: Mock) -> None:
+        """Omitting minute preserves the legacy body (no minute key)."""
+        control = ControlEndpoints(mock_client)
+
+        result = await control.start_quick_charge("1234567890")
+
+        assert result.success is True
+        call_data = mock_client._request.call_args[1]["data"]
+        assert "minute" not in call_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_minute", [0, -1, -30])
+    async def test_start_quick_charge_rejects_non_positive_minute(
+        self, mock_client: Mock, bad_minute: int
+    ) -> None:
+        """A non-positive minute raises ValueError before any request."""
+        control = ControlEndpoints(mock_client)
+
+        with pytest.raises(ValueError, match="minute must be a positive integer"):
+            await control.start_quick_charge("1234567890", minute=bad_minute)
+
+        # Guard fires before any network/auth side effect.
+        mock_client._request.assert_not_called()
+        mock_client._ensure_authenticated.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_minute", [1.5, True, "10"])
+    async def test_start_quick_charge_rejects_non_integer_minute(
+        self, mock_client: Mock, bad_minute: Any
+    ) -> None:
+        """Non-integer minute (float/bool/str) raises ValueError before any request."""
+        control = ControlEndpoints(mock_client)
+
+        with pytest.raises(ValueError, match="minute must be a positive integer"):
+            await control.start_quick_charge("1234567890", minute=bad_minute)
+
+        mock_client._request.assert_not_called()
+        mock_client._ensure_authenticated.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_quick_charge_invalidates_cache_on_success(self, mock_client: Mock) -> None:
+        """A successful start invalidates the cached status for that device."""
+        control = ControlEndpoints(mock_client)
+
+        await control.start_quick_charge("1234567890", minute=10)
+
+        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    async def test_start_quick_charge_no_invalidate_on_failure(self, mock_client: Mock) -> None:
+        """A failed start does not invalidate the cache."""
+        mock_client._request = AsyncMock(return_value={"success": False})
+        control = ControlEndpoints(mock_client)
+
+        await control.start_quick_charge("1234567890", minute=10)
+
+        mock_client.invalidate_cache_for_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_quick_charge_invalidates_cache_on_success(self, mock_client: Mock) -> None:
+        """A successful stop invalidates the cached status for that device."""
+        control = ControlEndpoints(mock_client)
+
+        await control.stop_quick_charge("1234567890")
+
+        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
 
 
 class TestQuickDischargeEndpoints:
@@ -219,3 +314,48 @@ class TestQuickChargeStatusModel:
 
         assert status.hasUnclosedQuickChargeTask is True
         assert status.hasUnclosedQuickDischargeTask is True
+
+    def test_model_parses_rich_minute_fields(self):
+        """New firmware fields parse from the API payload."""
+        status = QuickChargeStatus.model_validate(
+            {
+                "success": True,
+                "hasUnclosedQuickChargeTask": True,
+                "hasUnclosedQuickDischargeTask": False,
+                "remainTimeBeforeQuickChargeStop": 598,
+                "unclosedQuickChargeTaskId": 42,
+                "unclosedQuickChargeTaskStatus": "WAIT_CHARGE",
+                "lowVoltProtect": True,
+            }
+        )
+
+        assert status.remainTimeBeforeQuickChargeStop == 598
+        assert status.unclosedQuickChargeTaskId == 42
+        assert status.unclosedQuickChargeTaskStatus == "WAIT_CHARGE"
+        assert status.lowVoltProtect is True
+
+    def test_model_rich_fields_default_for_old_api(self):
+        """Older API payloads (no minute fields) get safe defaults."""
+        status = QuickChargeStatus(
+            success=True,
+            hasUnclosedQuickChargeTask=False,
+        )
+
+        assert status.remainTimeBeforeQuickChargeStop == 0
+        assert status.unclosedQuickChargeTaskId is None
+        assert status.unclosedQuickChargeTaskStatus is None
+        assert status.lowVoltProtect is False
+
+    @pytest.mark.parametrize(
+        ("remain_seconds", "expected_minutes"),
+        [(598, 10), (0, 0), (61, 2), (60, 1), (1, 1)],
+    )
+    def test_remaining_minutes_rounds_up(self, remain_seconds: int, expected_minutes: int) -> None:
+        """remaining_minutes rounds seconds up to whole minutes."""
+        status = QuickChargeStatus(
+            success=True,
+            hasUnclosedQuickChargeTask=True,
+            remainTimeBeforeQuickChargeStop=remain_seconds,
+        )
+
+        assert status.remaining_minutes == expected_minutes

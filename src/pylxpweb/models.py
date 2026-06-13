@@ -6,6 +6,7 @@ Field names match the API response format for easier parsing.
 
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 from typing import Any
 
@@ -1058,11 +1059,29 @@ class QuickChargeStatus(BaseModel):
 
     Note: The quickCharge/getStatusInfo endpoint returns status for BOTH
     quick charge and quick discharge operations.
+
+    The newer firmware (minute-based Quick Charge) also reports the remaining
+    time and task metadata. Older API versions omit these fields, so they
+    default to safe values.
     """
 
     success: bool
     hasUnclosedQuickChargeTask: bool
     hasUnclosedQuickDischargeTask: bool = False  # May not be present in older API versions
+    # Seconds remaining before quick charge stops (0 when idle/unknown).
+    remainTimeBeforeQuickChargeStop: int = 0
+    unclosedQuickChargeTaskId: int | None = None
+    unclosedQuickChargeTaskStatus: str | None = None
+    lowVoltProtect: bool = False
+
+    @property
+    def remaining_minutes(self) -> int:
+        """Remaining quick-charge time rounded up to whole minutes.
+
+        Returns 0 when no time remains. ``remainTimeBeforeQuickChargeStop`` is
+        reported in seconds by the cloud API, so e.g. 598s -> 10, 61s -> 2.
+        """
+        return math.ceil(self.remainTimeBeforeQuickChargeStop / 60)
 
 
 class SuccessResponse(BaseModel):
