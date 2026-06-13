@@ -130,6 +130,23 @@ class TestParameterInitialization:
         assert inverter.system_charge_soc_limit == 100
         assert inverter.pv_charge_power_limit == 10
 
+    def test_ac_charge_soc_limit_reads_101(self, mock_client: LuxpowerClient) -> None:
+        """The read property returns 101, not None (GH eg4_web_monitor#158).
+
+        101 = never stop AC charging (cell balancing). Clamping the property at
+        100 was the library-level cause of the reported live-101 read-back as
+        None (NaN in the HA integration, which reads via this property).
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter.parameters = {"HOLD_AC_CHARGE_SOC_LIMIT": 101}
+        assert inverter.ac_charge_soc_limit == 101
+
+        # 102 is past the cap and is still treated as out-of-range -> None.
+        inverter.parameters = {"HOLD_AC_CHARGE_SOC_LIMIT": 102}
+        assert inverter.ac_charge_soc_limit is None
+
     @pytest.mark.asyncio
     async def test_parameter_cache_invalidation_after_write(
         self, mock_client: LuxpowerClient

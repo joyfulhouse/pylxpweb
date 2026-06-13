@@ -228,9 +228,9 @@ class TestACChargeGetOperations:
             if soc_limit is None:
                 pytest.skip("AC charge SOC limit returned None - API may be rate limiting")
 
-            # Should return an integer between 0-100
+            # Should return an integer between 0-101 (101 = never stop, GH eg4_web_monitor#158)
             assert isinstance(soc_limit, int)
-            assert 0 <= soc_limit <= 100
+            assert 0 <= soc_limit <= 101
             print(f"\nInverter {hybrid_inverter.serial_number} AC charge SOC limit: {soc_limit}%")
 
         except LuxpowerAPIError as err:

@@ -185,7 +185,7 @@ class TestHybridInverterControls:
         # Values should be in valid ranges
         assert isinstance(settings["enabled"], bool)
         assert 0 <= settings["power_percent"] <= 100
-        assert 0 <= settings["soc_limit"] <= 100
+        assert 0 <= settings["soc_limit"] <= 101  # 101 = never stop (GH eg4_web_monitor#158)
 
     async def test_ac_charge_enable_disable(self, hybrid_inverter: HybridInverter | None) -> None:
         """Test AC charge enable/disable with restore."""

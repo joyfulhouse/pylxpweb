@@ -837,7 +837,7 @@ paths:
         |----------|------|-------------|-------|-----|
         | 21 | FuncEn | Function enable bit field | 0-65535 | R/W |
         | 66 | ACChgPowerCMD | AC charge power | 0-100% | R/W |
-        | 67 | ACChgSOCLimit | AC charge SOC limit | 0-100% | R/W |
+        | 67 | ACChgSOCLimit | AC charge SOC limit | 0-101% | R/W |
         | 105 | EOD | On-grid discharge cutoff | 10-90% | R/W |
         | 106 | SOC_Low_Limit_EPS | Off-grid SOC limit | 0-100% | R/W |
 
@@ -921,7 +921,7 @@ paths:
         | Register | Name | Description | Range | Example |
         |----------|------|-------------|-------|---------|
         | 66 | ACChgPowerCMD | AC charge power | 0-100% | 50 |
-        | 67 | ACChgSOCLimit | AC charge SOC limit | 0-100% | 100 |
+        | 67 | ACChgSOCLimit | AC charge SOC limit | 0-101% | 100 |
         | 68 | ACChgStartHour1 | Time period 1 start hour | 0-23 | 23 |
         | 69 | ACChgStartMin1 | Time period 1 start min | 0-59 | 0 |
         | 70 | ACChgEndHour1 | Time period 1 end hour | 0-23 | 7 |
@@ -2841,7 +2841,7 @@ components:
 
             Register 66-67 (AC Charge Control):
             - `HOLD_AC_CHARGE_POWER_CMD` - AC charge power (0-100%)
-            - `HOLD_AC_CHARGE_SOC_LIMIT` - AC charge SOC limit (0-100%)
+            - `HOLD_AC_CHARGE_SOC_LIMIT` - AC charge SOC limit (0-101%; 101 = never stop)
 
             Register 70-71 (AC Charge Schedule):
             - `HOLD_AC_CHARGE_START_HOUR_1` - Schedule 1 start hour

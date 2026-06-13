@@ -187,7 +187,7 @@ class HybridInverter(GenericInverter):
             Dictionary with:
             - enabled: AC charge function enabled
             - power_percent: Charge power (0-100%)
-            - soc_limit: Target SOC (0-100%)
+            - soc_limit: Target SOC (0-101%; 101 = never stop)
             - schedule1_enabled: Time schedule 1 enabled
             - schedule2_enabled: Time schedule 2 enabled
 
@@ -232,7 +232,8 @@ class HybridInverter(GenericInverter):
         Args:
             enabled: Enable AC charging
             power_percent: Charge power percentage (0-100), optional
-            soc_limit: Target SOC percentage (0-100), optional
+            soc_limit: Target SOC percentage (0-101), optional. 101 = never
+                stop AC charging (used for battery cell balancing).
 
         Returns:
             True if successful
@@ -257,8 +258,8 @@ class HybridInverter(GenericInverter):
         if power_percent is not None and not 0 <= power_percent <= 100:
             raise ValueError("power_percent must be between 0 and 100")
 
-        if soc_limit is not None and not 0 <= soc_limit <= 100:
-            raise ValueError("soc_limit must be between 0 and 100")
+        if soc_limit is not None and not 0 <= soc_limit <= 101:
+            raise ValueError("soc_limit must be between 0 and 101")
 
         # Update function enable bit
         func_params = await self.read_parameters(FUNC_EN_REGISTER, 1)
@@ -682,7 +683,8 @@ class HybridInverter(GenericInverter):
         Returns:
             Dictionary with:
             - start_soc: Battery SOC (%) to start AC charging (0-90)
-            - end_soc: Battery SOC (%) to stop AC charging (0-100), reg 67
+            - end_soc: Battery SOC (%) to stop AC charging (0-101; 101 = never
+              stop), reg 67
 
         Example:
             >>> limits = await inverter.get_ac_charge_soc_limits()
@@ -705,7 +707,8 @@ class HybridInverter(GenericInverter):
 
         Args:
             start_soc: Battery SOC (%) to start AC charging (0-90)
-            end_soc: Battery SOC (%) to stop AC charging (0-100), reg 67
+            end_soc: Battery SOC (%) to stop AC charging (0-101), reg 67.
+                101 = never stop AC charging (used for cell balancing).
 
         Returns:
             True if successful
@@ -721,8 +724,8 @@ class HybridInverter(GenericInverter):
 
         if not 0 <= start_soc <= 90:
             raise ValueError(f"start_soc must be 0-90, got {start_soc}")
-        if not 0 <= end_soc <= 100:
-            raise ValueError(f"end_soc must be 0-100, got {end_soc}")
+        if not 0 <= end_soc <= 101:
+            raise ValueError(f"end_soc must be 0-101, got {end_soc}")
 
         return await self.write_parameters(
             {HOLD_AC_CHARGE_START_SOC: start_soc, HOLD_AC_CHARGE_SOC_LIMIT: end_soc}

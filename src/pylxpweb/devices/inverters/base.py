@@ -2277,20 +2277,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters support AC charge SOC limits.
 
         Args:
-            soc_percent: SOC percentage (0 to 100)
+            soc_percent: SOC percentage (0 to 101). 101 = never stop AC
+                charging (the stop threshold is unreachable), used for
+                battery cell balancing.
 
         Returns:
             True if successful
 
         Raises:
-            ValueError: If soc_percent is out of valid range (0-100)
+            ValueError: If soc_percent is out of valid range (0-101)
 
         Example:
             >>> await inverter.set_ac_charge_soc_limit(90)
             True
         """
-        if not 0 <= soc_percent <= 100:
-            raise ValueError(f"AC charge SOC limit must be between 0 and 100%, got {soc_percent}")
+        if not 0 <= soc_percent <= 101:
+            raise ValueError(f"AC charge SOC limit must be between 0 and 101%, got {soc_percent}")
 
         result = await self._client.api.control.write_parameter(
             self.serial_number, "HOLD_AC_CHARGE_SOC_LIMIT", str(soc_percent)
@@ -2309,8 +2311,8 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters support AC charge SOC limits.
 
         Returns:
-            Current SOC limit percentage (0-100), or None if parameters not loaded
-            or parameter not found
+            Current SOC limit percentage (0-101; 101 = never stop AC charging),
+            or None if parameters not loaded or parameter not found
 
         Example:
             >>> limit = inverter.ac_charge_soc_limit
@@ -2324,7 +2326,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             return None
         try:
             int_value = int(value)
-            return int_value if 0 <= int_value <= 100 else None
+            return int_value if 0 <= int_value <= 101 else None
         except (ValueError, TypeError):
             return None
 
