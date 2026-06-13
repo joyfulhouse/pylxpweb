@@ -463,6 +463,26 @@ class TestACChargeSocLimitsCloud:
             await control.set_ac_charge_soc_limits(SERIAL, 95, 100)
 
     @pytest.mark.asyncio
+    async def test_set_ac_charge_soc_limits_end_101_accepted(
+        self, control: ControlEndpoints
+    ) -> None:
+        """end_soc=101 is accepted (never-stop / cell balancing, GH eg4_web_monitor#158)."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await control.set_ac_charge_soc_limits(SERIAL, 20, 101)
+
+        assert result.success is True
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_SOC_LIMIT", "101", client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_soc_limits_invalid_end(self, control: ControlEndpoints) -> None:
+        """end_soc above the 101 cap raises ValueError."""
+        with pytest.raises(ValueError, match="end_soc must be 0-101"):
+            await control.set_ac_charge_soc_limits(SERIAL, 20, 102)
+
+    @pytest.mark.asyncio
     async def test_get_ac_charge_soc_limits(self, control: ControlEndpoints) -> None:
         """Test getting AC charge SOC limits."""
         control.read_device_parameters_ranges = AsyncMock(

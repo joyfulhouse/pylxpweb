@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **AC Charge SOC Limit now allows 101%** ([eg4_web_monitor#158](https://github.com/joyfulhouse/eg4_web_monitor/issues/158)):
+  the inverter accepts **101%** as a "never stop AC charging" setting (the stop
+  threshold is unreachable since SOC cannot exceed 100), used for battery cell
+  balancing — but reg 67 was capped at 100 in every path, so a live-101 value
+  read back as out-of-range (`None`) and writes of 101 raised `ValueError`. The
+  101 ceiling is now allowed across all of them: the `ac_charge_soc_limit` read
+  property (the library-level cause of the live-101 read-back as `None`), reg 67
+  (`HOLD_AC_CHARGE_SOC_LIMIT`) `max_value` metadata, and every write path —
+  `BaseInverter.set_ac_charge_soc_limit()`, `HybridInverter.set_ac_charge(soc_limit=…)`,
+  and the `set_ac_charge_soc_limits(end_soc=…)` pair on both `HybridInverter`
+  and the cloud `ControlEndpoint`. The AC charge *power* bound and the start-SOC
+  bound (0–90) are unchanged, as are all other SOC limits. Matches the existing
+  101 cap already used for the System Charge SOC Limit. Reported by @DoubleDoc on
+  an 18kPV.
+
 ## [0.9.36b6] - 2026-06-12
 
 ### Added

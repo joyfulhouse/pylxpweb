@@ -928,6 +928,52 @@ class TestInverterControlOperations:
         with pytest.raises(ValueError, match="off_grid_limit must be between 0 and 100%"):
             await inverter.set_battery_soc_limits(off_grid_limit=105)
 
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_soc_limit_accepts_101(self, mock_client: LuxpowerClient) -> None:
+        """101% AC charge SOC limit writes reg 67 = 101 (GH eg4_web_monitor#158).
+
+        101 = never stop AC charging (SOC cannot reach 101), used for cell
+        balancing. It must be accepted, not rejected as out of range.
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_response)
+
+        result = await inverter.set_ac_charge_soc_limit(101)
+
+        mock_client.api.control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_AC_CHARGE_SOC_LIMIT", "101"
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_soc_limit_rejects_102(self, mock_client: LuxpowerClient) -> None:
+        """102% is past the 101 cap and must raise (GH eg4_web_monitor#158)."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        with pytest.raises(ValueError, match="must be between 0 and 101%"):
+            await inverter.set_ac_charge_soc_limit(102)
+
+    def test_ac_charge_soc_limit_register_max_is_101(self) -> None:
+        """Reg 67 metadata allows 101 so a live-101 reading is not out-of-range.
+
+        GH eg4_web_monitor#158: bounding at 100 made the integration read a
+        live 101% value back as None (unavailable).
+        """
+        from pylxpweb.registers.inverter_holding import BY_NAME
+
+        reg = BY_NAME["ac_charge_soc_limit"]
+        assert reg.address == 67
+        assert reg.min_value == 0
+        assert reg.max_value == 101
+
 
 class TestWorkingModeControls:
     """Test working mode control methods (Issue #16)."""

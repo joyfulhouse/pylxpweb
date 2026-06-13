@@ -192,19 +192,46 @@ class TestACChargeOperations:
         )
 
         # Try to set SOC below 0%
-        with pytest.raises(ValueError, match="soc_limit must be between 0 and 100"):
+        with pytest.raises(ValueError, match="soc_limit must be between 0 and 101"):
             await inverter.set_ac_charge(enabled=True, soc_limit=-5)
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_soc_validation_too_high(self, mock_client: LuxpowerClient) -> None:
-        """Test AC charge SOC validation - too high."""
+        """Test AC charge SOC validation - too high (102 is past the 101 cap)."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        # Try to set SOC above 100%
-        with pytest.raises(ValueError, match="soc_limit must be between 0 and 100"):
-            await inverter.set_ac_charge(enabled=True, soc_limit=105)
+        # Try to set SOC above 101%
+        with pytest.raises(ValueError, match="soc_limit must be between 0 and 101"):
+            await inverter.set_ac_charge(enabled=True, soc_limit=102)
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_soc_101_accepted(self, mock_client: LuxpowerClient) -> None:
+        """101% AC charge SOC limit is accepted (never-stop / cell-balancing).
+
+        GH eg4_web_monitor#158: the inverter accepts 101 (= never stop AC
+        charging, since SOC cannot reach 101). It must write reg 67 = 101,
+        not raise.
+        """
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        mock_read_response = Mock()
+        mock_read_response.parameters = {"reg_21": 0}
+        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
+
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+
+        result = await inverter.set_ac_charge(enabled=True, soc_limit=101)
+
+        mock_client.api.control.write_parameters.assert_called_once_with(
+            "1234567890", {21: 128, 67: 101}
+        )
+        assert result is True
 
 
 class TestEPSOperations:
@@ -798,18 +825,43 @@ class TestACChargeSocLimitOperations:
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        with pytest.raises(ValueError, match="end_soc must be 0-100"):
+        with pytest.raises(ValueError, match="end_soc must be 0-101"):
             await inverter.set_ac_charge_soc_limits(start_soc=10, end_soc=-1)
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_soc_limits_end_too_high(self, mock_client: LuxpowerClient) -> None:
-        """Test end_soc > 100 raises ValueError."""
+        """Test end_soc > 101 raises ValueError (102 is past the cap)."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        with pytest.raises(ValueError, match="end_soc must be 0-100"):
-            await inverter.set_ac_charge_soc_limits(start_soc=10, end_soc=101)
+        with pytest.raises(ValueError, match="end_soc must be 0-101"):
+            await inverter.set_ac_charge_soc_limits(start_soc=10, end_soc=102)
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_soc_limits_end_101_accepted(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """end_soc=101 is accepted and writes reg 67 = 101 (GH eg4_web_monitor#158).
+
+        101 = never stop AC charging (cell balancing); only the stop SOC (reg 67)
+        is widened, the start SOC stays 0-90.
+        """
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+
+        result = await inverter.set_ac_charge_soc_limits(start_soc=20, end_soc=101)
+
+        # reg 67 = HOLD_AC_CHARGE_SOC_LIMIT (end), reg 160 = start
+        mock_client.api.control.write_parameters.assert_called_once_with(
+            "1234567890", {160: 20, 67: 101}
+        )
+        assert result is True
 
 
 class TestACChargeVoltageLimitOperations:

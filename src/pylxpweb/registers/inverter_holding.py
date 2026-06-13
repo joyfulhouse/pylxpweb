@@ -533,9 +533,13 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         ha_entity_key="ac_charge_soc_limit",
         unit="%",
         min_value=0,
-        max_value=100,
+        # 101% = "never stop AC charging" (SOC can't reach 101, so the stop
+        # threshold is never met) — used for battery cell balancing. The
+        # inverter accepts and reports 101; bounding at 100 made a live-101
+        # value read back as out-of-range. GH eg4_web_monitor#158.
+        max_value=101,
         category=HoldingCategory.POWER,
-        description="AC charge SOC limit — stop AC charging when SOC reaches this.",
+        description="AC charge SOC limit — stop charging at this SOC (0-101%; 101 = never stop).",
     ),
     # =========================================================================
     # AC CHARGE SCHEDULE (regs 68-73)

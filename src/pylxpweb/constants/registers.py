@@ -86,7 +86,7 @@ FUNC_EN_2_BIT_SPORADIC_CHARGE = 12  # Sporadic charge enable (confirmed via Modb
 
 # AC Charge Parameters
 HOLD_AC_CHARGE_POWER_CMD = 66  # AC charge power in 100W units (0-150 = 0.0-15.0 kW)
-HOLD_AC_CHARGE_SOC_LIMIT = 67  # AC charge SOC limit (0-100%)
+HOLD_AC_CHARGE_SOC_LIMIT = 67  # AC charge SOC limit (0-101%; 101 = never stop)
 # AC Charge Time Schedule (regs 68-73) - packed time format (Modbus)
 # Format: value = (hour & 0xFF) | ((minute & 0xFF) << 8)
 # Each register stores hour (low byte) + minute (high byte)
