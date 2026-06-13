@@ -670,7 +670,7 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # Other known params: BIT_DRY_CONTRACTOR_MULTIPLEX, BIT_LCD_TYPE, BIT_OUT_CT_POSITION,
     # FUNC_BATTERY_CALIBRATION_EN, FUNC_ENERTEK_WORKING_MODE, FUNC_FAN_DC3
     233: [
-        "FUNC_233_BIT0",  # Bit 0: unknown
+        "FUNC_QUICK_CHG_START_EN",  # Bit 0: Quick charge start enable (confirmed)
         "FUNC_BATTERY_BACKUP_CTRL",  # Bit 1: Battery backup control (confirmed)
         "FUNC_233_BIT2",  # Bit 2: unknown
         "FUNC_233_BIT3",  # Bit 3: unknown
@@ -687,6 +687,12 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "FUNC_233_BIT14",  # Bit 14: unknown
         "FUNC_233_BIT15",  # Bit 15: unknown
     ],
+    # Register 234: Quick charge duration in minutes (single value register).
+    # Writable setpoint; also reads as the live remaining-minutes countdown
+    # while a quick charge is active. Confirmed on 18kPV (cloud reg dump) and
+    # LXP-LB (eg4_web_monitor#251). Enables LOCAL/HYBRID quick charge + the
+    # quick_charge_minute feature detection in _probe_optional_features.
+    234: ["SNA_HOLD_QUICK_CHARGE_MINUTE"],
 }
 
 # ============================================================================

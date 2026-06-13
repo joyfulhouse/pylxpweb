@@ -1775,6 +1775,24 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         category=HoldingCategory.FUNCTION,
         description="Sporadic charge enable.",
     ),
+    # =========================================================================
+    # QUICK CHARGE DURATION (reg 234) — minutes setpoint + live countdown
+    # =========================================================================
+    HoldingRegisterDefinition(
+        address=234,
+        canonical_name="quick_charge_minute",
+        api_param_key="SNA_HOLD_QUICK_CHARGE_MINUTE",
+        unit="min",
+        min_value=0,
+        max_value=1440,
+        category=HoldingCategory.BATTERY,
+        description=(
+            "Quick charge duration in minutes. Writable setpoint that also "
+            "reads as the live remaining-minutes countdown while a quick "
+            "charge is active (firmware sets it to 60 on enable; raise it to "
+            "extend the charge)."
+        ),
+    ),
 )
 
 

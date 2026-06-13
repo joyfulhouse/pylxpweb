@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Quick Charge over local transport** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  `enable_quick_charge`/`disable_quick_charge` are now transport-aware. With a
+  local transport (Modbus/Dongle, including HYBRID — which prefers local) they
+  write the duration to holding register 234 and toggle the enable bit
+  (register 233 bit 0) directly; HYBRID falls back to the cloud endpoint if the
+  local write fails, while cloud-only and local-only paths are unchanged. New
+  `set_quick_charge_minute()` writes register 234 (the live setpoint, so raising
+  it extends a running charge). `get_quick_charge_status`/`get_quick_charge_detail`
+  read the status from registers 233/234 in transport mode. Register 234 is now
+  mapped (`SNA_HOLD_QUICK_CHARGE_MINUTE`) and register 233 bit 0 is named
+  `FUNC_QUICK_CHG_START_EN`; the `quick_charge_minute` feature is detected by
+  register presence (EG4_HYBRID/LXP, not just SNA). Confirmed on an 18kPV and an
+  LXP-LB.
+
 ## [0.9.36b8] - 2026-06-13
 
 ### Added
