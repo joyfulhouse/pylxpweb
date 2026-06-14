@@ -2962,15 +2962,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         can be active alongside Normal or Standby operating modes.
 
         With a local transport (Modbus/Dongle, including HYBRID — which
-        prefers local) this writes the duration to holding register 234 when
-        given and sets the quick-charge enable bit (register 233 bit 0).
-        Without a transport it uses the cloud Quick Charge start endpoint.
+        prefers local) this sets the quick-charge enable bit (register 233
+        bit 0) only. The firmware starts the timed charge at its default
+        length and rejects writes to register 234 while quick charge is off,
+        so the duration is NOT pre-written here — adjust it live afterwards
+        with :meth:`set_quick_charge_minute` (register 234 doubles as the
+        live remaining-minutes countdown). Without a transport it uses the
+        cloud Quick Charge start endpoint.
 
         Args:
-            minute: Optional charge duration in minutes. Newer EG4 firmware
-                supports a fixed-duration quick charge; omitting it preserves
-                the legacy behaviour (charge until manually stopped). Must be
-                a positive integer when provided.
+            minute: Optional charge duration in minutes for the cloud start
+                endpoint. Newer EG4 firmware supports a fixed-duration quick
+                charge; omitting it preserves the legacy behaviour (charge
+                until manually stopped). Ignored on the local transport path
+                (the firmware starts at its default length and the duration is
+                set live via register 234). Must be a positive integer when
+                provided.
 
         Returns:
             True if successful
@@ -2990,15 +2997,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             raise ValueError(f"minute must be a positive integer, got {minute!r}")
 
         if self._transport is not None:
-            # LOCAL/HYBRID: write the duration (reg 234) first so the firmware
-            # starts the timed charge with the requested length rather than
-            # its default 60 minutes, then set the enable bit (reg 233 bit 0).
-            local_ok = True
-            if minute is not None:
-                local_ok = await self.write_transport_register(234, minute)
-            if local_ok:
-                local_ok = await self.write_transport_bit(233, 0, True)
-            if local_ok:
+            # LOCAL/HYBRID: set only the enable bit (reg 233 bit 0). The
+            # firmware starts the timed charge at its default length and
+            # rejects reg 234 writes while quick charge is off, so the duration
+            # is adjusted live afterwards via set_quick_charge_minute(); the
+            # `minute` argument is honoured only on the cloud fallback below.
+            if await self.write_transport_bit(233, 0, True):
                 return True
             # Local write failed. HYBRID (real cloud client) falls back to the
             # cloud endpoint; local-only (client is None) fails honestly.

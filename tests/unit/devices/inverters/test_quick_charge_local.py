@@ -51,15 +51,18 @@ def _inverter(mock_client: LuxpowerClient, *, with_transport: bool) -> _Inverter
 
 
 @pytest.mark.asyncio
-async def test_enable_local_writes_duration_then_enable_bit(mock_client):
+async def test_enable_local_with_minute_only_sets_bit_ignores_duration(mock_client):
+    """LOCAL enable sets only reg 233 bit 0; the firmware rejects reg 234 writes
+    while quick charge is off, so `minute` is ignored on the local path (the
+    duration is adjusted live via set_quick_charge_minute afterwards)."""
     inv = _inverter(mock_client, with_transport=True)
 
     ok = await inv.enable_quick_charge(minute=30)
 
     assert ok is True
     writes = [c.args[0] for c in inv._transport.write_parameters.call_args_list]
-    assert {234: 30} in writes  # duration setpoint
     assert {233: 1} in writes  # enable bit set (RMW on 0x0000)
+    assert all(234 not in w for w in writes)  # duration NOT pre-written
     mock_client.api.control.start_quick_charge.assert_not_called()
 
 
