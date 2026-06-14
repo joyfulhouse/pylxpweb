@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.36b10] - 2026-06-13
+
+### Fixed
+
+- **Quick Charge local enable starts at firmware default** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  on real LXP-LB hardware (thanks @ivanfmartinez) the firmware **rejects writes
+  to holding register 234 while quick charge is off**, so pre-writing the
+  duration before the enable bit was silently dropped. `enable_quick_charge()`
+  now sets only register 233 bit 0 over a local transport — the firmware starts
+  the timed charge at its default length and the duration is adjusted live via
+  `set_quick_charge_minute()` (register 234 doubles as the live remaining-minutes
+  countdown). The `minute` argument is honoured only on the cloud start endpoint;
+  HYBRID cloud fallback and the cloud-only path are unchanged.
+
 ## [0.9.36b9] - 2026-06-13
 
 ### Added
