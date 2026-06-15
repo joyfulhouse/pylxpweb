@@ -1073,6 +1073,14 @@ class QuickChargeStatus(BaseModel):
     unclosedQuickChargeTaskId: int | None = None
     unclosedQuickChargeTaskStatus: str | None = None
     lowVoltProtect: bool = False
+    # Holding register 234 value in minutes — the writable duration setpoint,
+    # which also reads back as the live remaining-minutes countdown while a
+    # charge runs. Populated only when read from a local transport
+    # (LOCAL/HYBRID); ``None`` on the cloud path, which has no equivalent
+    # register. Distinct from ``remainTimeBeforeQuickChargeStop`` (seconds,
+    # which prefers input register 210). Lets a consumer mirror the register
+    # faithfully rather than retain a stale preference.
+    quickChargeMinute: int | None = None
 
     @property
     def remaining_minutes(self) -> int:

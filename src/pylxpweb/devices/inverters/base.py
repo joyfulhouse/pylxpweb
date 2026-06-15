@@ -3103,8 +3103,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         register 233 bit 0 gives the active flag, and the remaining time prefers
         input register 210 (seconds, finer-grained, newer firmware) and falls
         back to holding register 234 (minutes × 60) when register 210 is
-        unavailable (older firmware reports 0). Otherwise it returns the cloud
-        getStatusInfo model, whose remaining-time value comes from the API.
+        unavailable (older firmware reports 0). The raw holding register 234
+        value (minutes) is also surfaced as ``quickChargeMinute`` — idle or
+        active — so a consumer can mirror the register faithfully. Otherwise it
+        returns the cloud getStatusInfo model, whose remaining-time value comes
+        from the API (``quickChargeMinute`` stays ``None``, no such register).
 
         Returns:
             QuickChargeStatus: Full quick charge status
@@ -3142,6 +3145,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 success=True,
                 hasUnclosedQuickChargeTask=active,
                 remainTimeBeforeQuickChargeStop=remaining_seconds,
+                quickChargeMinute=minutes,
             )
         return await self._client.api.control.get_quick_charge_status(self.serial_number)
 

@@ -233,6 +233,8 @@ async def test_detail_local_falls_back_to_reg234_when_input210_unavailable(mock_
     assert detail.hasUnclosedQuickChargeTask is True
     assert detail.remainTimeBeforeQuickChargeStop == 8 * 60
     assert detail.remaining_minutes == 8
+    # Raw holding reg 234 surfaced for the duration number to mirror.
+    assert detail.quickChargeMinute == 8
 
 
 @pytest.mark.asyncio
@@ -250,12 +252,18 @@ async def test_detail_local_prefers_input210_seconds(mock_client):
     assert detail.hasUnclosedQuickChargeTask is True
     assert detail.remainTimeBeforeQuickChargeStop == 320
     assert detail.remaining_minutes == 6  # ceil(320 / 60)
+    # remaining uses input reg 210 (seconds); quickChargeMinute still mirrors
+    # the holding reg 234 value (the duration setpoint register).
+    assert detail.quickChargeMinute == 8
 
 
 @pytest.mark.asyncio
-async def test_detail_local_idle_reports_zero_remaining(mock_client):
+async def test_detail_local_idle_surfaces_reg234_zero_remaining(mock_client):
+    """Idle: remaining is 0, but the raw holding reg 234 value is still surfaced
+    as quickChargeMinute so the duration number mirrors the register faithfully
+    (e.g. the last value the firmware retains) rather than a stored preference."""
     inv = _inverter(mock_client, with_transport=True)
-    inv._transport.read_parameters = AsyncMock(return_value={233: 0x0, 234: 8})  # idle
+    inv._transport.read_parameters = AsyncMock(return_value={233: 0x0, 234: 2})  # idle, reg=2
     inv._transport.read_quick_charge_remaining_seconds = AsyncMock(return_value=320)
 
     detail = await inv.get_quick_charge_detail()
@@ -265,6 +273,8 @@ async def test_detail_local_idle_reports_zero_remaining(mock_client):
     assert detail.remaining_minutes == 0
     # Idle: remaining is always 0, so input reg 210 is not read.
     inv._transport.read_quick_charge_remaining_seconds.assert_not_awaited()
+    # ...but the raw reg 234 value IS surfaced (faithful register mirror).
+    assert detail.quickChargeMinute == 2
 
 
 @pytest.mark.asyncio
@@ -274,6 +284,8 @@ async def test_detail_cloud_when_no_transport(mock_client):
     detail = await inv.get_quick_charge_detail()
 
     assert detail.hasUnclosedQuickChargeTask is True
+    # Cloud has no holding register 234 to mirror.
+    assert detail.quickChargeMinute is None
     mock_client.api.control.get_quick_charge_status.assert_awaited_once()
 
 
