@@ -468,6 +468,14 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         async with self._op_lock:
             return await super().read_parameters(start_address, count)
 
+    async def read_quick_charge_remaining_seconds(self) -> int | None:
+        """Read quick-charge remaining seconds (input reg 210) with op lock."""
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            await self._reconnect()
+
+        async with self._op_lock:
+            return await super().read_quick_charge_remaining_seconds()
+
     async def write_parameters(
         self,
         parameters: dict[int, int],

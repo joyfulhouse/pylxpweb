@@ -460,6 +460,32 @@ class RegisterDataMixin(_DataMixinBase):
             registers.update(self._registers_from_values(start, values))
         return registers
 
+    async def read_quick_charge_remaining_seconds(self) -> int | None:
+        """Read the quick-charge remaining-time countdown (INPUT register 210).
+
+        Register 210 is a read-only input register exposing the remaining quick
+        charge time in **seconds** (finer-grained than the minute-resolution
+        holding register 234). It is only populated on newer firmware (≈v25+);
+        older firmware reports 0. The read is non-fatal and out-of-band of the
+        main input groups, mirroring :meth:`_read_pv4_6_registers`.
+
+        Returns:
+            The remaining seconds when the register reports a positive value,
+            otherwise ``None`` (older firmware reporting 0, or a read failure) —
+            so callers can fall back to the holding-register 234 derivation.
+        """
+        try:
+            values = await self._read_input_registers(210, 1)
+        except (TransportReadError, TransportTimeoutError) as e:
+            _LOGGER.debug(
+                "Quick charge remaining (input reg 210) unavailable for %s: %s",
+                self._serial,
+                e,
+            )
+            return None
+        seconds = int(values[0]) if values else 0
+        return seconds if seconds > 0 else None
+
     # ------------------------------------------------------------------
     # Device data methods
     # ------------------------------------------------------------------

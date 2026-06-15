@@ -1122,6 +1122,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         async with self._op_lock:
             return await super().read_parameters(start_address, count)
 
+    async def read_quick_charge_remaining_seconds(self) -> int | None:
+        """Serialised read of quick-charge remaining seconds (input reg 210)."""
+        async with self._op_lock:
+            return await super().read_quick_charge_remaining_seconds()
+
     async def write_parameters(
         self,
         parameters: dict[int, int],

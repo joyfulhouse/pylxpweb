@@ -43,6 +43,10 @@ def _inverter(mock_client: LuxpowerClient, *, with_transport: bool) -> _Inverter
         transport = AsyncMock()
         transport.read_parameters = AsyncMock(return_value={233: 0})
         transport.write_parameters = AsyncMock(return_value=True)
+        # Input reg 210 unavailable by default (older firmware / no value) so the
+        # remaining time falls back to the holding-reg 234 derivation; tests that
+        # exercise the seconds path override this.
+        transport.read_quick_charge_remaining_seconds = AsyncMock(return_value=None)
         inv._transport = transport
     return inv
 
@@ -214,11 +218,13 @@ async def test_status_cloud_when_no_transport(mock_client):
 
 
 @pytest.mark.asyncio
-async def test_detail_local_builds_from_registers(mock_client):
+async def test_detail_local_falls_back_to_reg234_when_input210_unavailable(mock_client):
     inv = _inverter(mock_client, with_transport=True)
     # Both regs read LIVE in one read_parameters(233, 2) — reg 234 must come
     # from the transport, NOT the (stale) cached parameter dict.
     inv._transport.read_parameters = AsyncMock(return_value={233: 0x1, 234: 8})
+    # Input reg 210 unavailable (older firmware) -> fall back to reg 234 * 60.
+    inv._transport.read_quick_charge_remaining_seconds = AsyncMock(return_value=None)
     inv.parameters = {"SNA_HOLD_QUICK_CHARGE_MINUTE": 999}  # stale; must be ignored
 
     detail = await inv.get_quick_charge_detail()
@@ -230,15 +236,35 @@ async def test_detail_local_builds_from_registers(mock_client):
 
 
 @pytest.mark.asyncio
+async def test_detail_local_prefers_input210_seconds(mock_client):
+    """When input reg 210 reports a positive value (newer firmware), it is the
+    remaining-time source, overriding the minute-resolution reg 234 derivation."""
+    inv = _inverter(mock_client, with_transport=True)
+    inv._transport.read_parameters = AsyncMock(return_value={233: 0x1, 234: 8})
+    # Reg 210 = 320s (5m20s) — finer-grained than reg 234's 8 minutes.
+    inv._transport.read_quick_charge_remaining_seconds = AsyncMock(return_value=320)
+
+    detail = await inv.get_quick_charge_detail()
+
+    inv._transport.read_quick_charge_remaining_seconds.assert_awaited_once_with()
+    assert detail.hasUnclosedQuickChargeTask is True
+    assert detail.remainTimeBeforeQuickChargeStop == 320
+    assert detail.remaining_minutes == 6  # ceil(320 / 60)
+
+
+@pytest.mark.asyncio
 async def test_detail_local_idle_reports_zero_remaining(mock_client):
     inv = _inverter(mock_client, with_transport=True)
     inv._transport.read_parameters = AsyncMock(return_value={233: 0x0, 234: 8})  # idle
+    inv._transport.read_quick_charge_remaining_seconds = AsyncMock(return_value=320)
 
     detail = await inv.get_quick_charge_detail()
 
     assert detail.hasUnclosedQuickChargeTask is False
     assert detail.remainTimeBeforeQuickChargeStop == 0
     assert detail.remaining_minutes == 0
+    # Idle: remaining is always 0, so input reg 210 is not read.
+    inv._transport.read_quick_charge_remaining_seconds.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -249,3 +275,61 @@ async def test_detail_cloud_when_no_transport(mock_client):
 
     assert detail.hasUnclosedQuickChargeTask is True
     mock_client.api.control.get_quick_charge_status.assert_awaited_once()
+
+
+# ── transport: read_quick_charge_remaining_seconds (input reg 210) ────
+
+
+class TestReadQuickChargeRemainingSeconds:
+    """The transport reads input register 210 (remaining seconds) non-fatally,
+    returning None when unavailable so callers fall back to holding reg 234."""
+
+    @staticmethod
+    def _transport():
+        from pylxpweb.transports.modbus import ModbusTransport
+
+        return ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+    @pytest.mark.asyncio
+    async def test_reads_address_210_returns_seconds(self):
+        from unittest.mock import patch
+
+        transport = self._transport()
+        requested: list[tuple[int, int]] = []
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            requested.append((start, count))
+            return [420]
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            secs = await transport.read_quick_charge_remaining_seconds()
+
+        assert (210, 1) in requested
+        assert secs == 420
+
+    @pytest.mark.asyncio
+    async def test_zero_value_returns_none(self):
+        """Older firmware reports 0 -> None so the caller uses reg 234."""
+        from unittest.mock import patch
+
+        transport = self._transport()
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            return [0]
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            assert await transport.read_quick_charge_remaining_seconds() is None
+
+    @pytest.mark.asyncio
+    async def test_read_failure_is_non_fatal_returns_none(self):
+        from unittest.mock import patch
+
+        from pylxpweb.transports.exceptions import TransportReadError
+
+        transport = self._transport()
+
+        async def boom(start: int, count: int) -> list[int]:
+            raise TransportReadError("simulated timeout on input reg 210")
+
+        with patch.object(transport, "_read_input_registers", side_effect=boom):
+            assert await transport.read_quick_charge_remaining_seconds() is None

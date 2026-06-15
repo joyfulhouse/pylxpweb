@@ -3100,9 +3100,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         the complete ``QuickChargeStatus`` model including remaining time.
 
         With a local transport the model is reconstructed from registers:
-        register 233 bit 0 (active) and register 234, which holds the live
-        remaining-minutes countdown while a charge runs. Otherwise it returns
-        the cloud getStatusInfo model with its task metadata.
+        register 233 bit 0 gives the active flag, and the remaining time prefers
+        input register 210 (seconds, finer-grained, newer firmware) and falls
+        back to holding register 234 (minutes × 60) when register 210 is
+        unavailable (older firmware reports 0). Otherwise it returns the cloud
+        getStatusInfo model, whose remaining-time value comes from the API.
 
         Returns:
             QuickChargeStatus: Full quick charge status
@@ -3123,10 +3125,23 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             enable = values.get(233)
             active = bool(enable & 0x1) if enable is not None else False
             minutes = int(values.get(234, 0) or 0)
+            # Prefer input register 210 (remaining seconds, newer firmware) for
+            # the live countdown; fall back to the minute-resolution holding
+            # register 234 when it is unavailable. Read 210 only while a charge
+            # is active (idle remaining is always 0).
+            remaining_seconds = minutes * 60 if active else 0
+            if active:
+                read_remaining = getattr(
+                    self._transport, "read_quick_charge_remaining_seconds", None
+                )
+                if read_remaining is not None:
+                    input_seconds = await read_remaining()
+                    if input_seconds:
+                        remaining_seconds = int(input_seconds)
             return QuickChargeStatus(
                 success=True,
                 hasUnclosedQuickChargeTask=active,
-                remainTimeBeforeQuickChargeStop=minutes * 60 if active else 0,
+                remainTimeBeforeQuickChargeStop=remaining_seconds,
             )
         return await self._client.api.control.get_quick_charge_status(self.serial_number)
 
