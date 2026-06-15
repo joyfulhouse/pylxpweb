@@ -86,8 +86,9 @@ class GenericInverter(BaseInverter):
                     )
                 )
 
-            # PV Power
-            if hasattr(self._runtime, "ppv"):
+            # PV Power — ppv is None for an offline device (cloud omits it);
+            # skip the entity rather than emitting an unknown 0 (eg4_web_monitor#256).
+            if self._runtime.ppv is not None:
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_pv_power",
@@ -130,8 +131,9 @@ class GenericInverter(BaseInverter):
                     )
                 )
 
-            # Battery Charge/Discharge Power
-            if hasattr(self._runtime, "batPower"):
+            # Battery Charge/Discharge Power — batPower is None for an offline
+            # device (cloud omits it); skip rather than emit None (eg4_web_monitor#256).
+            if self._runtime.batPower is not None:
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_battery_power",

@@ -445,8 +445,10 @@ class InverterRuntimeData:
             pv1_power=float(runtime.ppv1 or 0),
             pv2_voltage=scale_runtime_value("vpv2", runtime.vpv2),
             pv2_power=float(runtime.ppv2 or 0),
-            pv3_voltage=scale_runtime_value("vpv3", runtime.vpv3 or 0),
-            pv3_power=float(runtime.ppv3 or 0),
+            # vpv3/ppv3 are Optional (absent on 2-string models, or omitted for an
+            # offline device) — preserve None like pv4-6 rather than a fake 0.
+            pv3_voltage=_opt_voltage("vpv3", runtime.vpv3),
+            pv3_power=_opt_power(runtime.ppv3),
             # PV4-6 (V23 extended, >3-string models).  Same SCALE_10 voltage /
             # SCALE_NONE power handling as pv1-3, but preserve None when the
             # cloud omits the field so a 3-string inverter's output (pv4-6 =
@@ -458,33 +460,34 @@ class InverterRuntimeData:
             pv5_power=_opt_power(runtime.ppv5),
             pv6_voltage=_opt_voltage("vpv6", runtime.vpv6),
             pv6_power=_opt_power(runtime.ppv6),
-            pv_total_power=float(runtime.ppv or 0),
-            # Battery — vBat is omitted by the cloud for an offline device
-            # (eg4_web_monitor#256); preserve None rather than scaling it.
+            pv_total_power=_opt_power(runtime.ppv),
+            # Battery — the cloud omits these for an offline device
+            # (eg4_web_monitor#256); preserve None rather than collapsing to a
+            # fake 0 reading (an offline inverter is "unknown", not "0%/0W").
             battery_voltage=_opt_voltage("vBat", runtime.vBat),
-            battery_soc=runtime.soc or 0,
-            battery_charge_power=float(runtime.pCharge or 0),
-            battery_discharge_power=float(runtime.pDisCharge or 0),
+            battery_soc=runtime.soc,
+            battery_charge_power=_opt_power(runtime.pCharge),
+            battery_discharge_power=_opt_power(runtime.pDisCharge),
             battery_temperature=float(runtime.tBat or 0),
             # Grid
             grid_voltage_r=scale_runtime_value("vacr", runtime.vacr),
             grid_voltage_s=scale_runtime_value("vacs", runtime.vacs),
             grid_voltage_t=scale_runtime_value("vact", runtime.vact),
             grid_frequency=scale_runtime_value("fac", runtime.fac),
-            rectifier_power=float(runtime.prec or 0),
+            rectifier_power=_opt_power(runtime.prec),
             power_to_grid=float(runtime.pToGrid or 0),
             # Grid import is pToUser (reg 27 mirror) — the old prec assignment
             # here was the same reg-17 misnaming as grid_power (eg4-9wf); the
             # Modbus path has always fed power_from_grid from reg 27.
             power_from_grid=float(runtime.pToUser or 0),
             # Inverter
-            inverter_power=float(runtime.pinv or 0),
+            inverter_power=_opt_power(runtime.pinv),
             # EPS
             eps_voltage_r=scale_runtime_value("vepsr", runtime.vepsr),
             eps_voltage_s=scale_runtime_value("vepss", runtime.vepss),
             eps_voltage_t=scale_runtime_value("vepst", runtime.vepst),
             eps_frequency=scale_runtime_value("feps", runtime.feps),
-            eps_power=float(runtime.peps or 0),
+            eps_power=_opt_power(runtime.peps),
             eps_apparent_power=runtime.seps or 0,
             # Load
             load_power=float(runtime.pToUser or 0),
@@ -499,8 +502,10 @@ class InverterRuntimeData:
             internal_temperature=float(runtime.tinner or 0),
             radiator_temperature_1=float(runtime.tradiator1 or 0),
             radiator_temperature_2=float(runtime.tradiator2 or 0),
-            # Status
-            device_status=runtime.status or 0,
+            # Status — code 0 = "normal" on EG4, so an offline device (cloud
+            # omits `status`) must stay None here, not collapse to a fake
+            # "normal" reading (eg4_web_monitor#256).
+            device_status=runtime.status,
             # Note: InverterRuntime doesn't have faultCode/warningCode fields
         )
 

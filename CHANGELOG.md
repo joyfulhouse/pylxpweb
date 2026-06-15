@@ -27,7 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   offline inverter now reports `statusText="offline"` rather than vanishing).
   `BatteryBank` aggregate properties (`status`, `soc`, `voltage`,
   `charge_power`, `discharge_power`) and the HYBRID HTTP battery fallback are
-  `None`-safe so an offline battery doesn't crash `apply_scale(None)`.
+  `None`-safe so an offline battery doesn't crash `apply_scale(None)`. The
+  cloud→transport converters (`InverterRuntimeData.from_http_response`,
+  `HTTPTransport.read_battery`) now preserve `None` for the omitted fields
+  instead of collapsing them to a phantom `0` reading — so an offline device
+  reads "unavailable", not a fake 0 %/0 W/status-0 ("normal"), on the
+  transport path too.
 
 ## [0.9.36b12] - 2026-06-15
 
