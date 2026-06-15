@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.36b12] - 2026-06-15
+
+### Added
+
+- **Quick Charge status surfaces the raw holding register 234 value** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  `QuickChargeStatus` gains a `quickChargeMinute` field (`int | None`) carrying
+  the holding register 234 value in minutes — the writable duration setpoint
+  that also counts down as the live remaining minutes while a charge runs.
+  `get_quick_charge_detail()` populates it on the local transport path, **idle
+  and active**, so a consumer can faithfully mirror the register rather than
+  retain a stale preference. It stays `None` on the cloud path (no equivalent
+  register). `remainTimeBeforeQuickChargeStop` (seconds, prefers input register
+  210) is unchanged. Per LXP-LB reports (@ivanfmartinez).
+
 ## [0.9.36b11] - 2026-06-15
 
 ### Added
