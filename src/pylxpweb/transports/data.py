@@ -459,8 +459,9 @@ class InverterRuntimeData:
             pv6_voltage=_opt_voltage("vpv6", runtime.vpv6),
             pv6_power=_opt_power(runtime.ppv6),
             pv_total_power=float(runtime.ppv or 0),
-            # Battery
-            battery_voltage=scale_runtime_value("vBat", runtime.vBat),
+            # Battery — vBat is omitted by the cloud for an offline device
+            # (eg4_web_monitor#256); preserve None rather than scaling it.
+            battery_voltage=_opt_voltage("vBat", runtime.vBat),
             battery_soc=runtime.soc or 0,
             battery_charge_power=float(runtime.pCharge or 0),
             battery_discharge_power=float(runtime.pDisCharge or 0),

@@ -219,7 +219,13 @@ class HTTPTransport(BaseTransport):
                 battery_count = len(batteries)
 
             return BatteryBankData(
-                voltage=apply_scale(battery_info.vBat, ScaleFactor.SCALE_10),
+                # vBat is omitted by the cloud for an offline battery — keep
+                # voltage None there rather than scaling None (eg4_web_monitor#256).
+                voltage=(
+                    apply_scale(battery_info.vBat, ScaleFactor.SCALE_10)
+                    if battery_info.vBat is not None
+                    else None
+                ),
                 soc=battery_info.soc or 0,
                 charge_power=float(battery_info.pCharge or 0),
                 discharge_power=float(battery_info.pDisCharge or 0),

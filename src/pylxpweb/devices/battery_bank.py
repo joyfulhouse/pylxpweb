@@ -114,11 +114,12 @@ class BatteryBank(BaseDevice):
     # ========== Status Properties ==========
 
     @property
-    def status(self) -> str:
+    def status(self) -> str | None:
         """Get battery bank charging status.
 
         Returns:
-            Status string (e.g., "Charging", "Discharging", "Idle").
+            Status string (e.g., "Charging", "Discharging", "Idle"), or None
+            when the battery is offline and the cloud omits ``batStatus``.
         """
         return self.data.batStatus
 
@@ -178,14 +179,15 @@ class BatteryBank(BaseDevice):
     # ========== State of Charge ==========
 
     @property
-    def soc(self) -> int:
+    def soc(self) -> int | None:
         """Get aggregate state of charge for battery bank.
 
         Uses transport runtime data when available for real-time values,
         falling back to cloud API data.
 
         Returns:
-            State of charge percentage (0-100).
+            State of charge percentage (0-100), or None when the battery is
+            offline and the cloud omits ``soc``.
         """
         val = self._get_transport_value("battery_soc")
         if val is not None:
@@ -341,18 +343,21 @@ class BatteryBank(BaseDevice):
     # ========== Voltage Properties ==========
 
     @property
-    def voltage(self) -> float:
+    def voltage(self) -> float | None:
         """Get battery bank voltage in volts.
 
         Uses transport runtime data when available for real-time values,
         falling back to cloud API data.
 
         Returns:
-            Battery voltage (scaled from vBat ÷10).
+            Battery voltage (scaled from vBat ÷10), or None when the battery is
+            offline and the cloud omits ``vBat``.
         """
         val = self._get_transport_value("battery_voltage")
         if val is not None:
             return float(val)
+        if self.data.vBat is None:
+            return None
         return apply_scale(self.data.vBat, ScaleFactor.SCALE_10)
 
     @property
@@ -367,14 +372,15 @@ class BatteryBank(BaseDevice):
     # ========== Power Properties ==========
 
     @property
-    def charge_power(self) -> int:
+    def charge_power(self) -> int | None:
         """Get total charging power in watts.
 
         Uses transport runtime data when available for real-time values,
         falling back to cloud API data.
 
         Returns:
-            Charging power in watts.
+            Charging power in watts, or None when the battery is offline and the
+            cloud omits ``pCharge``.
         """
         val = self._get_transport_value("battery_charge_power")
         if val is not None:
@@ -382,14 +388,15 @@ class BatteryBank(BaseDevice):
         return self.data.pCharge
 
     @property
-    def discharge_power(self) -> int:
+    def discharge_power(self) -> int | None:
         """Get total discharging power in watts.
 
         Uses transport runtime data when available for real-time values,
         falling back to cloud API data.
 
         Returns:
-            Discharging power in watts.
+            Discharging power in watts, or None when the battery is offline and
+            the cloud omits ``pDisCharge``.
         """
         val = self._get_transport_value("battery_discharge_power")
         if val is not None:
