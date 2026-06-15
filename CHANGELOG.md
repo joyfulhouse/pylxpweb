@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.36b13] - 2026-06-15
+
+### Fixed
+
+- **Offline inverter/battery no longer fails model validation** ([eg4_web_monitor#256](https://github.com/joyfulhouse/eg4_web_monitor/issues/256)):
+  when a device is offline (`lost: true`) the cloud returns a *partial*
+  `getInverterRuntime` / `getBatteryInfo` payload that omits the live/aggregate
+  measurement fields. `InverterRuntime` and `BatteryInfo` declared those fields
+  required, so `model_validate()` rejected the whole response — discarding even
+  the fields that *were* present (statusText, per-string PV, voltages, temps).
+  The downstream consumer (eg4_web_monitor) then saw `has_data=False` and made
+  **all** of that device's Home Assistant entities unavailable, while a second,
+  online inverter in the same station worked normally. The cloud-omittable live
+  fields are now `Optional` (`InverterRuntime`: `status`, `ppv`, `soc`, `vBat`,
+  `pCharge`, `pDisCharge`, `batPower`, `batteryColor`, `pinv`, `prec`, `peps`;
+  `BatteryInfo`: `batStatus`, `soc`, `vBat`, `pCharge`, `pDisCharge`), so a
+  partial/offline payload validates and the present fields flow through (an
+  offline inverter now reports `statusText="offline"` rather than vanishing).
+  `BatteryBank` aggregate properties (`status`, `soc`, `voltage`,
+  `charge_power`, `discharge_power`) and the HYBRID HTTP battery fallback are
+  `None`-safe so an offline battery doesn't crash `apply_scale(None)`. The
+  cloud→transport converters (`InverterRuntimeData.from_http_response`,
+  `HTTPTransport.read_battery`) now preserve `None` for the omitted fields
+  instead of collapsing them to a phantom `0` reading — so an offline device
+  reads "unavailable", not a fake 0 %/0 W/status-0 ("normal"), on the
+  transport path too.
+
 ## [0.9.36b12] - 2026-06-15
 
 ### Added

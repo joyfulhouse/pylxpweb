@@ -455,6 +455,15 @@ class InverterRuntime(BaseModel):
     - Temperature: no scaling (direct Celsius)
 
     See: constants.INVERTER_RUNTIME_SCALING for complete mapping
+
+    Offline tolerance: when an inverter is offline (``lost=true``) the cloud
+    ``getInverterRuntime`` response omits the live/aggregate measurement fields
+    (``status``, ``ppv``, ``soc``, ``vBat``, ``pCharge``, ``pDisCharge``,
+    ``batPower``, ``batteryColor``, ``pinv``, ``prec``, ``peps``).  Those fields
+    are therefore Optional so the partial payload still validates — keeping the
+    fields the device *does* report (statusText="offline", per-string PV,
+    voltages, temperatures).  Marking them required made one offline inverter
+    take down all of its Home Assistant entities (eg4_web_monitor#256).
     """
 
     success: bool
@@ -490,7 +499,11 @@ class InverterRuntime(BaseModel):
     ppv4: int | None = None  # Some models have 4 PV inputs
     ppv5: int | None = None  # >4-string models (V23 extended)
     ppv6: int | None = None  # >5-string models (V23 extended)
-    ppv: int
+    # Optional: an offline inverter (``lost=true``) returns a partial payload
+    # that omits the aggregate/live measurement fields below — see the class
+    # note on offline tolerance.  Required-field validation would otherwise
+    # reject the whole response and strip every sensor.
+    ppv: int | None = None
     ppvpCharge: int | None = None  # PV charge power (alternate field name on some models)
     # AC voltages (�100 for volts)
     vacr: int
@@ -516,18 +529,19 @@ class InverterRuntime(BaseModel):
     # Bus voltages
     vBus1: int
     vBus2: int
-    status: int
-    # Battery data
-    pCharge: int
-    pDisCharge: int
-    batPower: int
-    batteryColor: str
-    soc: int
-    vBat: int
-    # Inverter/rectifier power
-    pinv: int
-    prec: int
-    peps: int
+    # Optional: omitted by the cloud for an offline inverter (``lost=true``).
+    status: int | None = None
+    # Battery data — omitted entirely when the inverter is offline.
+    pCharge: int | None = None
+    pDisCharge: int | None = None
+    batPower: int | None = None
+    batteryColor: str | None = None
+    soc: int | None = None
+    vBat: int | None = None
+    # Inverter/rectifier power — omitted when offline.
+    pinv: int | None = None
+    prec: int | None = None
+    peps: int | None = None
     # AC couple
     _12KAcCoupleInverterFlow: bool = False
     _12KAcCoupleInverterData: bool = False
@@ -703,19 +717,23 @@ class BatteryInfo(BaseModel):
     lost: bool | None = None
     hasRuntimeData: bool | None = None
     statusText: str | None = None
-    batStatus: str
+    # Optional: an offline battery (``lost=true``) returns a partial payload
+    # that omits batStatus/soc/vBat/pCharge/pDisCharge.  Keeping them required
+    # rejected the whole response and stripped the battery-bank entities
+    # (eg4_web_monitor#256).
+    batStatus: str | None = None
 
     # State of Charge
-    soc: int
+    soc: int | None = None
 
     # Voltage (÷10 for volts at aggregate level)
-    vBat: int
+    vBat: int | None = None
     totalVoltageText: str | None = None
 
     # Power (direct watts)
     ppv: int | None = None  # PV power
-    pCharge: int
-    pDisCharge: int
+    pCharge: int | None = None
+    pDisCharge: int | None = None
     batPower: int | None = None  # Battery power
     pinv: int | None = None  # Inverter power
     prec: int | None = None  # Grid power

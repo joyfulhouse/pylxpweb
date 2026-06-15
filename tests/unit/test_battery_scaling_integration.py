@@ -269,6 +269,39 @@ class TestBatteryEntitiesScaling:
         assert max_cell_v.unit_of_measurement == "V"
 
 
+class TestOfflineBatteryBank:
+    """BatteryBank degrades gracefully when the battery is offline.
+
+    An offline battery (lost=true) returns a partial getBatteryInfo with no
+    batStatus/soc/vBat/pCharge/pDisCharge.  The aggregate properties must return
+    None rather than crash (e.g. apply_scale(None)) — eg4_web_monitor#256.
+    """
+
+    def test_offline_bank_properties_return_none(self, mock_client: None) -> None:
+        """Offline bank properties are None, not exceptions."""
+        import json
+        from pathlib import Path
+
+        from pylxpweb.devices.battery_bank import BatteryBank
+        from pylxpweb.models import BatteryInfo
+
+        sample = Path(__file__).parent.parent / "samples" / "battery_offline.json"
+        info = BatteryInfo.model_validate(json.loads(sample.read_text()))
+
+        bank = BatteryBank(
+            client=mock_client,  # type: ignore[arg-type]
+            inverter_serial="OFFLINE0001",
+            battery_info=info,
+        )
+
+        # No exceptions; offline-omitted aggregates surface as None.
+        assert bank.status is None
+        assert bank.soc is None
+        assert bank.voltage is None
+        assert bank.charge_power is None
+        assert bank.discharge_power is None
+
+
 @pytest.fixture
 def mock_client():
     """Mock LuxpowerClient for testing."""

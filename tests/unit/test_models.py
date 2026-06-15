@@ -180,6 +180,48 @@ class TestInverterRuntime:
         # Scaled value
         assert scale_frequency(model.fac) == pytest.approx(59.98, rel=0.01)
 
+    def test_parse_offline_runtime(self) -> None:
+        """An offline inverter (lost=true) returns a partial payload.
+
+        The cloud omits the live/aggregate measurement fields (status, ppv, soc,
+        vBat, pCharge, pDisCharge, batPower, batteryColor, pinv, prec, peps).
+        The model must still validate so the fields the device *does* report are
+        preserved — rather than rejecting the whole response and stripping every
+        sensor (eg4_web_monitor#256).
+        """
+        data = load_sample("runtime_offline.json")
+        # Guard: the sample really is a partial payload.
+        for omitted in (
+            "status",
+            "ppv",
+            "soc",
+            "vBat",
+            "pCharge",
+            "pDisCharge",
+            "batPower",
+            "batteryColor",
+            "pinv",
+            "prec",
+            "peps",
+        ):
+            assert omitted not in data
+
+        model = InverterRuntime.model_validate(data)
+
+        # Validation succeeds and the omitted live fields default to None.
+        assert model.lost is True
+        assert model.statusText == "offline"
+        assert model.status is None
+        assert model.ppv is None
+        assert model.soc is None
+        assert model.vBat is None
+        assert model.pCharge is None
+        assert model.batteryColor is None
+        # The fields the offline device DOES report survive.
+        assert model.ppv1 == 0
+        assert model.pToUser == 4015
+        assert model.tinner == 33
+
 
 class TestEnergyInfo:
     """Test EnergyInfo model."""
@@ -215,6 +257,26 @@ class TestBatteryInfo:
         assert model.serialNum == "1234567890"
         assert model.soc == 71
         assert len(model.batteryArray) > 0
+
+    def test_parse_offline_battery_info(self) -> None:
+        """An offline battery (lost=true) returns a partial getBatteryInfo.
+
+        The cloud omits batStatus/soc/vBat/pCharge/pDisCharge and an empty
+        batteryArray.  The model must still validate (eg4_web_monitor#256).
+        """
+        data = load_sample("battery_offline.json")
+        for omitted in ("batStatus", "soc", "vBat", "pCharge", "pDisCharge"):
+            assert omitted not in data
+
+        model = BatteryInfo.model_validate(data)
+
+        assert model.lost is True
+        assert model.batStatus is None
+        assert model.soc is None
+        assert model.vBat is None
+        assert model.pCharge is None
+        assert model.pDisCharge is None
+        assert model.batteryArray == []
 
     def test_battery_module_parsing(self) -> None:
         """Test parsing individual battery modules."""

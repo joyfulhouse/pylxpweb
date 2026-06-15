@@ -181,6 +181,56 @@ class TestInverterRuntimeData:
         assert data.power_to_grid == 200.0
         assert data.power_from_grid == 1500.0
 
+    def test_from_http_response_offline_preserves_none(self) -> None:
+        """Offline cloud runtime → converter keeps omitted fields None, not 0.
+
+        An offline device (cloud ``lost: true``) returns a partial payload that
+        omits the live fields. ``from_http_response`` must surface those as None
+        (unavailable), not collapse them to a fake 0 reading — otherwise an
+        offline inverter looks like it is reading 0%/0W/status-0 (which is the
+        "normal" status code). eg4_web_monitor#256.
+        """
+        import json
+        from pathlib import Path
+
+        sample = Path(__file__).resolve().parents[2] / "samples" / "runtime_offline.json"
+        runtime = InverterRuntime.model_validate(json.loads(sample.read_text()))
+
+        data = InverterRuntimeData.from_http_response(runtime)
+
+        # Omitted live fields stay None (not 0 / 0.0).
+        assert data.pv_total_power is None
+        assert data.battery_soc is None
+        assert data.battery_voltage is None
+        assert data.battery_charge_power is None
+        assert data.battery_discharge_power is None
+        assert data.rectifier_power is None
+        assert data.inverter_power is None
+        assert data.eps_power is None
+        assert data.device_status is None
+        # Fields the offline payload DOES carry still convert.
+        assert data.internal_temperature == 33.0  # tinner present
+
+    def test_from_http_response_omitted_pv3_is_none(self) -> None:
+        """A 2-string payload omitting vpv3/ppv3 → pv3 stays None, not 0.
+
+        Mirrors the pv4-6 handling so an absent optional PV string is reported
+        as unavailable rather than a phantom 0 V / 0 W (eg4_web_monitor#256).
+        """
+        import json
+        from pathlib import Path
+
+        sample = Path(__file__).resolve().parents[2] / "samples" / "runtime_1234567890.json"
+        payload = json.loads(sample.read_text())
+        payload.pop("vpv3", None)
+        payload.pop("ppv3", None)
+        runtime = InverterRuntime.model_validate(payload)
+
+        data = InverterRuntimeData.from_http_response(runtime)
+
+        assert data.pv3_voltage is None
+        assert data.pv3_power is None
+
 
 class TestInverterEnergyData:
     """Tests for InverterEnergyData dataclass."""
