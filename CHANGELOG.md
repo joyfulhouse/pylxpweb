@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.36b11] - 2026-06-15
+
+### Added
+
+- **Quick Charge remaining time prefers input register 210** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  new transport method `read_quick_charge_remaining_seconds()` reads input
+  register 210 (the finer-grained seconds countdown exposed by newer firmware,
+  ≈v25+) via FC04, non-fatally (returns `None` on a read failure or when the
+  register reports 0 on older firmware) and op-lock serialised on the modbus and
+  dongle transports. `get_quick_charge_detail()` now prefers register 210 while a
+  charge is active and falls back to holding register 234 (minutes × 60) when it
+  is unavailable. The cloud path is unchanged (remaining time comes from the
+  `getStatusInfo` API value). Holding register 234 (writable minutes setpoint /
+  live countdown) and input register 210 (read-only seconds countdown) are
+  intentionally kept as distinct registers. Confirmed against an LXP-LB
+  (@ivanfmartinez).
+
 ## [0.9.36b10] - 2026-06-13
 
 ### Fixed
