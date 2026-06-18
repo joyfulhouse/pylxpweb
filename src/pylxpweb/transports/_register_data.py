@@ -30,6 +30,7 @@ from pylxpweb.registers import (
     PV4_6_INPUT_REGISTER_GROUP,
 )
 
+from ._canonical_reader import read_battery_serial
 from ._register_readers import (
     is_midbox_device,
     read_device_type_async,
@@ -49,6 +50,12 @@ if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
 
 _LOGGER = logging.getLogger(__name__)
+
+# Minimum length for a BMS-reported battery serial to be trusted as a stable
+# identity.  Shorter strings are truncated/partial reads; such a slot falls
+# back to position-based identity until its full serial appears.  Mirrors the
+# integration's round-robin merge threshold (coordinator_local._MIN_SERIAL_LENGTH).
+_MIN_BATTERY_SERIAL_LEN = 10
 
 # ---------------------------------------------------------------------------
 # Register group constants (unified across Modbus and Dongle transports)
@@ -138,39 +145,42 @@ class RegisterDataMixin(_DataMixinBase):
         limit of 125 registers and ensures firmware round-robin rotation cannot
         change slot contents between reads (#170).
 
-        **Round-robin accumulation** (systems with >4 batteries):
+        **Serial-keyed round-robin accumulation** (#170, #258):
 
-        Firmware rotates batteries through 4 register slots.  Each read sees
-        one "page" of 4 batteries.  The ``pos`` field at register offset 24
-        (high byte) identifies which physical battery occupies each slot.
+        Firmware rotates batteries through the 4 register slots; each read sees
+        one "page" of up to 4 batteries.  ``_battery_accumulator`` maps a stable
+        battery *identity* to that battery's 30-register block.  Identity is the
+        BMS serial (offsets 17-23) when present, else the firmware slot position
+        (offset 24 high byte) as a fallback.  ``_battery_slot_index`` assigns
+        each identity a stable virtual slot, so the merged map presents every
+        accumulated battery in a contiguous slot range
+        (``BATTERY_BASE_ADDRESS + slot * BATTERY_REGISTER_COUNT + offset``).
 
-        This method maintains ``_battery_accumulator`` — a dict mapping
-        ``pos`` to that battery's 30-register block (rebased to slot-0
-        addresses).  Each cycle merges new slot data by ``pos``, and the
-        merged accumulator is returned as a single virtual register map
-        where battery at ``pos=N`` is addressed as
-        ``BATTERY_BASE_ADDRESS + N * BATTERY_REGISTER_COUNT + offset``.
-
-        Over ``ceil(battery_count / 4)`` refresh cycles, all batteries
-        populate and downstream ``BatteryBankData`` sees the full bank.
+        ``battery_count`` (reg 96) is deliberately NOT used for gating,
+        clearing, or counting: it under-reports on parallel systems (#170 saw
+        12 for a 6-battery bank; #258's 5-battery rig intermittently reads 4).
+        Accumulated entries are never evicted, so a momentary under-report or a
+        battery rotating out of the visible page never drops it.
 
         Args:
             battery_count: Value from register 96 (total batteries reported).
+                Used only for debug logging.
 
         Returns:
             Dict of address→value for all accumulated batteries, or *None*
-            if the read failed (no usable data).
+            if the read failed or no battery slots are populated.
         """
-        batteries_to_read = min(battery_count, BATTERY_MAX_COUNT)
-
-        if batteries_to_read <= 0:
-            return None
-
-        total_registers = batteries_to_read * BATTERY_REGISTER_COUNT
+        # reg 96 (battery_parallel_count) is unreliable on parallel systems:
+        # #170 reported 12 for a 6-battery bank, and the #258 5-battery rig
+        # intermittently reads 4.  We therefore IGNORE battery_count for
+        # gating, clearing, and counting — it is kept only for the debug log.
+        # All physical slots are always read and accumulated by stable battery
+        # identity so a momentary under-report never drops a battery.
+        total_registers = BATTERY_MAX_COUNT * BATTERY_REGISTER_COUNT
         _LOGGER.debug(
-            "[%s] Reading %d battery slots (%d regs) in single read (battery_count=%d)",
+            "[%s] Reading %d battery slots (%d regs) in single read (reg96=%d)",
             self._serial,
-            batteries_to_read,
+            BATTERY_MAX_COUNT,
             total_registers,
             battery_count,
         )
@@ -188,51 +198,25 @@ class RegisterDataMixin(_DataMixinBase):
 
         raw_registers = self._registers_from_values(BATTERY_BASE_ADDRESS, values)
 
-        # --- Round-robin accumulation ---
-        # Only accumulate when battery_count > BATTERY_MAX_COUNT (round-robin active).
-        if battery_count <= BATTERY_MAX_COUNT:
-            return raw_registers
-
-        accumulator: dict[int, dict[int, int]] = getattr(self, "_battery_accumulator", {})
-        prev_battery_count: int = getattr(self, "_accumulator_battery_count", 0)
-
+        # --- Serial-keyed round-robin accumulation (#170, #258) ---
+        # Firmware rotates batteries through the 4 fixed register slots.  Each
+        # slot's block is accumulated under a stable identity — the BMS serial
+        # when present, else the firmware slot position (offset 24 high byte) as
+        # a fallback for BMS that don't report a serial.  Entries are NEVER
+        # evicted: a battery the firmware rotates out keeps its last-known data
+        # so its entities stay populated.  Each identity is assigned a stable
+        # virtual slot so the merged map presents every accumulated battery in
+        # a contiguous slot range for the parser.
+        accumulator: dict[str, dict[int, int]] = getattr(self, "_battery_accumulator", {})
+        slot_index: dict[str, int] = getattr(self, "_battery_slot_index", {})
         last_seen: dict[int, datetime] = getattr(self, "_battery_last_seen", {})
-
-        # Clear accumulator if battery_count changed (battery added/removed)
-        if prev_battery_count != battery_count:
-            if accumulator:
-                _LOGGER.info(
-                    "[%s] battery_count changed %d→%d, clearing accumulator",
-                    self._serial,
-                    prev_battery_count,
-                    battery_count,
-                )
-            accumulator = {}
-            last_seen = {}
-        self._accumulator_battery_count = battery_count
-
         now = datetime.now()
 
-        for slot_idx in range(batteries_to_read):
-            slot_base = BATTERY_BASE_ADDRESS + (slot_idx * BATTERY_REGISTER_COUNT)
+        for phys_slot in range(BATTERY_MAX_COUNT):
+            slot_base = BATTERY_BASE_ADDRESS + (phys_slot * BATTERY_REGISTER_COUNT)
             status = raw_registers.get(slot_base, 0)
             if not status:
-                continue  # Empty slot — skip
-
-            # Extract pos from offset 24 (high byte = battery position, 0-based)
-            raw_24 = raw_registers.get(slot_base + 24, 0)
-            pos = (raw_24 >> 8) & 0xFF
-
-            # Sanity-check pos against battery_count
-            if pos >= battery_count:
-                _LOGGER.debug(
-                    "[%s] Slot %d pos=%d exceeds battery_count=%d, skipping",
-                    self._serial,
-                    slot_idx,
-                    pos,
-                    battery_count,
-                )
-                continue
+                continue  # Empty physical slot — skip
 
             # Extract this slot's 30-register block (using slot-local offsets 0-29)
             slot_regs: dict[int, int] = {}
@@ -241,26 +225,57 @@ class RegisterDataMixin(_DataMixinBase):
                 if addr in raw_registers:
                     slot_regs[offset] = raw_registers[addr]
 
-            accumulator[pos] = slot_regs
-            last_seen[pos] = now
+            # Identity: prefer the BMS serial (the only identity stable across
+            # rotation).  Serial occupies offsets 17-23 (offset 24's high byte is
+            # the position index, filtered out by read_battery_serial).
+            #   - valid serial (>= min length) → key by serial
+            #   - serial regs present but decode too short → partial/corrupt read;
+            #     SKIP this poll (the battery reappears with a full serial on a
+            #     later rotation).  Minting a fallback identity here would make one
+            #     physical battery accumulate twice and never evict.
+            #   - no serial regs at all → genuinely serial-less BMS; fall back to
+            #     the firmware slot position.
+            serial = read_battery_serial(raw_registers, base_address=slot_base)
+            serial_reported = any(raw_registers.get(slot_base + off, 0) for off in range(17, 24))
+            if serial and len(serial) >= _MIN_BATTERY_SERIAL_LEN:
+                identity = serial
+            elif serial_reported:
+                _LOGGER.debug(
+                    "[%s] slot %d: truncated serial %r — skipping this poll",
+                    self._serial,
+                    phys_slot,
+                    serial,
+                )
+                continue
+            else:
+                pos = (raw_registers.get(slot_base + 24, 0) >> 8) & 0xFF
+                identity = f"pos:{pos}"
+
+            if identity not in slot_index:
+                slot_index[identity] = len(slot_index)
+            accumulator[identity] = slot_regs
+            last_seen[slot_index[identity]] = now
 
         self._battery_accumulator = accumulator
+        self._battery_slot_index = slot_index
         self._battery_last_seen = last_seen
 
-        positions = sorted(accumulator.keys())
+        if not accumulator:
+            return None
+
         _LOGGER.debug(
-            "[%s] Battery accumulator: %d/%d positions populated %s",
+            "[%s] Battery accumulator: %d batteries populated (slots %s, reg96=%d)",
             self._serial,
             len(accumulator),
+            sorted(slot_index.values()),
             battery_count,
-            positions,
         )
 
-        # Build merged register map: remap each pos's block to virtual addresses
+        # Build merged register map: each identity at its stable virtual slot.
         merged: dict[int, int] = {}
-        for pos, slot_regs in accumulator.items():
-            virtual_base = BATTERY_BASE_ADDRESS + (pos * BATTERY_REGISTER_COUNT)
-            for offset, value in slot_regs.items():
+        for identity, regs in accumulator.items():
+            virtual_base = BATTERY_BASE_ADDRESS + (slot_index[identity] * BATTERY_REGISTER_COUNT)
+            for offset, value in regs.items():
                 merged[virtual_base + offset] = value
 
         return merged

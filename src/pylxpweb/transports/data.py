@@ -1524,7 +1524,11 @@ class BatteryBankData:
             BatteryBankData with all values properly scaled, or None if no battery
         """
         from pylxpweb.constants.registers import decode_bms_permissions
-        from pylxpweb.registers.battery import BATTERY_MAX_COUNT
+        from pylxpweb.registers.battery import (
+            BATTERY_BASE_ADDRESS,
+            BATTERY_MAX_COUNT,
+            BATTERY_REGISTER_COUNT,
+        )
         from pylxpweb.registers.inverter_input import BY_NAME
 
         # Battery voltage from canonical register def
@@ -1602,15 +1606,21 @@ class BatteryBankData:
             current_capacity = round(max_capacity * battery_soc / 100)
 
         # Parse individual battery data if extended registers provided.
-        # When round-robin accumulation is active (>4 batteries), the register
-        # map contains virtual addresses keyed by pos (not slot index), so we
-        # iterate up to battery_count instead of capping at BATTERY_MAX_COUNT.
+        # The round-robin accumulator presents every battery it has seen in a
+        # contiguous virtual slot range, which may hold MORE batteries than
+        # reg 96 reports (battery_parallel_count under-reports on parallel
+        # systems, #170/#258).  Derive the slot count directly from the
+        # populated register map rather than trusting reg 96; empty slots parse
+        # to None and are skipped.
         batteries: list[BatteryData] = []
         if individual_battery_registers:
-            if battery_count is not None and battery_count > 0:
-                count_to_use = battery_count
-            else:
-                count_to_use = BATTERY_MAX_COUNT
+            max_slot = -1
+            for addr in individual_battery_registers:
+                if addr < BATTERY_BASE_ADDRESS:
+                    continue
+                slot = (addr - BATTERY_BASE_ADDRESS) // BATTERY_REGISTER_COUNT
+                max_slot = max(max_slot, slot)
+            count_to_use = max_slot + 1 if max_slot >= 0 else BATTERY_MAX_COUNT
             for idx in range(count_to_use):
                 battery_data = BatteryData.from_modbus_registers(
                     battery_index=idx,
