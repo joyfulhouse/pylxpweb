@@ -1322,6 +1322,105 @@ class TestBatteryAccumulatorReg96Unreliable:
         assert len(bank.batteries) == 5
         assert {b.serial_number for b in bank.batteries} == set(serials)
 
+    def _addr_mock(
+        self, addr_map: dict[int, int], fail_if_count_over: int | None = None
+    ) -> tuple[MagicMock, list, MagicMock]:
+        """Mock client serving a register map by absolute address.
+
+        Optionally raises when a read's count exceeds ``fail_if_count_over``
+        (simulating a device that rejects reads larger than the Modbus PDU).
+        """
+        read_calls: list[tuple[int, int]] = []
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        mock_client.close = MagicMock()
+
+        async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
+            read_calls.append((address, count))
+            if fail_if_count_over is not None and count > fail_if_count_over:
+                raise TransportReadError(f"Illegal data quantity {count}")
+            resp = MagicMock()
+            resp.isError.return_value = False
+            resp.registers = [addr_map.get(address + i, 0) for i in range(count)]
+            return resp
+
+        mock_client.read_input_registers = mock_read
+        return mock_client, read_calls, MagicMock(return_value=mock_client)
+
+    def _dedicated_slots_map(self, n: int) -> tuple[dict[int, int], list[str]]:
+        """Build a register map with ``n`` batteries each in its own slot."""
+        serials = [f"BATTERYSER{i:04d}" for i in range(n)]
+        addr_map: dict[int, int] = {}
+        for idx, serial in enumerate(serials):
+            base = BATTERY_BASE_ADDRESS + idx * BATTERY_REGISTER_COUNT
+            page = _build_battery_slots_with_serials(
+                [(serial, idx), (None, 0), (None, 0), (None, 0)]
+            )
+            for off in range(BATTERY_REGISTER_COUNT):
+                addr_map[base + off] = page[off]
+        return addr_map, serials
+
+    @pytest.mark.asyncio
+    async def test_reads_all_reported_slots_in_one_read(self) -> None:
+        """A 5th battery in a dedicated slot (5122-5151) is read in one go.
+
+        Some inverters give each battery its own slot (no rotation): a
+        5-battery bank fills slots 0-4. Reading only 4 slots (120 regs) misses
+        battery 5 (#258). With reg 96 = 5 the reader requests all 5 slots
+        (150 regs) in a single read.
+        """
+        transport = self._make_transport()
+        addr_map, serials = self._dedicated_slots_map(5)
+        mock_client, read_calls, mock_class = self._addr_mock(addr_map)
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            merged = await transport._read_individual_battery_registers(5)
+
+        bat_reads = [(a, c) for a, c in read_calls if a == BATTERY_BASE_ADDRESS]
+        assert bat_reads, "no battery read issued"
+        assert bat_reads[0][1] >= 5 * BATTERY_REGISTER_COUNT, (
+            f"expected a single >=150-reg read, got {bat_reads}"
+        )
+        assert merged is not None
+        seen = {
+            read_battery_serial(
+                merged, base_address=BATTERY_BASE_ADDRESS + s * BATTERY_REGISTER_COUNT
+            )
+            for s in range(20)
+            if merged.get(BATTERY_BASE_ADDRESS + s * BATTERY_REGISTER_COUNT)
+        }
+        assert seen == set(serials)
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_four_slots_when_large_read_rejected(self) -> None:
+        """If the device rejects the larger read, fall back to 4 slots (no regression)."""
+        transport = self._make_transport()
+        addr_map, serials = self._dedicated_slots_map(5)
+        # Device rejects reads larger than 4 slots (120 regs).
+        mock_client, read_calls, mock_class = self._addr_mock(
+            addr_map, fail_if_count_over=BATTERY_MAX_COUNT * BATTERY_REGISTER_COUNT
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            merged = await transport._read_individual_battery_registers(5)
+
+        # Attempted the large read, then fell back to a 120-reg read.
+        counts = [c for a, c in read_calls if a == BATTERY_BASE_ADDRESS]
+        assert any(c > 120 for c in counts), "should attempt the larger read first"
+        assert 120 in counts, "should fall back to the 4-slot read"
+        # The first 4 batteries are still returned (no regression).
+        assert merged is not None
+        seen = {
+            read_battery_serial(
+                merged, base_address=BATTERY_BASE_ADDRESS + s * BATTERY_REGISTER_COUNT
+            )
+            for s in range(20)
+            if merged.get(BATTERY_BASE_ADDRESS + s * BATTERY_REGISTER_COUNT)
+        }
+        assert seen == set(serials[:4])
+
     @pytest.mark.asyncio
     async def test_truncated_serial_slot_skipped_no_phantom(self) -> None:
         """A present-but-truncated serial is skipped (no phantom identity).

@@ -57,6 +57,13 @@ _LOGGER = logging.getLogger(__name__)
 # integration's round-robin merge threshold (coordinator_local._MIN_SERIAL_LENGTH).
 _MIN_BATTERY_SERIAL_LEN = 10
 
+# Upper bound on battery slots to request in a single read.  reg 96
+# (battery_parallel_count) sizes the read but is unreliable in magnitude
+# (it read 12 for a 6-battery bank in #170), so it is clamped to this.  A
+# larger-than-4-slot read may exceed the device's PDU limit; the reader falls
+# back to the safe 4-slot read when the larger one is rejected.
+_BATTERY_SLOT_READ_MAX = 16
+
 # ---------------------------------------------------------------------------
 # Register group constants (unified across Modbus and Dongle transports)
 # ---------------------------------------------------------------------------
@@ -138,33 +145,37 @@ class RegisterDataMixin(_DataMixinBase):
         self,
         battery_count: int,
     ) -> dict[int, int] | None:
-        """Read battery slots atomically and accumulate across round-robin cycles.
+        """Read battery slots and accumulate across reads, keyed by serial.
 
-        All 4 slots (120 registers) are read in one Modbus FC 04 call starting
-        at ``BATTERY_BASE_ADDRESS`` (5002).  This fits within the Modbus PDU
-        limit of 125 registers and ensures firmware round-robin rotation cannot
-        change slot contents between reads (#170).
+        Two firmware behaviours are handled (#170, #258):
 
-        **Serial-keyed round-robin accumulation** (#170, #258):
+        - **Dedicated slots:** each battery has its own 30-register slot
+          (5002-5151 for 5 batteries, no rotation).  Reading only the first 4
+          slots (120 regs) misses the 5th, so this requests ALL reported slots
+          in one read (``battery_count`` slots, clamped).  The register space
+          may allow reads beyond the 4-slot/120-reg window (the official dongle
+          reads 127 regs in one frame); if the device rejects the larger read,
+          it falls back to a 4-slot read.
+        - **Rotation:** systems with more batteries than slots rotate them
+          through the slots over successive reads (e.g. 8-battery banks).
 
-        Firmware rotates batteries through the 4 register slots; each read sees
-        one "page" of up to 4 batteries.  ``_battery_accumulator`` maps a stable
-        battery *identity* to that battery's 30-register block.  Identity is the
-        BMS serial (offsets 17-23) when present, else the firmware slot position
-        (offset 24 high byte) as a fallback.  ``_battery_slot_index`` assigns
-        each identity a stable virtual slot, so the merged map presents every
-        accumulated battery in a contiguous slot range
+        ``_battery_accumulator`` maps a stable battery *identity* to that
+        battery's 30-register block.  Identity is the BMS serial (offsets
+        17-23) when present, else the firmware slot position (offset 24 high
+        byte) as a fallback.  ``_battery_slot_index`` assigns each identity a
+        stable virtual slot, so the merged map presents every accumulated
+        battery in a contiguous slot range
         (``BATTERY_BASE_ADDRESS + slot * BATTERY_REGISTER_COUNT + offset``).
+        Entries are never evicted, so a battery rotating out of view (or a
+        momentary read miss) never drops it.
 
-        ``battery_count`` (reg 96) is deliberately NOT used for gating,
-        clearing, or counting: it under-reports on parallel systems (#170 saw
-        12 for a 6-battery bank; #258's 5-battery rig intermittently reads 4).
-        Accumulated entries are never evicted, so a momentary under-report or a
-        battery rotating out of the visible page never drops it.
+        ``battery_count`` (reg 96) sizes the read but is NOT trusted for
+        gating/clearing/counting: it is unreliable in magnitude (it read 12
+        for a 6-battery bank in #170) and only errs high, so the read is
+        clamped and the parser counts populated slots from the data.
 
         Args:
             battery_count: Value from register 96 (total batteries reported).
-                Used only for debug logging.
 
         Returns:
             Dict of address→value for all accumulated batteries, or *None*
@@ -176,27 +187,54 @@ class RegisterDataMixin(_DataMixinBase):
         # gating, clearing, and counting — it is kept only for the debug log.
         # All physical slots are always read and accumulated by stable battery
         # identity so a momentary under-report never drops a battery.
-        total_registers = BATTERY_MAX_COUNT * BATTERY_REGISTER_COUNT
-        _LOGGER.debug(
-            "[%s] Reading %d battery slots (%d regs) in single read (reg96=%d)",
-            self._serial,
-            BATTERY_MAX_COUNT,
-            total_registers,
-            battery_count,
-        )
+        # Some inverters give each battery its own slot with no rotation: a
+        # 5-battery bank fills slots 0-4 (5002-5151), and reading only the first
+        # 4 slots (120 regs) misses the 5th (#258).  Try to read ALL reported
+        # slots in one go — the register space may support reads beyond the
+        # 4-slot/120-reg window (the official dongle reads 127 regs in one
+        # frame).  reg 96 errs high and is correct for dedicated-slot systems
+        # (5 for the #258 rig), so it sizes the read (clamped).  If the device
+        # rejects the larger read, fall back to the safe 4-slot read so a
+        # >4-battery system that ROTATES through 4 slots (e.g. 8-battery banks)
+        # still works via serial-keyed accumulation across polls.
+        slots_wanted = max(BATTERY_MAX_COUNT, min(battery_count, _BATTERY_SLOT_READ_MAX))
 
-        try:
-            values = await self._read_input_registers(BATTERY_BASE_ADDRESS, total_registers)
-        except Exception:
-            _LOGGER.warning(
-                "[%s] Failed to read battery registers %d-%d, will retry next poll",
+        raw_registers: dict[int, int] | None = None
+        slots_read = BATTERY_MAX_COUNT
+        # Ordered, de-duplicated: try the full read, then the 4-slot fallback.
+        for attempt in dict.fromkeys((slots_wanted, BATTERY_MAX_COUNT)):
+            reg_count = attempt * BATTERY_REGISTER_COUNT
+            try:
+                values = await self._read_input_registers(BATTERY_BASE_ADDRESS, reg_count)
+            except Exception:
+                if attempt > BATTERY_MAX_COUNT:
+                    _LOGGER.debug(
+                        "[%s] %d-slot battery read (%d regs) rejected, falling back to %d slots",
+                        self._serial,
+                        attempt,
+                        reg_count,
+                        BATTERY_MAX_COUNT,
+                    )
+                    continue
+                _LOGGER.warning(
+                    "[%s] Failed to read battery registers at %d, will retry next poll",
+                    self._serial,
+                    BATTERY_BASE_ADDRESS,
+                )
+                return None
+            raw_registers = self._registers_from_values(BATTERY_BASE_ADDRESS, values)
+            slots_read = attempt
+            _LOGGER.debug(
+                "[%s] Read %d battery slots (%d regs) (reg96=%d)",
                 self._serial,
-                BATTERY_BASE_ADDRESS,
-                BATTERY_BASE_ADDRESS + total_registers - 1,
+                attempt,
+                reg_count,
+                battery_count,
             )
-            return None
+            break
 
-        raw_registers = self._registers_from_values(BATTERY_BASE_ADDRESS, values)
+        if raw_registers is None:
+            return None
 
         # --- Serial-keyed round-robin accumulation (#170, #258) ---
         # Firmware rotates batteries through the 4 fixed register slots.  Each
@@ -212,7 +250,7 @@ class RegisterDataMixin(_DataMixinBase):
         last_seen: dict[int, datetime] = getattr(self, "_battery_last_seen", {})
         now = datetime.now()
 
-        for phys_slot in range(BATTERY_MAX_COUNT):
+        for phys_slot in range(slots_read):
             slot_base = BATTERY_BASE_ADDRESS + (phys_slot * BATTERY_REGISTER_COUNT)
             status = raw_registers.get(slot_base, 0)
             if not status:
