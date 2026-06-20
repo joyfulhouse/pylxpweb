@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A dropped `bms_data` read no longer publishes a degraded battery bank** ([eg4_web_monitor#261](https://github.com/joyfulhouse/eg4_web_monitor/issues/261)):
+  the combined (`read_all_input_data`) and chunked (`read_battery`) reads fetch
+  register groups as separate Modbus requests. Register 96 (`battery_parallel_count`)
+  and all BMS fields live in the `bms_data` group (80-112); battery voltage (reg 4)
+  and SOC (reg 5) live in the `power_energy` group (0-31). When only the `bms_data`
+  request dropped or returned a short/misrouted frame (common on a flaky WiFi-dongle
+  link), reg 96 defaulted to 0 but the valid power-group voltage kept
+  `from_modbus_registers` from short-circuiting to `None` — so it built a half-empty
+  bank (`battery_count=None`, current/cell/BMS-limit fields all `None`) that
+  overwrote the last-good `_transport_battery` cache, flickering battery-bank
+  sensors to unavailable. Both reads now track `bms_ok` (false on a failed **or
+  short** `bms_data` read) and return `battery=None` in that case, so the callers
+  (which both guard `if battery is not None`) preserve the last-good cache. A
+  genuine reg 96 = 0 on a successful full read still builds a bank.
 - **>4 batteries now accumulate reliably regardless of `battery_parallel_count`** ([eg4_web_monitor#170](https://github.com/joyfulhouse/eg4_web_monitor/issues/170), [eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   inverters expose individual battery data through 4 fixed Modbus input-register
   slots (5002-5121) and rotate >4 physical batteries through them over successive
