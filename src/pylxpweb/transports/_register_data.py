@@ -57,13 +57,6 @@ _LOGGER = logging.getLogger(__name__)
 # integration's round-robin merge threshold (coordinator_local._MIN_SERIAL_LENGTH).
 _MIN_BATTERY_SERIAL_LEN = 10
 
-# Upper bound on battery slots to request in a single read.  reg 96
-# (battery_parallel_count) sizes the read but is unreliable in magnitude
-# (it read 12 for a 6-battery bank in #170), so it is clamped to this.  A
-# larger-than-4-slot read may exceed the device's PDU limit; the reader falls
-# back to the safe 4-slot read when the larger one is rejected.
-_BATTERY_SLOT_READ_MAX = 16
-
 # ---------------------------------------------------------------------------
 # Register group constants (unified across Modbus and Dongle transports)
 # ---------------------------------------------------------------------------
@@ -145,37 +138,33 @@ class RegisterDataMixin(_DataMixinBase):
         self,
         battery_count: int,
     ) -> dict[int, int] | None:
-        """Read battery slots and accumulate across reads, keyed by serial.
+        """Read battery slots atomically and accumulate across round-robin cycles.
 
-        Two firmware behaviours are handled (#170, #258):
+        All 4 slots (120 registers) are read in one Modbus FC 04 call starting
+        at ``BATTERY_BASE_ADDRESS`` (5002).  This fits within the Modbus PDU
+        limit of 125 registers and ensures firmware round-robin rotation cannot
+        change slot contents between reads (#170).
 
-        - **Dedicated slots:** each battery has its own 30-register slot
-          (5002-5151 for 5 batteries, no rotation).  Reading only the first 4
-          slots (120 regs) misses the 5th, so this requests ALL reported slots
-          in one read (``battery_count`` slots, clamped).  The register space
-          may allow reads beyond the 4-slot/120-reg window (the official dongle
-          reads 127 regs in one frame); if the device rejects the larger read,
-          it falls back to a 4-slot read.
-        - **Rotation:** systems with more batteries than slots rotate them
-          through the slots over successive reads (e.g. 8-battery banks).
+        **Serial-keyed round-robin accumulation** (#170, #258):
 
-        ``_battery_accumulator`` maps a stable battery *identity* to that
-        battery's 30-register block.  Identity is the BMS serial (offsets
-        17-23) when present, else the firmware slot position (offset 24 high
-        byte) as a fallback.  ``_battery_slot_index`` assigns each identity a
-        stable virtual slot, so the merged map presents every accumulated
-        battery in a contiguous slot range
+        Firmware rotates batteries through the 4 register slots; each read sees
+        one "page" of up to 4 batteries.  ``_battery_accumulator`` maps a stable
+        battery *identity* to that battery's 30-register block.  Identity is the
+        BMS serial (offsets 17-23) when present, else the firmware slot position
+        (offset 24 high byte) as a fallback.  ``_battery_slot_index`` assigns
+        each identity a stable virtual slot, so the merged map presents every
+        accumulated battery in a contiguous slot range
         (``BATTERY_BASE_ADDRESS + slot * BATTERY_REGISTER_COUNT + offset``).
-        Entries are never evicted, so a battery rotating out of view (or a
-        momentary read miss) never drops it.
 
-        ``battery_count`` (reg 96) sizes the read but is NOT trusted for
-        gating/clearing/counting: it is unreliable in magnitude (it read 12
-        for a 6-battery bank in #170) and only errs high, so the read is
-        clamped and the parser counts populated slots from the data.
+        ``battery_count`` (reg 96) is deliberately NOT used for gating,
+        clearing, or counting: it under-reports on parallel systems (#170 saw
+        12 for a 6-battery bank; #258's 5-battery rig intermittently reads 4).
+        Accumulated entries are never evicted, so a momentary under-report or a
+        battery rotating out of the visible page never drops it.
 
         Args:
             battery_count: Value from register 96 (total batteries reported).
+                Used only for debug logging.
 
         Returns:
             Dict of address→value for all accumulated batteries, or *None*
@@ -187,54 +176,27 @@ class RegisterDataMixin(_DataMixinBase):
         # gating, clearing, and counting — it is kept only for the debug log.
         # All physical slots are always read and accumulated by stable battery
         # identity so a momentary under-report never drops a battery.
-        # Some inverters give each battery its own slot with no rotation: a
-        # 5-battery bank fills slots 0-4 (5002-5151), and reading only the first
-        # 4 slots (120 regs) misses the 5th (#258).  Try to read ALL reported
-        # slots in one go — the register space may support reads beyond the
-        # 4-slot/120-reg window (the official dongle reads 127 regs in one
-        # frame).  reg 96 errs high and is correct for dedicated-slot systems
-        # (5 for the #258 rig), so it sizes the read (clamped).  If the device
-        # rejects the larger read, fall back to the safe 4-slot read so a
-        # >4-battery system that ROTATES through 4 slots (e.g. 8-battery banks)
-        # still works via serial-keyed accumulation across polls.
-        slots_wanted = max(BATTERY_MAX_COUNT, min(battery_count, _BATTERY_SLOT_READ_MAX))
+        total_registers = BATTERY_MAX_COUNT * BATTERY_REGISTER_COUNT
+        _LOGGER.debug(
+            "[%s] Reading %d battery slots (%d regs) in single read (reg96=%d)",
+            self._serial,
+            BATTERY_MAX_COUNT,
+            total_registers,
+            battery_count,
+        )
 
-        raw_registers: dict[int, int] | None = None
-        slots_read = BATTERY_MAX_COUNT
-        # Ordered, de-duplicated: try the full read, then the 4-slot fallback.
-        for attempt in dict.fromkeys((slots_wanted, BATTERY_MAX_COUNT)):
-            reg_count = attempt * BATTERY_REGISTER_COUNT
-            try:
-                values = await self._read_input_registers(BATTERY_BASE_ADDRESS, reg_count)
-            except Exception:
-                if attempt > BATTERY_MAX_COUNT:
-                    _LOGGER.debug(
-                        "[%s] %d-slot battery read (%d regs) rejected, falling back to %d slots",
-                        self._serial,
-                        attempt,
-                        reg_count,
-                        BATTERY_MAX_COUNT,
-                    )
-                    continue
-                _LOGGER.warning(
-                    "[%s] Failed to read battery registers at %d, will retry next poll",
-                    self._serial,
-                    BATTERY_BASE_ADDRESS,
-                )
-                return None
-            raw_registers = self._registers_from_values(BATTERY_BASE_ADDRESS, values)
-            slots_read = attempt
-            _LOGGER.debug(
-                "[%s] Read %d battery slots (%d regs) (reg96=%d)",
+        try:
+            values = await self._read_input_registers(BATTERY_BASE_ADDRESS, total_registers)
+        except Exception:
+            _LOGGER.warning(
+                "[%s] Failed to read battery registers %d-%d, will retry next poll",
                 self._serial,
-                attempt,
-                reg_count,
-                battery_count,
+                BATTERY_BASE_ADDRESS,
+                BATTERY_BASE_ADDRESS + total_registers - 1,
             )
-            break
-
-        if raw_registers is None:
             return None
+
+        raw_registers = self._registers_from_values(BATTERY_BASE_ADDRESS, values)
 
         # --- Serial-keyed round-robin accumulation (#170, #258) ---
         # Firmware rotates batteries through the 4 fixed register slots.  Each
@@ -250,7 +212,7 @@ class RegisterDataMixin(_DataMixinBase):
         last_seen: dict[int, datetime] = getattr(self, "_battery_last_seen", {})
         now = datetime.now()
 
-        for phys_slot in range(slots_read):
+        for phys_slot in range(BATTERY_MAX_COUNT):
             slot_base = BATTERY_BASE_ADDRESS + (phys_slot * BATTERY_REGISTER_COUNT)
             status = raw_registers.get(slot_base, 0)
             if not status:
@@ -623,11 +585,36 @@ class RegisterDataMixin(_DataMixinBase):
         except Exception as e:
             _LOGGER.warning("Failed to read power registers 0-31: %s", e)
 
+        bms_ok = True
         try:
             bms_regs = await self._read_input_registers(80, 33)
-            all_registers.update(self._registers_from_values(80, bms_regs))
+            if len(bms_regs) < 33:
+                # Short/partial BMS response that didn't raise — reg 96 / BMS
+                # fields would be absent, rebuilding the half-empty bank (#261).
+                _LOGGER.warning(
+                    "Short BMS read (%d/33 regs) for %s; treating as unavailable",
+                    len(bms_regs),
+                    self._serial,
+                )
+                bms_ok = False
+            else:
+                all_registers.update(self._registers_from_values(80, bms_regs))
         except Exception as e:
             _LOGGER.warning("Failed to read BMS registers 80-112: %s", e)
+            bms_ok = False
+
+        # The bank's count + all BMS fields come from the 80-112 block.  If that
+        # read failed, a valid power-group voltage alone would still build a
+        # half-empty bank (battery_count=None) that overwrites the good cache and
+        # flickers battery_bank_* sensors to unavailable (eg4_web_monitor#261).
+        # Return None so the caller (_fetch_battery, guarded by
+        # ``if transport_battery is not None``) keeps the last-good cache.
+        if not bms_ok:
+            _LOGGER.debug(
+                "[%s] bms_data unavailable; preserving last-good battery cache",
+                self._serial,
+            )
+            return None
 
         # Read individual battery registers (5000+) if requested
         battery_count = all_registers.get(96, 0)
@@ -682,10 +669,24 @@ class RegisterDataMixin(_DataMixinBase):
             Tuple of (runtime_data, energy_data, battery_data_or_none).
         """
         input_registers: dict[int, int] = {}
+        bms_ok = True
 
         for i, (group_name, (start, count)) in enumerate(INPUT_REGISTER_GROUPS.items()):
             try:
                 values = await self._read_input_registers(start, count)
+                if group_name == "bms_data" and len(values) < count:
+                    # A short BMS response (e.g. a misrouted/partial dongle
+                    # frame that didn't raise) would leave reg 96 / BMS fields
+                    # absent and rebuild the half-empty bank.  Treat it as
+                    # unavailable, like an outright failure (#261).
+                    _LOGGER.debug(
+                        "bms_data short read (%d/%d regs) for %s, treating as unavailable",
+                        len(values),
+                        count,
+                        self._serial,
+                    )
+                    bms_ok = False
+                    continue
                 for offset, value in enumerate(values):
                     input_registers[start + offset] = value
             except Exception:
@@ -694,6 +695,7 @@ class RegisterDataMixin(_DataMixinBase):
                         "bms_data registers unavailable for %s, continuing",
                         self._serial,
                     )
+                    bms_ok = False
                     continue
                 raise
 
@@ -717,6 +719,20 @@ class RegisterDataMixin(_DataMixinBase):
             family,
             pv_string_count=self._pv_string_count,
         )
+
+        # The battery bank lives entirely in the bms_data group (reg 96 +
+        # voltage/SOC/current/cell/BMS-limit fields).  If that group's read
+        # dropped — common on a flaky dongle link, where single requests time
+        # out / get misrouted — the power group's voltage alone would still
+        # yield a half-empty bank (battery_count=None, current/cell data all
+        # None) that overwrites the good cache and flickers the battery_bank_*
+        # sensors to unavailable (eg4_web_monitor#261).  Return None instead so
+        # the caller (_fetch_combined_input_data, which guards
+        # ``if battery is not None``) preserves the last-good battery cache;
+        # runtime + energy still update.  A SUCCESSFUL bms_data read with a
+        # genuine reg 96 = 0 is unaffected and still builds a bank.
+        if not bms_ok:
+            return runtime, energy, None
 
         # Read individual battery registers (5000+) if present
         battery_count = input_registers.get(96, 0)

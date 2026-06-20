@@ -529,6 +529,96 @@ class TestHybridSupplementalRuntime:
         mock_client.api.devices.get_inverter_runtime.assert_awaited_once()
 
 
+class TestHybridSupplementalBattery:
+    """Cloud batteries the local registers never surface stay fresh in hybrid (#258).
+
+    Some firmware pins <=4 batteries to the 4 Modbus slots and never rotates the
+    rest into view, so a healthy transport-only refresh freezes the extra
+    batteries at their setup-time cloud snapshot.  refresh() schedules a
+    supplemental ``_fetch_battery_http()`` ONLY when the cloud reports more
+    batteries than the transport surfaces, riding the battery TTL on a dedicated
+    clock (the combined read keeps ``_battery_cache_time`` fresh on its own).
+    """
+
+    @staticmethod
+    def _healthy_transport(inverter: GenericInverter) -> AsyncMock:
+        runtime, energy, battery = _make_combined_data()
+        transport = AsyncMock()
+        transport.read_all_input_data = AsyncMock(return_value=(runtime, energy, battery))
+        inverter._transport = transport
+        return transport
+
+    @staticmethod
+    def _seed_battery_state(inverter: GenericInverter, *, cloud_count: int, surfaced: int) -> None:
+        """Seed cloud ``_battery_bank`` and the live ``_transport_battery`` slots."""
+        bank = Mock()
+        bank.battery_count = cloud_count
+        inverter._battery_bank = bank
+        transport_battery = Mock(spec=BatteryBankData)
+        transport_battery.batteries = [Mock(voltage=53.0, soc=80) for _ in range(surfaced)]
+        inverter._transport_battery = transport_battery
+
+    @pytest.mark.asyncio
+    async def test_cloud_more_than_transport_refreshes_cloud_battery(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Cloud reports 5, transport surfaces 4 → supplemental cloud battery fetch.
+
+        This is the #258 reporter's case (18kPV, dongle, HYBRID): the firmware
+        pins 4 batteries to the slots and never rotates the 5th in, so without
+        this fetch the 5th freezes at its setup-time cloud snapshot.
+        """
+        inverter = _make_inverter(client=mock_client)
+        self._healthy_transport(inverter)
+        self._seed_battery_state(inverter, cloud_count=5, surfaced=4)
+        inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
+
+        await inverter.refresh(force=True)
+
+        inverter._fetch_battery_http.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_transport_surfaces_all_makes_no_cloud_battery_call(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Transport surfaces all 5 → no supplemental call (no frozen battery)."""
+        inverter = _make_inverter(client=mock_client)
+        self._healthy_transport(inverter)
+        self._seed_battery_state(inverter, cloud_count=5, surfaced=5)
+        inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
+
+        await inverter.refresh(force=True)
+
+        inverter._fetch_battery_http.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_battery_bank_makes_no_cloud_battery_call(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """No cloud battery bank yet → nothing to supplement."""
+        inverter = _make_inverter(client=mock_client)
+        self._healthy_transport(inverter)
+        inverter._battery_bank = None
+        inverter._transport_battery = None
+        inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
+
+        await inverter.refresh(force=True)
+
+        inverter._fetch_battery_http.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_local_only_makes_no_cloud_battery_call(self) -> None:
+        """Pure LOCAL (no client) cannot fetch cloud battery data."""
+        inverter = _make_inverter(client=None)
+        self._healthy_transport(inverter)
+        self._seed_battery_state(inverter, cloud_count=5, surfaced=4)
+        inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
+
+        await inverter.refresh(force=True)
+
+        inverter._fetch_battery_http.assert_not_awaited()
+
+
 class TestMIDDeviceLinkHealth:
     """Failure counter, fallback, and recovery on MIDDevice."""
 
