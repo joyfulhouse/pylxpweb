@@ -138,6 +138,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         self._battery_cache_time: datetime | None = None
         self._battery_cache_ttl = timedelta(seconds=30)  # 30-second TTL for battery
         self._battery_cache_lock = asyncio.Lock()
+        # Dedicated clock for the hybrid supplemental cloud battery refresh
+        # (eg4_web_monitor#258).  The combined read keeps _battery_cache_time
+        # fresh on its own, so the supplemental needs its own TTL gate.
+        self._supplemental_battery_http_time: datetime | None = None
 
         # ===== Firmware Update Cache =====
         # Initialize firmware update detection (from FirmwareUpdateMixin)
@@ -580,6 +584,37 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             return False
         return features.model_family is InverterFamily.EG4_OFFGRID
 
+    @property
+    def _wants_hybrid_supplemental_battery(self) -> bool:
+        """True when the cloud reports more batteries than the transport surfaces.
+
+        Some firmware pins <=4 batteries to the 4 Modbus battery slots and never
+        rotates the rest into view (eg4_web_monitor#258), so a healthy
+        transport-only battery refresh leaves those extra batteries frozen at
+        their setup-time ``_battery_bank`` snapshot.  When the cloud knows more
+        batteries than the transport currently surfaces, a supplemental HTTP
+        refresh keeps them live.  Returns False once the transport surfaces them
+        all, so systems whose batteries are fully local make no extra cloud call.
+        """
+        bank = self._battery_bank
+        if bank is None:
+            return False
+        cloud_count = int(getattr(bank, "battery_count", 0) or 0)
+        if cloud_count <= 0:
+            return False
+        transport_battery = self._transport_battery
+        if transport_battery is None:
+            return True
+        # Count non-ghost slots: an empty 5002+ register slot reads 0V/0% SoC
+        # (pylxpweb's canonical ghost definition), so it must not count as a
+        # surfaced battery — otherwise the gate could never trip.
+        surfaced = sum(
+            1
+            for batt in (getattr(transport_battery, "batteries", None) or [])
+            if not (batt.voltage == 0 and batt.soc == 0)
+        )
+        return cloud_count > surfaced
+
     async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
         """Refresh runtime, energy, battery, and optionally parameters from API.
 
@@ -666,6 +701,27 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         )
         if supplemental_http_runtime:
             tasks.append(self._fetch_runtime_http())
+
+        # Hybrid supplemental cloud battery (eg4_web_monitor#258): mirror of the
+        # supplemental runtime above.  Some firmware exposes only 4 batteries
+        # through the 4 Modbus slots and never rotates the rest into view, so a
+        # healthy transport-only refresh freezes the extra batteries at their
+        # setup-time cloud snapshot.  When the cloud reports more batteries than
+        # the transport surfaces, refresh the cloud battery bank so those stay
+        # live.  Gated on a dedicated clock at the battery TTL — the combined
+        # read keeps _battery_cache_time fresh, so it cannot gate this.  The
+        # link-down case is covered by _refresh_http_fallback() below.
+        supplemental_http_battery = (
+            self._transport is not None
+            and not link_down
+            and self._cloud_fallback_available
+            and self._wants_hybrid_supplemental_battery
+            and self._is_cache_expired(
+                self._supplemental_battery_http_time, self._battery_cache_ttl, force
+            )
+        )
+        if supplemental_http_battery:
+            tasks.append(self._fetch_supplemental_battery_http())
 
         # Parameters (1hr TTL) - only fetch if explicitly requested
         if include_parameters and self._is_cache_expired(
@@ -892,6 +948,19 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     err,
                     type(err).__name__,
                 )
+
+    async def _fetch_supplemental_battery_http(self) -> None:
+        """Refresh the cloud battery bank in hybrid (eg4_web_monitor#258).
+
+        Mirrors the supplemental cloud runtime fetch: with a healthy transport
+        the battery read path only touches ``_transport_battery``, so batteries
+        the local registers never surface freeze at their setup-time cloud
+        snapshot.  ``_fetch_battery_http`` also stamps ``_battery_cache_time``,
+        but the combined read keeps that fresh on its own clock; a dedicated
+        timestamp gates this supplemental at the battery TTL.
+        """
+        await self._fetch_battery_http()
+        self._supplemental_battery_http_time = datetime.now()
 
     async def _fetch_combined_input_data(self) -> None:
         """Fetch runtime, energy, and battery via a single combined read.
