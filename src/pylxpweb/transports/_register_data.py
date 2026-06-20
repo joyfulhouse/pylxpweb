@@ -585,11 +585,36 @@ class RegisterDataMixin(_DataMixinBase):
         except Exception as e:
             _LOGGER.warning("Failed to read power registers 0-31: %s", e)
 
+        bms_ok = True
         try:
             bms_regs = await self._read_input_registers(80, 33)
-            all_registers.update(self._registers_from_values(80, bms_regs))
+            if len(bms_regs) < 33:
+                # Short/partial BMS response that didn't raise — reg 96 / BMS
+                # fields would be absent, rebuilding the half-empty bank (#261).
+                _LOGGER.warning(
+                    "Short BMS read (%d/33 regs) for %s; treating as unavailable",
+                    len(bms_regs),
+                    self._serial,
+                )
+                bms_ok = False
+            else:
+                all_registers.update(self._registers_from_values(80, bms_regs))
         except Exception as e:
             _LOGGER.warning("Failed to read BMS registers 80-112: %s", e)
+            bms_ok = False
+
+        # The bank's count + all BMS fields come from the 80-112 block.  If that
+        # read failed, a valid power-group voltage alone would still build a
+        # half-empty bank (battery_count=None) that overwrites the good cache and
+        # flickers battery_bank_* sensors to unavailable (eg4_web_monitor#261).
+        # Return None so the caller (_fetch_battery, guarded by
+        # ``if transport_battery is not None``) keeps the last-good cache.
+        if not bms_ok:
+            _LOGGER.debug(
+                "[%s] bms_data unavailable; preserving last-good battery cache",
+                self._serial,
+            )
+            return None
 
         # Read individual battery registers (5000+) if requested
         battery_count = all_registers.get(96, 0)
@@ -644,10 +669,24 @@ class RegisterDataMixin(_DataMixinBase):
             Tuple of (runtime_data, energy_data, battery_data_or_none).
         """
         input_registers: dict[int, int] = {}
+        bms_ok = True
 
         for i, (group_name, (start, count)) in enumerate(INPUT_REGISTER_GROUPS.items()):
             try:
                 values = await self._read_input_registers(start, count)
+                if group_name == "bms_data" and len(values) < count:
+                    # A short BMS response (e.g. a misrouted/partial dongle
+                    # frame that didn't raise) would leave reg 96 / BMS fields
+                    # absent and rebuild the half-empty bank.  Treat it as
+                    # unavailable, like an outright failure (#261).
+                    _LOGGER.debug(
+                        "bms_data short read (%d/%d regs) for %s, treating as unavailable",
+                        len(values),
+                        count,
+                        self._serial,
+                    )
+                    bms_ok = False
+                    continue
                 for offset, value in enumerate(values):
                     input_registers[start + offset] = value
             except Exception:
@@ -656,6 +695,7 @@ class RegisterDataMixin(_DataMixinBase):
                         "bms_data registers unavailable for %s, continuing",
                         self._serial,
                     )
+                    bms_ok = False
                     continue
                 raise
 
@@ -679,6 +719,20 @@ class RegisterDataMixin(_DataMixinBase):
             family,
             pv_string_count=self._pv_string_count,
         )
+
+        # The battery bank lives entirely in the bms_data group (reg 96 +
+        # voltage/SOC/current/cell/BMS-limit fields).  If that group's read
+        # dropped — common on a flaky dongle link, where single requests time
+        # out / get misrouted — the power group's voltage alone would still
+        # yield a half-empty bank (battery_count=None, current/cell data all
+        # None) that overwrites the good cache and flickers the battery_bank_*
+        # sensors to unavailable (eg4_web_monitor#261).  Return None instead so
+        # the caller (_fetch_combined_input_data, which guards
+        # ``if battery is not None``) preserves the last-good battery cache;
+        # runtime + energy still update.  A SUCCESSFUL bms_data read with a
+        # genuine reg 96 = 0 is unaffected and still builds a bank.
+        if not bms_ok:
+            return runtime, energy, None
 
         # Read individual battery registers (5000+) if present
         battery_count = input_registers.get(96, 0)
