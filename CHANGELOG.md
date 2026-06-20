@@ -9,29 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Batteries beyond the 4th now reported on >4-battery systems** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258), [eg4_web_monitor#170](https://github.com/joyfulhouse/eg4_web_monitor/issues/170)):
-  individual battery data lives in 30-register slots starting at 5002. Two
-  firmware behaviours both broke >4-battery banks:
-  - **Dedicated slots:** a 5-battery system places each battery in its own slot
-    (5002-5151, no rotation), but only the first 4 slots (120 regs) were read,
-    so battery 5 (slot 4, 5122-5151) was never read at all (confirmed from a
-    live 5-battery capture: reg 96 = 5, slots 0-3 held batteries 1-4, position 4
-    never appeared). The reader now requests **all reported slots in one read**
-    (sized by reg 96, clamped), and falls back to the 4-slot read if the device
-    rejects the larger one.
-  - **Rotation:** systems with more batteries than slots rotate them through the
-    slots over successive reads (e.g. 8-battery banks). The accumulator keyed on
-    `pos` and trusted Modbus register 96 (`battery_parallel_count`) — unreliable
-    on parallel systems (it read 12 for a 6-battery bank) — gating accumulation
-    on `reg 96 > 4`, wiping on any reg-96 change, and rejecting `pos >= reg96`,
-    each of which dropped a battery.
-
-  Accumulation now keys on the **battery serial** (the only identity stable
-  across rotation), ignores reg 96 for gating/clearing/counting, and never
-  evicts, so a battery latches once seen. The parser counts populated slots from
-  the data, not reg 96. A present-but-truncated serial read is skipped that poll
-  (rather than minting a duplicate identity) so partial reads cannot create
-  phantom batteries.
+- **>4 batteries now accumulate reliably regardless of `battery_parallel_count`** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258), [eg4_web_monitor#170](https://github.com/joyfulhouse/eg4_web_monitor/issues/170)):
+  inverters expose individual battery data through 4 fixed Modbus input-register
+  slots (5002-5121) and rotate >4 physical batteries through them over successive
+  reads. The round-robin accumulator keyed on `pos` and trusted Modbus register
+  96 (`battery_parallel_count`), which is unreliable on parallel systems (it read
+  12 for a 6-battery bank in #170 and intermittently reads 4 on a 5-battery rig
+  in #258). It only accumulated when reg 96 > 4, wiped the whole accumulator on
+  any reg-96 change, and rejected `pos >= reg96`; the parser also capped the slot
+  count at reg 96. Any of these dropped a rotated-in battery. Accumulation now
+  keys on the **battery serial** (the only identity stable across rotation),
+  ignores reg 96 entirely for gating/clearing/counting, and never evicts — so a
+  battery latches permanently once it rotates into view. The parser derives the
+  slot count from the populated register map, not reg 96. A present-but-truncated
+  serial read is skipped for that poll (rather than minting a duplicate identity)
+  so partial reads cannot create phantom batteries.
 
 ## [0.9.36b13] - 2026-06-15
 
