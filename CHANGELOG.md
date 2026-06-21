@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A dropped `bms_data` read no longer publishes a degraded battery bank** ([eg4_web_monitor#261](https://github.com/joyfulhouse/eg4_web_monitor/issues/261)):
+  the combined (`read_all_input_data`) and chunked (`read_battery`) reads fetch
+  register groups as separate Modbus requests. Register 96 (`battery_parallel_count`)
+  and all BMS fields live in the `bms_data` group (80-112); battery voltage (reg 4)
+  and SOC (reg 5) live in the `power_energy` group (0-31). When only the `bms_data`
+  request dropped or returned a short/misrouted frame (common on a flaky WiFi-dongle
+  link), reg 96 defaulted to 0 but the valid power-group voltage kept
+  `from_modbus_registers` from short-circuiting to `None` — so it built a half-empty
+  bank (`battery_count=None`, current/cell/BMS-limit fields all `None`) that
+  overwrote the last-good `_transport_battery` cache, flickering battery-bank
+  sensors to unavailable. Both reads now track `bms_ok` (false on a failed **or
+  short** `bms_data` read) and return `battery=None` in that case, so the callers
+  (which both guard `if battery is not None`) preserve the last-good cache. A
+  genuine reg 96 = 0 on a successful full read still builds a bank.
+- **>4 batteries now accumulate reliably regardless of `battery_parallel_count`** ([eg4_web_monitor#170](https://github.com/joyfulhouse/eg4_web_monitor/issues/170), [eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  inverters expose individual battery data through 4 fixed Modbus input-register
+  slots (5002-5121) and rotate >4 physical batteries through them over successive
+  reads. The round-robin accumulator keyed on `pos` and trusted Modbus register
+  96 (`battery_parallel_count`), which is unreliable on parallel systems (it read
+  12 for a 6-battery bank in #170). It only accumulated when reg 96 > 4, wiped the
+  whole accumulator on any reg-96 change, and rejected `pos >= reg96`; the parser
+  also capped the slot count at reg 96. Any of these dropped a rotated-in battery.
+  Accumulation now keys on the **battery serial** (the only identity stable across
+  rotation), ignores reg 96 entirely for gating/clearing/counting, and never
+  evicts — so a battery latches permanently once it rotates into view. The parser
+  derives the slot count from the populated register map, not reg 96. A
+  present-but-truncated serial read is skipped for that poll (rather than minting
+  a duplicate identity) so partial reads cannot create phantom batteries.
+
+- **Hybrid keeps cloud-only batteries fresh instead of frozen** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  some firmware pins <=4 batteries to the 4 Modbus slots and never rotates the
+  rest into view (header register 5001, the rotation signal, stays `0`), so with
+  a healthy local transport the battery read path only ever refreshes
+  `_transport_battery` and the batteries the registers never surface (e.g. a 5th
+  on a 5-battery rig) froze at their setup-time cloud `_battery_bank` snapshot —
+  present every poll but never updating. `refresh()` now schedules a supplemental
+  cloud battery fetch — a mirror of the #222 supplemental-runtime fix — gated to
+  fire only when the cloud reports more batteries than the transport surfaces, on
+  a dedicated battery-TTL clock (the combined read keeps `_battery_cache_time`
+  fresh, so it cannot gate this). Systems whose batteries are fully visible
+  locally, and pure-LOCAL installs, make no extra cloud call.
+
 ## [0.9.36b13] - 2026-06-15
 
 ### Fixed
