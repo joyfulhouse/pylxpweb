@@ -40,6 +40,30 @@ class ExportDaySheet:
     rows: list[dict[str, str]] = field(default_factory=list)
 
 
+def _disambiguate_headers(headers: list[str]) -> list[str]:
+    """Suffix duplicate header names so no column is silently overwritten.
+
+    Each row is built as a ``{header: value}`` dict, so two columns sharing a
+    header would collapse to one (last-column-wins — a silent data loss).
+    Repeated names get a ``.N`` suffix — ``SOC``, ``SOC.1``, ``SOC.2`` —
+    mirroring pandas; unique headers (the live export's case) are unchanged. The
+    suffix counter advances until the candidate is genuinely unused, so a
+    generated name can never collide with a literal one already in the row
+    (``["SOC", "SOC.1", "SOC"]`` -> ``["SOC", "SOC.1", "SOC.2"]``).
+    """
+    seen: set[str] = set()
+    unique: list[str] = []
+    for header in headers:
+        candidate = header
+        suffix = 1
+        while candidate in seen:
+            candidate = f"{header}.{suffix}"
+            suffix += 1
+        seen.add(candidate)
+        unique.append(candidate)
+    return unique
+
+
 def parse_export(content: bytes) -> list[ExportDaySheet]:
     """Parse the bytes from :meth:`ExportEndpoints.export_data` into day sheets.
 
@@ -97,7 +121,9 @@ def parse_export(content: bytes) -> list[ExportDaySheet]:
             if sheet.nrows < 2:
                 sheets.append(ExportDaySheet(day=sheet.name))
                 continue
-            headers = [str(sheet.cell_value(0, col)).strip() for col in range(sheet.ncols)]
+            headers = _disambiguate_headers(
+                [str(sheet.cell_value(0, col)).strip() for col in range(sheet.ncols)]
+            )
             rows = [
                 {header: cell_text(sheet.cell(row, col)) for col, header in enumerate(headers)}
                 for row in range(1, sheet.nrows)

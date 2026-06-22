@@ -56,6 +56,28 @@ def test_parse_export_integer_cells_render_without_decimal() -> None:
     assert sheets[0].rows == [{"SOC": "95"}]
 
 
+def test_parse_export_duplicate_headers_are_disambiguated_not_dropped() -> None:
+    # Two columns sharing a header would collapse in a {header: value} dict,
+    # silently losing the first column. Repeated names must be suffixed so every
+    # column survives.
+    content = _build_xls({"2025-11-19": [["SOC", "Time", "SOC"], ["95", "00:00:00", "96"]]})
+
+    sheets = parse_export(content)
+
+    assert sheets[0].rows == [{"SOC": "95", "Time": "00:00:00", "SOC.1": "96"}]
+
+
+def test_parse_export_duplicate_header_collides_with_literal_suffix() -> None:
+    # A generated suffix must not collide with a literal one already present:
+    # ["SOC", "SOC.1", "SOC"] must become three distinct keys, not drop a column.
+    content = _build_xls({"2025-11-19": [["SOC", "SOC.1", "SOC"], ["a", "b", "c"]]})
+
+    sheets = parse_export(content)
+
+    assert sheets[0].rows == [{"SOC": "a", "SOC.1": "b", "SOC.2": "c"}]
+    assert len(sheets[0].rows[0]) == 3  # no column silently lost
+
+
 def test_parse_export_header_only_sheet_has_no_rows() -> None:
     content = _build_xls({"2025-11-19": [["Time", "SOC"]]})
 
