@@ -60,10 +60,12 @@ from .endpoints import (
     AnalyticsEndpoints,
     ControlEndpoints,
     DeviceEndpoints,
+    ExportDaySheet,
     ExportEndpoints,
     FirmwareEndpoints,
     ForecastingEndpoints,
     PlantEndpoints,
+    parse_export,
 )
 from .exceptions import (
     LuxpowerAPIError,
@@ -107,6 +109,8 @@ __all__ = [
     "AnalyticsEndpoints",
     "ForecastingEndpoints",
     "ExportEndpoints",
+    "ExportDaySheet",
+    "parse_export",
     "FirmwareEndpoints",
     # Models
     "DatalogListItem",
