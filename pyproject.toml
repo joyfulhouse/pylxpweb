@@ -29,6 +29,9 @@ Homepage = "https://github.com/joyfulhouse/pylxpweb"
 Repository = "https://github.com/joyfulhouse/pylxpweb"
 
 [project.optional-dependencies]
+parse = [
+    "xlrd>=2.0.1",
+]
 dev = [
     "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
@@ -36,6 +39,9 @@ dev = [
     "aioresponses>=0.7.8",
     "mypy>=1.18.2",
     "ruff>=0.14.5",
+    "xlrd>=2.0.1",
+    "types-xlrd>=2.0.0",
+    "xlwt>=1.3.0",
 ]
 
 [project.scripts]
@@ -120,6 +126,7 @@ addopts = [
 ]
 markers = [
     "integration: Integration tests that require real API access (run with: pytest -m integration)",
+    "control: Tests that write to or control real hardware (run with: pytest -m \"integration and control\")",
 ]
 timeout = 60  # Per-test timeout in seconds (prevents hanging)
 
