@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`.xls` data-export parser** — `parse_export(content: bytes) -> list[ExportDaySheet]`
+  turns the bytes returned by `ExportEndpoints.export_data()` into per-day rows, and
+  `ExportEndpoints.export_and_parse()` downloads and parses in one call (offloading the
+  synchronous `xlrd` parse to a worker thread so it never blocks the event loop). The
+  export is a legacy BIFF (`.xls`) workbook with one worksheet per day (the server caps
+  it at 10 day-sheets); cell values come back as text, date-typed cells render as ISO
+  `YYYY-MM-DD HH:MM:SS`, and duplicate column headers are disambiguated (`SOC`, `SOC.1`)
+  so no column is silently dropped. Malformed input raises `LuxpowerAPIError`. Requires
+  the optional `xlrd` dependency: `pip install pylxpweb[parse]`. (#181)
+
 ## [0.9.35] - 2026-06-05
 
 ### Fixed
