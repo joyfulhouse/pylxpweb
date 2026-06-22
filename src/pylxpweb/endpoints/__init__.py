@@ -10,7 +10,7 @@ from pylxpweb.endpoints.analytics import AnalyticsEndpoints
 from pylxpweb.endpoints.base import BaseEndpoint
 from pylxpweb.endpoints.control import ControlEndpoints
 from pylxpweb.endpoints.devices import DeviceEndpoints
-from pylxpweb.endpoints.export import ExportEndpoints
+from pylxpweb.endpoints.export import ExportDaySheet, ExportEndpoints, parse_export
 from pylxpweb.endpoints.firmware import FirmwareEndpoints
 from pylxpweb.endpoints.forecasting import ForecastingEndpoints
 from pylxpweb.endpoints.plants import PlantEndpoints
@@ -22,6 +22,8 @@ __all__ = [
     "ControlEndpoints",
     "AnalyticsEndpoints",
     "ExportEndpoints",
+    "ExportDaySheet",
+    "parse_export",
     "ForecastingEndpoints",
     "FirmwareEndpoints",
 ]
