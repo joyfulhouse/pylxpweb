@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from pylxpweb.registers import (
@@ -210,7 +210,9 @@ class RegisterDataMixin(_DataMixinBase):
         accumulator: dict[str, dict[int, int]] = getattr(self, "_battery_accumulator", {})
         slot_index: dict[str, int] = getattr(self, "_battery_slot_index", {})
         last_seen: dict[int, datetime] = getattr(self, "_battery_last_seen", {})
-        now = datetime.now()
+        # tz-aware UTC: last_seen crosses into Home Assistant, which would
+        # interpret a naive datetime as its own local zone (eg4_web_monitor#258).
+        now = datetime.now(UTC)
 
         for phys_slot in range(BATTERY_MAX_COUNT):
             slot_base = BATTERY_BASE_ADDRESS + (phys_slot * BATTERY_REGISTER_COUNT)
@@ -284,14 +286,16 @@ class RegisterDataMixin(_DataMixinBase):
         """Stamp ``last_seen`` on each battery from accumulator timestamps.
 
         For non-accumulated reads (battery_count <= 4), all batteries are
-        fresh — stamped with ``datetime.now()``.  For accumulated reads,
+        fresh — stamped with ``datetime.now(UTC)``.  For accumulated reads,
         each battery gets the timestamp from ``_battery_last_seen[pos]``.
         """
         if battery is None or not battery.batteries:
             return
 
         last_seen: dict[int, datetime] = getattr(self, "_battery_last_seen", {})
-        now = datetime.now()
+        # tz-aware UTC: last_seen crosses into Home Assistant, which would
+        # interpret a naive datetime as its own local zone (eg4_web_monitor#258).
+        now = datetime.now(UTC)
 
         for b in battery.batteries:
             b.last_seen = last_seen.get(b.battery_index, now)

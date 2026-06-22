@@ -1210,6 +1210,31 @@ class TestBatteryRoundRobinAccumulator:
         # Accumulation always runs: all 4 batteries get a last_seen timestamp.
         assert set(transport._battery_last_seen.keys()) == {0, 1, 2, 3}
 
+    @pytest.mark.asyncio
+    async def test_last_seen_is_timezone_aware_utc(self) -> None:
+        """last_seen must be tz-aware UTC, not naive local (eg4_web_monitor#258).
+
+        last_seen crosses into Home Assistant, which interprets a *naive*
+        datetime as HA's configured timezone. When the container/OS timezone
+        differs from HA's, a naive-local stamp is mis-converted, skewing the
+        battery-freshness decision (a fresh battery looked stale, or a frozen
+        one looked fresh). A tz-aware UTC stamp is unambiguous everywhere.
+        """
+        transport = self._make_transport()
+        page = _build_battery_slot_values([0, 1, 2, 3])
+        _, mock_class = self._mock_client([page])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(4)
+
+        # The accumulator timestamps feed BatteryData.last_seen, which crosses
+        # into Home Assistant. They must be timezone-aware and in UTC.
+        assert transport._battery_last_seen
+        for ts in transport._battery_last_seen.values():
+            assert ts.tzinfo is not None, "last_seen must be timezone-aware"
+            assert ts.utcoffset().total_seconds() == 0, "last_seen must be UTC"
+
 
 class TestBatteryAccumulatorReg96Unreliable:
     """Round-robin accumulation must not depend on reg 96 (#170, #258).

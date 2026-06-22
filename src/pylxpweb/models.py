@@ -119,20 +119,28 @@ class CountryInfo(BaseModel):
 
 
 class UserVisitRecord(BaseModel):
-    """User visit record."""
+    """User visit record (the last device the user opened in the portal).
+
+    Only ``plantId`` and ``serialNum`` are guaranteed. When the last-visited
+    entity is a parallel GROUP (``serialNum`` like ``"Parallel_A"``) rather than
+    an individual inverter, the cloud omits every device-specific field. They
+    are therefore all optional. This record is informational only and is not
+    consumed anywhere — keeping login parsing tolerant avoids breaking the whole
+    cloud session over unused metadata (GitHub issue #258).
+    """
 
     plantId: int
     serialNum: str
-    phase: int
-    phaseValue: int
-    deviceType: int
-    deviceTypeValue: int
-    subDeviceTypeValue: int
-    dtc: int
-    dtcValue: int
-    powerRating: int
-    batteryType: BatteryType
-    protocolVersion: int
+    phase: int | None = None
+    phaseValue: int | None = None
+    deviceType: int | None = None
+    deviceTypeValue: int | None = None
+    subDeviceTypeValue: int | None = None
+    dtc: int | None = None
+    dtcValue: int | None = None
+    powerRating: int | None = None
+    batteryType: BatteryType | None = None
+    protocolVersion: int | None = None
 
     @field_serializer("serialNum")
     def serialize_serial(self, value: str) -> str:
@@ -235,7 +243,7 @@ class LoginResponse(BaseModel):
     telNumber: str
     address: str
     platform: str
-    userVisitRecord: UserVisitRecord
+    userVisitRecord: UserVisitRecord | None = None
     plants: list[PlantBasic]
     clusterId: int
     needHideDisChgEnergy: bool
