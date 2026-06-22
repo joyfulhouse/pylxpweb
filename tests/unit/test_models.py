@@ -117,6 +117,49 @@ class TestLoginResponse:
         assert model.techInfo.techInfoType2 == "Email"
         assert model.techInfo.techInfo2 == "support@example.com"
 
+    def test_parse_parallel_group_user_visit_record(self) -> None:
+        """Test login when userVisitRecord is a parallel-group stub.
+
+        On parallel systems the EG4 cloud may report the parallel GROUP as the
+        "last visited device". In that case userVisitRecord carries only
+        plantId + serialNum (e.g. serialNum='Parallel_A') and omits every
+        device-specific field (phase, phaseValue, deviceType, deviceTypeValue,
+        subDeviceTypeValue, dtc, dtcValue, powerRating, batteryType,
+        protocolVersion).
+
+        Regression test for GitHub issue #258: these fields were required, so
+        login() raised 10 validation errors -> _ensure_authenticated() raised
+        -> every cloud call failed (ConfigEntryNotReady on setup, frozen
+        cloud battery backfill, log spam).
+        """
+        data = load_sample("login.json")
+        data["userVisitRecord"] = {"plantId": 42921, "serialNum": "Parallel_A"}
+
+        model = LoginResponse.model_validate(data)
+
+        assert model.userVisitRecord is not None
+        assert model.userVisitRecord.plantId == 42921
+        assert model.userVisitRecord.serialNum == "Parallel_A"
+        # Device-specific fields are absent for a parallel group.
+        assert model.userVisitRecord.phase is None
+        assert model.userVisitRecord.deviceType is None
+        assert model.userVisitRecord.batteryType is None
+        assert model.userVisitRecord.protocolVersion is None
+
+    def test_parse_login_without_user_visit_record(self) -> None:
+        """Test login response that omits userVisitRecord entirely.
+
+        Defensive: a brand-new account that has never opened a device in the
+        EG4 portal has no "last visit", so the cloud may omit the field. Login
+        must still succeed.
+        """
+        data = load_sample("login.json")
+        data.pop("userVisitRecord", None)
+
+        model = LoginResponse.model_validate(data)
+
+        assert model.userVisitRecord is None
+
 
 class TestPlantInfo:
     """Test PlantInfo model."""

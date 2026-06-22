@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Login no longer fails when the "last visited device" is a parallel group** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  on a parallel system the EG4 cloud may report the parallel GROUP (e.g.
+  `serialNum="Parallel_A"`) as the account's `userVisitRecord`, which carries only
+  `plantId` + `serialNum` and omits every device-specific field (`phase`,
+  `deviceType`, `batteryType`, …). Those fields were declared required, so
+  `LoginResponse.model_validate()` raised and **every** authenticated call failed
+  (the consumer saw a hard login error and lost all cloud data). The
+  `UserVisitRecord` fields — and `LoginResponse.userVisitRecord` itself — are now
+  optional; the record is informational only and is not read anywhere, so
+  tolerating the parallel-group shape cannot affect any caller.
+- **Battery `last_seen` is now timezone-aware UTC** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  the round-robin accumulator stamped each battery's `last_seen` with a naive
+  `datetime.now()` (OS-local). Consumers that interpret a naive datetime as their
+  *own* timezone (e.g. Home Assistant) mis-computed battery freshness when the
+  container timezone differed from theirs. `last_seen` is now stamped with
+  `datetime.now(UTC)` so the value is unambiguous across process boundaries.
 - **`Fault Code` / `Warning Code` no longer flicker to "unknown" on a dropped `bms_data` read** ([eg4_web_monitor#261](https://github.com/joyfulhouse/eg4_web_monitor/issues/261)):
   the inverter fault/warning registers (60-63, in the always-read `status_energy`
   group) are merged with their BMS fallback codes (regs 99-100, in the droppable
