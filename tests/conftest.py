@@ -23,7 +23,7 @@ from aioresponses import core as aioresponses_core
 # against aiohttp >= 3.14 rather than cap it. Supply the kwarg here — mirroring
 # aioresponses' own `writer=None` — by reassigning the ClientResponse class that
 # aioresponses.core instantiates for mocked responses. The guard makes this a
-# no-op on aiohttp < 3.14. Remove once aioresponses ships native aiohttp 3.14 support.
+# no-op on aiohttp < 3.14. Remove once aioresponses ships native aiohttp 3.14 support (see #189).
 if "stream_writer" in inspect.signature(ClientResponse.__init__).parameters:
 
     class _NoopStreamWriter:
