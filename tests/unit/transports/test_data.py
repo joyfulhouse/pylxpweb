@@ -881,3 +881,65 @@ class TestPv456Parity:
         assert data.pv4_power is None
         assert data.pv5_power is None
         assert data.pv6_power is None
+
+
+class TestFaultWarningCodeMerge:
+    """Merge of the inverter fault/warning code (regs 60-63) with the BMS
+    fallback (regs 99-100) in ``from_modbus_registers``.
+
+    The two sources live in different input-register groups — the inverter
+    code in ``status_energy`` (regs 32-63, always read) and the BMS fallback in
+    ``bms_data`` (regs 80-112, the one group whose read is allowed to fail
+    non-fatally).  When the bms_data read drops (a common flaky-dongle case),
+    ``read_all_input_data`` still rebuilds the runtime from the surviving
+    snapshot, so the BMS code is None while the inverter code still reads a
+    healthy 0.  The merge must surface that known-healthy 0 rather than None:
+    collapsing it to None blanked the Home Assistant ``Fault Code`` sensor to
+    "unknown" on every such drop, even though the inverter reported no fault
+    (eg4_web_monitor#261).  A genuinely unread code (both sources absent) must
+    still be None, and an active code from either source must be preserved.
+    """
+
+    def test_healthy_inverter_survives_bms_data_drop(self) -> None:
+        """Inverter code 0 + bms_data group dropped → 0, not None (#261).
+
+        regs 60-63 = 0 (the always-read inverter fault/warning, healthy) with
+        the bms_data group (incl. regs 99-100) absent — exactly the snapshot
+        ``read_all_input_data`` rebuilds on a bms_data drop.
+        """
+        regs: dict[int, int] = {60: 0, 61: 0, 62: 0, 63: 0}  # bms regs 99/100 absent
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code == 0
+        assert data.warning_code == 0
+
+    def test_both_sources_absent_yields_none(self) -> None:
+        """Neither inverter nor BMS code present → genuinely unknown (None)."""
+        regs: dict[int, int] = {0: 0}  # no fault/warning registers at all
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code is None
+        assert data.warning_code is None
+
+    def test_real_inverter_fault_survives_bms_drop(self) -> None:
+        """An active inverter code is preserved when the bms_data group drops."""
+        regs: dict[int, int] = {60: 0x10, 61: 0, 62: 0x01, 63: 0}  # bms absent
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code == 0x10
+        assert data.warning_code == 0x01
+
+    def test_bms_code_used_when_inverter_zero(self) -> None:
+        """BMS fallback unchanged: inverter code 0, BMS code active → BMS code."""
+        regs: dict[int, int] = {60: 0, 61: 0, 62: 0, 63: 0, 99: 0x04, 100: 0x08}
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code == 0x04
+        assert data.warning_code == 0x08
+
+    def test_fault_and_warning_merge_independently_on_bms_drop(self) -> None:
+        """Healthy fault + active warning, bms_data dropped → 0 and the warning.
+
+        Fault and warning are merged independently, so a healthy-0 fault must
+        survive (not None) while an active warning on the same poll is preserved.
+        """
+        regs: dict[int, int] = {60: 0, 61: 0, 62: 0x02, 63: 0}  # bms regs absent
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code == 0
+        assert data.warning_code == 0x02

@@ -92,6 +92,31 @@ _RUNTIME_INT_FIELDS: frozenset[str] = frozenset(
 # _sum_optional = sum_optional
 
 
+def _merge_status_code(inverter_code: int | None, bms_code: int | None) -> int | None:
+    """Merge an inverter fault/warning code with its BMS fallback.
+
+    The inverter code (regs 60-63) and the BMS fallback (regs 99-100) are read
+    from different input-register groups — ``status_energy`` (32-63, always
+    read) and ``bms_data`` (80-112, the one group allowed to fail non-fatally).
+    A transient bms_data-group drop therefore leaves ``bms_code`` None while the
+    inverter code still reads a healthy 0.
+
+    Prefer an active (non-zero) code from either source, inverter first.  When
+    neither is active, return 0 if *either* register was actually read (a
+    known-healthy 0) and None only when *both* are absent (genuinely unread), so
+    a dropped BMS read never turns a known-healthy 0 into None — which blanked
+    the Home Assistant Fault Code sensor to "unknown" even though the inverter
+    reported no fault (eg4_web_monitor#261).
+    """
+    if inverter_code:
+        return inverter_code
+    if bms_code:
+        return bms_code
+    if inverter_code is not None or bms_code is not None:
+        return 0
+    return None
+
+
 @dataclass
 class InverterRuntimeData:
     """Real-time inverter operating data.
@@ -625,11 +650,11 @@ class InverterRuntimeData:
             else:
                 kwargs[field_name] = read_scaled(input_registers, reg)
 
-        # Combine fault/warning codes (inverter + BMS) — prefer non-zero
-        kwargs["fault_code"] = inverter_fault_code if inverter_fault_code else bms_fault_code
-        kwargs["warning_code"] = (
-            inverter_warning_code if inverter_warning_code else bms_warning_code
-        )
+        # Combine fault/warning codes (inverter + BMS).  Prefer an active
+        # (non-zero) code; preserve a known-healthy 0 when only the BMS read
+        # dropped instead of collapsing it to None (eg4_web_monitor#261).
+        kwargs["fault_code"] = _merge_status_code(inverter_fault_code, bms_fault_code)
+        kwargs["warning_code"] = _merge_status_code(inverter_warning_code, bms_warning_code)
 
         # Compute derived fields.  Sum all non-None pvN_power across pv1..pv6
         # so the total is count-agnostic: a 3-string inverter has pv4-6=None

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Fault Code` / `Warning Code` no longer flicker to "unknown" on a dropped `bms_data` read** ([eg4_web_monitor#261](https://github.com/joyfulhouse/eg4_web_monitor/issues/261)):
+  the inverter fault/warning registers (60-63, in the always-read `status_energy`
+  group) are merged with their BMS fallback codes (regs 99-100, in the droppable
+  `bms_data` group) "prefer the non-zero code". The merge was
+  `inverter_code if inverter_code else bms_code`, which collapsed a **known-healthy
+  `0`** (the inverter reporting no fault) into `None` whenever the `bms_data` group
+  read dropped — `read_all_input_data` still rebuilds the runtime from the surviving
+  snapshot, so the BMS code is `None` while the inverter code reads `0`, and
+  `0 if 0 else None` is `None`. A `None` code is omitted from the sensor payload, so
+  Home Assistant's `Fault Code` sensor went *unknown* on those polls in both HYBRID
+  and LOCAL mode. (The integration's earlier carry-forward only covered a full
+  link-down where `transport_runtime` is `None`, not this present-but-`None` case.)
+  The merge now returns `0` when **either** register was actually read and `None`
+  only when **both** are genuinely absent, so a healthy `0` survives a dropped BMS
+  read; an active code from either source is still preferred and preserved.
 - **A dropped `bms_data` read no longer publishes a degraded battery bank** ([eg4_web_monitor#261](https://github.com/joyfulhouse/eg4_web_monitor/issues/261)):
   the combined (`read_all_input_data`) and chunked (`read_battery`) reads fetch
   register groups as separate Modbus requests. Register 96 (`battery_parallel_count`)
