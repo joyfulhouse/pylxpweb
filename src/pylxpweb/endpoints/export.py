@@ -6,6 +6,7 @@ historical runtime data in CSV or Excel formats.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
@@ -13,9 +14,11 @@ from urllib.parse import urljoin
 import aiohttp
 
 from pylxpweb.endpoints.base import BaseEndpoint
-from pylxpweb.exceptions import LuxpowerConnectionError
+from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError
 
 if TYPE_CHECKING:
+    from xlrd.sheet import Cell
+
     from pylxpweb.client import LuxpowerClient
 
 
@@ -29,7 +32,8 @@ class ExportDaySheet:
 
     Attributes:
         day: The worksheet name, a ``YYYY-MM-DD`` date.
-        rows: Header -> raw string cell value, one dict per interval.
+        rows: Header -> cell value as text (date-typed cells rendered ISO
+            ``YYYY-MM-DD HH:MM:SS``), one dict per logging interval.
     """
 
     day: str
@@ -44,6 +48,11 @@ def parse_export(content: bytes) -> list[ExportDaySheet]:
     forward, so request windows of 10 days or fewer and parse every sheet (the
     later days past the cap are dropped, not the earlier ones).
 
+    Cell values are returned as text. A date-typed cell is rendered with the
+    workbook's date mode as ``YYYY-MM-DD HH:MM:SS`` so a date-typed ``Time``
+    column can never leak an Excel serial number; on the live server that column
+    is plain text, but handling both keeps the parser correct across firmware.
+
     Args:
         content: Raw ``.xls`` bytes from ``export_data``.
 
@@ -52,35 +61,51 @@ def parse_export(content: bytes) -> list[ExportDaySheet]:
 
     Raises:
         ImportError: If the optional ``xlrd`` dependency is not installed.
+        LuxpowerAPIError: If ``content`` is empty or not a valid ``.xls`` workbook.
     """
     try:
-        import xlrd  # type: ignore[import-untyped]
+        import xlrd
+        from xlrd.xldate import xldate_as_datetime
     except ImportError as err:
         raise ImportError(
             "Parsing the .xls export requires xlrd; install it with 'pip install pylxpweb[parse]'."
         ) from err
 
-    workbook = xlrd.open_workbook(file_contents=content)
-    sheets: list[ExportDaySheet] = []
-    for index in range(workbook.nsheets):
-        sheet = workbook.sheet_by_index(index)
-        if sheet.nrows < 2:
-            sheets.append(ExportDaySheet(day=sheet.name))
-            continue
-        headers = [str(sheet.cell_value(0, col)).strip() for col in range(sheet.ncols)]
-        rows = [
-            {header: _coerce_cell(sheet.cell_value(row, col)) for col, header in enumerate(headers)}
-            for row in range(1, sheet.nrows)
-        ]
-        sheets.append(ExportDaySheet(day=sheet.name, rows=rows))
-    return sheets
+    if not content:
+        raise LuxpowerAPIError("Cannot parse an empty .xls export.")
 
+    # The bytes come straight off the wire, and xlrd surfaces malformed input as
+    # a grab-bag of types: XLRDError, CompDocError, BadZipFile for an .xlsx, and
+    # bare IndexError/struct.error/OverflowError on a truncated or corrupt file.
+    # Convert the whole parse at this boundary so a caller never sees a
+    # third-party exception type leak through.
+    try:
+        workbook = xlrd.open_workbook(file_contents=content)
+        datemode = workbook.datemode
 
-def _coerce_cell(value: object) -> str:
-    """Render a cell as text, dropping the trailing ``.0`` xlrd gives integers."""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value).strip()
+        def cell_text(cell: Cell) -> str:
+            if cell.ctype == xlrd.XL_CELL_DATE:
+                return xldate_as_datetime(float(cell.value), datemode).isoformat(sep=" ")
+            value = cell.value
+            if isinstance(value, float) and value.is_integer():
+                return str(int(value))
+            return str(value).strip()
+
+        sheets: list[ExportDaySheet] = []
+        for index in range(workbook.nsheets):
+            sheet = workbook.sheet_by_index(index)
+            if sheet.nrows < 2:
+                sheets.append(ExportDaySheet(day=sheet.name))
+                continue
+            headers = [str(sheet.cell_value(0, col)).strip() for col in range(sheet.ncols)]
+            rows = [
+                {header: cell_text(sheet.cell(row, col)) for col, header in enumerate(headers)}
+                for row in range(1, sheet.nrows)
+            ]
+            sheets.append(ExportDaySheet(day=sheet.name, rows=rows))
+        return sheets
+    except Exception as err:
+        raise LuxpowerAPIError(f"Could not parse the .xls export: {err}") from err
 
 
 class ExportEndpoints(BaseEndpoint):
@@ -114,7 +139,7 @@ class ExportEndpoints(BaseEndpoint):
             bytes: CSV/Excel file content
 
         Raises:
-            LuxpowerAPIError: If export fails
+            LuxpowerConnectionError: If the export download fails.
 
         Example:
             # Export single day
@@ -159,6 +184,8 @@ class ExportEndpoints(BaseEndpoint):
         """Download and parse the data export in one call.
 
         Convenience wrapper over :meth:`export_data` and :func:`parse_export`.
+        The synchronous parse runs in a worker thread (``asyncio.to_thread``) so
+        it never blocks the event loop while xlrd decodes a large export.
 
         Args:
             serial_num: Device serial number
@@ -171,7 +198,8 @@ class ExportEndpoints(BaseEndpoint):
 
         Raises:
             ImportError: If the optional ``xlrd`` dependency is not installed.
-            LuxpowerAPIError: If the export download fails.
+            LuxpowerConnectionError: If the export download fails.
+            LuxpowerAPIError: If the downloaded export is empty or not a valid ``.xls``.
         """
         content = await self.export_data(serial_num, start_date, end_date)
-        return parse_export(content)
+        return await asyncio.to_thread(parse_export, content)
