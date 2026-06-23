@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1008,6 +1009,31 @@ class TestBatteryRoundRobinAccumulator:
         # 4 distinct batteries accumulated, each with 30 registers
         assert len(result) == 120
         assert len(transport._battery_accumulator) == 4
+
+    @pytest.mark.asyncio
+    async def test_raw_physical_page_logged_for_rotation_diagnostics(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Each read logs the raw physical-slot -> identity page (eg4_web_monitor#258).
+
+        The accumulator log shows VIRTUAL slots and the merged map hides which
+        battery occupies each PHYSICAL slot, so firmware rotation cannot be
+        characterized from logs.  The raw page (physical slot -> identity, before
+        accumulation) is the missing signal: diffing it across reads shows exactly
+        when a battery rotates into/out of a physical slot.
+        """
+        transport = self._make_transport()
+        page_a = _build_battery_slot_values([0, 1, 2, 3])
+        _, mock_class = self._mock_client([page_a])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            with caplog.at_level(logging.DEBUG):
+                await transport._read_individual_battery_registers(4)
+
+        assert "RR raw page" in caplog.text
+        assert "0=pos:0" in caplog.text
+        assert "3=pos:3" in caplog.text
 
     @pytest.mark.asyncio
     async def test_accumulation_first_page(self) -> None:

@@ -42,6 +42,15 @@ from ._runtime_properties import InverterRuntimePropertiesMixin
 
 _LOGGER = logging.getLogger(__name__)
 
+# A never-evict battery accumulator (eg4_web_monitor#258) keeps re-presenting a
+# battery the firmware stopped surfacing locally, with its last_seen frozen.  In
+# the hybrid supplemental gate, a transport battery whose last_seen lags the
+# freshest sibling by more than this window is treated as not currently surfaced,
+# so the cloud supplement that keeps it live is not silenced.  Kept below the
+# integration's 5-minute transport-freshness overlay so the cloud value is
+# refreshed before the overlay switches to it.
+_SUPPLEMENTAL_BATTERY_STALE_AFTER = timedelta(minutes=2)
+
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
@@ -608,11 +617,37 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # Count non-ghost slots: an empty 5002+ register slot reads 0V/0% SoC
         # (pylxpweb's canonical ghost definition), so it must not count as a
         # surfaced battery — otherwise the gate could never trip.
-        surfaced = sum(
-            1
+        candidates = [
+            batt
             for batt in (getattr(transport_battery, "batteries", None) or [])
             if not (batt.voltage == 0 and batt.soc == 0)
-        )
+        ]
+        if not candidates:
+            return True
+        # Exclude never-evict frozen batteries (eg4_web_monitor#258): on
+        # non-rotating firmware the accumulator re-presents a battery the
+        # firmware stopped surfacing locally, with its last_seen frozen.  If it
+        # counted as surfaced, surfaced would reach cloud_count and silence this
+        # very supplement — freezing that battery at its last value.  A battery
+        # read in step with the freshest sibling is genuinely surfaced; one
+        # materially older was not refreshed this cycle.  The comparison is
+        # relative (newest sibling, not wall-clock), so it is poll-interval
+        # agnostic and needs no clock read.
+        seen = [
+            batt.last_seen for batt in candidates if getattr(batt, "last_seen", None) is not None
+        ]
+        if not seen:
+            # No timestamps (legacy transport): keep the count-only gate rather
+            # than over-fetching cloud data.
+            surfaced = len(candidates)
+        else:
+            newest = max(seen)
+            surfaced = sum(
+                1
+                for batt in candidates
+                if getattr(batt, "last_seen", None) is not None
+                and newest - batt.last_seen <= _SUPPLEMENTAL_BATTERY_STALE_AFTER
+            )
         return cloud_count > surfaced
 
     async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
