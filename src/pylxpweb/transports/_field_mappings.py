@@ -59,7 +59,7 @@ RUNTIME_FIELD: dict[str, str | None] = {
     "grid_l2_voltage": "grid_l2_voltage",
     "grid_frequency": "grid_frequency",
     "inverter_power": "inverter_power",
-    "rectifier_power": "grid_power",
+    "rectifier_power": "rectifier_power",
     "power_factor": "power_factor",
     # EPS / Off-Grid
     "eps_voltage_r": "eps_voltage_r",

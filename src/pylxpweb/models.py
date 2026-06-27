@@ -6,6 +6,7 @@ Field names match the API response format for easier parsing.
 
 from __future__ import annotations
 
+import math
 from enum import StrEnum
 from typing import Any
 
@@ -26,6 +27,35 @@ class OperatingMode(StrEnum):
 
     NORMAL = "normal"
     STANDBY = "standby"
+
+
+class BatteryControlMode(StrEnum):
+    """Battery charge/discharge control regime.
+
+    EG4/LuxPower inverters decide whether the battery charge and discharge
+    limits are governed by State-of-Charge (closed-loop, BMS/lithium) or by
+    battery Voltage (open-loop, lead-acid or no BMS comms). The regime is held
+    in register 179 (``FUNC_EXT_REGISTER``) — bit 9 for charge, bit 10 for
+    discharge. ``0`` = SOC, ``1`` = Voltage.
+
+    - SOC: charge/discharge limits use the SOC registers (e.g. on-grid SOC
+      cutoff, AC charge SOC limit). The voltage limit registers are ignored.
+    - VOLTAGE: charge/discharge limits use the voltage registers (e.g. on-grid
+      end-of-discharge voltage). The SOC limit registers are ignored.
+    """
+
+    SOC = "soc"
+    VOLTAGE = "voltage"
+
+    @classmethod
+    def from_voltage_flag(cls, voltage_mode: bool) -> BatteryControlMode:
+        """Map the raw reg-179 bit (True=Voltage) to the enum."""
+        return cls.VOLTAGE if voltage_mode else cls.SOC
+
+    @property
+    def is_voltage(self) -> bool:
+        """True when this is the Voltage (open-loop) regime."""
+        return self is BatteryControlMode.VOLTAGE
 
 
 def _obfuscate_serial(serial: str) -> str:
@@ -89,20 +119,28 @@ class CountryInfo(BaseModel):
 
 
 class UserVisitRecord(BaseModel):
-    """User visit record."""
+    """User visit record (the last device the user opened in the portal).
+
+    Only ``plantId`` and ``serialNum`` are guaranteed. When the last-visited
+    entity is a parallel GROUP (``serialNum`` like ``"Parallel_A"``) rather than
+    an individual inverter, the cloud omits every device-specific field. They
+    are therefore all optional. This record is informational only and is not
+    consumed anywhere — keeping login parsing tolerant avoids breaking the whole
+    cloud session over unused metadata (GitHub issue #258).
+    """
 
     plantId: int
     serialNum: str
-    phase: int
-    phaseValue: int
-    deviceType: int
-    deviceTypeValue: int
-    subDeviceTypeValue: int
-    dtc: int
-    dtcValue: int
-    powerRating: int
-    batteryType: BatteryType
-    protocolVersion: int
+    phase: int | None = None
+    phaseValue: int | None = None
+    deviceType: int | None = None
+    deviceTypeValue: int | None = None
+    subDeviceTypeValue: int | None = None
+    dtc: int | None = None
+    dtcValue: int | None = None
+    powerRating: int | None = None
+    batteryType: BatteryType | None = None
+    protocolVersion: int | None = None
 
     @field_serializer("serialNum")
     def serialize_serial(self, value: str) -> str:
@@ -205,7 +243,7 @@ class LoginResponse(BaseModel):
     telNumber: str
     address: str
     platform: str
-    userVisitRecord: UserVisitRecord
+    userVisitRecord: UserVisitRecord | None = None
     plants: list[PlantBasic]
     clusterId: int
     needHideDisChgEnergy: bool
@@ -425,6 +463,15 @@ class InverterRuntime(BaseModel):
     - Temperature: no scaling (direct Celsius)
 
     See: constants.INVERTER_RUNTIME_SCALING for complete mapping
+
+    Offline tolerance: when an inverter is offline (``lost=true``) the cloud
+    ``getInverterRuntime`` response omits the live/aggregate measurement fields
+    (``status``, ``ppv``, ``soc``, ``vBat``, ``pCharge``, ``pDisCharge``,
+    ``batPower``, ``batteryColor``, ``pinv``, ``prec``, ``peps``).  Those fields
+    are therefore Optional so the partial payload still validates — keeping the
+    fields the device *does* report (statusText="offline", per-string PV,
+    voltages, temperatures).  Marking them required made one offline inverter
+    take down all of its Home Assistant entities (eg4_web_monitor#256).
     """
 
     success: bool
@@ -460,7 +507,11 @@ class InverterRuntime(BaseModel):
     ppv4: int | None = None  # Some models have 4 PV inputs
     ppv5: int | None = None  # >4-string models (V23 extended)
     ppv6: int | None = None  # >5-string models (V23 extended)
-    ppv: int
+    # Optional: an offline inverter (``lost=true``) returns a partial payload
+    # that omits the aggregate/live measurement fields below — see the class
+    # note on offline tolerance.  Required-field validation would otherwise
+    # reject the whole response and strip every sensor.
+    ppv: int | None = None
     ppvpCharge: int | None = None  # PV charge power (alternate field name on some models)
     # AC voltages (�100 for volts)
     vacr: int
@@ -486,18 +537,19 @@ class InverterRuntime(BaseModel):
     # Bus voltages
     vBus1: int
     vBus2: int
-    status: int
-    # Battery data
-    pCharge: int
-    pDisCharge: int
-    batPower: int
-    batteryColor: str
-    soc: int
-    vBat: int
-    # Inverter/rectifier power
-    pinv: int
-    prec: int
-    peps: int
+    # Optional: omitted by the cloud for an offline inverter (``lost=true``).
+    status: int | None = None
+    # Battery data — omitted entirely when the inverter is offline.
+    pCharge: int | None = None
+    pDisCharge: int | None = None
+    batPower: int | None = None
+    batteryColor: str | None = None
+    soc: int | None = None
+    vBat: int | None = None
+    # Inverter/rectifier power — omitted when offline.
+    pinv: int | None = None
+    prec: int | None = None
+    peps: int | None = None
     # AC couple
     _12KAcCoupleInverterFlow: bool = False
     _12KAcCoupleInverterData: bool = False
@@ -523,6 +575,11 @@ class InverterRuntime(BaseModel):
     # Consumption
     consumptionPower114: int = 0
     consumptionPower: int = 0
+    # Load output power — cloud mirror of input register 170 (Pload).  Reliable
+    # on both 18kPV and FlexBOSS21, unlike consumptionPower114 which reads 0 on
+    # FlexBOSS21 (live capture 2026-06-10, eg4-9e4).  Optional: older payloads
+    # may omit it.
+    pLoad170: int | None = None
     pEpsL1N: int = 0
     pEpsL2N: int = 0
     haspEpsLNValue: bool = False
@@ -668,19 +725,23 @@ class BatteryInfo(BaseModel):
     lost: bool | None = None
     hasRuntimeData: bool | None = None
     statusText: str | None = None
-    batStatus: str
+    # Optional: an offline battery (``lost=true``) returns a partial payload
+    # that omits batStatus/soc/vBat/pCharge/pDisCharge.  Keeping them required
+    # rejected the whole response and stripped the battery-bank entities
+    # (eg4_web_monitor#256).
+    batStatus: str | None = None
 
     # State of Charge
-    soc: int
+    soc: int | None = None
 
     # Voltage (÷10 for volts at aggregate level)
-    vBat: int
+    vBat: int | None = None
     totalVoltageText: str | None = None
 
     # Power (direct watts)
     ppv: int | None = None  # PV power
-    pCharge: int
-    pDisCharge: int
+    pCharge: int | None = None
+    pDisCharge: int | None = None
     batPower: int | None = None  # Battery power
     pinv: int | None = None  # Inverter power
     prec: int | None = None  # Grid power
@@ -1024,11 +1085,37 @@ class QuickChargeStatus(BaseModel):
 
     Note: The quickCharge/getStatusInfo endpoint returns status for BOTH
     quick charge and quick discharge operations.
+
+    The newer firmware (minute-based Quick Charge) also reports the remaining
+    time and task metadata. Older API versions omit these fields, so they
+    default to safe values.
     """
 
     success: bool
     hasUnclosedQuickChargeTask: bool
     hasUnclosedQuickDischargeTask: bool = False  # May not be present in older API versions
+    # Seconds remaining before quick charge stops (0 when idle/unknown).
+    remainTimeBeforeQuickChargeStop: int = 0
+    unclosedQuickChargeTaskId: int | None = None
+    unclosedQuickChargeTaskStatus: str | None = None
+    lowVoltProtect: bool = False
+    # Holding register 234 value in minutes — the writable duration setpoint,
+    # which also reads back as the live remaining-minutes countdown while a
+    # charge runs. Populated only when read from a local transport
+    # (LOCAL/HYBRID); ``None`` on the cloud path, which has no equivalent
+    # register. Distinct from ``remainTimeBeforeQuickChargeStop`` (seconds,
+    # which prefers input register 210). Lets a consumer mirror the register
+    # faithfully rather than retain a stale preference.
+    quickChargeMinute: int | None = None
+
+    @property
+    def remaining_minutes(self) -> int:
+        """Remaining quick-charge time rounded up to whole minutes.
+
+        Returns 0 when no time remains. ``remainTimeBeforeQuickChargeStop`` is
+        reported in seconds by the cloud API, so e.g. 598s -> 10, 61s -> 2.
+        """
+        return math.ceil(self.remainTimeBeforeQuickChargeStop / 60)
 
 
 class SuccessResponse(BaseModel):
@@ -1585,3 +1672,141 @@ class DatalogListResponse(BaseModel):
             if item.datalogSn == datalog_sn:
                 return item.is_online
         return None
+
+
+# Historical Energy Models (inverterChart endpoints)
+
+
+class DailyEnergyHistoryEntry(BaseModel):
+    """One day of historical energy totals.
+
+    Source: rows of ``/WManage/api/inverterChart/monthColumn`` (single
+    inverter) or ``/WManage/api/inverterChart/monthColumnParallel``
+    (parallel-group aggregate) — the endpoints the EG4 mobile app uses for
+    its daily energy bar charts.
+
+    Raw fields use the cloud convention of 0.1 kWh units, consistent with
+    :class:`EnergyInfo` (confirmed by the EG4 app, which divides these
+    values by 10 before plotting them on kWh axes). Use the ``*_kwh``
+    properties for scaled values.
+
+    Field availability differs between the two endpoint variants:
+
+    - Single inverter rows carry per-string PV (``ePv1Day``..``ePv3Day``)
+      and ``eToGridDay``.
+    - Parallel rows carry aggregated ``ePvDay`` and ``eExportDay``, plus
+      ``eImportDay`` (grid import) and ``eGenDay`` (generator-port energy —
+      AC-coupled PV on gen-port sites).  Live-verified 2026-06-11 on plant
+      19147: ``eGenDay`` matched the GridBOSS AC-couple daily exactly.
+    - ``eDisChgDay`` and ``eConsumptionDay`` appear in both variants.
+    - The remaining fields mirror the standard daily energy family and may
+      be absent depending on server/firmware version; absent fields are
+      ``None`` and the corresponding ``*_kwh`` property returns ``None``.
+    """
+
+    day: int
+    """1-based day of month."""
+
+    ePvDay: float | None = None
+    ePv1Day: float | None = None
+    ePv2Day: float | None = None
+    ePv3Day: float | None = None
+    eInvDay: float | None = None
+    eRecDay: float | None = None
+    eChgDay: float | None = None
+    eDisChgDay: float | None = None
+    eEpsDay: float | None = None
+    eToGridDay: float | None = None
+    eExportDay: float | None = None
+    eToUserDay: float | None = None
+    eImportDay: float | None = None
+    eConsumptionDay: float | None = None
+    eGenDay: float | None = None
+
+    @staticmethod
+    def _scaled(value: float | None) -> float | None:
+        """Convert a raw 0.1 kWh value to kWh (None-safe)."""
+        return None if value is None else value / 10.0
+
+    @property
+    def pv_kwh(self) -> float | None:
+        """PV generation in kWh (aggregate field or sum of PV strings)."""
+        if self.ePvDay is not None:
+            return self._scaled(self.ePvDay)
+        strings = [v for v in (self.ePv1Day, self.ePv2Day, self.ePv3Day) if v is not None]
+        if not strings:
+            return None
+        return self._scaled(sum(strings))
+
+    @property
+    def inverter_kwh(self) -> float | None:
+        """Inverter output energy (yield) in kWh."""
+        return self._scaled(self.eInvDay)
+
+    @property
+    def ac_charge_kwh(self) -> float | None:
+        """AC charge (rectifier) energy in kWh."""
+        return self._scaled(self.eRecDay)
+
+    @property
+    def charge_kwh(self) -> float | None:
+        """Battery charge energy in kWh."""
+        return self._scaled(self.eChgDay)
+
+    @property
+    def discharge_kwh(self) -> float | None:
+        """Battery discharge energy in kWh."""
+        return self._scaled(self.eDisChgDay)
+
+    @property
+    def eps_kwh(self) -> float | None:
+        """EPS/backup output energy in kWh."""
+        return self._scaled(self.eEpsDay)
+
+    @property
+    def export_kwh(self) -> float | None:
+        """Grid export energy in kWh (``eToGridDay``, else ``eExportDay``)."""
+        if self.eToGridDay is not None:
+            return self._scaled(self.eToGridDay)
+        return self._scaled(self.eExportDay)
+
+    @property
+    def import_kwh(self) -> float | None:
+        """Grid import energy in kWh (``eImportDay``, else ``eToUserDay``).
+
+        The parallel endpoint names this field ``eImportDay`` while the
+        single-inverter endpoint uses ``eToUserDay`` — same dual-name
+        situation as :attr:`export_kwh`.
+        """
+        if self.eImportDay is not None:
+            return self._scaled(self.eImportDay)
+        return self._scaled(self.eToUserDay)
+
+    @property
+    def consumption_kwh(self) -> float | None:
+        """Load consumption energy in kWh."""
+        return self._scaled(self.eConsumptionDay)
+
+    @property
+    def generator_kwh(self) -> float | None:
+        """Generator-port energy in kWh (``eGenDay``, parallel endpoint).
+
+        On systems with AC-coupled PV wired to the generator port this is
+        the daily AC-couple production.
+        """
+        return self._scaled(self.eGenDay)
+
+
+class MonthlyEnergyHistory(BaseModel):
+    """Daily energy history for one calendar month.
+
+    Returned by
+    :meth:`pylxpweb.endpoints.analytics.AnalyticsEndpoints.get_month_daily_energy`.
+    ``days`` is ordered by day of month; for the current month the server
+    may return fewer rows than calendar days, or zero-filled trailing rows.
+    """
+
+    success: bool
+    year: int
+    month: int
+    days: list[DailyEnergyHistoryEntry]

@@ -55,6 +55,10 @@ class TestFunctionToggleHelpers:
             ("disable_green_mode", "FUNC_GREEN_EN", False),
             ("enable_sporadic_charge", "FUNC_SPORADIC_CHARGE", True),
             ("disable_sporadic_charge", "FUNC_SPORADIC_CHARGE", False),
+            ("enable_feed_in_grid", "FUNC_FEED_IN_GRID_EN", True),
+            ("disable_feed_in_grid", "FUNC_FEED_IN_GRID_EN", False),
+            ("enable_pv_sell_to_grid", "FUNC_PV_SELL_TO_GRID_EN", True),
+            ("disable_pv_sell_to_grid", "FUNC_PV_SELL_TO_GRID_EN", False),
         ],
     )
     async def test_toggle_delegates_to_control_function(
@@ -91,9 +95,13 @@ class TestFunctionStatusHelpers:
             ("get_ac_charge_mode_status", 21, "FUNC_AC_CHARGE"),
             ("get_pv_charge_priority_status", 21, "FUNC_FORCED_CHG_EN"),
             ("get_forced_discharge_status", 21, "FUNC_FORCED_DISCHG_EN"),
-            ("get_peak_shaving_mode_status", 21, "FUNC_GRID_PEAK_SHAVING"),
+            # Reg 179, NOT 21: live named reads (2026-06-12) show the key
+            # only appears in the (179, 1) response on EG4 hardware.
+            ("get_peak_shaving_mode_status", 179, "FUNC_GRID_PEAK_SHAVING"),
             ("get_green_mode_status", 110, "FUNC_GREEN_EN"),
             ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
+            ("get_feed_in_grid_status", 21, "FUNC_FEED_IN_GRID_EN"),
+            ("get_pv_sell_to_grid_status", 179, "FUNC_PV_SELL_TO_GRID_EN"),
         ],
     )
     async def test_status_enabled(
@@ -116,6 +124,8 @@ class TestFunctionStatusHelpers:
             ("get_battery_backup_status", 21, "FUNC_EPS_EN"),
             ("get_green_mode_status", 110, "FUNC_GREEN_EN"),
             ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
+            ("get_feed_in_grid_status", 21, "FUNC_FEED_IN_GRID_EN"),
+            ("get_pv_sell_to_grid_status", 179, "FUNC_PV_SELL_TO_GRID_EN"),
         ],
     )
     async def test_status_disabled(
@@ -451,6 +461,26 @@ class TestACChargeSocLimitsCloud:
         """Test that invalid start_soc raises ValueError."""
         with pytest.raises(ValueError, match="start_soc must be 0-90"):
             await control.set_ac_charge_soc_limits(SERIAL, 95, 100)
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_soc_limits_end_101_accepted(
+        self, control: ControlEndpoints
+    ) -> None:
+        """end_soc=101 is accepted (never-stop / cell balancing, GH eg4_web_monitor#158)."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await control.set_ac_charge_soc_limits(SERIAL, 20, 101)
+
+        assert result.success is True
+        control.write_parameter.assert_any_call(
+            SERIAL, "HOLD_AC_CHARGE_SOC_LIMIT", "101", client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_soc_limits_invalid_end(self, control: ControlEndpoints) -> None:
+        """end_soc above the 101 cap raises ValueError."""
+        with pytest.raises(ValueError, match="end_soc must be 0-101"):
+            await control.set_ac_charge_soc_limits(SERIAL, 20, 102)
 
     @pytest.mark.asyncio
     async def test_get_ac_charge_soc_limits(self, control: ControlEndpoints) -> None:

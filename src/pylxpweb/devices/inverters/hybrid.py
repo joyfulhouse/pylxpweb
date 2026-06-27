@@ -9,8 +9,11 @@ This module provides the HybridInverter class for hybrid inverters that support:
 
 from __future__ import annotations
 
+from typing import Any
+
 from pylxpweb.constants import ScheduleType
 from pylxpweb.exceptions import LuxpowerDeviceError
+from pylxpweb.models import BatteryControlMode
 
 from .generic import GenericInverter
 
@@ -49,48 +52,129 @@ class HybridInverter(GenericInverter):
     # Private Helpers
     # ============================================================================
 
-    async def _set_register_bit(self, register: int, bit: int, enabled: bool) -> bool:
-        """Read-modify-write a single bit in a register.
+    @staticmethod
+    def _cloud_param_key(register: int, bit: int = 0) -> str:
+        """Resolve the cloud API parameter name for a register value or bit.
 
-        Reads the current register value, sets or clears the specified bit,
-        and writes the new value back. Other bits are preserved.
-
-        Args:
-            register: Register address
-            bit: Bit number to set or clear
-            enabled: True to set bit, False to clear
-
-        Returns:
-            True if successful
+        Uses ``REGISTER_TO_PARAM_KEYS`` so the cloud (HTTP) path can name the
+        register the same way the EG4 API does. For a value register the bit
+        index defaults to 0 (the single value key); for a bit field the index
+        is the bit position.
         """
-        params = await self.read_parameters(register, 1)
-        current_value = params.get(f"reg_{register}", 0)
-        new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
-        return await self.write_parameters({register: new_value})
+        from pylxpweb.constants.registers import REGISTER_TO_PARAM_KEYS
+
+        keys = REGISTER_TO_PARAM_KEYS.get(register)
+        if not keys or bit >= len(keys):
+            raise LuxpowerDeviceError(
+                f"No cloud parameter mapping for register {register} bit {bit}"
+            )
+        return keys[bit]
+
+    @staticmethod
+    def _register_scale_divisor(register: int) -> int:
+        """Return the raw→engineering divisor for a value register (default 1).
+
+        The cloud API returns parameter values already in engineering units
+        (e.g. ``59.5`` V for a DIV_10 register), whereas the local transport
+        returns the raw register integer (e.g. ``595``). This divisor lets the
+        cloud path reconstruct the raw value so both transports agree on what
+        :meth:`_read_modbus_register` returns.
+        """
+        from pylxpweb.registers.inverter_holding import BY_ADDRESS
+
+        defs = BY_ADDRESS.get(register)
+        if not defs:
+            return 1
+        return int(defs[0].scale.value)
 
     async def _read_modbus_register(self, register: int) -> int:
-        """Read a single register via transport-only Modbus path."""
-        value = await self.read_transport_register(register)
-        if value is None:
+        """Read a single value register, via transport (raw) or cloud (named param).
+
+        Transport mode reads the raw register directly. Cloud mode reads the
+        single named value parameter the API exposes for this register. Bit
+        fields must use :meth:`_get_register_bit` instead — the cloud API does
+        not return a raw 16-bit value for them.
+        """
+        if self._transport is not None:
+            value = await self.read_transport_register(register)
+            if value is None:
+                raise LuxpowerDeviceError(
+                    f"Register {register} read requires a successful Modbus read"
+                )
+            return int(value)
+        if self._client is None:
             raise LuxpowerDeviceError(
-                f"Register {register} read requires transport mode and a successful Modbus read"
+                f"Register {register} read requires a transport or a cloud client"
             )
-        return int(value)
+        param_key = self._cloud_param_key(register)
+        response = await self._client.api.control.read_parameters(self.serial_number, register, 1)
+        # Cloud returns engineering units (possibly a float-like string, e.g.
+        # "59.5"); reconstruct the raw register value so callers that re-apply
+        # the register scale get the same result as the transport path.
+        raw = float(response.parameters.get(param_key, 0))
+        return int(round(raw * self._register_scale_divisor(register)))
 
     async def _write_modbus_register(self, register: int, value: int) -> bool:
-        """Write a single register via transport-only Modbus path."""
-        success = await self.write_transport_register(register, value)
-        if not success:
+        """Write a single raw register value, via transport or cloud.
+
+        Cloud mode writes the raw register value directly (``write_parameters``
+        keys by register address), so no name mapping or scaling translation is
+        needed — the same raw value used by the transport path is written.
+        """
+        if self._transport is not None:
+            success = await self.write_transport_register(register, value)
+            if not success:
+                raise LuxpowerDeviceError(
+                    f"Register {register} write requires a successful Modbus write"
+                )
+            return True
+        if self._client is None:
             raise LuxpowerDeviceError(
-                f"Register {register} write requires transport mode and a successful Modbus write"
+                f"Register {register} write requires a transport or a cloud client"
             )
-        return True
+        response = await self._client.api.control.write_parameters(
+            self.serial_number, {register: value}
+        )
+        return bool(response.success)
+
+    async def _get_register_bit(self, register: int, bit: int) -> bool:
+        """Read a single bit, via transport (raw mask) or cloud (named bool param)."""
+        if self._transport is not None:
+            raw = await self.read_transport_register(register)
+            if raw is None:
+                raise LuxpowerDeviceError(
+                    f"Register {register} read requires a successful Modbus read"
+                )
+            return bool(raw & (1 << bit))
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                f"Register {register} read requires a transport or a cloud client"
+            )
+        param_key = self._cloud_param_key(register, bit)
+        response = await self._client.api.control.read_parameters(self.serial_number, register, 1)
+        return bool(response.parameters.get(param_key, False))
 
     async def _set_modbus_register_bit(self, register: int, bit: int, enabled: bool) -> bool:
-        """Read-modify-write a single bit via transport-only Modbus path."""
-        current_value = await self._read_modbus_register(register)
-        new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
-        return await self._write_modbus_register(register, new_value)
+        """Set/clear a single register bit, via transport or cloud.
+
+        Transport mode performs an atomic read-modify-write that preserves the
+        other bits. Cloud mode uses the function-control API, which applies the
+        bit update server-side (also preserving the other bits) — avoiding a
+        read-modify-write race across the slower HTTP round-trip.
+        """
+        if self._transport is not None:
+            current_value = await self._read_modbus_register(register)
+            new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
+            return await self._write_modbus_register(register, new_value)
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                f"Register {register} write requires a transport or a cloud client"
+            )
+        param_key = self._cloud_param_key(register, bit)
+        response = await self._client.api.control.control_function(
+            self.serial_number, param_key, enabled
+        )
+        return bool(response.success)
 
     # ============================================================================
     # Hybrid-Specific Control Operations
@@ -103,7 +187,7 @@ class HybridInverter(GenericInverter):
             Dictionary with:
             - enabled: AC charge function enabled
             - power_percent: Charge power (0-100%)
-            - soc_limit: Target SOC (0-100%)
+            - soc_limit: Target SOC (0-101%; 101 = never stop)
             - schedule1_enabled: Time schedule 1 enabled
             - schedule2_enabled: Time schedule 2 enabled
 
@@ -148,7 +232,8 @@ class HybridInverter(GenericInverter):
         Args:
             enabled: Enable AC charging
             power_percent: Charge power percentage (0-100), optional
-            soc_limit: Target SOC percentage (0-100), optional
+            soc_limit: Target SOC percentage (0-101), optional. 101 = never
+                stop AC charging (used for battery cell balancing).
 
         Returns:
             True if successful
@@ -173,8 +258,8 @@ class HybridInverter(GenericInverter):
         if power_percent is not None and not 0 <= power_percent <= 100:
             raise ValueError("power_percent must be between 0 and 100")
 
-        if soc_limit is not None and not 0 <= soc_limit <= 100:
-            raise ValueError("soc_limit must be between 0 and 100")
+        if soc_limit is not None and not 0 <= soc_limit <= 101:
+            raise ValueError("soc_limit must be between 0 and 101")
 
         # Update function enable bit
         func_params = await self.read_parameters(FUNC_EN_REGISTER, 1)
@@ -211,7 +296,7 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EN_BIT_EPS_EN, FUNC_EN_REGISTER
 
-        return await self._set_register_bit(FUNC_EN_REGISTER, FUNC_EN_BIT_EPS_EN, enabled)
+        return await self._set_modbus_register_bit(FUNC_EN_REGISTER, FUNC_EN_BIT_EPS_EN, enabled)
 
     async def set_forced_charge(self, enabled: bool) -> bool:
         """Enable or disable forced charge mode.
@@ -230,7 +315,9 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EN_BIT_FORCED_CHG_EN, FUNC_EN_REGISTER
 
-        return await self._set_register_bit(FUNC_EN_REGISTER, FUNC_EN_BIT_FORCED_CHG_EN, enabled)
+        return await self._set_modbus_register_bit(
+            FUNC_EN_REGISTER, FUNC_EN_BIT_FORCED_CHG_EN, enabled
+        )
 
     async def set_forced_discharge(self, enabled: bool) -> bool:
         """Enable or disable forced discharge mode.
@@ -249,7 +336,9 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EN_BIT_FORCED_DISCHG_EN, FUNC_EN_REGISTER
 
-        return await self._set_register_bit(FUNC_EN_REGISTER, FUNC_EN_BIT_FORCED_DISCHG_EN, enabled)
+        return await self._set_modbus_register_bit(
+            FUNC_EN_REGISTER, FUNC_EN_BIT_FORCED_DISCHG_EN, enabled
+        )
 
     async def get_charge_discharge_power(self) -> dict[str, int]:
         """Get AC charge and forced/PV charge power settings.
@@ -594,7 +683,8 @@ class HybridInverter(GenericInverter):
         Returns:
             Dictionary with:
             - start_soc: Battery SOC (%) to start AC charging (0-90)
-            - end_soc: Battery SOC (%) to stop AC charging (0-100), reg 67
+            - end_soc: Battery SOC (%) to stop AC charging (0-101; 101 = never
+              stop), reg 67
 
         Example:
             >>> limits = await inverter.get_ac_charge_soc_limits()
@@ -617,7 +707,8 @@ class HybridInverter(GenericInverter):
 
         Args:
             start_soc: Battery SOC (%) to start AC charging (0-90)
-            end_soc: Battery SOC (%) to stop AC charging (0-100), reg 67
+            end_soc: Battery SOC (%) to stop AC charging (0-101), reg 67.
+                101 = never stop AC charging (used for cell balancing).
 
         Returns:
             True if successful
@@ -633,8 +724,8 @@ class HybridInverter(GenericInverter):
 
         if not 0 <= start_soc <= 90:
             raise ValueError(f"start_soc must be 0-90, got {start_soc}")
-        if not 0 <= end_soc <= 100:
-            raise ValueError(f"end_soc must be 0-100, got {end_soc}")
+        if not 0 <= end_soc <= 101:
+            raise ValueError(f"end_soc must be 0-101, got {end_soc}")
 
         return await self.write_parameters(
             {HOLD_AC_CHARGE_START_SOC: start_soc, HOLD_AC_CHARGE_SOC_LIMIT: end_soc}
@@ -742,7 +833,7 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EN_2_BIT_SPORADIC_CHARGE, FUNC_EN_2_REGISTER
 
-        return await self._set_register_bit(
+        return await self._set_modbus_register_bit(
             FUNC_EN_2_REGISTER, FUNC_EN_2_BIT_SPORADIC_CHARGE, enabled
         )
 
@@ -767,8 +858,7 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_SYS_BIT_CHARGE_LAST, FUNC_SYS_REGISTER
 
-        raw = await self._read_modbus_register(FUNC_SYS_REGISTER)
-        return bool(raw & (1 << FUNC_SYS_BIT_CHARGE_LAST))
+        return await self._get_register_bit(FUNC_SYS_REGISTER, FUNC_SYS_BIT_CHARGE_LAST)
 
     async def set_charge_last(self, enabled: bool) -> bool:
         """Enable or disable charge last mode.
@@ -808,8 +898,7 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EXT_BIT_BAT_CHARGE_CONTROL, FUNC_EXT_REGISTER
 
-        raw = await self._read_modbus_register(FUNC_EXT_REGISTER)
-        return bool(raw & (1 << FUNC_EXT_BIT_BAT_CHARGE_CONTROL))
+        return await self._get_register_bit(FUNC_EXT_REGISTER, FUNC_EXT_BIT_BAT_CHARGE_CONTROL)
 
     async def set_battery_charge_control(self, voltage_mode: bool) -> bool:
         """Set battery charge control mode.
@@ -843,8 +932,7 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL, FUNC_EXT_REGISTER
 
-        raw = await self._read_modbus_register(FUNC_EXT_REGISTER)
-        return bool(raw & (1 << FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL))
+        return await self._get_register_bit(FUNC_EXT_REGISTER, FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL)
 
     async def set_battery_discharge_control(self, voltage_mode: bool) -> bool:
         """Set battery discharge control mode.
@@ -864,6 +952,162 @@ class HybridInverter(GenericInverter):
         return await self._set_modbus_register_bit(
             FUNC_EXT_REGISTER, FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL, voltage_mode
         )
+
+    # -- Friendly mode-aware helpers ------------------------------------------
+    # These wrap the raw bool primitives above with the BatteryControlMode enum
+    # and derive the currently-active limit from the live regime, so callers do
+    # not re-implement the "which register is active" logic.
+
+    async def get_battery_charge_control_mode(self) -> BatteryControlMode:
+        """Get the battery charge control regime as a :class:`BatteryControlMode`.
+
+        Friendly wrapper over :meth:`get_battery_charge_control` (which returns a
+        raw bool). Works in cloud, hybrid and local modes.
+        """
+        return BatteryControlMode.from_voltage_flag(await self.get_battery_charge_control())
+
+    async def set_battery_charge_control_mode(self, mode: BatteryControlMode) -> bool:
+        """Set the battery charge control regime (SOC or Voltage)."""
+        return await self.set_battery_charge_control(mode.is_voltage)
+
+    async def get_battery_discharge_control_mode(self) -> BatteryControlMode:
+        """Get the battery discharge control regime as a :class:`BatteryControlMode`."""
+        return BatteryControlMode.from_voltage_flag(await self.get_battery_discharge_control())
+
+    async def set_battery_discharge_control_mode(self, mode: BatteryControlMode) -> bool:
+        """Set the battery discharge control regime (SOC or Voltage)."""
+        return await self.set_battery_discharge_control(mode.is_voltage)
+
+    async def get_active_charge_limit(self) -> dict[str, Any]:
+        """Return the charge ceiling the inverter is currently honoring.
+
+        Derives from the live charge regime (reg 179 bit 9): SOC mode → system
+        charge SOC limit (%, reg 227); Voltage mode → system charge voltage
+        limit (V, reg 228). The other register is ignored by firmware until the
+        regime is switched.
+
+        Returns ``{"mode": BatteryControlMode, "value": <number>, "unit": "%"|"V"}``.
+        """
+        mode = await self.get_battery_charge_control_mode()
+        if mode.is_voltage:
+            return {
+                "mode": mode,
+                "value": await self.get_system_charge_volt_limit(),
+                "unit": "V",
+            }
+        return {
+            "mode": mode,
+            "value": await self.get_system_charge_soc_limit(),
+            "unit": "%",
+        }
+
+    async def get_active_discharge_cutoff(self, *, off_grid: bool = False) -> dict[str, Any]:
+        """Return the discharge cutoff the inverter is currently honoring.
+
+        Derives from the live discharge regime (reg 179 bit 10): SOC mode →
+        discharge cutoff SOC (%); Voltage mode → end-of-discharge voltage (V).
+        Pass ``off_grid=True`` for the EPS/off-grid cutoff (regs 125 / 100),
+        otherwise the on-grid cutoff (regs 105 / 169) is returned.
+
+        Returns ``{"mode": BatteryControlMode, "value": <number>, "unit": "%"|"V"}``.
+        """
+        mode = await self.get_battery_discharge_control_mode()
+        if mode.is_voltage:
+            value: float = (
+                await self.get_off_grid_cutoff_voltage()
+                if off_grid
+                else await self.get_on_grid_cutoff_voltage()
+            )
+            return {"mode": mode, "value": value, "unit": "V"}
+        soc_value: int = (
+            await self.get_off_grid_cutoff_soc()
+            if off_grid
+            else await self.get_on_grid_cutoff_soc()
+        )
+        return {"mode": mode, "value": soc_value, "unit": "%"}
+
+    # ============================================================================
+    # PV Sell to Grid / Export PV Only Operations (GH eg4_web_monitor#135)
+    # ============================================================================
+    # Register 179 bit 3 (FUNC_PV_SELL_TO_GRID_EN, "Export PV Only" in the EG4
+    # web UI).  Bit pinned 2026-06-12 ~16:05-16:07 PT via authorized live
+    # cloud toggles with raw verification (remoteRead (179,1) valueFrame,
+    # base64 LE uint16) on BOTH 12K-hybrid models: FlexBOSS21 52842P0581 and
+    # 18kPV 4512670118 each toggled raw 0x104c <-> 0x1044 (XOR 0x0008 =
+    # single bit 3) in lockstep with the named param, restores verified by
+    # re-read.  These overrides replace the cloud-only BaseInverter
+    # implementations with the same dual-path dispatch the battery
+    # charge/discharge control bits (9/10) use.
+
+    async def get_pv_sell_to_grid_status(self) -> bool:
+        """Get current PV sell to grid (Export PV Only) status.
+
+        Reads register 179 bit 3 via the transport when one is attached,
+        otherwise via the cloud named-parameter read.
+
+        Returns:
+            True if Export PV Only is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_pv_sell_to_grid_status()
+            >>> is_enabled
+            True
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_PV_SELL_TO_GRID, FUNC_EXT_REGISTER
+
+        return await self._get_register_bit(FUNC_EXT_REGISTER, FUNC_EXT_BIT_PV_SELL_TO_GRID)
+
+    async def set_pv_sell_to_grid(self, enabled: bool) -> bool:
+        """Enable or disable PV sell to grid ("Export PV Only").
+
+        Transport mode performs a read-modify-write on register 179 that
+        preserves the other function bits from the read value (a read
+        followed by a write — the same non-atomic sequence as bits 9/10);
+        cloud mode applies the bit server-side via the function-control API.
+
+        Args:
+            enabled: True to only export PV surplus (never battery)
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.set_pv_sell_to_grid(True)
+            True
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_PV_SELL_TO_GRID, FUNC_EXT_REGISTER
+
+        return await self._set_modbus_register_bit(
+            FUNC_EXT_REGISTER, FUNC_EXT_BIT_PV_SELL_TO_GRID, enabled
+        )
+
+    async def enable_pv_sell_to_grid(self) -> bool:
+        """Enable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Dual-path override of the cloud-only BaseInverter method: register
+        179 bit 3 read-modify-write over the transport, or the atomic cloud
+        function-control update without one.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_pv_sell_to_grid()
+            True
+        """
+        return await self.set_pv_sell_to_grid(True)
+
+    async def disable_pv_sell_to_grid(self) -> bool:
+        """Disable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_pv_sell_to_grid()
+            True
+        """
+        return await self.set_pv_sell_to_grid(False)
 
     # ============================================================================
     # Battery Charge/Discharge Current Limit Operations (Modbus)

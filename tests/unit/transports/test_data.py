@@ -65,6 +65,7 @@ class TestInverterRuntimeData:
         runtime.prec = 100
         runtime.pToGrid = 200
         runtime.pinv = 2300
+        runtime.pLoad170 = 1800
         runtime.vepsr = 2400
         runtime.vepss = 2405
         runtime.vepst = 2410
@@ -92,6 +93,20 @@ class TestInverterRuntimeData:
         assert data.grid_frequency == 59.98
         assert data.eps_apparent_power == 1
         assert data.bus_voltage_1 == 370.0
+        # Reg-17 semantics (eg4-9wf): prec is RECTIFIER power; grid import
+        # comes from pToUser, matching the Modbus path (reg 27).
+        assert data.rectifier_power == 100.0
+        assert data.power_from_grid == 1500.0
+        assert data.power_to_grid == 200.0
+        # Reg-170 mirror (eg4-9e4): pLoad170 feeds output_power.
+        assert data.output_power == 1800.0
+
+    def test_grid_power_deprecated_alias(self) -> None:
+        """grid_power is a deprecated read-only alias for rectifier_power."""
+        data = InverterRuntimeData(rectifier_power=100.0)
+
+        with pytest.warns(DeprecationWarning, match="rectifier_power"):
+            assert data.grid_power == 100.0
 
     def test_from_modbus_registers(self) -> None:
         """Test conversion from Modbus registers.
@@ -160,6 +175,61 @@ class TestInverterRuntimeData:
         assert data.bus_voltage_1 == 370.0
         assert data.internal_temperature == 25.0
         assert data.fault_code == 35  # From regs 60-61 (32-bit)
+        # Reg 17 lands on rectifier_power (renamed from grid_power, eg4-9wf);
+        # regs 26/27 carry the real grid flows.
+        assert data.rectifier_power == 100.0
+        assert data.power_to_grid == 200.0
+        assert data.power_from_grid == 1500.0
+
+    def test_from_http_response_offline_preserves_none(self) -> None:
+        """Offline cloud runtime → converter keeps omitted fields None, not 0.
+
+        An offline device (cloud ``lost: true``) returns a partial payload that
+        omits the live fields. ``from_http_response`` must surface those as None
+        (unavailable), not collapse them to a fake 0 reading — otherwise an
+        offline inverter looks like it is reading 0%/0W/status-0 (which is the
+        "normal" status code). eg4_web_monitor#256.
+        """
+        import json
+        from pathlib import Path
+
+        sample = Path(__file__).resolve().parents[2] / "samples" / "runtime_offline.json"
+        runtime = InverterRuntime.model_validate(json.loads(sample.read_text()))
+
+        data = InverterRuntimeData.from_http_response(runtime)
+
+        # Omitted live fields stay None (not 0 / 0.0).
+        assert data.pv_total_power is None
+        assert data.battery_soc is None
+        assert data.battery_voltage is None
+        assert data.battery_charge_power is None
+        assert data.battery_discharge_power is None
+        assert data.rectifier_power is None
+        assert data.inverter_power is None
+        assert data.eps_power is None
+        assert data.device_status is None
+        # Fields the offline payload DOES carry still convert.
+        assert data.internal_temperature == 33.0  # tinner present
+
+    def test_from_http_response_omitted_pv3_is_none(self) -> None:
+        """A 2-string payload omitting vpv3/ppv3 → pv3 stays None, not 0.
+
+        Mirrors the pv4-6 handling so an absent optional PV string is reported
+        as unavailable rather than a phantom 0 V / 0 W (eg4_web_monitor#256).
+        """
+        import json
+        from pathlib import Path
+
+        sample = Path(__file__).resolve().parents[2] / "samples" / "runtime_1234567890.json"
+        payload = json.loads(sample.read_text())
+        payload.pop("vpv3", None)
+        payload.pop("ppv3", None)
+        runtime = InverterRuntime.model_validate(payload)
+
+        data = InverterRuntimeData.from_http_response(runtime)
+
+        assert data.pv3_voltage is None
+        assert data.pv3_power is None
 
 
 class TestInverterEnergyData:
@@ -336,6 +406,49 @@ class TestBatteryData:
         assert data.current == 15.5
         assert data.soc == 85
         assert data.cycle_count == 150
+
+    def test_from_modbus_registers_cell_numbers_not_crossed(self) -> None:
+        """Cell-number registers: offset 14 = temp numbers, offset 15 = voltage numbers.
+
+        Regression test for eg4-4yg: the original map had offsets 14/15
+        crossed (temp-number register parsed into the voltage-number fields
+        and vice versa).
+
+        Raw values reconstructed from the 2026-02-26 cross-mode capture of
+        18kPV 4512670118 battery 01 (scratchpad/snapshots in eg4_web_monitor):
+        the live cloud API reported batMaxCellNumTemp=1, batMinCellNumTemp=2,
+        batMaxCellNumVolt=3, batMinCellNumVolt=1 while the local register
+        read of the same battery held 0x0201 at offset 14 and 0x0103 at
+        offset 15.  Cell temp/voltage extreme VALUES (offsets 10-13) are
+        pinned too so an off-by-one cannot reintroduce the cross silently.
+        """
+        base = 5002  # battery slot 0
+        registers = dict.fromkeys(range(base, base + 30), 0)
+        registers[base + 0] = 0xC003  # status header: connected, 3 batteries
+        registers[base + 6] = 5305  # voltage 53.05 V
+        registers[base + 8] = (100 << 8) | 85  # SOH=100 / SOC=85
+        registers[base + 10] = 250  # max cell temp 25.0 °C
+        registers[base + 11] = 240  # min cell temp 24.0 °C
+        registers[base + 12] = 3364  # max cell voltage 3.364 V
+        registers[base + 13] = 3361  # min cell voltage 3.361 V
+        # Offset 14: TEMP cell numbers — low byte = max (1), high byte = min (2)
+        registers[base + 14] = 0x0201
+        # Offset 15: VOLTAGE cell numbers — low byte = max (3), high byte = min (1)
+        registers[base + 15] = 0x0103
+
+        data = BatteryData.from_modbus_registers(0, registers)
+
+        assert data is not None
+        # Cell numbers must land in the matching fields (cloud-verified truth)
+        assert data.max_cell_num_temp == 1
+        assert data.min_cell_num_temp == 2
+        assert data.max_cell_num_voltage == 3
+        assert data.min_cell_num_voltage == 1
+        # Neighboring extreme values stay on offsets 10-13
+        assert data.max_cell_temperature == pytest.approx(25.0)
+        assert data.min_cell_temperature == pytest.approx(24.0)
+        assert data.max_cell_voltage == pytest.approx(3.364)
+        assert data.min_cell_voltage == pytest.approx(3.361)
 
 
 class TestBatteryBankData:
@@ -768,3 +881,65 @@ class TestPv456Parity:
         assert data.pv4_power is None
         assert data.pv5_power is None
         assert data.pv6_power is None
+
+
+class TestFaultWarningCodeMerge:
+    """Merge of the inverter fault/warning code (regs 60-63) with the BMS
+    fallback (regs 99-100) in ``from_modbus_registers``.
+
+    The two sources live in different input-register groups — the inverter
+    code in ``status_energy`` (regs 32-63, always read) and the BMS fallback in
+    ``bms_data`` (regs 80-112, the one group whose read is allowed to fail
+    non-fatally).  When the bms_data read drops (a common flaky-dongle case),
+    ``read_all_input_data`` still rebuilds the runtime from the surviving
+    snapshot, so the BMS code is None while the inverter code still reads a
+    healthy 0.  The merge must surface that known-healthy 0 rather than None:
+    collapsing it to None blanked the Home Assistant ``Fault Code`` sensor to
+    "unknown" on every such drop, even though the inverter reported no fault
+    (eg4_web_monitor#261).  A genuinely unread code (both sources absent) must
+    still be None, and an active code from either source must be preserved.
+    """
+
+    def test_healthy_inverter_survives_bms_data_drop(self) -> None:
+        """Inverter code 0 + bms_data group dropped → 0, not None (#261).
+
+        regs 60-63 = 0 (the always-read inverter fault/warning, healthy) with
+        the bms_data group (incl. regs 99-100) absent — exactly the snapshot
+        ``read_all_input_data`` rebuilds on a bms_data drop.
+        """
+        regs: dict[int, int] = {60: 0, 61: 0, 62: 0, 63: 0}  # bms regs 99/100 absent
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code == 0
+        assert data.warning_code == 0
+
+    def test_both_sources_absent_yields_none(self) -> None:
+        """Neither inverter nor BMS code present → genuinely unknown (None)."""
+        regs: dict[int, int] = {0: 0}  # no fault/warning registers at all
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code is None
+        assert data.warning_code is None
+
+    def test_real_inverter_fault_survives_bms_drop(self) -> None:
+        """An active inverter code is preserved when the bms_data group drops."""
+        regs: dict[int, int] = {60: 0x10, 61: 0, 62: 0x01, 63: 0}  # bms absent
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code == 0x10
+        assert data.warning_code == 0x01
+
+    def test_bms_code_used_when_inverter_zero(self) -> None:
+        """BMS fallback unchanged: inverter code 0, BMS code active → BMS code."""
+        regs: dict[int, int] = {60: 0, 61: 0, 62: 0, 63: 0, 99: 0x04, 100: 0x08}
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code == 0x04
+        assert data.warning_code == 0x08
+
+    def test_fault_and_warning_merge_independently_on_bms_drop(self) -> None:
+        """Healthy fault + active warning, bms_data dropped → 0 and the warning.
+
+        Fault and warning are merged independently, so a healthy-0 fault must
+        survive (not None) while an active warning on the same poll is preserved.
+        """
+        regs: dict[int, int] = {60: 0, 61: 0, 62: 0x02, 63: 0}  # bms regs absent
+        data = InverterRuntimeData.from_modbus_registers(regs)
+        assert data.fault_code == 0
+        assert data.warning_code == 0x02

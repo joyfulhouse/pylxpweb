@@ -76,6 +76,7 @@ FUNC_SYS_BIT_CHARGE_LAST = 4  # Charge last: charge battery after loads satisfie
 
 # Extended Function Enable Register (Address 179) - Bit Field
 FUNC_EXT_REGISTER = 179
+FUNC_EXT_BIT_PV_SELL_TO_GRID = 3  # Export PV Only (pinned 2026-06-12 live cloud toggle)
 FUNC_EXT_BIT_BAT_CHARGE_CONTROL = 9  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
 FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL = 10  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
 
@@ -85,7 +86,7 @@ FUNC_EN_2_BIT_SPORADIC_CHARGE = 12  # Sporadic charge enable (confirmed via Modb
 
 # AC Charge Parameters
 HOLD_AC_CHARGE_POWER_CMD = 66  # AC charge power in 100W units (0-150 = 0.0-15.0 kW)
-HOLD_AC_CHARGE_SOC_LIMIT = 67  # AC charge SOC limit (0-100%)
+HOLD_AC_CHARGE_SOC_LIMIT = 67  # AC charge SOC limit (0-101%; 101 = never stop)
 # AC Charge Time Schedule (regs 68-73) - packed time format (Modbus)
 # Format: value = (hour & 0xFF) | ((minute & 0xFF) << 8)
 # Each register stores hour (low byte) + minute (high byte)
@@ -145,7 +146,7 @@ HOLD_FORCED_CHARGE_TIME_2_END = 81  # Period 2 end
 
 # Forced Discharge Parameters
 # Cloud API names: HOLD_FORCED_DISCHG_POWER_CMD, HOLD_FORCED_DISCHG_SOC_LIMIT
-HOLD_FORCED_DISCHG_POWER_CMD = 82  # Forced discharge power command (0-100%)
+HOLD_FORCED_DISCHG_POWER_CMD = 82  # Forced discharge power, 100W units (0-255 = 0-25.5kW)
 HOLD_FORCED_DISCHG_SOC_LIMIT = 83  # Forced discharge SOC limit (0-100%)
 
 # Forced Discharge Time Schedule (regs 84-89) - packed time format (Modbus)
@@ -186,7 +187,7 @@ HOLD_ON_GRID_EOD_VOLTAGE = 169  # On-grid discharge cutoff voltage (V, ×10, con
 HOLD_P_TO_USER_START_DISCHG = 116  # Start discharge when import exceeds this
 
 # System Charge Limits (regs 227-228)
-HOLD_SYSTEM_CHARGE_SOC_LIMIT = 227  # System charge SOC limit (0-100%, verified 2026-01-27)
+HOLD_SYSTEM_CHARGE_SOC_LIMIT = 227  # System charge SOC limit (0-101%; 101 = top balancing)
 HOLD_SYSTEM_CHARGE_VOLT_LIMIT = 228  # System charge voltage limit (V, ×10, confirmed 2026-02-18)
 
 # Grid Protection Parameters
@@ -511,14 +512,46 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # 100W units (0-150 = 0.0-15.0 kW), same encoding as AC charge power (reg 66).
     # Hardware-verified: FlexBOSS reg74=20 -> 2.0 kW, 18kPV reg74=120 -> 12.0 kW.
     74: ["HOLD_FORCED_CHG_POWER_CMD"],
+    # Forced charge stop SOC + time windows (75-81, from the canonical
+    # holding table).  Named so reads spanning the 64-83 block resolve every
+    # register to its API name instead of leaking raw numeric keys into the
+    # parameter cache (codex review of the regs-82/83 addition).
+    75: ["HOLD_FORCED_CHG_SOC_LIMIT"],
+    76: ["HOLD_FORCED_CHARGE_TIME_0_START"],
+    77: ["HOLD_FORCED_CHARGE_TIME_0_END"],
+    78: ["HOLD_FORCED_CHARGE_TIME_1_START"],
+    79: ["HOLD_FORCED_CHARGE_TIME_1_END"],
+    80: ["HOLD_FORCED_CHARGE_TIME_2_START"],
+    81: ["HOLD_FORCED_CHARGE_TIME_2_END"],
+    # Forced discharge: reg 82 follows the reg-74/66 100W-unit encoding
+    # (0-255 = 0-25.5 kW); reg 83 is a 0-100 % stop SOC.  Hardware-verified on
+    # an EG4 hybrid via the dongle in PR #249 (DevTodd): panel entry 2.5 kW
+    # reads back raw 25, while SOC 18 % reads back raw 18.  Cloud UI takes
+    # float kW [0, 25.5] for reg 82 and int % [0, 100] for reg 83.
+    82: ["HOLD_FORCED_DISCHG_POWER_CMD"],
+    83: ["HOLD_FORCED_DISCHG_SOC_LIMIT"],
     # Battery protection
     100: ["HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT"],
     # Battery charge/discharge current limits (A, confirmed 2026-02-18)
     101: ["HOLD_LEAD_ACID_CHARGE_RATE"],
     102: ["HOLD_LEAD_ACID_DISCHARGE_RATE"],
+    # Max export (sell-back) power percent.  Cloud-pinned via single-register
+    # named window reads 2026-06-12 (GH eg4_web_monitor#135): remoteRead of
+    # (103, 1) returns exactly HOLD_FEED_IN_GRID_POWER_PERCENT on both an
+    # 18kPV (value 16) and a FlexBOSS21 (value 14).  The protocol-spec name
+    # for reg 103 is "MaxBackflowPower" but the cloud API key is the FEED_IN
+    # one; HOLD_MAX_BACKFLOW_POWER_PERCENT is absent from every named window
+    # on this hardware.  Raw encoding is whole percent (0-100): the spec, the
+    # cloud value and the canonical bounds all agree, and unlike reg 202
+    # there is no plausible alternative scale for a 0-100 percent field.
+    103: ["HOLD_FEED_IN_GRID_POWER_PERCENT"],
     # SOC limits
     105: ["HOLD_DISCHG_CUT_OFF_SOC_EOD"],  # On-grid discharge cutoff SOC (10-90%)
-    # System functions (Register 110: 14 bit fields, verified)
+    116: ["HOLD_PTOUSER_START_DISCHARGE"],  # Power-to-user start-discharge threshold (W)
+    # System functions (Register 110: 14 bit fields, verified on 18kPV).
+    # WARNING: this layout is 18kPV/EG4_HYBRID-derived.  EG4_OFFGRID (SNA)
+    # hardware evidence contradicts the upper bits (buzzer at 7, ECO at 15) —
+    # see OFFGRID_REGISTER_110_PARAM_KEYS for the family-specific override.
     110: [
         "FUNC_PV_GRID_OFF_EN",  # Bit 0
         "FUNC_RUN_WITHOUT_GRID",  # Bit 1
@@ -550,7 +583,13 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     158: ["HOLD_AC_CHARGE_START_BATTERY_VOLTAGE"],
     159: ["HOLD_AC_CHARGE_END_BATTERY_VOLTAGE"],
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
+    169: ["HOLD_ON_GRID_EOD_VOLTAGE"],  # On-grid EOD voltage (V, ×10; cloud-confirmed name)
     190: ["HOLD_P2"],
+    # Forced-discharge stop voltage — the voltage-regime counterpart of
+    # HOLD_FORCED_DISCHG_SOC_LIMIT (reg 83). Raw encoding verified DECIVOLTS
+    # 2026-06-11: local read raw 400 vs cloud 40 V on an 18kPV. Cloud
+    # read/write uses float volts [40, 56]; see the canonical table.
+    202: ["_12K_HOLD_STOP_DISCHG_VOLT"],
     # Register 179: Extended function enable bit field (verified via Modbus probe 2026-02-13)
     # API returns 16 FUNC_* params for this register (alphabetical, NOT bit order).
     # Bit 7 (FUNC_GRID_PEAK_SHAVING) confirmed via live toggle test.
@@ -560,11 +599,35 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # FUNC_GEN_PEAK_SHAVING, FUNC_ON_GRID_ALWAYS_ON, FUNC_PV_ARC, FUNC_PV_ARC_FAULT_CLEAR,
     # FUNC_PV_SELL_TO_GRID_EN, FUNC_RSD_DISABLE, FUNC_SMART_LOAD_ENABLE,
     # FUNC_TOTAL_LOAD_COMPENSATION_EN, FUNC_TRIP_TIME_UNIT, FUNC_WATT_VOLT_EN
+    #
+    # FUNC_PV_SELL_TO_GRID_EN ("Export PV Only" in the EG4 web UI, GH
+    # eg4_web_monitor#135): BIT 3, PINNED 2026-06-12 ~16:05-16:07 PT via
+    # authorized live cloud functionControl toggles with raw verification
+    # through remoteRead (179, 1) valueFrame (base64, little-endian uint16)
+    # on BOTH 12K-hybrid models:
+    #   - FlexBOSS21 52842P0581: disable toggled raw 0x104c -> 0x1044
+    #     (XOR 0x0008 = single bit 3) with the named FUNC_PV_SELL_TO_GRID_EN
+    #     flipping True->False in lockstep; re-enable restored 0x104c,
+    #     verified by re-read.
+    #   - 18kPV 4512670118: same toggle, same 0x104c -> 0x1044 -> restored
+    #     0x104c, verified.
+    # Register-level evidence equivalent to a local before/after probe,
+    # proven directly on both family models — no extrapolation needed.
+    # Membership in this register had been re-confirmed via live
+    # single-register named reads 2026-06-12 (remoteRead (179, 1) returns it
+    # on both inverters).  The canonical holding table's spec name for bit 3
+    # is FUNC_BAT_WAKEUP_EN ("Battery wakeup / PV sell first enable") — the
+    # "PV sell first" wording corroborates the pin.  EG4_OFFGRID inherits
+    # this entry like the other reg-179 bits (7, 9, 10, 11 — all 12K-pinned):
+    # per the eg4-juzg adjudication, family overrides are reserved for
+    # hardware-PROVEN divergence (reg 110); no SNA evidence contradicts the
+    # shared reg-179 layout, and consumers suppress sell-back controls on
+    # that no-sellback family.
     179: [
         "FUNC_179_BIT0",  # Bit 0: unknown
         "FUNC_179_BIT1",  # Bit 1: unknown
         "FUNC_179_BIT2",  # Bit 2: unknown
-        "FUNC_179_BIT3",  # Bit 3: unknown (set on FlexBOSS21)
+        "FUNC_PV_SELL_TO_GRID_EN",  # Bit 3: Export PV Only (pinned 2026-06-12, see above)
         "FUNC_179_BIT4",  # Bit 4: unknown
         "FUNC_179_BIT5",  # Bit 5: unknown
         "FUNC_179_BIT6",  # Bit 6: unknown (set on FlexBOSS21)
@@ -582,8 +645,24 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     227: ["HOLD_SYSTEM_CHARGE_SOC_LIMIT"],
     # System charge voltage limit (V, ×10, confirmed 2026-02-18)
     228: ["HOLD_SYSTEM_CHARGE_VOLT_LIMIT"],
-    # Grid peak shaving power (2 registers, 32-bit value in kW)
-    231: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER"],
+    # Grid peak shaving family (eg4-gfu5, located 2026-06-12 via single-register
+    # cloud window reads on an 18kPV AND a FlexBOSS21 — both devices agree):
+    #   206 = _12K_HOLD_GRID_PEAK_SHAVING_POWER   (PS1; raw kW encoding UNVERIFIED)
+    #   207 = _12K_HOLD_GRID_PEAK_SHAVING_SOC     (%, raw 1:1: raw 80 -> "80")
+    #   208 = _12K_HOLD_GRID_PEAK_SHAVING_VOLT    (decivolts: raw 520 -> "52")
+    #   218 = _12K_HOLD_GRID_PEAK_SHAVING_SOC_2   (%, raw 1:1: raw 50 -> "50")
+    #   219 = _12K_HOLD_GRID_PEAK_SHAVING_VOLT_2  (decivolts: raw 520 -> "52")
+    #   232 = _12K_HOLD_GRID_PEAK_SHAVING_POWER_2 (PS2; raw kW encoding UNVERIFIED)
+    # The old `231: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER"]` entry here was WRONG:
+    # single-register cloud reads of (231,1) return ZERO named parameters on both
+    # inverters while (206,1) names PS1.  Local name-writes through the old entry
+    # landed in register 231 — a real but UNKNOWN field (raw 0; a past raw write
+    # quantized 55 -> 54, i.e. even values only).  None of the family is mapped
+    # here yet: the local parameter refresh spans these registers and would
+    # surface raw values (decivolts / unverified kW encoding) as engineering
+    # units.  Map them together with raw-encoding verification + scaling support
+    # (same discipline as register 202 above).  See the canonical table rows in
+    # registers/inverter_holding.py for the full evidence trail.
     # Register 233: Extended function enable 2 bit field (verified via Modbus probe 2026-02-13)
     # API returns 9 params for this register (alphabetical, NOT bit order).
     # Bit 1 (FUNC_BATTERY_BACKUP_CTRL) confirmed via live toggle test.
@@ -591,7 +670,7 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # Other known params: BIT_DRY_CONTRACTOR_MULTIPLEX, BIT_LCD_TYPE, BIT_OUT_CT_POSITION,
     # FUNC_BATTERY_CALIBRATION_EN, FUNC_ENERTEK_WORKING_MODE, FUNC_FAN_DC3
     233: [
-        "FUNC_233_BIT0",  # Bit 0: unknown
+        "FUNC_QUICK_CHG_START_EN",  # Bit 0: Quick charge start enable (confirmed)
         "FUNC_BATTERY_BACKUP_CTRL",  # Bit 1: Battery backup control (confirmed)
         "FUNC_233_BIT2",  # Bit 2: unknown
         "FUNC_233_BIT3",  # Bit 3: unknown
@@ -608,7 +687,74 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "FUNC_233_BIT14",  # Bit 14: unknown
         "FUNC_233_BIT15",  # Bit 15: unknown
     ],
+    # Register 234: Quick charge duration in minutes (single value register).
+    # Writable setpoint; also reads as the live remaining-minutes countdown
+    # while a quick charge is active. Confirmed on 18kPV (cloud reg dump) and
+    # LXP-LB (eg4_web_monitor#251). Enables LOCAL/HYBRID quick charge + the
+    # quick_charge_minute feature detection in _probe_optional_features.
+    234: ["SNA_HOLD_QUICK_CHARGE_MINUTE"],
 }
+
+# ============================================================================
+# EG4_OFFGRID (SNA PLATFORM) FAMILY OVERRIDES
+# ============================================================================
+# Register 110 bit layout for the EG4 Off-Grid series (12000XP/6000XP).
+#
+# The base REGISTER_TO_PARAM_KEYS table above was verified on 18kPV
+# (EG4_HYBRID) hardware only.  Three independent sources show the SNA
+# platform packs register 110 differently in the upper bits:
+#
+#   1. 12000XP live evidence (eg4_web_monitor PR #220, jesserobbins):
+#      raw reg 110 = 0x8080 with Battery ECO enabled, 0x0080 with it
+#      disabled — only bit 15 toggles.  Raw bit-15 writes enable/disable
+#      ECO in both directions (verified on hardware); writing the base
+#      table's bit 9 returns success but changes nothing on the inverter.
+#   2. EG4 cloud decode of a stock SNA12K-US (docs/inverters/
+#      SNA12KUS_52XXXXXX68.md, reg 110): FUNC_BUZZER_EN=True is the ONLY
+#      set function.  Combined with the constant raw 0x0080 (bit 7) from
+#      the same model line, the buzzer lives at bit 7 on this family —
+#      not bit 6 as on 18kPV.
+#   3. ant0nkr/luxpower-ha-integration (LXP firmware lineage shared by the
+#      SNA platform) documents H_FUNCTION_ENABLE_3 (110) with BuzzerEn at
+#      bit 7, GreenModeEn at bit 14 and EcoModeEn at bit 15, with 2-bit
+#      CT/PVCT sample fields at 5-6/8-9/12-13.
+#
+# Only the relocations that are directly evidenced are applied here
+# (buzzer -> bit 7, Battery ECO -> bit 15).  Displaced or unverifiable
+# slots become FUNC_110_BITn placeholders (same convention as register
+# 179/233 unknowns) rather than inheriting unproven 18kPV names.
+# FUNC_GREEN_EN deliberately KEEPS the 18kPV position (bit 8) for
+# continuity: no SNA hardware toggle test exists yet, and consumers
+# (green mode controls) would otherwise lose local read/write entirely.
+# If the lxp_modbus layout fully applies, green may actually be bit 14 —
+# a community toggle test (read 110, toggle Green in the EG4 cloud UI,
+# read 110 again) settles it; see eg4_web_monitor issue #197 follow-ups.
+OFFGRID_REGISTER_110_PARAM_KEYS: list[str] = [
+    "FUNC_PV_GRID_OFF_EN",  # Bit 0 (all sources agree on bits 0-4)
+    "FUNC_RUN_WITHOUT_GRID",  # Bit 1
+    "FUNC_MICRO_GRID_EN",  # Bit 2
+    "FUNC_BAT_SHARED",  # Bit 3
+    "FUNC_CHARGE_LAST",  # Bit 4
+    "FUNC_TAKE_LOAD_TOGETHER",  # Bit 5 (UNVERIFIED on SNA; lxp_modbus: CT ratio low bit)
+    "FUNC_110_BIT6",  # Bit 6: unknown (18kPV buzzer slot; lxp_modbus: CT ratio high bit)
+    "FUNC_BUZZER_EN",  # Bit 7 (SNA cloud decode + raw 0x0080; lxp_modbus agrees)
+    "FUNC_GREEN_EN",  # Bit 8 (UNVERIFIED on SNA — kept from 18kPV; lxp_modbus puts green at 14)
+    "FUNC_110_BIT9",  # Bit 9: unknown (18kPV ECO slot; lxp_modbus: PVCT sample type high bit)
+    "BIT_WORKING_MODE",  # Bit 10 (UNVERIFIED on SNA)
+    "BIT_PVCT_SAMPLE_TYPE",  # Bit 11 (UNVERIFIED on SNA)
+    "BIT_PVCT_SAMPLE_RATIO",  # Bit 12 (UNVERIFIED on SNA)
+    "BIT_CT_SAMPLE_RATIO",  # Bit 13 (UNVERIFIED on SNA)
+    "FUNC_110_BIT14",  # Bit 14: unknown (lxp_modbus green candidate — needs SNA toggle test)
+    "FUNC_BATTERY_ECO_EN",  # Bit 15 (12000XP live toggle, PR #220; lxp_modbus agrees)
+]
+
+
+def _offgrid_register_to_param_keys() -> dict[int, list[str]]:
+    """Return the EG4_OFFGRID register→param mapping (base + overrides)."""
+    mapping = dict(REGISTER_TO_PARAM_KEYS)
+    mapping[110] = OFFGRID_REGISTER_110_PARAM_KEYS
+    return mapping
+
 
 # ============================================================================
 # MIDBOX (GRIDBOSS) REGISTER MAPPINGS
@@ -1287,6 +1433,10 @@ LXP_EU_PARAMETERS = [
 # Device Type Code Constants (HOLD_DEVICE_TYPE_CODE register 19)
 # These identify the specific inverter model/variant
 DEVICE_TYPE_CODE_SNA = 54  # SNA Series (e.g., SNA12K-US, 12000XP, 6000XP)
+# 6000XP variant reporting code 38 instead of 54 — field-confirmed twice on an
+# EG4 6000XP via WiFi dongle (joyfulhouse/eg4_web_monitor#222).  Same
+# EG4 Off-Grid register layout/feature set as code 54.
+DEVICE_TYPE_CODE_SNA_6000XP = 38
 DEVICE_TYPE_CODE_PV_SERIES = 2092  # PV Series (e.g., 12KPV, 18KPV)
 DEVICE_TYPE_CODE_LXP_EU = 12  # LXP-EU Series (e.g., LXP-EU 12K)
 DEVICE_TYPE_CODE_LXP_LB = 44  # LXP-LB Low-voltage Battery (LXP-US 8-10K)
@@ -1400,15 +1550,18 @@ def get_register_to_param_mapping(
 ) -> dict[int, list[str]]:
     """Get the register-to-parameter mapping for an inverter family.
 
-    Currently all families share the same 18KPV-based mapping.  The *family*
-    parameter is accepted for forward compatibility but has no effect yet.
+    Most families share the 18KPV-based mapping.  ``EG4_OFFGRID`` (SNA
+    platform — 12000XP/6000XP) overrides register 110, whose bit layout is
+    hardware-verified to differ from 18kPV (Battery ECO at bit 15, buzzer
+    at bit 7).  See ``OFFGRID_REGISTER_110_PARAM_KEYS``.
 
     For GridBOSS/MID devices, pass ``device_type="MIDBOX"`` to get the
     MIDBOX-specific register mapping (e.g., register 20 smart port modes).
 
     Args:
         family: Inverter family string (from InverterFamily enum value).
-            Currently unused — all families return the same mapping.
+            ``"EG4_OFFGRID"`` selects the SNA register-110 override; all
+            other values (or None) return the 18KPV-based mapping.
         device_type: Device type string. Pass ``"MIDBOX"`` for GridBOSS
             devices to include GridBOSS-specific register mappings.
 
@@ -1425,13 +1578,13 @@ def get_register_to_param_mapping(
         midbox_mapping = get_register_to_param_mapping(device_type="MIDBOX")
         param_keys = midbox_mapping.get(20)  # ["BIT_MIDBOX_SP_MODE_1", ...]
     """
-    # Currently all families use the 18KPV mapping as the base
-    # The HTTP transport handles family-specific differences on the server side
-    # For local transports, the 18KPV mapping covers most common parameters
-    _ = family  # Reserved for future family-specific mappings
-
+    # The HTTP transport handles family-specific differences on the server
+    # side; this mapping only drives LOCAL (Modbus/dongle) named access.
     if device_type == "MIDBOX":
         return MIDBOX_REGISTER_TO_PARAM_KEYS
+
+    if family == "EG4_OFFGRID":
+        return _offgrid_register_to_param_keys()
 
     return REGISTER_TO_PARAM_KEYS
 
@@ -1451,7 +1604,8 @@ def get_param_to_register_mapping(
 
     Args:
         family: Inverter family string (from InverterFamily enum value).
-            Currently unused — all families return the same mapping.
+            ``"EG4_OFFGRID"`` selects the SNA register-110 override; all
+            other values (or None) use the 18KPV-based mapping.
         device_type: Device type string. Pass ``"MIDBOX"`` for GridBOSS
             devices to include GridBOSS-specific register mappings.
 

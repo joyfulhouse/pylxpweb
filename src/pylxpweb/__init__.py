@@ -60,10 +60,12 @@ from .endpoints import (
     AnalyticsEndpoints,
     ControlEndpoints,
     DeviceEndpoints,
+    ExportDaySheet,
     ExportEndpoints,
     FirmwareEndpoints,
     ForecastingEndpoints,
     PlantEndpoints,
+    parse_export,
 )
 from .exceptions import (
     LuxpowerAPIError,
@@ -74,10 +76,13 @@ from .exceptions import (
     LuxpowerError,
 )
 from .models import (
+    BatteryControlMode,
+    DailyEnergyHistoryEntry,
     DatalogListItem,
     DatalogListResponse,
     DongleStatus,
     FirmwareUpdateInfo,
+    MonthlyEnergyHistory,
     OperatingMode,
 )
 from .transports.data import (
@@ -107,14 +112,19 @@ __all__ = [
     "AnalyticsEndpoints",
     "ForecastingEndpoints",
     "ExportEndpoints",
+    "ExportDaySheet",
+    "parse_export",
     "FirmwareEndpoints",
     # Models
+    "DailyEnergyHistoryEntry",
     "DatalogListItem",
     "DatalogListResponse",
     "DongleStatus",
     "FirmwareUpdateInfo",
+    "MonthlyEnergyHistory",
     # Enums
     "OperatingMode",
+    "BatteryControlMode",
     # Device hierarchy (consumed-surface public API)
     "Station",
     "ParallelGroup",

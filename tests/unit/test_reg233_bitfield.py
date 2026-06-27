@@ -26,10 +26,13 @@ class TestReg233Bitfield:
         assert reg.api_param_key == "FUNC_QUICK_CHG_START_EN"
 
     def test_battery_backup_bit1(self) -> None:
+        # Live-verified API param name; must agree with the transport
+        # REGISTER_TO_PARAM_KEYS entry for reg 233 bit 1 (eg4-6ag2).
         reg = BY_NAME["battery_backup_enable"]
         assert reg.address == 233
         assert reg.bit_position == 1
-        assert reg.api_param_key == "FUNC_BATT_BACKUP_EN"
+        assert reg.api_param_key == "FUNC_BATTERY_BACKUP_CTRL"
+        assert reg.writable
 
     def test_maintenance_bit2(self) -> None:
         reg = BY_NAME["maintenance_enable"]
@@ -64,5 +67,6 @@ class TestReg233Bitfield:
             "FUNC_ENERTEK_WORKING_MODE",
             "FUNC_SPORADIC_CHARGE",
             "FUNC_QUICK_CHG_START_EN",
+            "FUNC_BATTERY_BACKUP_CTRL",
         ):
             assert key in BY_API_KEY, f"{key} missing from BY_API_KEY"

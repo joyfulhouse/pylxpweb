@@ -225,6 +225,38 @@ class TestHTTPTransport:
         assert battery.charge_power == 500.0
 
     @pytest.mark.asyncio
+    async def test_read_battery_offline_preserves_none(self) -> None:
+        """Offline cloud battery → read_battery keeps omitted fields None, not 0.
+
+        An offline battery (cloud ``lost: true``) returns a partial
+        getBatteryInfo that omits vBat/soc/pCharge/pDisCharge. read_battery must
+        surface them as None (unavailable), not a fake 0V/0%/0W reading.
+        eg4_web_monitor#256.
+        """
+        import json
+        from pathlib import Path
+
+        from pylxpweb.models import BatteryInfo
+
+        sample = Path(__file__).resolve().parents[2] / "samples" / "battery_offline.json"
+        offline = BatteryInfo.model_validate(json.loads(sample.read_text()))
+
+        client = MagicMock()
+        client.login = AsyncMock()
+        client.api.devices.get_battery_info = AsyncMock(return_value=offline)
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        battery = await transport.read_battery()
+
+        assert battery is not None
+        assert battery.voltage is None
+        assert battery.soc is None
+        assert battery.charge_power is None
+        assert battery.discharge_power is None
+
+    @pytest.mark.asyncio
     async def test_read_battery_uses_cached_bat_parallel_num(self) -> None:
         """Test battery count uses cached batParallelNum from runtime.
 

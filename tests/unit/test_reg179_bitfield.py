@@ -28,6 +28,20 @@ class TestReg179Bitfield:
         assert reg.bit_position == 0
         assert reg.api_param_key == "FUNC_AC_CT_DIRECTION"
 
+    def test_battery_wakeup_pv_sell_bit3(self) -> None:
+        """Canonical bit 3 (spec name FUNC_BAT_WAKEUP_EN, 'Battery wakeup /
+        PV sell first enable') and the transport map's cloud name
+        FUNC_PV_SELL_TO_GRID_EN agree on (179, 3) — pinned by 2026-06-12
+        live cloud toggles raw-verified on both a FlexBOSS21 (52842P0581)
+        and an 18kPV (4512670118): raw 0x104c <-> 0x1044, single bit 3."""
+        from pylxpweb.constants import REGISTER_TO_PARAM_KEYS
+
+        reg = BY_NAME["battery_wakeup_enable"]
+        assert reg.address == 179
+        assert reg.bit_position == 3
+        assert reg.api_param_key == "FUNC_BAT_WAKEUP_EN"
+        assert REGISTER_TO_PARAM_KEYS[179].index("FUNC_PV_SELL_TO_GRID_EN") == 3
+
     def test_battery_charge_control_bit9(self) -> None:
         reg = BY_NAME["battery_charge_control"]
         assert reg.address == 179

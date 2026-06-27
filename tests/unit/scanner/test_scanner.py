@@ -327,6 +327,54 @@ class TestNetworkScanner:
         assert results[0].device_type_code == 2092
         assert results[0].firmware_version == "1.0.5"
 
+    async def test_scan_verifies_6000xp_type_code_38(self) -> None:
+        """Code 38 (6000XP variant, GH eg4_web_monitor#222) scans as VERIFIED.
+
+        Uses the real get_model_family_name so the known_codes membership and
+        the family mapping are exercised together.
+        """
+        config = ScanConfig(
+            ip_range="192.168.1.1",
+            ports=[502],
+            timeout=0.1,
+            verify_modbus=True,
+            lookup_mac=False,
+        )
+        writer = MagicMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        mock_info = MagicMock()
+        mock_info.serial = "4233740012"
+        mock_info.device_type_code = 38  # 6000XP variant
+        mock_info.firmware_version = "2.0.1"
+
+        mock_transport = MagicMock()
+        mock_transport.connect = AsyncMock()
+        mock_transport.disconnect = AsyncMock()
+
+        with (
+            patch(
+                "pylxpweb.scanner.scanner.asyncio.open_connection",
+                return_value=(MagicMock(), writer),
+            ),
+            patch(
+                "pylxpweb.transports.factory.create_modbus_transport",
+                return_value=mock_transport,
+            ),
+            patch(
+                "pylxpweb.transports.discovery.discover_device_info",
+                return_value=mock_info,
+            ),
+        ):
+            scanner = NetworkScanner(config)
+            results = [r async for r in scanner.scan()]
+
+        assert len(results) == 1
+        assert results[0].device_type == DeviceType.MODBUS_VERIFIED
+        assert results[0].model_family == "EG4_OFFGRID"
+        assert results[0].device_type_code == 38
+
     async def test_scan_with_modbus_verification_unknown_code(self) -> None:
         """Test Modbus verification with unknown device type code."""
         config = ScanConfig(

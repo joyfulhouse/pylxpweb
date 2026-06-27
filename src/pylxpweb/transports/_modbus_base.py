@@ -19,7 +19,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from pymodbus.exceptions import ModbusIOException
+from pymodbus.exceptions import ModbusException
 
 from ._register_data import INPUT_REGISTER_GROUPS, RegisterDataMixin
 from .exceptions import (
@@ -207,7 +207,13 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     self._consecutive_errors = 0
                     return list(result.registers)
 
-                except ModbusIOException as err:
+                except ModbusException as err:
+                    # Catch the pymodbus BASE class: ConnectionException
+                    # ("Not connected") is a SIBLING of ModbusIOException,
+                    # not a subclass.  Before this, a fast-fail disconnected
+                    # client bypassed the consecutive-error accounting, so
+                    # the _reconnect() gate never fired and the transport
+                    # stayed dead even after the network recovered (eg4-57g).
                     self._consecutive_errors += 1
                     if "timeout" in str(err).lower():
                         last_err = TransportTimeoutError(
@@ -312,6 +318,9 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     )
 
                 if result.isError():
+                    # Functional exception response: the device answered, so
+                    # the link is fine — NOT a transport failure.  Propagates
+                    # untouched (no consecutive-error accounting).
                     _LOGGER.error(
                         "Modbus error writing registers at %d: %s",
                         address,
@@ -319,18 +328,30 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     )
                     raise TransportWriteError(f"Modbus write error at address {address}: {result}")
 
+                self._consecutive_errors = 0
                 return True
 
-            except ModbusIOException as err:
+            except ModbusException as err:
+                # Catch the pymodbus BASE class, mirroring _read_registers:
+                # ConnectionException ("Not connected") is a SIBLING of
+                # ModbusIOException, not a subclass.  Before this, a write on
+                # a dropped TCP session escaped as a raw ConnectionException
+                # — bypassing the typed TransportWriteError contract that the
+                # upstream write retry/fallback machinery (#201) keys on —
+                # and never advanced the consecutive-error accounting, so the
+                # _reconnect() gate never fired for write-only ops (eg4-1cxn).
+                self._consecutive_errors += 1
                 if "timeout" in str(err).lower():
                     _LOGGER.error("Timeout writing registers at %d", address)
                     raise TransportTimeoutError(f"Timeout writing registers at {address}") from err
                 _LOGGER.error("Failed to write registers at %d: %s", address, err)
                 raise TransportWriteError(f"Failed to write registers at {address}: {err}") from err
             except TimeoutError as err:
+                self._consecutive_errors += 1
                 _LOGGER.error("Timeout writing registers at %d", address)
                 raise TransportTimeoutError(f"Timeout writing registers at {address}") from err
             except OSError as err:
+                self._consecutive_errors += 1
                 _LOGGER.error("Failed to write registers at %d: %s", address, err)
                 raise TransportWriteError(f"Failed to write registers at {address}: {err}") from err
 
@@ -447,11 +468,27 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         async with self._op_lock:
             return await super().read_parameters(start_address, count)
 
+    async def read_quick_charge_remaining_seconds(self) -> int | None:
+        """Read quick-charge remaining seconds (input reg 210) with op lock."""
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            await self._reconnect()
+
+        async with self._op_lock:
+            return await super().read_quick_charge_remaining_seconds()
+
     async def write_parameters(
         self,
         parameters: dict[int, int],
     ) -> bool:
-        """Write holding registers with op-level lock."""
+        """Write holding registers with reconnect gate and op-level lock.
+
+        The reconnect check mirrors the input-data read ops: after enough
+        consecutive transport errors (reads or writes), the next write heals
+        the link first instead of failing on the dead session (eg4-1cxn).
+        """
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            await self._reconnect()
+
         async with self._op_lock:
             return await super().write_parameters(parameters)
 
@@ -459,12 +496,15 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self,
         parameters: dict[str, Any],
     ) -> bool:
-        """Read-modify-write named parameters with op-level lock.
+        """Read-modify-write named parameters with reconnect gate and op lock.
 
         Acquires op_lock for the full call so the RMW is atomic relative to
         concurrent reads.  The internal calls to read_parameters /
         write_parameters re-enter the reentrant lock without blocking.
         """
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            await self._reconnect()
+
         async with self._op_lock:
             return await super().write_named_parameters(parameters)
 

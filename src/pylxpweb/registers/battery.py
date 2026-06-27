@@ -139,8 +139,8 @@ class BatteryRegisterDefinition:
 #  11    │ min_cell_temp              │ ÷10    │ yes    │ °C   │ batMinCellTemp
 #  12    │ max_cell_voltage           │ ÷1000  │ no     │ V    │ batMaxCellVoltage
 #  13    │ min_cell_voltage           │ ÷1000  │ no     │ V    │ batMinCellVoltage
-#  14    │ max_cell_num_v (lo) / min_cell_num_v (hi) │ — │ — │ — │ packed
-#  15    │ max_cell_num_t (lo) / min_cell_num_t (hi) │ — │ — │ — │ packed
+#  14    │ max_cell_num_t (lo) / min_cell_num_t (hi) │ — │ — │ — │ packed
+#  15    │ max_cell_num_v (lo) / min_cell_num_v (hi) │ — │ — │ — │ packed
 #  16    │ firmware_version           │ —      │ no     │ —    │ fwVersionText
 # 17-24  │ serial_number (ASCII)      │ —      │ no     │ —    │ batterySn
 # 25-29  │ reserved                   │ —      │ —      │ —    │ —
@@ -313,27 +313,14 @@ BATTERY_REGISTERS: tuple[BatteryRegisterDefinition, ...] = (
     ),
     # =========================================================================
     # CELL NUMBER (offsets 14-15) — packed: low byte = max, high byte = min
+    #
+    # Offset 14 = TEMPERATURE cell numbers, offset 15 = VOLTAGE cell numbers.
+    # Verified against live cloud API (batMaxCellNumTemp/batMaxCellNumVolt)
+    # vs local register reads of the same batteries (eg4-4yg); the original
+    # map had these two registers crossed.
     # =========================================================================
     BatteryRegisterDefinition(
         offset=14,
-        canonical_name="battery_max_cell_num_voltage",
-        cloud_api_field="batMaxCellNumVolt",
-        ha_sensor_key="battery_max_cell_voltage_num",
-        category=BatteryCategory.CELL,
-        description="Cell number with highest voltage (low byte).",
-        packed="low_byte",
-    ),
-    BatteryRegisterDefinition(
-        offset=14,
-        canonical_name="battery_min_cell_num_voltage",
-        cloud_api_field="batMinCellNumVolt",
-        ha_sensor_key="battery_min_cell_voltage_num",
-        category=BatteryCategory.CELL,
-        description="Cell number with lowest voltage (high byte).",
-        packed="high_byte",
-    ),
-    BatteryRegisterDefinition(
-        offset=15,
         canonical_name="battery_max_cell_num_temp",
         cloud_api_field="batMaxCellNumTemp",
         ha_sensor_key="battery_max_cell_temp_num",
@@ -342,12 +329,30 @@ BATTERY_REGISTERS: tuple[BatteryRegisterDefinition, ...] = (
         packed="low_byte",
     ),
     BatteryRegisterDefinition(
-        offset=15,
+        offset=14,
         canonical_name="battery_min_cell_num_temp",
         cloud_api_field="batMinCellNumTemp",
         ha_sensor_key="battery_min_cell_temp_num",
         category=BatteryCategory.CELL,
         description="Cell number with lowest temperature (high byte).",
+        packed="high_byte",
+    ),
+    BatteryRegisterDefinition(
+        offset=15,
+        canonical_name="battery_max_cell_num_voltage",
+        cloud_api_field="batMaxCellNumVolt",
+        ha_sensor_key="battery_max_cell_voltage_num",
+        category=BatteryCategory.CELL,
+        description="Cell number with highest voltage (low byte).",
+        packed="low_byte",
+    ),
+    BatteryRegisterDefinition(
+        offset=15,
+        canonical_name="battery_min_cell_num_voltage",
+        cloud_api_field="batMinCellNumVolt",
+        ha_sensor_key="battery_min_cell_voltage_num",
+        category=BatteryCategory.CELL,
+        description="Cell number with lowest voltage (high byte).",
         packed="high_byte",
     ),
     # =========================================================================

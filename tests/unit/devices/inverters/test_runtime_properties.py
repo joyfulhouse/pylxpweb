@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from pylxpweb.devices.inverters._features import InverterFamily, InverterFeatures
 from pylxpweb.devices.inverters.generic import GenericInverter
 from pylxpweb.models import InverterRuntime
 from pylxpweb.transports.data import InverterRuntimeData
@@ -446,3 +447,127 @@ class TestBmsPermissionProperties:
         assert inverter_without_runtime.bms_allow_charge is None
         assert inverter_without_runtime.bms_allow_discharge is None
         assert inverter_without_runtime.bms_force_charge is None
+
+
+class TestSmartLoadProperties:
+    """Tests for cloud-only smart load split properties (GH eg4_web_monitor#222).
+
+    On the EG4 Off-Grid family (6000XP/12000XP) the GEN terminal can be a
+    smart-load output.  The cloud splits the backup-path output into
+    smartLoadPower + epsLoadPower + gridLoadPower while peps carries the
+    combined value.  No validated local register exists, so the properties
+    must read the HTTP runtime even when a transport is attached (HYBRID).
+    """
+
+    def test_cloud_values_returned(self, inverter_with_runtime):
+        """Cloud runtime present → raw watt values returned."""
+        inverter = inverter_with_runtime
+        inverter._runtime.smartLoadPower = 2999
+        inverter._runtime.gridLoadPower = 0
+        assert inverter.smart_load_power == 2999
+        assert inverter.grid_load_power == 0
+
+    def test_none_without_runtime(self, inverter_without_runtime):
+        """No cloud runtime → None (sensor unavailable, not a false 0)."""
+        assert inverter_without_runtime.smart_load_power is None
+        assert inverter_without_runtime.grid_load_power is None
+
+    def test_hybrid_transport_does_not_mask_cloud_value(self, inverter_with_transport):
+        """HYBRID: attached transport must NOT short-circuit the cloud read.
+
+        This is the reporter's exact configuration (6000XP via WiFi dongle in
+        HYBRID mode): _transport_runtime is populated but the smart load split
+        only exists in the cloud runtime.  A transport-first helper would
+        return None here — the properties must read the HTTP runtime directly.
+        """
+        inverter = inverter_with_transport
+        inverter._runtime = InverterRuntime.model_construct(
+            smartLoadPower=2999,
+            gridLoadPower=0,
+            epsLoadPower=365,
+        )
+        assert inverter.smart_load_power == 2999
+        assert inverter.grid_load_power == 0
+
+    def test_hybrid_transport_without_cloud_is_none(self, inverter_with_transport):
+        """Transport attached but no cloud runtime yet → None, not 0."""
+        inverter = inverter_with_transport
+        inverter._runtime = None
+        assert inverter.smart_load_power is None
+        assert inverter.grid_load_power is None
+
+
+class TestConsumptionPowerCloudFallback:
+    """consumption_power HTTP-branch family awareness (GH eg4_web_monitor#226).
+
+    The cloud does not populate consumptionPower for the EG4 Off-Grid family
+    (it reads a false 0 under load), but it does carry the authoritative
+    backup-path split.  During a hybrid link-down cloud-fallback window the
+    transport runtime is cleared, so the HTTP branch is what keeps the Loads
+    sensor honest: it must sum epsLoadPower + smartLoadPower + gridLoadPower
+    for EG4_OFFGRID and keep using consumptionPower for everything else.
+    """
+
+    @staticmethod
+    def _offgrid_features() -> InverterFeatures:
+        features = InverterFeatures.from_device_type_code(38)
+        assert features.model_family is InverterFamily.EG4_OFFGRID
+        return features
+
+    def test_offgrid_sums_cloud_split(self, inverter_with_runtime):
+        """EG4_OFFGRID + no transport runtime → eps + smart + grid sum."""
+        inverter = inverter_with_runtime
+        inverter._features = self._offgrid_features()
+        inverter._runtime = InverterRuntime.model_construct(
+            epsLoadPower=365,
+            smartLoadPower=2999,
+            gridLoadPower=0,
+            consumptionPower=0,  # the false 0 the cloud serves this family
+        )
+        assert inverter.consumption_power == 3364
+        # total_load_power is the deprecated alias — the reporter's actual
+        # sensor; it must resolve through the same fallback.
+        assert inverter.total_load_power == 3364
+
+    def test_offgrid_transport_branch_unchanged(self, inverter_with_transport):
+        """Transport runtime present → energy balance wins, split ignored."""
+        inverter = inverter_with_transport
+        inverter._features = self._offgrid_features()
+        inverter._runtime = InverterRuntime.model_construct(
+            epsLoadPower=365,
+            smartLoadPower=2999,
+            gridLoadPower=0,
+        )
+        tr = inverter._transport_runtime
+        tr.pv_total_power = 1000
+        tr.power_from_grid = 0
+        tr.power_to_grid = 0
+        tr.battery_discharge_power = 500
+        tr.battery_charge_power = 0
+        assert inverter.consumption_power == 1500
+
+    def test_non_offgrid_keeps_consumption_field(self, inverter_with_runtime):
+        """Grid-tied families keep the server-computed consumptionPower."""
+        inverter = inverter_with_runtime
+        inverter._features = InverterFeatures(model_family=InverterFamily.EG4_HYBRID)
+        inverter._runtime = InverterRuntime.model_construct(
+            consumptionPower=1234,
+            epsLoadPower=365,
+            smartLoadPower=2999,
+            gridLoadPower=0,
+        )
+        assert inverter.consumption_power == 1234
+
+    def test_no_features_keeps_consumption_field(self, inverter_with_runtime):
+        """Family not yet detected → existing behavior (no fallback)."""
+        inverter = inverter_with_runtime
+        inverter._features = None
+        inverter._runtime = InverterRuntime.model_construct(consumptionPower=777)
+        assert inverter.consumption_power == 777
+
+    def test_offgrid_no_runtime_is_none(self, inverter_without_runtime):
+        """EG4_OFFGRID with no cloud runtime at all → None, not a fake 0."""
+        inverter = inverter_without_runtime
+        inverter._features = self._offgrid_features()
+        assert inverter.consumption_power is None
+        assert inverter.total_load_power is None

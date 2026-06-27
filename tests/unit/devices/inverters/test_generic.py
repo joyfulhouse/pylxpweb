@@ -104,6 +104,32 @@ class TestGenericInverterEntities:
         assert "1234567890_battery_voltage" in entity_ids
         assert "1234567890_pv_power" in entity_ids
 
+    def test_grid_power_entity_is_net_import_positive(
+        self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
+    ) -> None:
+        """grid_power = pToUser − pToGrid: importing 500 W reads +500 (eg4-9wf)."""
+        inverter = GenericInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter._runtime = sample_runtime.model_copy(update={"pToUser": 500, "pToGrid": 0})
+
+        entities = {e.unique_id: e for e in inverter.to_entities()}
+
+        assert entities["1234567890_grid_power"].value == 500
+
+    def test_grid_power_entity_is_net_export_negative(
+        self, mock_client: LuxpowerClient, sample_runtime: InverterRuntime
+    ) -> None:
+        """grid_power = pToUser − pToGrid: exporting 1200 W reads −1200 (eg4-9wf)."""
+        inverter = GenericInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter._runtime = sample_runtime.model_copy(update={"pToUser": 0, "pToGrid": 1200})
+
+        entities = {e.unique_id: e for e in inverter.to_entities()}
+
+        assert entities["1234567890_grid_power"].value == -1200
+
     def test_to_entities_with_energy_data(
         self, mock_client: LuxpowerClient, sample_energy: EnergyInfo
     ) -> None:

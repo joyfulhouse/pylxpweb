@@ -130,6 +130,23 @@ class TestParameterInitialization:
         assert inverter.system_charge_soc_limit == 100
         assert inverter.pv_charge_power_limit == 10
 
+    def test_ac_charge_soc_limit_reads_101(self, mock_client: LuxpowerClient) -> None:
+        """The read property returns 101, not None (GH eg4_web_monitor#158).
+
+        101 = never stop AC charging (cell balancing). Clamping the property at
+        100 was the library-level cause of the reported live-101 read-back as
+        None (NaN in the HA integration, which reads via this property).
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter.parameters = {"HOLD_AC_CHARGE_SOC_LIMIT": 101}
+        assert inverter.ac_charge_soc_limit == 101
+
+        # 102 is past the cap and is still treated as out-of-range -> None.
+        inverter.parameters = {"HOLD_AC_CHARGE_SOC_LIMIT": 102}
+        assert inverter.ac_charge_soc_limit is None
+
     @pytest.mark.asyncio
     async def test_parameter_cache_invalidation_after_write(
         self, mock_client: LuxpowerClient
@@ -241,6 +258,17 @@ class TestParameterInitialization:
         # Case 5: Parameters loaded but key missing - should return None (no default)
         inverter.parameters = {"OTHER_PARAM": 50}
         assert inverter.system_charge_soc_limit is None  # No default, returns None
+
+    def test_system_charge_soc_limit_register_max_is_101(self) -> None:
+        """Reg 227 metadata allows 101 (top balancing), matching the property,
+        the cloud setter, and the HA entity. GH eg4_web_monitor#158 — this was
+        the lone stale 100; cloud-confirmed accepting 101 on an 18kPV."""
+        from pylxpweb.registers.inverter_holding import BY_NAME
+
+        reg = BY_NAME["system_charge_soc_limit"]
+        assert reg.address == 227
+        assert reg.min_value == 0
+        assert reg.max_value == 101
 
     def test_discharge_power_limit_property(self, mock_client: LuxpowerClient) -> None:
         """Test discharge_power_limit property returns correct values.

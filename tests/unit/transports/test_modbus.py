@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pymodbus.exceptions import ConnectionException
 
 from pylxpweb.registers.battery import (
     BATTERY_BASE_ADDRESS,
     BATTERY_MAX_COUNT,
     BATTERY_REGISTER_COUNT,
 )
+from pylxpweb.transports._canonical_reader import read_battery_serial
+from pylxpweb.transports.data import BatteryBankData
 from pylxpweb.transports.exceptions import (
     TransportConnectionError,
     TransportReadError,
+    TransportTimeoutError,
     TransportWriteError,
 )
 from pylxpweb.transports.modbus import ModbusTransport
@@ -45,6 +50,49 @@ def _build_battery_slot_values(
         vals[base + 6] = voltage_raw  # voltage
         vals[base + 8] = (100 << 8) | 95  # SOH=100, SOC=95 packed
         vals[base + 24] = pos << 8  # pos in high byte
+    return vals
+
+
+def _encode_serial(serial: str) -> list[int]:
+    """Pack an ASCII serial into 7 registers (offsets 17-23), 2 chars/reg.
+
+    Mirrors ``read_battery_serial`` decoding: each register holds low byte
+    then high byte.  The serial is padded/truncated to 14 chars.
+    """
+    padded = serial[:14].ljust(14, "0")
+    regs: list[int] = []
+    for i in range(7):
+        low = ord(padded[2 * i])
+        high = ord(padded[2 * i + 1])
+        regs.append((high << 8) | low)
+    return regs
+
+
+def _build_battery_slots_with_serials(
+    specs: list[tuple[str | None, int]],
+    voltage_raw: int = 5246,
+) -> list[int]:
+    """Build a 120-register page (4 slots) with per-slot serial + pos.
+
+    Args:
+        specs: ``(serial_or_None, pos)`` for each of the 4 physical slots.
+            ``serial=None`` marks an empty slot (status header zero).
+        voltage_raw: Raw per-slot voltage.
+
+    Returns:
+        List of 120 register values (4 slots × 30 registers).
+    """
+    vals = [0] * (BATTERY_MAX_COUNT * BATTERY_REGISTER_COUNT)
+    for slot_idx, (serial, pos) in enumerate(specs):
+        if serial is None:
+            continue
+        base = slot_idx * BATTERY_REGISTER_COUNT
+        vals[base] = 0xC003  # status header: connected
+        vals[base + 6] = voltage_raw  # voltage
+        vals[base + 8] = (100 << 8) | 95  # SOH=100, SOC=95 packed
+        for i, reg_val in enumerate(_encode_serial(serial)):
+            vals[base + 17 + i] = reg_val
+        vals[base + 24] = pos << 8  # pos high byte (low byte 0)
     return vals
 
 
@@ -878,9 +926,10 @@ class TestAdaptiveBatterySlotCeiling:
                 resp.isError.return_value = False
                 vals = [0] * count
                 if address == 5002:
-                    # Populate status header for each of 4 slots
+                    # Populate status header + distinct pos for each of 4 slots
                     for slot in range(4):
                         vals[slot * 30] = 0xC003
+                        vals[slot * 30 + 24] = slot << 8  # distinct pos identity
                 resp.registers = vals
                 return resp
 
@@ -942,8 +991,12 @@ class TestBatteryRoundRobinAccumulator:
         return mock_client, mock_class
 
     @pytest.mark.asyncio
-    async def test_no_accumulation_when_count_le_4(self) -> None:
-        """battery_count <= 4: no accumulation, raw registers returned."""
+    async def test_accumulation_active_for_four_batteries(self) -> None:
+        """Accumulation runs regardless of reg 96 (no <=4 passthrough gate).
+
+        reg 96 cannot distinguish a true 4-battery bank from a 5-battery bank
+        under-reporting as 4, so accumulation always runs and keys by identity.
+        """
         transport = self._make_transport()
         page_a = _build_battery_slot_values([0, 1, 2, 3])
         _, mock_class = self._mock_client([page_a])
@@ -953,12 +1006,34 @@ class TestBatteryRoundRobinAccumulator:
             result = await transport._read_individual_battery_registers(4)
 
         assert result is not None
-        # Raw registers: 4 slots × 30 = 120
+        # 4 distinct batteries accumulated, each with 30 registers
         assert len(result) == 120
-        # No accumulator created
-        assert not hasattr(transport, "_battery_accumulator") or not getattr(
-            transport, "_battery_accumulator", {}
-        )
+        assert len(transport._battery_accumulator) == 4
+
+    @pytest.mark.asyncio
+    async def test_raw_physical_page_logged_for_rotation_diagnostics(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Each read logs the raw physical-slot -> identity page (eg4_web_monitor#258).
+
+        The accumulator log shows VIRTUAL slots and the merged map hides which
+        battery occupies each PHYSICAL slot, so firmware rotation cannot be
+        characterized from logs.  The raw page (physical slot -> identity, before
+        accumulation) is the missing signal: diffing it across reads shows exactly
+        when a battery rotates into/out of a physical slot.
+        """
+        transport = self._make_transport()
+        page_a = _build_battery_slot_values([0, 1, 2, 3])
+        _, mock_class = self._mock_client([page_a])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            with caplog.at_level(logging.DEBUG):
+                await transport._read_individual_battery_registers(4)
+
+        assert "RR raw page" in caplog.text
+        assert "0=pos:0" in caplog.text
+        assert "3=pos:3" in caplog.text
 
     @pytest.mark.asyncio
     async def test_accumulation_first_page(self) -> None:
@@ -1042,41 +1117,42 @@ class TestBatteryRoundRobinAccumulator:
             result = await transport._read_individual_battery_registers(8)
 
         assert result is not None
-        # Only pos 0 and 2 populated
-        assert result.get(BATTERY_BASE_ADDRESS) == 0xC003  # pos 0
-        pos2_base = BATTERY_BASE_ADDRESS + (2 * BATTERY_REGISTER_COUNT)
-        assert result.get(pos2_base) == 0xC003  # pos 2
-        # pos 1 not present
-        pos1_base = BATTERY_BASE_ADDRESS + (1 * BATTERY_REGISTER_COUNT)
-        assert result.get(pos1_base) is None
+        # Two batteries accumulated (the two non-empty slots), assigned to
+        # contiguous virtual slots 0 and 1.
+        assert len(transport._battery_accumulator) == 2
+        assert result.get(BATTERY_BASE_ADDRESS) == 0xC003  # virtual slot 0
+        slot1_base = BATTERY_BASE_ADDRESS + (1 * BATTERY_REGISTER_COUNT)
+        assert result.get(slot1_base) == 0xC003  # virtual slot 1
+        # No third slot
+        slot2_base = BATTERY_BASE_ADDRESS + (2 * BATTERY_REGISTER_COUNT)
+        assert result.get(slot2_base) is None
 
     @pytest.mark.asyncio
-    async def test_battery_count_change_clears_accumulator(self) -> None:
-        """Accumulator resets when battery_count changes."""
+    async def test_accumulator_not_cleared_on_count_change(self) -> None:
+        """Accumulator persists across a reg 96 change (reg 96 is untrusted)."""
         transport = self._make_transport()
-        page_8bat = _build_battery_slot_values([0, 1, 2, 3])
-        page_12bat = _build_battery_slot_values([0, 1, 2, 3])
-        _, mock_class = self._mock_client([page_8bat, page_12bat])
+        page_a = _build_battery_slot_values([0, 1, 2, 3])
+        page_b = _build_battery_slot_values([4, 5, 6, 7])
+        _, mock_class = self._mock_client([page_a, page_b])
 
         with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
             await transport.connect()
 
-            # First read with battery_count=8
             result1 = await transport._read_individual_battery_registers(8)
             assert result1 is not None
             assert len(transport._battery_accumulator) == 4
 
-            # Second read with battery_count=12 — accumulator cleared
+            # reg 96 reports a different value; the accumulator must NOT reset,
+            # so the second page MERGES with the first → 8 batteries.
             result2 = await transport._read_individual_battery_registers(12)
             assert result2 is not None
-            # Should have exactly 4 (fresh), not 4+4
-            assert len(transport._battery_accumulator) == 4
+            assert len(transport._battery_accumulator) == 8
 
     @pytest.mark.asyncio
-    async def test_pos_exceeding_battery_count_skipped(self) -> None:
-        """Battery with pos >= battery_count is ignored."""
+    async def test_pos_beyond_reg96_still_accumulated(self) -> None:
+        """A pos >= reg 96 is kept (reg 96 under-reports and is not trusted)."""
         transport = self._make_transport()
-        # pos=10 exceeds battery_count=8
+        # pos=10 exceeds reg 96 = 8 but is real data — must not be dropped.
         page = _build_battery_slot_values([0, 1, 10, 3])
         _, mock_class = self._mock_client([page])
 
@@ -1085,9 +1161,9 @@ class TestBatteryRoundRobinAccumulator:
             result = await transport._read_individual_battery_registers(8)
 
         assert result is not None
-        # Only 3 valid positions accumulated (0, 1, 3)
-        assert len(transport._battery_accumulator) == 3
-        assert 10 not in transport._battery_accumulator
+        # All 4 distinct positions accumulated (0, 1, 10, 3)
+        assert len(transport._battery_accumulator) == 4
+        assert "pos:10" in transport._battery_accumulator
 
     @pytest.mark.asyncio
     async def test_twelve_battery_three_page_accumulation(self) -> None:
@@ -1147,8 +1223,8 @@ class TestBatteryRoundRobinAccumulator:
                 assert transport._battery_last_seen[pos] >= ts_page_a[0]
 
     @pytest.mark.asyncio
-    async def test_last_seen_not_set_when_count_le_4(self) -> None:
-        """No last_seen tracking when accumulation is inactive."""
+    async def test_last_seen_set_for_four_batteries(self) -> None:
+        """last_seen is tracked for every accumulated battery (no <=4 gate)."""
         transport = self._make_transport()
         page = _build_battery_slot_values([0, 1, 2, 3])
         _, mock_class = self._mock_client([page])
@@ -1157,5 +1233,343 @@ class TestBatteryRoundRobinAccumulator:
             await transport.connect()
             await transport._read_individual_battery_registers(4)
 
-        # No accumulator or last_seen created for <=4 batteries
-        assert not getattr(transport, "_battery_last_seen", {})
+        # Accumulation always runs: all 4 batteries get a last_seen timestamp.
+        assert set(transport._battery_last_seen.keys()) == {0, 1, 2, 3}
+
+    @pytest.mark.asyncio
+    async def test_last_seen_is_timezone_aware_utc(self) -> None:
+        """last_seen must be tz-aware UTC, not naive local (eg4_web_monitor#258).
+
+        last_seen crosses into Home Assistant, which interprets a *naive*
+        datetime as HA's configured timezone. When the container/OS timezone
+        differs from HA's, a naive-local stamp is mis-converted, skewing the
+        battery-freshness decision (a fresh battery looked stale, or a frozen
+        one looked fresh). A tz-aware UTC stamp is unambiguous everywhere.
+        """
+        transport = self._make_transport()
+        page = _build_battery_slot_values([0, 1, 2, 3])
+        _, mock_class = self._mock_client([page])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(4)
+
+        # The accumulator timestamps feed BatteryData.last_seen, which crosses
+        # into Home Assistant. They must be timezone-aware and in UTC.
+        assert transport._battery_last_seen
+        for ts in transport._battery_last_seen.values():
+            assert ts.tzinfo is not None, "last_seen must be timezone-aware"
+            assert ts.utcoffset().total_seconds() == 0, "last_seen must be UTC"
+
+
+class TestBatteryAccumulatorReg96Unreliable:
+    """Round-robin accumulation must not depend on reg 96 (#170, #258).
+
+    ``battery_parallel_count`` (reg 96) is unreliable on parallel systems:
+    #170 reported 12 for a 6-battery bank; the #258 5-battery rig
+    intermittently reads 4.  Accumulation keys on the battery *serial* (the
+    only stable identity) and ignores reg 96 for gating, clearing, and
+    counting, so a battery is never dropped once observed.
+    """
+
+    def _make_transport(self) -> ModbusTransport:
+        return ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+    def _mock_client(
+        self,
+        slot_values_per_call: list[list[int]],
+    ) -> tuple[MagicMock, MagicMock]:
+        call_idx = [0]
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        mock_client.close = MagicMock()
+
+        async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
+            resp = MagicMock()
+            resp.isError.return_value = False
+            if address == BATTERY_BASE_ADDRESS:
+                idx = min(call_idx[0], len(slot_values_per_call) - 1)
+                resp.registers = slot_values_per_call[idx]
+                call_idx[0] += 1
+            else:
+                resp.registers = [0] * count
+            return resp
+
+        mock_client.read_input_registers = mock_read
+        return mock_client, MagicMock(return_value=mock_client)
+
+    @pytest.mark.asyncio
+    async def test_fifth_battery_retained_when_reg96_underreports(self) -> None:
+        """A battery once seen survives a later poll where reg 96 reads 4."""
+        transport = self._make_transport()
+        serials = [f"BATTERYSER{n:04d}" for n in range(5)]
+        # Poll 1 (reg 96 = 5): slots show batteries 0-3 (5th not yet rotated in).
+        page1 = _build_battery_slots_with_serials(
+            [(serials[0], 0), (serials[1], 1), (serials[2], 2), (serials[3], 3)]
+        )
+        # Poll 2 (reg 96 jitters to 4): 5th rotates into slot 0, displacing #0.
+        page2 = _build_battery_slots_with_serials(
+            [(serials[4], 4), (serials[1], 1), (serials[2], 2), (serials[3], 3)]
+        )
+        _, mock_class = self._mock_client([page1, page2])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(5)
+            merged = await transport._read_individual_battery_registers(4)
+
+        assert merged is not None
+        seen: set[str] = set()
+        for slot in range(20):  # generous upper bound on virtual slots
+            base = BATTERY_BASE_ADDRESS + slot * BATTERY_REGISTER_COUNT
+            if merged.get(base):  # status header present
+                seen.add(read_battery_serial(merged, base_address=base))
+        assert seen == set(serials), f"expected all 5 serials, got {seen}"
+
+    @pytest.mark.asyncio
+    async def test_accumulator_not_cleared_on_reg96_change(self) -> None:
+        """A changing reg 96 between polls does not wipe accumulated batteries."""
+        transport = self._make_transport()
+        serials = [f"BATTERYSER{n:04d}" for n in range(5)]
+        page1 = _build_battery_slots_with_serials(
+            [(serials[0], 0), (serials[1], 1), (serials[2], 2), (serials[3], 3)]
+        )
+        page2 = _build_battery_slots_with_serials(
+            [(serials[4], 4), (None, 0), (None, 0), (None, 0)]
+        )
+        _, mock_class = self._mock_client([page1, page2])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(5)
+            # reg 96 reports a different value; accumulator must NOT reset.
+            merged = await transport._read_individual_battery_registers(8)
+
+        assert merged is not None
+        seen: set[str] = set()
+        for slot in range(20):
+            base = BATTERY_BASE_ADDRESS + slot * BATTERY_REGISTER_COUNT
+            if merged.get(base):
+                seen.add(read_battery_serial(merged, base_address=base))
+        assert seen == set(serials), f"expected all 5 serials retained, got {seen}"
+
+    def test_parser_counts_populated_slots_not_reg96(self) -> None:
+        """BatteryBankData parses every populated virtual slot, ignoring reg 96."""
+        serials = [f"BATTERYSER{n:04d}" for n in range(5)]
+        individual: dict[int, int] = {}
+        for idx, serial in enumerate(serials):
+            base = BATTERY_BASE_ADDRESS + idx * BATTERY_REGISTER_COUNT
+            individual[base] = 0xC003
+            individual[base + 6] = 5246
+            individual[base + 8] = (100 << 8) | 95
+            for i, reg_val in enumerate(_encode_serial(serial)):
+                individual[base + 17 + i] = reg_val
+        # Aggregate registers: battery present, but reg 96 under-reports (4).
+        input_registers = {4: 530, 5: (100 << 8) | 85, 96: 4}
+
+        bank = BatteryBankData.from_modbus_registers(input_registers, individual)
+
+        assert bank is not None
+        assert len(bank.batteries) == 5
+        assert {b.serial_number for b in bank.batteries} == set(serials)
+
+    @pytest.mark.asyncio
+    async def test_truncated_serial_slot_skipped_no_phantom(self) -> None:
+        """A present-but-truncated serial is skipped (no phantom identity).
+
+        A partial/corrupt read (serial regs populated but decoding < min length)
+        must NOT mint a separate identity — that battery reappears with its full
+        serial on a later rotation.  Otherwise the same physical battery would
+        accumulate twice (Gemini review: serial↔fallback flapping → unbounded
+        phantom growth).
+        """
+        transport = self._make_transport()
+        # Poll 1: slot 0 valid; slot 1 non-empty but serial truncated (2 chars).
+        page1 = _build_battery_slots_with_serials(
+            [("BATTERYSER0000", 0), (None, 0), (None, 0), (None, 0)]
+        )
+        s1 = 1 * BATTERY_REGISTER_COUNT
+        page1[s1 + 0] = 0xC003  # status: connected
+        page1[s1 + 6] = 5246  # voltage
+        page1[s1 + 17] = (ord("B") << 8) | ord("A")  # serial "AB" → len 2 < 10
+        page1[s1 + 24] = 1 << 8  # pos byte present (must NOT trigger pos fallback)
+        # Poll 2: slot 1 now reports its full serial.
+        page2 = _build_battery_slots_with_serials(
+            [("BATTERYSER0000", 0), ("BATTERYSER0001", 1), (None, 0), (None, 0)]
+        )
+        _, mock_class = self._mock_client([page1, page2])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(5)
+            # After poll 1: only the valid battery; no phantom for the truncated slot.
+            assert set(transport._battery_accumulator.keys()) == {"BATTERYSER0000"}
+            await transport._read_individual_battery_registers(5)
+
+        acc = transport._battery_accumulator
+        assert set(acc.keys()) == {"BATTERYSER0000", "BATTERYSER0001"}
+        assert not any(k.startswith("pos:") for k in acc), "no phantom pos identity"
+
+
+class TestWriteConnectionException:
+    """ConnectionException during writes surfaces typed and heals (eg4-1cxn).
+
+    Mirrors the eg4-57g read-path fix for the write path: pymodbus
+    ``ConnectionException`` ("Not connected") is a SIBLING of
+    ``ModbusIOException``, so it previously escaped ``_write_holding_registers``
+    raw — bypassing the typed ``TransportWriteError`` contract that upstream
+    retry/fallback machinery (#201, hybrid HTTP fallback) keys on — and never
+    advanced ``_consecutive_errors``, so the ``_reconnect()`` gate never fired.
+    """
+
+    def _make_transport(self) -> ModbusTransport:
+        return ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+    def _make_client(self) -> MagicMock:
+        """Build a mock pymodbus client that connects successfully."""
+        client = MagicMock()
+        client.connect = AsyncMock(return_value=True)
+        return client
+
+    @staticmethod
+    def _ok_response() -> MagicMock:
+        response = MagicMock()
+        response.isError.return_value = False
+        return response
+
+    @pytest.mark.asyncio
+    async def test_single_register_write_connection_exception(self) -> None:
+        """FC06 path: ConnectionException -> TransportWriteError, counter +1."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_register = AsyncMock(
+            side_effect=ConnectionException("Not connected"),
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            with pytest.raises(TransportWriteError) as exc_info:
+                await transport.write_parameters({66: 50})
+
+        assert isinstance(exc_info.value.__cause__, ConnectionException)
+        assert transport._consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_multi_register_write_connection_exception(self) -> None:
+        """FC16 path: ConnectionException -> TransportWriteError, counter +1."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_registers = AsyncMock(
+            side_effect=ConnectionException("Not connected"),
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            # Consecutive addresses batch into a single FC16 write
+            with pytest.raises(TransportWriteError) as exc_info:
+                await transport.write_parameters({66: 50, 67: 80})
+
+        assert isinstance(exc_info.value.__cause__, ConnectionException)
+        mock_client.write_registers.assert_awaited_once()
+        assert transport._consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_write_named_parameters_connection_exception(self) -> None:
+        """Named-parameter writes surface ConnectionException typed too."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_register = AsyncMock(
+            side_effect=ConnectionException("Not connected"),
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            # Plain (non-bit-field) parameter: no read-modify-write read step
+            with pytest.raises(TransportWriteError) as exc_info:
+                await transport.write_named_parameters({"HOLD_AC_CHARGE_POWER_CMD": 50})
+
+        assert isinstance(exc_info.value.__cause__, ConnectionException)
+        assert transport._consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_connection_exception_with_timeout_message(self) -> None:
+        """Timeout-flavoured ModbusException maps to TransportTimeoutError."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_register = AsyncMock(
+            side_effect=ConnectionException("Connection timeout to device"),
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            with pytest.raises(TransportTimeoutError):
+                await transport.write_parameters({66: 50})
+
+        assert transport._consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_write_failures_trigger_reconnect_on_next_write(self) -> None:
+        """3 failed writes reach the gate; the next write reconnects first."""
+        transport = self._make_transport()
+        dead_client = self._make_client()
+        dead_client.write_register = AsyncMock(
+            side_effect=ConnectionException("Not connected"),
+        )
+        healthy_client = self._make_client()
+        healthy_client.write_register = AsyncMock(return_value=self._ok_response())
+
+        with patch(
+            "pymodbus.client.AsyncModbusTcpClient",
+            side_effect=[dead_client, healthy_client],
+        ) as mock_client_class:
+            await transport.connect()
+
+            for _ in range(transport._max_consecutive_errors):
+                with pytest.raises(TransportWriteError):
+                    await transport.write_parameters({66: 50})
+
+            assert transport._consecutive_errors == transport._max_consecutive_errors
+
+            # Next write call: reconnect gate fires, fresh client, write lands
+            assert await transport.write_parameters({66: 50}) is True
+
+        assert mock_client_class.call_count == 2
+        healthy_client.write_register.assert_awaited_once()
+        assert transport._consecutive_errors == 0
+
+    @pytest.mark.asyncio
+    async def test_write_success_resets_consecutive_errors(self) -> None:
+        """A successful write proves the link is alive and resets the counter."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        mock_client.write_register = AsyncMock(return_value=self._ok_response())
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+            transport._consecutive_errors = 2
+
+            assert await transport.write_parameters({66: 50}) is True
+
+        assert transport._consecutive_errors == 0
+
+    @pytest.mark.asyncio
+    async def test_functional_exception_response_not_counted(self) -> None:
+        """Modbus exception responses are NOT transport failures: no counting."""
+        transport = self._make_transport()
+        mock_client = self._make_client()
+        error_response = MagicMock()
+        error_response.isError.return_value = True
+        mock_client.write_register = AsyncMock(return_value=error_response)
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=mock_client):
+            await transport.connect()
+
+            with pytest.raises(TransportWriteError, match="Modbus write error"):
+                await transport.write_parameters({66: 50})
+
+        # Device responded — link is fine, reconnect accounting untouched
+        assert transport._consecutive_errors == 0

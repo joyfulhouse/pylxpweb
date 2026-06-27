@@ -7,9 +7,11 @@ and Home Assistant integration.
 
 from __future__ import annotations
 
+import logging
+import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from pylxpweb.validation import (
     MAX_ENERGY_DELTA,
@@ -19,7 +21,33 @@ from pylxpweb.validation import (
 
 from .models import DeviceInfo, Entity
 
+_LOGGER = logging.getLogger(__name__)
+
+# Number of initial energy reads that bypass validation to establish
+# baseline values.  Prevents false rejections at startup when the first
+# real data arrives with no previous values to compare against.
+WARMUP_READS = 2
+
+# Consecutive transport-read failures after which the local link is
+# considered down (``transport_link_down`` becomes True).  Reads keep
+# being attempted every cycle — the transports' own reconnect logic
+# (Modbus ``_reconnect()``, dongle reconnect-on-timeout) handles
+# recovery, and any successful read resets the counter.
+TRANSPORT_LINK_DOWN_THRESHOLD = 3
+
+# Minimum seconds between link-down probes.  Coordinator code paths can
+# call refresh() more than once within the same update tick (e.g. a group
+# refresh followed by per-device processing); while the link is down every
+# transport read is a probe against a dead endpoint, so same-tick
+# duplicates collapse to one.  Just under the fastest 5s coordinator tick
+# so every real cycle still probes.
+LINK_PROBE_MIN_INTERVAL_SECONDS = 4.0
+
+_T = TypeVar("_T")
+
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from pylxpweb import LuxpowerClient
     from pylxpweb.transports.protocol import InverterTransport
 
@@ -95,6 +123,11 @@ class BaseDevice(ABC):
         # Shared by BaseInverter and MIDDevice for lifetime energy checks.
         self._energy_reject_count: int = 0
 
+        # Warm-up counter: first N energy reads establish baseline without
+        # validation.  Prevents false rejections on startup when prev=None
+        # transitions to real data with large deltas.
+        self._energy_validation_calls: int = 0
+
         # Max energy delta (kWh) for spike detection.  Subclasses override
         # with rated_power_kw * 1.5 once device capabilities are known.
         self._max_energy_delta: float = MAX_ENERGY_DELTA
@@ -109,6 +142,29 @@ class BaseDevice(ABC):
         # detect_features() (inverters) or set_max_system_power() (MID).
         # Zero means unknown — validation falls back to DEFAULT_RATED_POWER_KW.
         self._rated_power_kw: float = 0.0
+
+        # Tracks when daily energy values last *increased* (not just last read).
+        # Used for elapsed_seconds in daily bounds validation so the window
+        # reflects the actual accumulation period, not the polling interval.
+        # Only updated when an accepted read contains a daily value increase.
+        # Monotonic clock — wall-clock (DST/NTP) steps must not move the window.
+        self._daily_energy_change_monotonic: float | None = None
+
+        # ===== Transport link health (eg4-57g / integration #226) =====
+        # Consecutive transport-read failures and last-success timestamp.
+        # When the counter crosses TRANSPORT_LINK_DOWN_THRESHOLD, the link
+        # is declared down: cached transport data stops being served (see
+        # _on_transport_link_down) so consumers don't mistake stale local
+        # reads for fresh data.  Reads keep being attempted every cycle;
+        # any success resets the counter.
+        self._transport_consecutive_failures: int = 0
+        self._transport_last_success_monotonic: float | None = None
+        # One-shot logging guard: warn once on the down transition, info
+        # once on recovery — per-failure logs stay at debug level.
+        self._transport_link_down_logged: bool = False
+        # Rate limit for link-down probes (see _link_probe_due): collapses
+        # same-tick duplicate refresh() calls into one dead-link read.
+        self._last_link_probe_monotonic: float | None = None
 
     @property
     def model(self) -> str:
@@ -151,6 +207,115 @@ class BaseDevice(ABC):
         """
         return self._local_transport is not None and not self._client.username
 
+    # ------------------------------------------------------------------
+    # Transport link health (eg4-57g / integration #226)
+    # ------------------------------------------------------------------
+
+    @property
+    def transport_consecutive_failures(self) -> int:
+        """Number of consecutive failed transport reads for this device."""
+        return self._transport_consecutive_failures
+
+    @property
+    def transport_link_down(self) -> bool:
+        """True when the local transport link is considered down.
+
+        The link is declared down after TRANSPORT_LINK_DOWN_THRESHOLD
+        consecutive transport-read failures.  The transport stays attached
+        and reads keep being attempted every refresh cycle — any successful
+        read clears this flag.  Always False for devices that have never
+        had a transport read fail (including cloud-only devices).
+        """
+        return self._transport_consecutive_failures >= TRANSPORT_LINK_DOWN_THRESHOLD
+
+    @property
+    def _cloud_fallback_available(self) -> bool:
+        """True when a usable cloud client exists for degraded HTTP fallback.
+
+        Local-only devices are constructed with ``client=None`` (or a
+        credential-less placeholder), so they can never fall back to HTTP.
+        """
+        return self._client is not None and bool(getattr(self._client, "username", ""))
+
+    def _link_probe_due(self) -> bool:
+        """Check-and-stamp the link-down probe rate limit.
+
+        While the link is down every transport read is a probe against a
+        dead endpoint, and coordinator code paths can call refresh() more
+        than once within the same update tick (e.g. a group refresh
+        followed by per-device processing).  Returns True — and stamps the
+        monotonic clock — at most once per LINK_PROBE_MIN_INTERVAL_SECONDS;
+        within the interval callers behave as if caches were fresh.  The
+        stamp resets on any successful read so a future outage probes
+        immediately.
+        """
+        now = time.monotonic()
+        if (
+            self._last_link_probe_monotonic is not None
+            and now - self._last_link_probe_monotonic < LINK_PROBE_MIN_INTERVAL_SECONDS
+        ):
+            return False
+        self._last_link_probe_monotonic = now
+        return True
+
+    def _record_transport_read_success(self) -> None:
+        """Reset the failure counter after a successful transport read."""
+        self._transport_last_success_monotonic = time.monotonic()
+        # A healthy link needs no probe rate limit — reset so a future
+        # outage probes immediately on its first post-transition cycle.
+        self._last_link_probe_monotonic = None
+        if self._transport_link_down_logged:
+            _LOGGER.info(
+                "Local transport link restored for %s after %d consecutive read failures",
+                self.serial_number,
+                self._transport_consecutive_failures,
+            )
+            self._transport_link_down_logged = False
+        self._transport_consecutive_failures = 0
+
+    def _record_transport_read_failure(self) -> None:
+        """Count a failed transport read; escalate once on the down transition."""
+        self._transport_consecutive_failures += 1
+        if self.transport_link_down and not self._transport_link_down_logged:
+            self._transport_link_down_logged = True
+            _LOGGER.warning(
+                "Local transport link down for %s after %d consecutive read "
+                "failures; reads keep retrying every cycle and cached local "
+                "data is no longer served",
+                self.serial_number,
+                self._transport_consecutive_failures,
+            )
+            self._on_transport_link_down()
+
+    def _on_transport_link_down(self) -> None:
+        """Hook invoked exactly once when the link transitions to down.
+
+        Subclasses clear their cached transport data here so properties
+        stop serving stale local reads (and, in hybrid mode, fall back to
+        HTTP data instead).  The base implementation only records the
+        transition at debug level.
+        """
+        _LOGGER.debug(
+            "Transport link down for %s: no transport data caches to clear",
+            self.serial_number,
+        )
+
+    async def _tracked_transport_read(self, coro: Awaitable[_T]) -> _T:
+        """Await a transport read, recording link health.
+
+        Any exception increments the consecutive-failure counter (the
+        transition past the threshold logs one warning); a successful
+        return resets it (recovery logs one info).  The exception is
+        re-raised for the caller's existing error handling.
+        """
+        try:
+            result = await coro
+        except Exception:
+            self._record_transport_read_failure()
+            raise
+        self._record_transport_read_success()
+        return result
+
     def _is_energy_valid(
         self,
         prev_values: dict[str, float | None],
@@ -162,9 +327,13 @@ class BaseDevice(ABC):
         so a decrease is always corruption regardless of the validate_data
         toggle.  The validate_data flag controls canary-based is_corrupt()
         checks which can have edge-case false positives; monotonicity
-        cannot false-positive.
+        cannot false-positive at startup because first reads have no
+        previous values to compare against, so no warm-up bypass applies
+        here either.
 
-        Updates ``_energy_reject_count`` as a side-effect.
+        Updates ``_energy_reject_count`` and ``_energy_validation_calls``
+        (the warm-up counter consumed by ``_is_daily_energy_valid``) as
+        side-effects.
 
         Args:
             prev_values: Previous cycle's lifetime energy dict.
@@ -173,6 +342,7 @@ class BaseDevice(ABC):
         Returns:
             True if the data should be accepted, False if it should be rejected.
         """
+        self._energy_validation_calls += 1
         result, self._energy_reject_count = validate_energy_monotonicity(
             prev_values,
             curr_values,
@@ -186,22 +356,69 @@ class BaseDevice(ABC):
         self,
         curr_values: dict[str, float | None],
         prev_values: dict[str, float | None] | None,
-        elapsed_seconds: float | None,
     ) -> bool:
         """Check whether daily energy values are within plausible bounds.
 
-        Delegates to :func:`~pylxpweb.validation.validate_daily_energy_bounds`
-        which applies an absolute cap and, when previous data exists, a
-        tighter time-based delta check.  Always active (not gated by
-        ``validate_data`` toggle).
+        Computes elapsed time from ``_daily_energy_change_monotonic`` — the
+        last time a daily energy value *increased* — rather than from the
+        last accepted read.  This prevents false rejections when a register
+        sits unchanged for several polls and then ticks by the minimum
+        resolution (0.1 kWh).
+
+        On acceptance, updates ``_daily_energy_change_monotonic`` if any
+        daily value increased so the next window starts from this point.
+
+        Gated by ``validate_data`` toggle and warm-up period (counter
+        incremented by ``_is_energy_valid``).  Warm-up and first post-gate
+        reads seed the change clock so the first real delta check always
+        has a bounded window instead of falling back to the lenient
+        absolute cap.
         """
-        return validate_daily_energy_bounds(
+        if not self.validate_data:
+            return True
+
+        # Warm-up reads and the first gated read with no window yet: skip
+        # the time-based delta check (its short windows were the false-
+        # rejection source — static-data transitions and unknown elapsed),
+        # but still enforce the absolute daily cap so a corrupt spike can
+        # never slip through unchecked.  Seeds the change clock so the
+        # next read gets a real elapsed window.
+        if (
+            self._energy_validation_calls <= WARMUP_READS
+            or self._daily_energy_change_monotonic is None
+        ):
+            if self._daily_energy_change_monotonic is None:
+                self._daily_energy_change_monotonic = time.monotonic()
+            return validate_daily_energy_bounds(
+                curr_values=curr_values,
+                device_id=self.serial_number,
+                rated_power_kw=self._rated_power_kw,
+                elapsed_seconds=None,
+                prev_values=None,
+            )
+
+        # Compute elapsed from last value change, not last read.
+        elapsed = time.monotonic() - self._daily_energy_change_monotonic
+
+        valid = validate_daily_energy_bounds(
             curr_values=curr_values,
             device_id=self.serial_number,
             rated_power_kw=self._rated_power_kw,
-            elapsed_seconds=elapsed_seconds,
+            elapsed_seconds=elapsed,
             prev_values=prev_values,
         )
+
+        if valid and prev_values is not None:
+            # Update change time only when a daily value actually increased.
+            for key, curr in curr_values.items():
+                if curr is None:
+                    continue
+                prev = prev_values.get(key)
+                if prev is not None and curr > prev:
+                    self._daily_energy_change_monotonic = time.monotonic()
+                    break
+
+        return valid
 
     @abstractmethod
     async def refresh(self) -> None:

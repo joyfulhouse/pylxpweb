@@ -533,9 +533,13 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         ha_entity_key="ac_charge_soc_limit",
         unit="%",
         min_value=0,
-        max_value=100,
+        # 101% = "never stop AC charging" (SOC can't reach 101, so the stop
+        # threshold is never met) — used for battery cell balancing. The
+        # inverter accepts and reports 101; bounding at 100 made a live-101
+        # value read back as out-of-range. GH eg4_web_monitor#158.
+        max_value=101,
         category=HoldingCategory.POWER,
-        description="AC charge SOC limit — stop AC charging when SOC reaches this.",
+        description="AC charge SOC limit — stop charging at this SOC (0-101%; 101 = never stop).",
     ),
     # =========================================================================
     # AC CHARGE SCHEDULE (regs 68-73)
@@ -670,11 +674,18 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=82,
         canonical_name="forced_discharge_power_command",
         api_param_key="HOLD_FORCED_DISCHG_POWER_CMD",
-        unit="%",
+        unit="W",
         min_value=0,
-        max_value=100,
+        max_value=25500,
         category=HoldingCategory.SCHEDULE,
-        description="Forced discharge power command percentage.",
+        description=(
+            "Forced discharge power command. Raw value in 100W units "
+            "(0-255 = 0-25.5kW), same encoding as AC charge power (reg 66) and "
+            "forced charge power (reg 74). Hardware-verified in eg4_web_monitor "
+            "PR #249: panel entry 2.5kW reads back raw 25. Cloud UI 'Forced "
+            "Discharge Power 1(kW)' accepts float kW in [0, 25.5] (the 18KPV "
+            "PDF's percent claim is wrong for this register)."
+        ),
     ),
     HoldingRegisterDefinition(
         address=83,
@@ -802,13 +813,29 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     HoldingRegisterDefinition(
         address=103,
         canonical_name="max_backflow_power_percent",
-        api_param_key="HOLD_MAX_BACKFLOW_POWER_PERCENT",
+        api_param_key="HOLD_FEED_IN_GRID_POWER_PERCENT",  # verified
         unit="%",
         min_value=0,
         max_value=100,
         category=HoldingCategory.POWER,
-        description="Maximum export (backflow) power percentage.",
+        description=(
+            "Maximum export (sell-back) power percentage — 'Grid Sell Back "
+            "Power' in the EG4 web UI.  The protocol spec calls reg 103 "
+            "'MaxBackflowPower', but live single-register named reads "
+            "(2026-06-12, 18kPV + FlexBOSS21, GH eg4_web_monitor#135) prove "
+            "the cloud API key is HOLD_FEED_IN_GRID_POWER_PERCENT; "
+            "HOLD_MAX_BACKFLOW_POWER_PERCENT does not exist on this "
+            "hardware.  canonical_name retained for API stability."
+        ),
     ),
+    # HOLD_EXPORT_LOCK_POWER is deliberately NOT mapped: its register is
+    # MODEL-DEPENDENT — single-register named reads pin it at 268 on an
+    # 18kPV (2026-06-12, value '25.5', plausibly kW with reg-66/74-style
+    # 100W raw units), while the 12KPV scanner dump
+    # (docs/inverters/12KPV_43XXXXXX39.json) shows it at 261, and it is
+    # absent on FlexBOSS21.  Also outside the local parameter read span
+    # (0-249) with unverified raw encoding — add only together with a
+    # per-model local read/write verification (reg-202 precedent).
     HoldingRegisterDefinition(
         address=116,
         canonical_name="ptouser_start_discharge",
@@ -865,8 +892,16 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         description="Off-grid/EPS discharge SOC low limit.",
     ),
     # =========================================================================
-    # SYSTEM FUNCTION BITFIELD — Register 110 (14 bits, verified)
+    # SYSTEM FUNCTION BITFIELD — Register 110 (14 bits, verified on 18kPV)
     # =========================================================================
+    # FAMILY CAVEAT: these bit positions are 18kPV/EG4_HYBRID-derived.  On
+    # EG4_OFFGRID (SNA platform) hardware the upper bits differ — the buzzer
+    # is bit 7 and Battery ECO is bit 15 (12000XP live evidence,
+    # eg4_web_monitor PR #220; corroborated by the SNA12K-US cloud decode in
+    # docs/inverters/ and the ant0nkr lxp_modbus reference).  Local
+    # transports apply the family override via
+    # constants.registers.OFFGRID_REGISTER_110_PARAM_KEYS; the definitions
+    # below intentionally stay 18kPV-canonical.
     HoldingRegisterDefinition(
         address=110,
         bit_position=0,
@@ -944,9 +979,12 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=110,
         bit_position=9,
         canonical_name="battery_eco_enable",
-        api_param_key="FUNC_BATTERY_ECO_EN",  # verified
+        api_param_key="FUNC_BATTERY_ECO_EN",  # verified on 18kPV
         category=HoldingCategory.FUNCTION,
-        description="Battery eco mode — reduce battery cycling for longevity.",
+        description="Battery eco mode — reduce battery cycling for longevity. "
+        "Bit 9 is the 18kPV/EG4_HYBRID position; EG4_OFFGRID (12000XP/6000XP) "
+        "uses bit 15 (hardware-verified, eg4_web_monitor PR #220) — local "
+        "transports apply OFFGRID_REGISTER_110_PARAM_KEYS for that family.",
     ),
     HoldingRegisterDefinition(
         address=110,
@@ -1265,7 +1303,7 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     HoldingRegisterDefinition(
         address=169,
         canonical_name="ongrid_eod_voltage",
-        api_param_key="HOLD_ONGRID_EOD_VOLTAGE",
+        api_param_key="HOLD_ON_GRID_EOD_VOLTAGE",
         scale=ScaleFactor.DIV_10,
         unit="V",
         min_value=40.0,
@@ -1358,6 +1396,29 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         description="Maximum generator charge battery current.",
     ),
     # =========================================================================
+    # STOP DISCHARGE VOLTAGE (reg 202, live-verified 2026-06-11)
+    # =========================================================================
+    HoldingRegisterDefinition(
+        address=202,
+        canonical_name="stop_discharge_voltage",
+        api_param_key="_12K_HOLD_STOP_DISCHG_VOLT",
+        unit="V",
+        min_value=40,
+        max_value=56,
+        category=HoldingCategory.BATTERY,
+        description=(
+            "Forced-discharge stop voltage — the voltage-regime counterpart of "
+            "the reg-83 stop SOC (cloud UI gates it with disChgVoltEnable). "
+            "Register located by single-register cloud window bisection and "
+            "confirmed by write/readback/revert on an 18kPV and a FlexBOSS21 "
+            "(40 -> 41.5 -> 40 V). Cloud read/write uses float volts [40, 56]. "
+            "Raw encoding verified DECIVOLTS 2026-06-11 (local read raw 400 vs "
+            "cloud 40 V on an 18kPV), so the register is mapped in "
+            "REGISTER_TO_PARAM_KEYS; local reads surface the raw decivolt "
+            "value and callers normalize by magnitude (>=100 -> /10)."
+        ),
+    ),
+    # =========================================================================
     # SYSTEM CHARGE SOC LIMIT (reg 227, verified)
     # =========================================================================
     HoldingRegisterDefinition(
@@ -1367,22 +1428,153 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         ha_entity_key="system_charge_soc_limit",
         unit="%",
         min_value=0,
-        max_value=100,
+        # 101% = "never stop / top balancing" (the stop threshold is
+        # unreachable since SOC can't exceed 100), the LiFePO4 cell-balance
+        # trigger — same semantics as AC charge SOC (reg 67). The read
+        # property, the cloud setter (set_system_charge_soc_limit), and the HA
+        # entity already use 101; this metadata was the lone stale 100.
+        # Cloud-confirmed accepting 101 on an 18kPV (2026-06-13, reg 227 write
+        # 80->101->restore). GH eg4_web_monitor#158.
+        max_value=101,
         category=HoldingCategory.BATTERY,
-        description="System-level charge SOC limit (stops all charging at this SOC).",
+        description="System charge SOC limit (0-101%; 101 = top balancing / never stop).",
     ),
     # =========================================================================
-    # GRID PEAK SHAVING (reg 231, 32-bit)
+    # SYSTEM CHARGE VOLTAGE LIMIT (reg 228, confirmed 2026-02-18)
     # =========================================================================
     HoldingRegisterDefinition(
-        address=231,
+        address=228,
+        canonical_name="system_charge_volt_limit",
+        api_param_key="HOLD_SYSTEM_CHARGE_VOLT_LIMIT",  # verified
+        ha_entity_key="system_charge_volt_limit",
+        scale=ScaleFactor.DIV_10,
+        unit="V",
+        min_value=48.0,
+        max_value=60.0,
+        category=HoldingCategory.BATTERY,
+        description=(
+            "System-level charge voltage limit (stops all charging at this "
+            "voltage). Active when battery charge control is in Voltage mode "
+            "(reg 179 bit 9 = 1)."
+        ),
+    ),
+    # =========================================================================
+    # GRID PEAK SHAVING (regs 206-208 / 218-219 / 232, located 2026-06-12)
+    # =========================================================================
+    # eg4-gfu5: the family was located by single-register cloud window reads
+    # ((reg, 1) named-parameter reads) on an 18kPV AND a FlexBOSS21 — both
+    # devices return identical name placements.  The previous row mapped PS1
+    # to register 231 (claimed 32-bit) — WRONG on both counts: (231,1) returns
+    # ZERO named parameters on either inverter, and 232 is the time-period-2
+    # power (PS2), not a high word.  Register 231 itself is a real but UNKNOWN
+    # field (raw 0; a past authorized raw write quantized 55 -> 54, i.e. even
+    # values only) — deliberately left unmapped.
+    HoldingRegisterDefinition(
+        address=206,
         canonical_name="grid_peak_shaving_power",
-        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_POWER",  # verified
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_POWER",  # verified at 206
         ha_entity_key="grid_peak_shaving_power",
-        bit_width=32,
         unit="kW",
+        min_value=0,
+        max_value=25.5,
         category=HoldingCategory.GRID,
-        description="Grid peak shaving power limit (32-bit, kW).",
+        description=(
+            "Grid peak shaving power limit, time period 1.  Cloud read/write "
+            "uses float kW [0, 25.5].  Register located 2026-06-12 by "
+            "single-register cloud window reads on an 18kPV and a FlexBOSS21 "
+            "((206,1) names this key; (231,1) names nothing).  Raw register "
+            "encoding presumed deci-kW (sibling _12K_HOLD_START_PV_POWER at "
+            "reg 217 reads raw 5 for '0.5' kW, and 25.5 kW max fits one byte "
+            "at 0.1 kW/LSB) but UNVERIFIED — live setpoint was 0 on both "
+            "devices.  Deliberately NOT in REGISTER_TO_PARAM_KEYS until the "
+            "raw encoding is write-verified — the local parameter refresh "
+            "spans this register and would surface unscaled values.  "
+            "`writable` describes the register itself (cloud NAME-writes "
+            "work); do NOT construct local raw writes from this row while "
+            "the encoding is unverified."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=207,
+        canonical_name="grid_peak_shaving_soc",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_SOC",  # verified at 207
+        unit="%",
+        min_value=0,
+        max_value=100,
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving SOC threshold, time period 1.  Located "
+            "2026-06-12 via (207,1) cloud reads on an 18kPV and a FlexBOSS21; "
+            "raw 1:1 percent proven by raw-vs-named cross-check in the same "
+            "responses (raw 80 -> '80').  Not in REGISTER_TO_PARAM_KEYS yet — "
+            "added together with the rest of the family once the power "
+            "members' raw encodings are verified."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=208,
+        canonical_name="grid_peak_shaving_volt",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_VOLT",  # verified at 208
+        scale=ScaleFactor.DIV_10,
+        unit="V",
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving battery voltage threshold, time period 1.  "
+            "Located 2026-06-12 via (208,1) cloud reads on an 18kPV and a "
+            "FlexBOSS21; decivolt raw encoding proven by raw-vs-named "
+            "cross-check in the same responses (raw 520 -> '52' V).  Not in "
+            "REGISTER_TO_PARAM_KEYS yet — see grid_peak_shaving_power."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=218,
+        canonical_name="grid_peak_shaving_soc_2",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_SOC_2",  # verified at 218
+        unit="%",
+        min_value=0,
+        max_value=100,
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving SOC threshold, time period 2.  Located "
+            "2026-06-12 via (218,1) cloud reads on an 18kPV and a FlexBOSS21; "
+            "raw 1:1 percent proven by raw-vs-named cross-check (raw 50 -> "
+            "'50').  Not in REGISTER_TO_PARAM_KEYS yet — see "
+            "grid_peak_shaving_power."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=219,
+        canonical_name="grid_peak_shaving_volt_2",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2",  # verified at 219
+        scale=ScaleFactor.DIV_10,
+        unit="V",
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving battery voltage threshold, time period 2.  "
+            "Located 2026-06-12 via (219,1) cloud reads on an 18kPV and a "
+            "FlexBOSS21; decivolt raw encoding proven by raw-vs-named "
+            "cross-check (raw 520 -> '52' V).  Not in REGISTER_TO_PARAM_KEYS "
+            "yet — see grid_peak_shaving_power."
+        ),
+    ),
+    HoldingRegisterDefinition(
+        address=232,
+        canonical_name="grid_peak_shaving_power_2",
+        api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_POWER_2",  # verified at 232
+        unit="kW",
+        min_value=0,
+        max_value=25.5,
+        category=HoldingCategory.GRID,
+        description=(
+            "Grid peak shaving power limit, time period 2.  Located "
+            "2026-06-12 via (232,1) cloud reads on an 18kPV and a FlexBOSS21 "
+            "(this single-register read naming PS2 also disproves the old "
+            "'PS1 is 32-bit across 231-232' claim).  Raw encoding presumed "
+            "deci-kW like grid_peak_shaving_power but UNVERIFIED (live "
+            "setpoint 0).  Not in REGISTER_TO_PARAM_KEYS yet; `writable` "
+            "describes the register itself (cloud name-writes) — no local "
+            "raw writes until the encoding is verified."
+        ),
     ),
     # =========================================================================
     # EXTENDED FUNCTION ENABLE 4 (reg 179) — 16-bit bitfield
@@ -1417,7 +1609,14 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         canonical_name="battery_wakeup_enable",
         api_param_key="FUNC_BAT_WAKEUP_EN",
         category=HoldingCategory.FUNCTION,
-        description="Battery wakeup / PV sell first enable.",
+        description=(
+            "Battery wakeup / PV sell first enable.  The cloud names this "
+            "bit FUNC_PV_SELL_TO_GRID_EN ('Export PV Only', GH "
+            "eg4_web_monitor#135) — pinned to bit 3 by 2026-06-12 live "
+            "cloud toggles raw-verified on both a FlexBOSS21 and an 18kPV "
+            "(raw 0x104c <-> 0x1044, single bit 3); the transport map "
+            "(REGISTER_TO_PARAM_KEYS) carries the cloud name."
+        ),
     ),
     HoldingRegisterDefinition(
         address=179,
@@ -1534,9 +1733,13 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=233,
         bit_position=1,
         canonical_name="battery_backup_enable",
-        api_param_key="FUNC_BATT_BACKUP_EN",
+        # Live-verified API param name (toggle test): the cloud/local API key
+        # for reg 233 bit 1 is FUNC_BATTERY_BACKUP_CTRL, matching the transport
+        # REGISTER_TO_PARAM_KEYS table (eg4-6ag2; the earlier
+        # FUNC_BATT_BACKUP_EN placeholder was a guess).
+        api_param_key="FUNC_BATTERY_BACKUP_CTRL",
         category=HoldingCategory.FUNCTION,
-        description="Battery backup enable.",
+        description="Battery backup control (distinct from EPS enable, reg 21 bit 0).",
     ),
     HoldingRegisterDefinition(
         address=233,
@@ -1571,6 +1774,24 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         ha_entity_key="sporadic_charge",
         category=HoldingCategory.FUNCTION,
         description="Sporadic charge enable.",
+    ),
+    # =========================================================================
+    # QUICK CHARGE DURATION (reg 234) — minutes setpoint + live countdown
+    # =========================================================================
+    HoldingRegisterDefinition(
+        address=234,
+        canonical_name="quick_charge_minute",
+        api_param_key="SNA_HOLD_QUICK_CHARGE_MINUTE",
+        unit="min",
+        min_value=0,
+        max_value=1440,
+        category=HoldingCategory.BATTERY,
+        description=(
+            "Quick charge duration in minutes. Writable setpoint that also "
+            "reads as the live remaining-minutes countdown while a quick "
+            "charge is active (firmware sets it to 60 on enable; raise it to "
+            "extend the charge)."
+        ),
     ),
 )
 

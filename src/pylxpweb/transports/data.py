@@ -20,6 +20,7 @@ values (SOC, SOH) to valid 0-100 range and log warnings for out-of-range values.
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -43,6 +44,7 @@ from pylxpweb.transports._field_mappings import (
     RUNTIME_CATEGORIES,
     RUNTIME_FIELD,
 )
+from pylxpweb.validation import MAX_LIFETIME_KWH
 
 if TYPE_CHECKING:
     from pylxpweb.models import EnergyInfo, InverterRuntime, MidboxData
@@ -53,7 +55,9 @@ _LOGGER = logging.getLogger(__name__)
 # this indicate 32-bit register corruption (e.g. a high-word bit flip).  A
 # 21 kW inverter running continuously for 50 years accumulates ~9.2 GWh total,
 # so 1 GWh per individual counter is unreachable in any realistic service life.
-_MAX_LIFETIME_ENERGY_KWH = 999_999.0
+# Aliases validation.MAX_LIFETIME_KWH so the monotonicity self-heal ceiling
+# and this canary agree on what "absurd" means.
+_MAX_LIFETIME_ENERGY_KWH = MAX_LIFETIME_KWH
 
 # Fields on InverterRuntimeData that store raw int values (no ÷10/÷100 scaling).
 # Used by from_modbus_registers() to decide between read_raw() and read_scaled().
@@ -86,6 +90,31 @@ _RUNTIME_INT_FIELDS: frozenset[str] = frozenset(
 # Legacy helper aliases are now imported from _canonical_reader.py:
 # _clamp_percentage = clamp_percentage
 # _sum_optional = sum_optional
+
+
+def _merge_status_code(inverter_code: int | None, bms_code: int | None) -> int | None:
+    """Merge an inverter fault/warning code with its BMS fallback.
+
+    The inverter code (regs 60-63) and the BMS fallback (regs 99-100) are read
+    from different input-register groups — ``status_energy`` (32-63, always
+    read) and ``bms_data`` (80-112, the one group allowed to fail non-fatally).
+    A transient bms_data-group drop therefore leaves ``bms_code`` None while the
+    inverter code still reads a healthy 0.
+
+    Prefer an active (non-zero) code from either source, inverter first.  When
+    neither is active, return 0 if *either* register was actually read (a
+    known-healthy 0) and None only when *both* are absent (genuinely unread), so
+    a dropped BMS read never turns a known-healthy 0 into None — which blanked
+    the Home Assistant Fault Code sensor to "unknown" even though the inverter
+    reported no fault (eg4_web_monitor#261).
+    """
+    if inverter_code:
+        return inverter_code
+    if bms_code:
+        return bms_code
+    if inverter_code is not None or bms_code is not None:
+        return 0
+    return None
 
 
 @dataclass
@@ -150,7 +179,10 @@ class InverterRuntimeData:
     grid_current_s: float | None = None  # A
     grid_current_t: float | None = None  # A
     grid_frequency: float | None = None  # Hz
-    grid_power: float | None = None  # W (positive = import, negative = export)
+    # Reg 17 (Prec) — AC-charging RECTIFIER power (grid-to-battery), NOT net
+    # grid flow.  Renamed from the misleading ``grid_power`` (eg4-9wf); compute
+    # net grid power as ``power_from_grid - power_to_grid``.
+    rectifier_power: float | None = None  # W (reg 17 Prec)
     power_to_grid: float | None = None  # W (export)
     power_from_grid: float | None = None  # W (import)
 
@@ -279,6 +311,22 @@ class InverterRuntimeData:
         self.battery_soc = _clamp_percentage(self.battery_soc, "battery_soc")
         self.battery_soh = _clamp_percentage(self.battery_soh, "battery_soh")
 
+    @property
+    def grid_power(self) -> float | None:
+        """Deprecated read-only alias for :attr:`rectifier_power`.
+
+        Register 17 (Prec) is the AC-charging rectifier power, not net grid
+        flow, so the field was renamed (eg4-9wf).  Compute net grid power as
+        ``power_from_grid - power_to_grid`` (positive = import).
+        """
+        warnings.warn(
+            "InverterRuntimeData.grid_power is deprecated; use rectifier_power "
+            "(reg 17 Prec is rectifier power, not net grid flow)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.rectifier_power
+
     def is_corrupt(self, max_power_watts: float = 0.0) -> bool:
         """Check if runtime data contains physically impossible values.
 
@@ -328,6 +376,52 @@ class InverterRuntimeData:
                         max_power_watts,
                     )
                     return True
+        # PV voltage: 0-600V generous range.  Corrupt 0xFFFF/10 = 6553.5V.
+        for label, v in (
+            ("pv1_voltage", self.pv1_voltage),
+            ("pv2_voltage", self.pv2_voltage),
+            ("pv3_voltage", self.pv3_voltage),
+            ("pv4_voltage", self.pv4_voltage),
+            ("pv5_voltage", self.pv5_voltage),
+            ("pv6_voltage", self.pv6_voltage),
+        ):
+            if v is not None and v > 600:
+                _LOGGER.warning("Canary: %s=%.1f > 600V", label, v)
+                return True
+        # AC/EPS voltage — L1/L2 only (0-300V).  R/S/T registers contain
+        # garbage on US split-phase inverters (_features.py:174) and cannot
+        # be validated without phase awareness.
+        for label, v in (
+            ("grid_l1_voltage", self.grid_l1_voltage),
+            ("grid_l2_voltage", self.grid_l2_voltage),
+            ("eps_l1_voltage", self.eps_l1_voltage),
+            ("eps_l2_voltage", self.eps_l2_voltage),
+        ):
+            if v is not None and v > 300:
+                _LOGGER.warning("Canary: %s=%.1f > 300V", label, v)
+                return True
+        # Temperatures: -40 to 100°C covers all operating conditions.
+        for label, t in (
+            ("internal_temperature", self.internal_temperature),
+            ("radiator_temperature_1", self.radiator_temperature_1),
+            ("radiator_temperature_2", self.radiator_temperature_2),
+            ("battery_temperature", self.battery_temperature),
+            ("bms_max_cell_temperature", self.bms_max_cell_temperature),
+            ("bms_min_cell_temperature", self.bms_min_cell_temperature),
+        ):
+            if t is not None and (t < -40 or t > 100):
+                _LOGGER.warning("Canary: %s=%.1f outside -40..100C", label, t)
+                return True
+        # PV current: 0-100A per string (most panels <= 50A).
+        # abs() catches signed corruption (e.g. -655.35A from 0xFFFF).
+        for label, i in (
+            ("pv1_current", self.pv1_current),
+            ("pv2_current", self.pv2_current),
+            ("pv3_current", self.pv3_current),
+        ):
+            if i is not None and abs(i) > 100:
+                _LOGGER.warning("Canary: %s=%.1f > 100A", label, i)
+                return True
         return False
 
     @property
@@ -376,8 +470,10 @@ class InverterRuntimeData:
             pv1_power=float(runtime.ppv1 or 0),
             pv2_voltage=scale_runtime_value("vpv2", runtime.vpv2),
             pv2_power=float(runtime.ppv2 or 0),
-            pv3_voltage=scale_runtime_value("vpv3", runtime.vpv3 or 0),
-            pv3_power=float(runtime.ppv3 or 0),
+            # vpv3/ppv3 are Optional (absent on 2-string models, or omitted for an
+            # offline device) — preserve None like pv4-6 rather than a fake 0.
+            pv3_voltage=_opt_voltage("vpv3", runtime.vpv3),
+            pv3_power=_opt_power(runtime.ppv3),
             # PV4-6 (V23 extended, >3-string models).  Same SCALE_10 voltage /
             # SCALE_NONE power handling as pv1-3, but preserve None when the
             # cloud omits the field so a 3-string inverter's output (pv4-6 =
@@ -389,32 +485,41 @@ class InverterRuntimeData:
             pv5_power=_opt_power(runtime.ppv5),
             pv6_voltage=_opt_voltage("vpv6", runtime.vpv6),
             pv6_power=_opt_power(runtime.ppv6),
-            pv_total_power=float(runtime.ppv or 0),
-            # Battery
-            battery_voltage=scale_runtime_value("vBat", runtime.vBat),
-            battery_soc=runtime.soc or 0,
-            battery_charge_power=float(runtime.pCharge or 0),
-            battery_discharge_power=float(runtime.pDisCharge or 0),
+            pv_total_power=_opt_power(runtime.ppv),
+            # Battery — the cloud omits these for an offline device
+            # (eg4_web_monitor#256); preserve None rather than collapsing to a
+            # fake 0 reading (an offline inverter is "unknown", not "0%/0W").
+            battery_voltage=_opt_voltage("vBat", runtime.vBat),
+            battery_soc=runtime.soc,
+            battery_charge_power=_opt_power(runtime.pCharge),
+            battery_discharge_power=_opt_power(runtime.pDisCharge),
             battery_temperature=float(runtime.tBat or 0),
             # Grid
             grid_voltage_r=scale_runtime_value("vacr", runtime.vacr),
             grid_voltage_s=scale_runtime_value("vacs", runtime.vacs),
             grid_voltage_t=scale_runtime_value("vact", runtime.vact),
             grid_frequency=scale_runtime_value("fac", runtime.fac),
-            grid_power=float(runtime.prec or 0),
+            rectifier_power=_opt_power(runtime.prec),
             power_to_grid=float(runtime.pToGrid or 0),
-            power_from_grid=float(runtime.prec or 0),
+            # Grid import is pToUser (reg 27 mirror) — the old prec assignment
+            # here was the same reg-17 misnaming as grid_power (eg4-9wf); the
+            # Modbus path has always fed power_from_grid from reg 27.
+            power_from_grid=float(runtime.pToUser or 0),
             # Inverter
-            inverter_power=float(runtime.pinv or 0),
+            inverter_power=_opt_power(runtime.pinv),
             # EPS
             eps_voltage_r=scale_runtime_value("vepsr", runtime.vepsr),
             eps_voltage_s=scale_runtime_value("vepss", runtime.vepss),
             eps_voltage_t=scale_runtime_value("vepst", runtime.vepst),
             eps_frequency=scale_runtime_value("feps", runtime.feps),
-            eps_power=float(runtime.peps or 0),
+            eps_power=_opt_power(runtime.peps),
             eps_apparent_power=runtime.seps or 0,
             # Load
             load_power=float(runtime.pToUser or 0),
+            # Reg-170 mirror (canonical output_power ↔ cloud pLoad170,
+            # eg4-9e4).  Preserve None when the payload omits the field so
+            # HTTP-sourced data matches a Modbus snapshot without reg 170.
+            output_power=(float(runtime.pLoad170) if runtime.pLoad170 is not None else None),
             # Internal
             bus_voltage_1=scale_runtime_value("vBus1", runtime.vBus1),
             bus_voltage_2=scale_runtime_value("vBus2", runtime.vBus2),
@@ -422,8 +527,10 @@ class InverterRuntimeData:
             internal_temperature=float(runtime.tinner or 0),
             radiator_temperature_1=float(runtime.tradiator1 or 0),
             radiator_temperature_2=float(runtime.tradiator2 or 0),
-            # Status
-            device_status=runtime.status or 0,
+            # Status — code 0 = "normal" on EG4, so an offline device (cloud
+            # omits `status`) must stay None here, not collapse to a fake
+            # "normal" reading (eg4_web_monitor#256).
+            device_status=runtime.status,
             # Note: InverterRuntime doesn't have faultCode/warningCode fields
         )
 
@@ -543,11 +650,11 @@ class InverterRuntimeData:
             else:
                 kwargs[field_name] = read_scaled(input_registers, reg)
 
-        # Combine fault/warning codes (inverter + BMS) — prefer non-zero
-        kwargs["fault_code"] = inverter_fault_code if inverter_fault_code else bms_fault_code
-        kwargs["warning_code"] = (
-            inverter_warning_code if inverter_warning_code else bms_warning_code
-        )
+        # Combine fault/warning codes (inverter + BMS).  Prefer an active
+        # (non-zero) code; preserve a known-healthy 0 when only the BMS read
+        # dropped instead of collapsing it to None (eg4_web_monitor#261).
+        kwargs["fault_code"] = _merge_status_code(inverter_fault_code, bms_fault_code)
+        kwargs["warning_code"] = _merge_status_code(inverter_warning_code, bms_warning_code)
 
         # Compute derived fields.  Sum all non-None pvN_power across pv1..pv6
         # so the total is count-agnostic: a 3-string inverter has pv4-6=None
@@ -978,6 +1085,14 @@ class BatteryData:
                 self.battery_index,
                 self.min_cell_voltage,
                 self.max_cell_voltage,
+            )
+            return True
+        # Individual battery current: 0-250A.
+        if abs(self.current) > 250:
+            _LOGGER.warning(
+                "Battery %d canary: current=%.1f exceeds 250A",
+                self.battery_index,
+                self.current,
             )
             return True
         return False
@@ -1434,7 +1549,11 @@ class BatteryBankData:
             BatteryBankData with all values properly scaled, or None if no battery
         """
         from pylxpweb.constants.registers import decode_bms_permissions
-        from pylxpweb.registers.battery import BATTERY_MAX_COUNT
+        from pylxpweb.registers.battery import (
+            BATTERY_BASE_ADDRESS,
+            BATTERY_MAX_COUNT,
+            BATTERY_REGISTER_COUNT,
+        )
         from pylxpweb.registers.inverter_input import BY_NAME
 
         # Battery voltage from canonical register def
@@ -1512,15 +1631,21 @@ class BatteryBankData:
             current_capacity = round(max_capacity * battery_soc / 100)
 
         # Parse individual battery data if extended registers provided.
-        # When round-robin accumulation is active (>4 batteries), the register
-        # map contains virtual addresses keyed by pos (not slot index), so we
-        # iterate up to battery_count instead of capping at BATTERY_MAX_COUNT.
+        # The round-robin accumulator presents every battery it has seen in a
+        # contiguous virtual slot range, which may hold MORE batteries than
+        # reg 96 reports (battery_parallel_count under-reports on parallel
+        # systems, #170/#258).  Derive the slot count directly from the
+        # populated register map rather than trusting reg 96; empty slots parse
+        # to None and are skipped.
         batteries: list[BatteryData] = []
         if individual_battery_registers:
-            if battery_count is not None and battery_count > 0:
-                count_to_use = battery_count
-            else:
-                count_to_use = BATTERY_MAX_COUNT
+            max_slot = -1
+            for addr in individual_battery_registers:
+                if addr < BATTERY_BASE_ADDRESS:
+                    continue
+                slot = (addr - BATTERY_BASE_ADDRESS) // BATTERY_REGISTER_COUNT
+                max_slot = max(max_slot, slot)
+            count_to_use = max_slot + 1 if max_slot >= 0 else BATTERY_MAX_COUNT
             for idx in range(count_to_use):
                 battery_data = BatteryData.from_modbus_registers(
                     battery_index=idx,

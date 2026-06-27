@@ -312,7 +312,7 @@ PARAMETER_SCALING: dict[str, ScaleFactor] = {
     # Power Parameters (direct Watts or percentage)
     "HOLD_AC_CHARGE_POWER_CMD": ScaleFactor.SCALE_NONE,  # Watts
     "HOLD_FORCED_CHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # 100W units (0-150=0-15kW); caller scales
-    "HOLD_FORCED_DISCHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # Percentage (0-100)
+    "HOLD_FORCED_DISCHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # 100W units like reg 74; caller scales
     "HOLD_FEED_IN_GRID_POWER_PERCENT": ScaleFactor.SCALE_NONE,  # Percentage
     # SOC Parameters (percentage, no scaling)
     "HOLD_AC_CHARGE_SOC_LIMIT": ScaleFactor.SCALE_NONE,
@@ -322,6 +322,14 @@ PARAMETER_SCALING: dict[str, ScaleFactor] = {
     "HOLD_SOC_LOW_LIMIT_EPS_DISCHG": ScaleFactor.SCALE_NONE,
     "HOLD_AC_CHARGE_START_BATTERY_SOC": ScaleFactor.SCALE_NONE,
     "HOLD_AC_CHARGE_END_BATTERY_SOC": ScaleFactor.SCALE_NONE,
+    # Battery voltage limits with transport-dependent encoding: the cloud API
+    # returns already-scaled volts (40.0) while local transports surface the
+    # raw decivolt register value (400). A blind SCALE_10 here would break
+    # cloud reads (the PVStartVoltage failure class), so this stays
+    # SCALE_NONE and callers normalize by magnitude (>=100 -> /10) — the same
+    # convention as the reg-228/169/158/159 voltage family, which is
+    # deliberately absent from this table.
+    "_12K_HOLD_STOP_DISCHG_VOLT": ScaleFactor.SCALE_NONE,  # reg 202, decivolts raw
 }
 
 

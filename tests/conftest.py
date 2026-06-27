@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from collections.abc import AsyncGenerator, Generator
@@ -9,9 +10,45 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from aiohttp import web
+from aiohttp import ClientResponse, web
 from aiohttp.test_utils import TestClient, TestServer
 from aioresponses import aioresponses
+from aioresponses import core as aioresponses_core
+
+# aioresponses 0.7.8 (its latest release) builds mock ClientResponse objects
+# without the `stream_writer` keyword argument that aiohttp 3.14.0 made required,
+# so every aioresponses-mocked test would raise
+# "ClientResponse.__init__() missing 1 required keyword-only argument: 'stream_writer'".
+# Home Assistant pins aiohttp==3.14.1, so pylxpweb must keep working (and testing)
+# against aiohttp >= 3.14 rather than cap it. Supply the kwarg here — mirroring
+# aioresponses' own `writer=None` — by reassigning the ClientResponse class that
+# aioresponses.core instantiates for mocked responses. The guard makes this a
+# no-op on aiohttp < 3.14. Remove once aioresponses ships native aiohttp 3.14 support (see #189).
+if "stream_writer" in inspect.signature(ClientResponse.__init__).parameters:
+
+    class _NoopStreamWriter:
+        """Minimal stand-in for the request body writer aiohttp>=3.14 expects.
+
+        aioresponses always passes ``writer=None`` ("request already sent"), so
+        aiohttp only reads ``stream_writer.output_size`` and never writes through
+        it — a bare object carrying that one attribute is enough.
+        """
+
+        output_size = 0
+
+    class _StreamWriterCompatResponse(ClientResponse):
+        """ClientResponse that defaults the aiohttp>=3.14 `stream_writer` kwarg."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs.setdefault("stream_writer", _NoopStreamWriter())
+            super().__init__(*args, **kwargs)
+
+    # Patch via __dict__ to satisfy both linters without a suppression:
+    # aioresponses.core re-imports ClientResponse without re-exporting it, so a
+    # plain `core.ClientResponse = ...` trips mypy attr-defined (whole-tree check)
+    # while `setattr(core, "ClientResponse", ...)` trips ruff B010. A __dict__ write
+    # patches the same name and is clean under both.
+    aioresponses_core.__dict__["ClientResponse"] = _StreamWriterCompatResponse
 
 
 def is_ci_environment() -> bool:

@@ -33,6 +33,7 @@ Properties are organized by category:
 - Bus Voltage Properties
 - AC Couple & Generator Properties
 - Consumption Properties
+- Smart Load Properties (cloud-only)
 - Status & Info Properties
 """
 
@@ -41,6 +42,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from pylxpweb.constants import derive_pv_current, scale_runtime_value
+
+from ._features import InverterFamily
 
 if TYPE_CHECKING:
     from pylxpweb.models import InverterRuntime
@@ -373,7 +376,7 @@ class InverterRuntimePropertiesMixin:
         This is the power from grid used specifically for AC battery charging,
         NOT the total grid import power. See power_to_user for grid import.
         """
-        return self._raw_int("grid_power", "prec")
+        return self._raw_int("rectifier_power", "prec")
 
     # ===========================================
     # Battery Properties
@@ -614,7 +617,15 @@ class InverterRuntimePropertiesMixin:
     def consumption_power(self) -> int | None:
         """Get consumption power in watts.
 
-        For HTTP data, uses the server-computed consumptionPower field.
+        For HTTP data, uses the server-computed consumptionPower field —
+        except on the EG4 Off-Grid family, where the cloud does not populate
+        consumptionPower (it would read a false 0 under load) and the
+        authoritative figure is the backup-path split:
+            consumption = epsLoadPower + smartLoadPower + gridLoadPower
+        (live-confirmed on a 6000XP, GH eg4_web_monitor#226: the split is
+        what keeps the Loads sensor honest during a hybrid link-down
+        cloud-fallback window).
+
         For local transport data (Modbus/Dongle), computes from energy balance:
             consumption = pv + battery_power + grid_import - grid_export
 
@@ -643,6 +654,13 @@ class InverterRuntimePropertiesMixin:
             return max(0, consumption)
         if self._runtime is None:
             return None
+        features = getattr(self, "_features", None)
+        if features is not None and features.model_family is InverterFamily.EG4_OFFGRID:
+            return (
+                self._runtime.epsLoadPower
+                + self._runtime.smartLoadPower
+                + self._runtime.gridLoadPower
+            )
         return self._runtime.consumptionPower
 
     @property
@@ -652,6 +670,59 @@ class InverterRuntimePropertiesMixin:
         Deprecated: use consumption_power instead, which returns the same data.
         """
         return self.consumption_power
+
+    # ===========================================
+    # Smart Load Properties (cloud-only)
+    # ===========================================
+    # The EG4 Off-Grid family (6000XP/12000XP) can repurpose the GEN terminal
+    # as a smart-load output.  The cloud splits the backup-path output into
+    # smartLoadPower (GEN port) + epsLoadPower (EPS loads) + gridLoadPower,
+    # while peps / pEpsL1N / pEpsL2N carry the COMBINED backup output
+    # (live-confirmed on a 6000XP: peps 3371 W = smartLoadPower 2999 W +
+    # epsLoadPower 365 W, GH eg4_web_monitor#222).
+    #
+    # No Modbus input register is validated for these values on the off-grid
+    # family — the 18kPV firmware RE names input reg 232 "smart_load_power",
+    # but it has never been observed non-zero and the off-grid firmware is a
+    # different codebase.  These properties therefore intentionally read the
+    # HTTP runtime even when a local transport is attached (HYBRID
+    # supplemental data) instead of using the transport-first helpers.
+    # Freshness in hybrid: BaseInverter.refresh() schedules a supplemental
+    # _fetch_runtime_http() for EG4_OFFGRID devices with a healthy transport
+    # (see _wants_hybrid_supplemental_runtime), so _runtime tracks the cloud
+    # on the runtime TTL instead of freezing at its setup-time snapshot.
+
+    @property
+    def smart_load_power(self) -> int | None:
+        """Get smart load (GEN port) output power in watts.
+
+        Cloud-only field (``smartLoadPower``): no validated local register
+        exists on the EG4 Off-Grid family, so this reads the HTTP runtime
+        even in HYBRID mode.
+
+        Returns:
+            Smart load power in watts, or None when cloud runtime data is
+            unavailable (for example pure-LOCAL operation).
+        """
+        if self._runtime is None:
+            return None
+        return self._runtime.smartLoadPower
+
+    @property
+    def grid_load_power(self) -> int | None:
+        """Get grid-side load power in watts.
+
+        Cloud-only field (``gridLoadPower``): no validated local register
+        exists on the EG4 Off-Grid family, so this reads the HTTP runtime
+        even in HYBRID mode.
+
+        Returns:
+            Grid load power in watts, or None when cloud runtime data is
+            unavailable (for example pure-LOCAL operation).
+        """
+        if self._runtime is None:
+            return None
+        return self._runtime.gridLoadPower
 
     # ===========================================
     # Status & Info Properties

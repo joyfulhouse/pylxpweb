@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from pylxpweb.constants import SCHEDULE_CONFIGS, ScheduleType
 from pylxpweb.endpoints.base import BaseEndpoint
@@ -336,7 +337,11 @@ class ControlEndpoints(BaseEndpoint):
         return result
 
     async def start_quick_charge(
-        self, inverter_sn: str, client_type: str = "WEB"
+        self,
+        inverter_sn: str,
+        client_type: str = "WEB",
+        *,
+        minute: int | None = None,
     ) -> SuccessResponse:
         """Start quick charge operation.
 
@@ -344,24 +349,46 @@ class ControlEndpoints(BaseEndpoint):
 
         Args:
             inverter_sn: Inverter serial number
+            minute: Optional charge duration in minutes. The newer EG4 firmware
+                accepts a ``minute`` parameter to run a fixed-duration quick
+                charge (confirmed on an 18kPV via the cloud API). Omitting it
+                preserves the legacy behaviour (charge until manually stopped).
             client_type: Client type (WEB/APP)
 
         Returns:
             SuccessResponse: Operation result
 
+        Raises:
+            ValueError: If minute is provided and is not a positive integer
+
         Example:
             result = await client.control.start_quick_charge("1234567890")
             if result.success:
                 print("Quick charge started successfully")
+
+            # Run a fixed 30-minute quick charge (new firmware)
+            await client.control.start_quick_charge("1234567890", minute=30)
         """
+        if minute is not None and (
+            not isinstance(minute, int) or isinstance(minute, bool) or minute <= 0
+        ):
+            raise ValueError(f"minute must be a positive integer, got {minute!r}")
+
         await self.client._ensure_authenticated()
 
-        data = {"inverterSn": inverter_sn, "clientType": client_type}
+        data: dict[str, Any] = {"inverterSn": inverter_sn, "clientType": client_type}
+        if minute is not None:
+            data["minute"] = minute
 
         response = await self.client._request(
             "POST", "/WManage/web/config/quickCharge/start", data=data
         )
-        return SuccessResponse.model_validate(response)
+        result = SuccessResponse.model_validate(response)
+        # The status endpoint is cached (~1 min); refresh it so a freshly
+        # started charge is reflected immediately instead of after expiry.
+        if result.success:
+            self.client.invalidate_cache_for_device(inverter_sn)
+        return result
 
     async def stop_quick_charge(
         self, inverter_sn: str, client_type: str = "WEB"
@@ -389,7 +416,12 @@ class ControlEndpoints(BaseEndpoint):
         response = await self.client._request(
             "POST", "/WManage/web/config/quickCharge/stop", data=data
         )
-        return SuccessResponse.model_validate(response)
+        result = SuccessResponse.model_validate(response)
+        # Shares the cached status endpoint with start; refresh so the stop
+        # is reflected immediately.
+        if result.success:
+            self.client.invalidate_cache_for_device(inverter_sn)
+        return result
 
     async def get_quick_charge_status(self, inverter_sn: str) -> QuickChargeStatus:
         """Get current quick charge operation status.
@@ -912,6 +944,142 @@ class ControlEndpoints(BaseEndpoint):
         """
         return await self._get_function_status(inverter_sn, 21, "FUNC_FORCED_DISCHG_EN")
 
+    async def enable_feed_in_grid(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable feed-in to grid ("Grid Sell Back" in the EG4 web UI).
+
+        Convenience wrapper for control_function(..., "FUNC_FEED_IN_GRID_EN", True).
+        Register 21 bit 15, live-verified (GH eg4_web_monitor#135).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_feed_in_grid("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_FEED_IN_GRID_EN", True, client_type=client_type
+        )
+
+    async def disable_feed_in_grid(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable feed-in to grid ("Grid Sell Back" in the EG4 web UI).
+
+        Convenience wrapper for control_function(..., "FUNC_FEED_IN_GRID_EN", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_feed_in_grid("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_FEED_IN_GRID_EN", False, client_type=client_type
+        )
+
+    async def get_feed_in_grid_status(self, inverter_sn: str) -> bool:
+        """Get current feed-in grid (Grid Sell Back) status.
+
+        Reads register 21 (function enable) and extracts FUNC_FEED_IN_GRID_EN
+        (bit 15).
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if feed-in to grid is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_feed_in_grid_status("1234567890")
+            >>> if enabled:
+            >>>     print("Grid sell back is active")
+        """
+        return await self._get_function_status(inverter_sn, 21, "FUNC_FEED_IN_GRID_EN")
+
+    async def enable_pv_sell_to_grid(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Convenience wrapper for control_function(..., "FUNC_PV_SELL_TO_GRID_EN", True).
+        Register 179 bit 3, pinned 2026-06-12 via live cloud toggles
+        raw-verified on both a FlexBOSS21 and an 18kPV (raw 0x104c <->
+        0x1044, single bit 3); the local Modbus write path is
+        HybridInverter.set_pv_sell_to_grid (GH eg4_web_monitor#135).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_pv_sell_to_grid("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_PV_SELL_TO_GRID_EN", True, client_type=client_type
+        )
+
+    async def disable_pv_sell_to_grid(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Convenience wrapper for control_function(..., "FUNC_PV_SELL_TO_GRID_EN", False).
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_pv_sell_to_grid("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_PV_SELL_TO_GRID_EN", False, client_type=client_type
+        )
+
+    async def get_pv_sell_to_grid_status(self, inverter_sn: str) -> bool:
+        """Get current PV sell to grid (Export PV Only) status.
+
+        Reads register 179 (extended function enable) and extracts
+        FUNC_PV_SELL_TO_GRID_EN — live single-register reads confirm the
+        cloud returns it for that window (18kPV + FlexBOSS21, 2026-06-12).
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if Export PV Only is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_pv_sell_to_grid_status("1234567890")
+            >>> if enabled:
+            >>>     print("Export PV Only is active")
+        """
+        return await self._get_function_status(inverter_sn, 179, "FUNC_PV_SELL_TO_GRID_EN")
+
     async def enable_peak_shaving_mode(
         self, inverter_sn: str, client_type: str = "WEB"
     ) -> SuccessResponse:
@@ -961,7 +1129,11 @@ class ControlEndpoints(BaseEndpoint):
     async def get_peak_shaving_mode_status(self, inverter_sn: str) -> bool:
         """Get current peak shaving mode status.
 
-        Reads register 21 (function enable) and extracts FUNC_GRID_PEAK_SHAVING bit.
+        Reads register 179 (extended function enable) and extracts
+        FUNC_GRID_PEAK_SHAVING (bit 7).  Previously this read register 21,
+        which never returns the key — live single-register named reads
+        (18kPV + FlexBOSS21, 2026-06-12) show FUNC_GRID_PEAK_SHAVING only
+        in the (179, 1) response, so the old read always reported False.
 
         Args:
             inverter_sn: Inverter serial number
@@ -974,7 +1146,7 @@ class ControlEndpoints(BaseEndpoint):
             >>> if enabled:
             >>>     print("Peak shaving mode is active")
         """
-        return await self._get_function_status(inverter_sn, 21, "FUNC_GRID_PEAK_SHAVING")
+        return await self._get_function_status(inverter_sn, 179, "FUNC_GRID_PEAK_SHAVING")
 
     # ============================================================================
     # Green Mode Controls (Off-Grid Mode in Web Monitor)
@@ -1454,7 +1626,7 @@ class ControlEndpoints(BaseEndpoint):
         Args:
             inverter_sn: Inverter serial number
             start_soc: Battery SOC (%) to start AC charging (0-90)
-            end_soc: Battery SOC (%) to stop AC charging (0-100)
+            end_soc: Battery SOC (%) to stop AC charging (0-101; 101 = never stop)
             client_type: Client type (WEB/APP)
 
         Returns:
@@ -1470,8 +1642,8 @@ class ControlEndpoints(BaseEndpoint):
         """
         if not 0 <= start_soc <= 90:
             raise ValueError(f"start_soc must be 0-90, got {start_soc}")
-        if not 0 <= end_soc <= 100:
-            raise ValueError(f"end_soc must be 0-100, got {end_soc}")
+        if not 0 <= end_soc <= 101:
+            raise ValueError(f"end_soc must be 0-101, got {end_soc}")
 
         await self.write_parameter(
             inverter_sn,

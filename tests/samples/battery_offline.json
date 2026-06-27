@@ -1,0 +1,18 @@
+{
+  "capacityPercent": 0,
+  "chargeVoltRef": "",
+  "currentText": "",
+  "currentType": "unknown",
+  "fullCapacity": 0,
+  "globalMaxCellTemp": "",
+  "globalMaxCellVoltage": "",
+  "globalMinCellTemp": "",
+  "globalMinCellVoltage": "",
+  "hasCellExtremes": false,
+  "lost": true,
+  "remainCapacity": 0,
+  "serialNum": "OFFLINE0001",
+  "success": true,
+  "totalNumber": 0,
+  "totalVoltageText": ""
+}

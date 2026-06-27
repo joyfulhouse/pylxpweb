@@ -212,6 +212,7 @@ class NetworkScanner:
             DEVICE_TYPE_CODE_LXP_EU,
             DEVICE_TYPE_CODE_PV_SERIES,
             DEVICE_TYPE_CODE_SNA,
+            DEVICE_TYPE_CODE_SNA_6000XP,
         )
         from pylxpweb.transports.discovery import discover_device_info, get_model_family_name
         from pylxpweb.transports.factory import create_modbus_transport
@@ -219,6 +220,7 @@ class NetworkScanner:
         known_codes = {
             DEVICE_TYPE_CODE_GRIDBOSS,
             DEVICE_TYPE_CODE_SNA,
+            DEVICE_TYPE_CODE_SNA_6000XP,  # 6000XP variant (GH eg4_web_monitor#222)
             DEVICE_TYPE_CODE_PV_SERIES,
             DEVICE_TYPE_CODE_FLEXBOSS,
             DEVICE_TYPE_CODE_LXP_EU,

@@ -7,6 +7,507 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Raw round-robin battery page logging** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  the accumulator logs *virtual* slots and the merged register map hides which
+  battery occupies each *physical* Modbus slot, so firmware round-robin rotation
+  could not be characterized from debug logs. `_accumulate_battery_slots` now
+  emits an `RR raw page: 0=<id> 1=<id> 2=<id> 3=<id>` line each read (physical
+  slot → battery identity, before accumulation, with empty/truncated slots
+  marked). Diffing this line across reads reveals the rotation cadence and what
+  triggers a battery to enter/leave a physical slot — the signal needed to fix
+  non-rotating-firmware systems that have no cloud fallback.
+
+- **`.xls` data-export parser** — `parse_export(content: bytes) -> list[ExportDaySheet]`
+  turns the bytes returned by `ExportEndpoints.export_data()` into per-day rows, and
+  `ExportEndpoints.export_and_parse()` downloads and parses in one call (offloading the
+  synchronous `xlrd` parse to a worker thread so it never blocks the event loop). The
+  export is a legacy BIFF (`.xls`) workbook with one worksheet per day (the server caps
+  it at 10 day-sheets); cell values come back as text, date-typed cells render as ISO
+  `YYYY-MM-DD HH:MM:SS`, and duplicate column headers are disambiguated (`SOC`, `SOC.1`)
+  so no column is silently dropped. Malformed input raises `LuxpowerAPIError`. Requires
+  the optional `xlrd` dependency: `pip install pylxpweb[parse]`. (#181)
+
+### Fixed
+
+- **HYBRID `>4`-battery cloud refresh no longer stalls after a battery briefly appears locally** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  the hybrid supplemental-battery gate (`_wants_hybrid_supplemental_battery`)
+  counted every non-ghost transport battery as "surfaced", including ones the
+  never-evict accumulator re-presents after the firmware stops rotating them into
+  a slot. On non-rotating firmware a battery that entered a Modbus slot even
+  *once* made `surfaced == cloud_count`, silencing the supplemental cloud fetch
+  that kept it live — so it froze at its last value (the #258 reporter's 5th
+  battery degraded from ~5-minute to hourly updates after midnight). A transport
+  battery now counts as surfaced only when its `last_seen` is within
+  `_SUPPLEMENTAL_BATTERY_STALE_AFTER` (2 min) of the freshest sibling — a
+  relative, poll-interval-agnostic comparison — so a frozen cached battery no
+  longer suppresses the cloud refresh. Pure-local and all-batteries-surfaced
+  systems are unchanged (still no extra cloud calls).
+
+- **Login no longer fails when the "last visited device" is a parallel group** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  on a parallel system the EG4 cloud may report the parallel GROUP (e.g.
+  `serialNum="Parallel_A"`) as the account's `userVisitRecord`, which carries only
+  `plantId` + `serialNum` and omits every device-specific field (`phase`,
+  `deviceType`, `batteryType`, …). Those fields were declared required, so
+  `LoginResponse.model_validate()` raised and **every** authenticated call failed
+  (the consumer saw a hard login error and lost all cloud data). The
+  `UserVisitRecord` fields — and `LoginResponse.userVisitRecord` itself — are now
+  optional; the record is informational only and is not read anywhere, so
+  tolerating the parallel-group shape cannot affect any caller.
+- **Battery `last_seen` is now timezone-aware UTC** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  the round-robin accumulator stamped each battery's `last_seen` with a naive
+  `datetime.now()` (OS-local). Consumers that interpret a naive datetime as their
+  *own* timezone (e.g. Home Assistant) mis-computed battery freshness when the
+  container timezone differed from theirs. `last_seen` is now stamped with
+  `datetime.now(UTC)` so the value is unambiguous across process boundaries.
+- **`Fault Code` / `Warning Code` no longer flicker to "unknown" on a dropped `bms_data` read** ([eg4_web_monitor#261](https://github.com/joyfulhouse/eg4_web_monitor/issues/261)):
+  the inverter fault/warning registers (60-63, in the always-read `status_energy`
+  group) are merged with their BMS fallback codes (regs 99-100, in the droppable
+  `bms_data` group) "prefer the non-zero code". The merge was
+  `inverter_code if inverter_code else bms_code`, which collapsed a **known-healthy
+  `0`** (the inverter reporting no fault) into `None` whenever the `bms_data` group
+  read dropped — `read_all_input_data` still rebuilds the runtime from the surviving
+  snapshot, so the BMS code is `None` while the inverter code reads `0`, and
+  `0 if 0 else None` is `None`. A `None` code is omitted from the sensor payload, so
+  Home Assistant's `Fault Code` sensor went *unknown* on those polls in both HYBRID
+  and LOCAL mode. (The integration's earlier carry-forward only covered a full
+  link-down where `transport_runtime` is `None`, not this present-but-`None` case.)
+  The merge now returns `0` when **either** register was actually read and `None`
+  only when **both** are genuinely absent, so a healthy `0` survives a dropped BMS
+  read; an active code from either source is still preferred and preserved.
+- **A dropped `bms_data` read no longer publishes a degraded battery bank** ([eg4_web_monitor#261](https://github.com/joyfulhouse/eg4_web_monitor/issues/261)):
+  the combined (`read_all_input_data`) and chunked (`read_battery`) reads fetch
+  register groups as separate Modbus requests. Register 96 (`battery_parallel_count`)
+  and all BMS fields live in the `bms_data` group (80-112); battery voltage (reg 4)
+  and SOC (reg 5) live in the `power_energy` group (0-31). When only the `bms_data`
+  request dropped or returned a short/misrouted frame (common on a flaky WiFi-dongle
+  link), reg 96 defaulted to 0 but the valid power-group voltage kept
+  `from_modbus_registers` from short-circuiting to `None` — so it built a half-empty
+  bank (`battery_count=None`, current/cell/BMS-limit fields all `None`) that
+  overwrote the last-good `_transport_battery` cache, flickering battery-bank
+  sensors to unavailable. Both reads now track `bms_ok` (false on a failed **or
+  short** `bms_data` read) and return `battery=None` in that case, so the callers
+  (which both guard `if battery is not None`) preserve the last-good cache. A
+  genuine reg 96 = 0 on a successful full read still builds a bank.
+- **>4 batteries now accumulate reliably regardless of `battery_parallel_count`** ([eg4_web_monitor#170](https://github.com/joyfulhouse/eg4_web_monitor/issues/170), [eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  inverters expose individual battery data through 4 fixed Modbus input-register
+  slots (5002-5121) and rotate >4 physical batteries through them over successive
+  reads. The round-robin accumulator keyed on `pos` and trusted Modbus register
+  96 (`battery_parallel_count`), which is unreliable on parallel systems (it read
+  12 for a 6-battery bank in #170). It only accumulated when reg 96 > 4, wiped the
+  whole accumulator on any reg-96 change, and rejected `pos >= reg96`; the parser
+  also capped the slot count at reg 96. Any of these dropped a rotated-in battery.
+  Accumulation now keys on the **battery serial** (the only identity stable across
+  rotation), ignores reg 96 entirely for gating/clearing/counting, and never
+  evicts — so a battery latches permanently once it rotates into view. The parser
+  derives the slot count from the populated register map, not reg 96. A
+  present-but-truncated serial read is skipped for that poll (rather than minting
+  a duplicate identity) so partial reads cannot create phantom batteries.
+
+- **Hybrid keeps cloud-only batteries fresh instead of frozen** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  some firmware pins <=4 batteries to the 4 Modbus slots and never rotates the
+  rest into view (header register 5001, the rotation signal, stays `0`), so with
+  a healthy local transport the battery read path only ever refreshes
+  `_transport_battery` and the batteries the registers never surface (e.g. a 5th
+  on a 5-battery rig) froze at their setup-time cloud `_battery_bank` snapshot —
+  present every poll but never updating. `refresh()` now schedules a supplemental
+  cloud battery fetch — a mirror of the #222 supplemental-runtime fix — gated to
+  fire only when the cloud reports more batteries than the transport surfaces, on
+  a dedicated battery-TTL clock (the combined read keeps `_battery_cache_time`
+  fresh, so it cannot gate this). Systems whose batteries are fully visible
+  locally, and pure-LOCAL installs, make no extra cloud call.
+
+## [0.9.36b13] - 2026-06-15
+
+### Fixed
+
+- **Offline inverter/battery no longer fails model validation** ([eg4_web_monitor#256](https://github.com/joyfulhouse/eg4_web_monitor/issues/256)):
+  when a device is offline (`lost: true`) the cloud returns a *partial*
+  `getInverterRuntime` / `getBatteryInfo` payload that omits the live/aggregate
+  measurement fields. `InverterRuntime` and `BatteryInfo` declared those fields
+  required, so `model_validate()` rejected the whole response — discarding even
+  the fields that *were* present (statusText, per-string PV, voltages, temps).
+  The downstream consumer (eg4_web_monitor) then saw `has_data=False` and made
+  **all** of that device's Home Assistant entities unavailable, while a second,
+  online inverter in the same station worked normally. The cloud-omittable live
+  fields are now `Optional` (`InverterRuntime`: `status`, `ppv`, `soc`, `vBat`,
+  `pCharge`, `pDisCharge`, `batPower`, `batteryColor`, `pinv`, `prec`, `peps`;
+  `BatteryInfo`: `batStatus`, `soc`, `vBat`, `pCharge`, `pDisCharge`), so a
+  partial/offline payload validates and the present fields flow through (an
+  offline inverter now reports `statusText="offline"` rather than vanishing).
+  `BatteryBank` aggregate properties (`status`, `soc`, `voltage`,
+  `charge_power`, `discharge_power`) and the HYBRID HTTP battery fallback are
+  `None`-safe so an offline battery doesn't crash `apply_scale(None)`. The
+  cloud→transport converters (`InverterRuntimeData.from_http_response`,
+  `HTTPTransport.read_battery`) now preserve `None` for the omitted fields
+  instead of collapsing them to a phantom `0` reading — so an offline device
+  reads "unavailable", not a fake 0 %/0 W/status-0 ("normal"), on the
+  transport path too.
+
+## [0.9.36b12] - 2026-06-15
+
+### Added
+
+- **Quick Charge status surfaces the raw holding register 234 value** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  `QuickChargeStatus` gains a `quickChargeMinute` field (`int | None`) carrying
+  the holding register 234 value in minutes — the writable duration setpoint
+  that also counts down as the live remaining minutes while a charge runs.
+  `get_quick_charge_detail()` populates it on the local transport path, **idle
+  and active**, so a consumer can faithfully mirror the register rather than
+  retain a stale preference. It stays `None` on the cloud path (no equivalent
+  register). `remainTimeBeforeQuickChargeStop` (seconds, prefers input register
+  210) is unchanged. Per LXP-LB reports (@ivanfmartinez).
+
+## [0.9.36b11] - 2026-06-15
+
+### Added
+
+- **Quick Charge remaining time prefers input register 210** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  new transport method `read_quick_charge_remaining_seconds()` reads input
+  register 210 (the finer-grained seconds countdown exposed by newer firmware,
+  ≈v25+) via FC04, non-fatally (returns `None` on a read failure or when the
+  register reports 0 on older firmware) and op-lock serialised on the modbus and
+  dongle transports. `get_quick_charge_detail()` now prefers register 210 while a
+  charge is active and falls back to holding register 234 (minutes × 60) when it
+  is unavailable. The cloud path is unchanged (remaining time comes from the
+  `getStatusInfo` API value). Holding register 234 (writable minutes setpoint /
+  live countdown) and input register 210 (read-only seconds countdown) are
+  intentionally kept as distinct registers. Confirmed against an LXP-LB
+  (@ivanfmartinez).
+
+## [0.9.36b10] - 2026-06-13
+
+### Fixed
+
+- **Quick Charge local enable starts at firmware default** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  on real LXP-LB hardware (thanks @ivanfmartinez) the firmware **rejects writes
+  to holding register 234 while quick charge is off**, so pre-writing the
+  duration before the enable bit was silently dropped. `enable_quick_charge()`
+  now sets only register 233 bit 0 over a local transport — the firmware starts
+  the timed charge at its default length and the duration is adjusted live via
+  `set_quick_charge_minute()` (register 234 doubles as the live remaining-minutes
+  countdown). The `minute` argument is honoured only on the cloud start endpoint;
+  HYBRID cloud fallback and the cloud-only path are unchanged.
+
+## [0.9.36b9] - 2026-06-13
+
+### Added
+
+- **Quick Charge over local transport** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  `enable_quick_charge`/`disable_quick_charge` are now transport-aware. With a
+  local transport (Modbus/Dongle, including HYBRID — which prefers local) they
+  write the duration to holding register 234 and toggle the enable bit
+  (register 233 bit 0) directly; HYBRID falls back to the cloud endpoint if the
+  local write fails, while cloud-only and local-only paths are unchanged. New
+  `set_quick_charge_minute()` writes register 234 (the live setpoint, so raising
+  it extends a running charge). `get_quick_charge_status`/`get_quick_charge_detail`
+  read the status from registers 233/234 in transport mode. Register 234 is now
+  mapped (`SNA_HOLD_QUICK_CHARGE_MINUTE`) and register 233 bit 0 is named
+  `FUNC_QUICK_CHG_START_EN`; the `quick_charge_minute` feature is detected by
+  register presence (EG4_HYBRID/LXP, not just SNA). Confirmed on an 18kPV and an
+  LXP-LB.
+
+## [0.9.36b8] - 2026-06-13
+
+### Added
+
+- **Minute-based Quick Charge** ([eg4_web_monitor#251](https://github.com/joyfulhouse/eg4_web_monitor/issues/251)):
+  the newer EG4 firmware accepts a fixed-duration quick charge. `start_quick_charge`
+  now takes an optional `minute` parameter (sent in the `quickCharge/start` body;
+  omitting it preserves legacy "charge until stopped" behaviour, `minute <= 0`
+  raises `ValueError`), and `BaseInverter.enable_quick_charge(minute=...)` forwards
+  it. `QuickChargeStatus` gained the rich fields the new `getStatusInfo` returns
+  (`remainTimeBeforeQuickChargeStop` in seconds, `unclosedQuickChargeTaskId`,
+  `unclosedQuickChargeTaskStatus`, `lowVoltProtect`, all with safe defaults for
+  older API versions) plus a `remaining_minutes` convenience property (seconds
+  rounded up). New `BaseInverter.get_quick_charge_detail()` returns the full
+  `QuickChargeStatus` (the existing boolean `get_quick_charge_status()` is
+  unchanged for compatibility). Reverse-engineered live on an 18kPV via cloud,
+  2026-06-13.
+
+### Fixed
+
+- **System Charge SOC Limit register metadata now allows 101** (consistency
+  follow-up to [eg4_web_monitor#158](https://github.com/joyfulhouse/eg4_web_monitor/issues/158)):
+  reg 227 (`HOLD_SYSTEM_CHARGE_SOC_LIMIT`) `max_value` was a stale 100 while the
+  read property, the cloud setter (`set_system_charge_soc_limit`, documented for
+  top balancing), and the HA entity already used 101. Aligned the metadata (and
+  the parameter-reference docs) to 0-101, where 101 = LiFePO4 top balancing.
+  Cloud-confirmed accepting 101 on an 18kPV (reg 227 write 80 → 101 → restore,
+  2026-06-13). No behaviour change — `max_value` is documentary; this removes
+  the last inconsistency.
+
+## [0.9.36b7] - 2026-06-13
+
+### Fixed
+
+- **AC Charge SOC Limit now allows 101%** ([eg4_web_monitor#158](https://github.com/joyfulhouse/eg4_web_monitor/issues/158)):
+  the inverter accepts **101%** as a "never stop AC charging" setting (the stop
+  threshold is unreachable since SOC cannot exceed 100), used for battery cell
+  balancing — but reg 67 was capped at 100 in every path, so a live-101 value
+  read back as out-of-range (`None`) and writes of 101 raised `ValueError`. The
+  101 ceiling is now allowed across all of them: the `ac_charge_soc_limit` read
+  property (the library-level cause of the live-101 read-back as `None`), reg 67
+  (`HOLD_AC_CHARGE_SOC_LIMIT`) `max_value` metadata, and every write path —
+  `BaseInverter.set_ac_charge_soc_limit()`, `HybridInverter.set_ac_charge(soc_limit=…)`,
+  and the `set_ac_charge_soc_limits(end_soc=…)` pair on both `HybridInverter`
+  and the cloud `ControlEndpoint`. The AC charge *power* bound and the start-SOC
+  bound (0–90) are unchanged, as are all other SOC limits. Matches the existing
+  101 cap already used for the System Charge SOC Limit. Reported by @DoubleDoc on
+  an 18kPV.
+
+## [0.9.36b6] - 2026-06-12
+
+### Added
+
+- **`FUNC_PV_SELL_TO_GRID_EN` pinned to holding register 179 bit 3 and wired
+  for local Modbus** ("Export PV Only" in the EG4 web UI, GH
+  [eg4_web_monitor#135](https://github.com/joyfulhouse/eg4_web_monitor/issues/135)):
+  pinned 2026-06-12 ~16:05–16:07 PT via authorized live cloud
+  functionControl toggles with raw verification through `remoteRead`
+  (179, 1) valueFrame (base64, little-endian uint16) on BOTH 12K-hybrid
+  models — FlexBOSS21 52842P0581 (`disable_pv_sell_to_grid` toggled raw
+  `0x104c` → `0x1044`, XOR `0x0008` = single bit 3, named param True→False
+  in lockstep; re-enable restored `0x104c`, verified) and 18kPV 4512670118
+  (same toggle, same `0x104c` → `0x1044` → restored `0x104c`, verified).
+  Register-level evidence equivalent to a local before/after probe, proven
+  directly on both family models — no extrapolation needed. The
+  `FUNC_179_BIT3` placeholder in `REGISTER_TO_PARAM_KEYS[179]`
+  is replaced by the real name, so local/dongle parameter decode now surfaces
+  the bit and `write_named_parameters({"FUNC_PV_SELL_TO_GRID_EN": ...})`
+  performs the read-modify-write locally. `HybridInverter` gains dual-path
+  `enable_pv_sell_to_grid` / `disable_pv_sell_to_grid` /
+  `get_pv_sell_to_grid_status` / `set_pv_sell_to_grid` overrides (transport
+  RMW on reg 179 bit 3, atomic cloud function-control without a transport —
+  the same pattern as the battery charge/discharge control bits 9/10), plus
+  the `FUNC_EXT_BIT_PV_SELL_TO_GRID = 3` constant. The canonical holding
+  table's spec name for the same bit (`FUNC_BAT_WAKEUP_EN`, "Battery wakeup /
+  PV sell first enable") corroborates the pin and is cross-referenced.
+
+### Fixed
+
+- **EG4_OFFGRID register-110 layout corrected: Battery ECO is bit 15, buzzer is bit 7**
+  (adjudication of eg4_web_monitor [PR #220](https://github.com/joyfulhouse/eg4_web_monitor/pull/220)
+  / [#197](https://github.com/joyfulhouse/eg4_web_monitor/issues/197) follow-up):
+  the shared `REGISTER_TO_PARAM_KEYS[110]` table is 18kPV-derived; on the SNA
+  platform (12000XP/6000XP) live hardware evidence shows `FUNC_BATTERY_ECO_EN`
+  toggling raw bit 15 (`0x0080`↔`0x8080`, bidirectional write test) while the
+  bit-9 named write returns success without changing the inverter, and the
+  stock SNA cloud decode places the buzzer at bit 7 (sole set flag with raw
+  `0x0080`), matching the ant0nkr lxp_modbus reference. Local Modbus/dongle
+  transports now resolve register 110 through a family-specific layout
+  (`OFFGRID_REGISTER_110_PARAM_KEYS`) for `EG4_OFFGRID`: ECO=15, buzzer=7,
+  displaced/unverified slots as `FUNC_110_BITn` placeholders. `FUNC_GREEN_EN`
+  intentionally keeps the 18kPV bit-8 position pending an SNA toggle test
+  (lxp_modbus suggests bit 14). All other families are byte-for-byte
+  unchanged; cloud writes were always correct (server-side bit mapping).
+
+### Changed
+
+- **`grid_peak_shaving` family default for EG4_OFFGRID is now `False`**
+  (same adjudication): GRID peak shaving requires grid-parallel
+  import/export blending, which the no-sellback SNA platform does not do —
+  it uses `FUNC_GEN_PEAK_SHAVING` (generator overload protection) instead.
+  Field data: stock SNA12K-US cloud dump reads `FUNC_GEN_PEAK_SHAVING=True`
+  / `FUNC_GRID_PEAK_SHAVING=False` and exposes no
+  `_12K_HOLD_GRID_PEAK_SHAVING_POWER` parameter, so the register probe
+  cannot re-enable the flag on this family either. The old `True` dated to
+  the v0.4.0 feature-table bulk fill, not hardware evidence. Generator
+  input-register definitions 124/125 (Egen) gained documentation caveats
+  recording why PR #220's raw-Wh AC-couple-energy reinterpretation was
+  rejected (the reporter's own sweep shows bit-field behavior, not energy).
+
+## [0.9.36b5] - 2026-06-12
+
+### Fixed
+
+- **Off-grid `consumption_power` falls back to the cloud load split**
+  ([eg4_web_monitor#226](https://github.com/joyfulhouse/eg4_web_monitor/issues/226)
+  residual): the cloud does not populate `consumptionPower` for the EG4
+  Off-Grid family (it reads a false 0 under load), so with no transport
+  data the property returned a useless value and the integration's Loads
+  sensor went unknown during hybrid link-down windows. The HTTP branch is
+  now family-aware: for EG4_OFFGRID it returns
+  `epsLoadPower + smartLoadPower + gridLoadPower` (the authoritative
+  split, live-confirmed on a 6000XP). The transport energy-balance path
+  and all other families are unchanged.
+
+## [0.9.36b4] - 2026-06-12
+
+### Added
+
+- **Forced discharge controls** (regs 82/83,
+  [eg4_web_monitor#207](https://github.com/joyfulhouse/eg4_web_monitor/issues/207),
+  co-authored with DevTodd): `set_forced_discharge_power(power_kw)` (cloud
+  float kW, 0–25.5) and `set_forced_discharge_soc_limit(percent)` setters
+  plus the matching properties. **Register 82 stores 100 W units (kW
+  scale), not percent** — hardware set-2.5kW-read-raw-25 verification and
+  the cloud maintain page (float field, [0, 25.5] = the raw uint8 ceiling)
+  falsified the 18KPV PDF's percent claim; the canonical table and scaling
+  map are corrected accordingly. Live-verified by cloud
+  write/readback/revert on an 18kPV and a FlexBOSS21.
+- **Register 202 located and documented** (`_12K_HOLD_STOP_DISCHG_VOLT`,
+  Stop Discharge Voltage, 40–56 V, raw decivolts — confirmed by
+  single-register cloud window reads plus a raw read of 400 against the
+  cloud's 40 V): canonical row added; the `REGISTER_TO_PARAM_KEYS` entry
+  is deliberately deferred to the release that ships the entity.
+- **Device type code 38 mapped to the EG4 6000XP (EG4_OFFGRID)**
+  ([eg4_web_monitor#222](https://github.com/joyfulhouse/eg4_web_monitor/issues/222)):
+  feature detection, transport discovery, model naming, and the network
+  scanner all resolve code 38 directly instead of falling back to
+  model-name heuristics (field-reported by two 6000XP systems).
+- **Cloud smart-load split exposed for the EG4 Off-Grid family**:
+  `smart_load_power` / `grid_load_power` properties surface the cloud-only
+  `smartLoadPower`/`gridLoadPower` runtime fields (the GEN-as-smart-load
+  port draw; `peps` is the combined backup output). In hybrid mode these
+  fields ride a supplemental HTTP runtime refresh on the normal runtime
+  TTL — gated to EG4_OFFGRID with a healthy link and cloud credentials —
+  so they keep updating instead of freezing at the setup-time snapshot.
+  No Modbus register source is known; pure-local operation does not carry
+  these fields.
+
+### Fixed
+
+- **WiFi dongle transport reconnects after silent path loss**
+  ([eg4_web_monitor#226](https://github.com/joyfulhouse/eg4_web_monitor/issues/226)):
+  a response timeout never tore down the TCP connection, so after a silent
+  path drop (VPN tunnel break, NAT/conntrack flush — no RST/FIN delivered)
+  every poll re-used the same dead ESTABLISHED flow forever and only an
+  integration reload could recover. Every response timeout and EOF now
+  tears the connection down; the next request (or link-down probe) dials a
+  fresh TCP connection, so polling self-restores within a poll cycle of the
+  path returning. The 0.9.36b3 reconnect gate covered pymodbus transports
+  only; this closes the same gap for the raw-TCP dongle transport.
+- **Dongle connection state can no longer be corrupted by partial
+  connects**: `_connected` is set only after the socket is fully usable
+  (open AND initial-data window handled); every connect failure path tears
+  down, and a dongle that accepts then immediately closes (single-client
+  slot conflict) now fails the attempt into the retry/backoff cycle instead
+  of being declared connected.
+- **Concurrent dongle connects serialized**: `connect()` now holds a
+  dedicated lock and the loser of a connect race returns the winner's
+  fresh connection — two parallel dials can no longer fight over the
+  dongle's single TCP slot. Request-path reconnection happens only under
+  the per-transaction lock.
+- **Write requests never resend the same packet on ACK loss** (codex
+  review): after a timeout, EOF, or socket error during a write, the
+  pre-built packet is not retransmitted in-call (the inverter may have
+  already applied it — a resend could replay stale bit-field values over a
+  concurrent writer's change). All write failures propagate to
+  `write_named_parameters`' sequence-level retry, which re-reads the
+  register before re-writing.
+- **Parallel-group history: `eImportDay`/`eGenDay` parsed from
+  monthColumn** (live-found during the 3.4.0-beta.4 verification): the
+  parallel endpoint names grid import `eImportDay` (not `eToUserDay`), so
+  the `grid_import` history series came back empty; generator energy is
+  now exposed as `generator_kwh` alongside it. Re-running a historical
+  import after upgrading backfills the affected series (idempotent).
+
+## [0.9.36b3] - 2026-06-11
+
+Backfilled summary — see the
+[GitHub release notes](https://github.com/joyfulhouse/pylxpweb/releases/tag/v0.9.36b3)
+for full detail.
+
+### Added
+
+- **Transport link health**: after 3 consecutive failed local reads the
+  link is declared down — stale transport data stops being served, the
+  dead link is probed every cycle (rate-limited), and everything
+  self-restores on reconnection.
+- **Typed monthly daily-energy history API** (`inverterChart`
+  monthColumn) powering the integration's `import_historical_data`
+  service.
+- **Energy value sanity checks**: physical-bounds validation with
+  always-on monotonicity, self-heal ceilings in both directions, and an
+  absolute daily cap on warm-up/seed reads.
+
+### Fixed
+
+- **Modbus write/read paths widened to `ModbusException`** so
+  `ConnectionException` reaches the reconnect gate (previously only
+  `ModbusIOException` counted and a dropped TCP session wedged the
+  pymodbus transport).
+- **Register-semantics cluster**: `output_power` load semantics, net
+  `grid_power` flow, canonical yield pairing, and battery cell-number
+  registers uncrossed (offset 14 = temp, 15 = voltage).
+
+## [0.9.36b2] - 2026-06-10
+
+### Fixed
+
+- **WiFi dongle parameter writes survive TCP connection drops without write
+  wars** ([eg4_web_monitor#201](https://github.com/joyfulhouse/eg4_web_monitor/issues/201)):
+  the dongle drops its TCP link mid-sequence during parameter writes (firmware
+  timeout / cloud-connection priority), which previously failed the whole write
+  in LOCAL-only mode. `write_named_parameters` now retries the ENTIRE
+  read-modify-write sequence on transport errors — tearing down the dead
+  connection and RE-READING the register before re-writing, so a retry can
+  never replay stale bit-field values over a concurrent writer's change.
+  Request-level timeout resends were removed from the write path for the same
+  reason, and post-write verification mismatches are now diagnostic-only
+  (warn + accept) instead of triggering a re-write.
+- **Write ACK echo validation** — misrouted dongle responses for the SAME
+  register can no longer confirm a write they don't belong to: FC06 ACKs must
+  echo the written value and FC16 ACKs the register count.
+  `_parse_response()` now parses the real 16-byte write-ACK layout
+  (action + func + serial + register + payload, no byte_count header);
+  read-style ACK echoes still fall through to the read parser, so a
+  legitimate ACK can never false-positive into a write error.
+- **All multi-request reads serialized on the dongle's single TCP link**:
+  `read_runtime`, `read_energy`, `read_battery`, `read_all_input_data`,
+  `read_parameters`, `read_midbox_runtime`, and the device-info reads now hold
+  the operation lock, so a coordinator poll can no longer interleave with a
+  write retry/reconnect and misroute responses.
+- **Cloud battery bank full/remaining capacity double-counted banks whose
+  master module mirrors pack totals** (eg4_web_monitor live finding): the
+  cloud's `fullCapacity`/`remainCapacity` aggregates sum the module array, and
+  on banks where module 01 reports PACK-level values the sum double-counts
+  (live 18kPV 3x280 Ah: 840+280+280 -> 1400 Ah "full", 487+162+173 -> 822 Ah
+  "remaining" vs true 840/495.6). `BatteryBank.full_capacity` /
+  `remain_capacity` now prefer the BMS-reported bank pair
+  (`maxBatteryCharge`/`currentBatteryCharge`), switching sources TOGETHER on a
+  single complete-pair gate: open-loop systems (lead-acid / no BMS comms,
+  pair reads 0/None) and half-present pairs keep the legacy fields for BOTH
+  properties, so the displayed pair can never mix sources.
+
+## [0.9.36b1] - 2026-06-08
+
+### Added
+
+- **`BatteryControlMode` enum** (`SOC` / `VOLTAGE`) exported from the package root,
+  with `from_voltage_flag()` and `is_voltage` helpers. Models the register-179
+  charge/discharge regime (bit 9 charge, bit 10 discharge; 0 = SOC, 1 = Voltage).
+- **Friendly battery-control helpers** on `HybridInverter`:
+  `get/set_battery_charge_control_mode`, `get/set_battery_discharge_control_mode`
+  (enum-based), and `get_active_charge_limit()` / `get_active_discharge_cutoff()`
+  which return whichever limit (SOC % or Voltage) the live regime is honoring.
+- **Register 228** (`HOLD_SYSTEM_CHARGE_VOLT_LIMIT`, DIV_10) added to the holding
+  register map.
+
+### Fixed
+
+- **Battery-control methods now work over the cloud (HTTP), not just local
+  transport.** The shared bit/value helpers (`_read_modbus_register`,
+  `_write_modbus_register`, `_get_register_bit`, `_set_modbus_register_bit`) are
+  now dual-path: transport mode does an on-device read-modify-write; cloud mode
+  uses the atomic `control_function` API for bits and `read_parameters` /
+  `write_parameters` for values. This fixes `get/set_battery_charge_control`,
+  `get/set_battery_discharge_control`, the voltage/SOC limit getters/setters,
+  current limits, charge-last, and start-discharge-power in cloud and hybrid mode.
+- **Cloud bit writes no longer corrupt sibling bits.** `set_eps_enabled`,
+  `set_forced_charge`, `set_forced_discharge`, and `set_sporadic_charge` previously
+  used a read-modify-write that read `reg_<n>` (a key the cloud API never returns),
+  zeroing the base value and clearing unrelated bits in register 21/233 in cloud
+  mode. They now route through the atomic `control_function` path.
+- **Cloud voltage reads reconstruct the raw register value** using each register's
+  scale, so callers that re-apply the scale get the same result as the transport
+  path, and float-like cloud strings (e.g. `"59.5"`) no longer raise.
+- **Register 169 cloud name** corrected to `HOLD_ON_GRID_EOD_VOLTAGE` (matches the
+  EG4 cloud API and the existing integer constant; a non-canonical spelling made
+  the on-grid EOD voltage unreadable in cloud mode). Confirmed via live cloud read.
+
 ## [0.9.35] - 2026-06-05
 
 ### Fixed

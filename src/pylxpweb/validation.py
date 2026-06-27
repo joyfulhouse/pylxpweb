@@ -35,6 +35,22 @@ MAX_ENERGY_DELTA = 108.0
 # "new" value as a self-healing baseline reset.
 SELF_HEAL_THRESHOLD = 3
 
+# Upward spike self-heal threshold.  Higher than downward (5 vs 3)
+# because upward spikes from 0xFFFF corruption are common; we want more
+# confidence before accepting a large jump as legitimate (e.g. after a
+# week-long outage).  At 30s polling, 5 rejections = ~2.5 minutes.
+UPWARD_SELF_HEAL_THRESHOLD = 5
+
+# Absolute ceiling for a self-healed lifetime baseline (kWh).  Matches the
+# transport-layer canary ceiling (1 GWh per counter) so a persistently
+# corrupt huge value can never become the accepted baseline via repetition —
+# the HTTP path has no is_corrupt() canary in front of this check.
+# Sub-ceiling stable jumps are accepted by design (a device offline for a
+# week MUST be able to re-baseline); if such a jump was actually corrupt,
+# the downward self-heal (3 rejections) restores the true baseline once
+# real values return, bounding the damage to a transient.
+MAX_LIFETIME_KWH = 999_999.0
+
 EnergyValidationResult = Literal["valid", "reject", "self_healed"]
 
 
@@ -76,23 +92,41 @@ def validate_energy_monotonicity(
 
         # Upward spike: impossibly large increase
         if curr > prev and (curr - prev) > max_delta:
+            count = reject_count + 1
+
+            if count >= UPWARD_SELF_HEAL_THRESHOLD and MIN_LIFETIME_KWH <= curr <= MAX_LIFETIME_KWH:
+                _LOGGER.warning(
+                    "%s upward spike accepted after %d consecutive rejections: "
+                    "%s was %.1f, accepting %.1f as new baseline",
+                    device_id,
+                    count,
+                    key,
+                    prev,
+                    curr,
+                )
+                return "self_healed", 0
+
             _LOGGER.warning(
-                "%s corrupt spike rejected: %s jumped %.1f -> %.1f "
-                "(delta %.1f > %.0f max) — keeping previous data",
+                "%s energy spike rejected (%d/%d): %s jumped %.1f -> %.1f (delta %.1f > %.0f max)",
                 device_id,
+                count,
+                UPWARD_SELF_HEAL_THRESHOLD,
                 key,
                 prev,
                 curr,
                 curr - prev,
                 max_delta,
             )
-            return "reject", 0
+            return "reject", count
 
         # Downward drop: monotonicity violation
         if curr < prev:
             count = reject_count + 1
 
-            if count >= SELF_HEAL_THRESHOLD and curr >= MIN_LIFETIME_KWH:
+            # Ceiling applies here too: if the PREVIOUS baseline was already
+            # absurd (accepted via an HTTP first read with no canary), a
+            # "drop" to a still-absurd value must not re-baseline either.
+            if count >= SELF_HEAL_THRESHOLD and MIN_LIFETIME_KWH <= curr <= MAX_LIFETIME_KWH:
                 _LOGGER.warning(
                     "%s corrupt baseline detected after %d consecutive "
                     "rejections: %s was %.1f, resetting to %.1f",
@@ -136,6 +170,11 @@ DEFAULT_RATED_POWER_KW = 108.0
 # so that very long outages don't produce absurdly large bounds.
 MAX_ELAPSED_HOURS = 24.0
 
+# Minimum plausible daily energy delta (kWh).  Energy registers have 0.1 kWh
+# resolution (16-bit with DIV_10 scaling), so any computed bound below this
+# would reject the smallest possible real increment.
+MIN_DAILY_DELTA = 0.1
+
 
 def validate_daily_energy_bounds(
     curr_values: dict[str, float | None],
@@ -175,10 +214,15 @@ def validate_daily_energy_bounds(
 
     # Compute time-based delta bound when we have elapsed time.
     # Cap at MAX_ELAPSED_HOURS so long outages don't weaken the bound.
+    # Floor at MIN_DAILY_DELTA so the bound never drops below register
+    # resolution (0.1 kWh) — prevents rejecting the smallest real tick.
     delta_bound: float | None = None
     if elapsed_seconds is not None and prev_values is not None:
         elapsed_hours = min(elapsed_seconds / 3600.0, MAX_ELAPSED_HOURS)
-        delta_bound = power * elapsed_hours * DAILY_ENERGY_MARGIN
+        delta_bound = max(
+            power * elapsed_hours * DAILY_ENERGY_MARGIN,
+            MIN_DAILY_DELTA,
+        )
 
     for key, curr in curr_values.items():
         if curr is None:

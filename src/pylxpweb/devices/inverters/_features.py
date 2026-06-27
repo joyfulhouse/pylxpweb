@@ -23,6 +23,7 @@ from pylxpweb.constants import (
     DEVICE_TYPE_CODE_LXP_LB,
     DEVICE_TYPE_CODE_PV_SERIES,
     DEVICE_TYPE_CODE_SNA,
+    DEVICE_TYPE_CODE_SNA_6000XP,
 )
 from pylxpweb.registers.inverter_input import pv_string_count_for_model
 
@@ -48,7 +49,7 @@ class InverterFamily(StrEnum):
 
     # EG4 Off-Grid Series - Off-grid capable, no grid sellback
     # Models: 12000XP, 6000XP
-    # Device type code: 54
+    # Device type codes: 54, 38 (6000XP variant, GH eg4_web_monitor#222)
     EG4_OFFGRID = "EG4_OFFGRID"
 
     # EG4 Hybrid Series - Grid-tied hybrid with sellback capability
@@ -142,6 +143,8 @@ def resolve_family(name: str | InverterFamily) -> InverterFamily:
 DEVICE_TYPE_CODE_TO_FAMILY: dict[int, InverterFamily] = {
     # EG4 Off-Grid Series (12000XP, 6000XP)
     DEVICE_TYPE_CODE_SNA: InverterFamily.EG4_OFFGRID,
+    # 6000XP variant reporting type code 38 (field-confirmed, GH eg4_web_monitor#222)
+    DEVICE_TYPE_CODE_SNA_6000XP: InverterFamily.EG4_OFFGRID,
     # EG4 Hybrid Series (18kPV, 12kPV, FlexBOSS21, FlexBOSS18)
     DEVICE_TYPE_CODE_PV_SERIES: InverterFamily.EG4_HYBRID,  # 18KPV, 12kPV
     DEVICE_TYPE_CODE_FLEXBOSS: InverterFamily.EG4_HYBRID,  # FlexBOSS21, FlexBOSS18
@@ -179,7 +182,16 @@ FAMILY_DEFAULT_FEATURES: dict[InverterFamily, dict[str, bool]] = {
         "three_phase_capable": False,
         "parallel_support": False,  # Single inverter typically
         "volt_watt_curve": False,
-        "grid_peak_shaving": True,
+        # GRID peak shaving needs grid-parallel operation (cap grid import by
+        # blending battery output) — the SNA platform is bypass-or-invert with
+        # no sellback/blending.  Field data agrees: stock SNA12K-US cloud dump
+        # has FUNC_GEN_PEAK_SHAVING=True (the generator-overload variant the
+        # platform actually uses) with FUNC_GRID_PEAK_SHAVING=False, and the
+        # 6000XP capture in eg4_web_monitor #222 also reads False.  The True
+        # default here dated to the original v0.4.0 feature-table bulk fill,
+        # not hardware evidence (adjudicated in eg4_web_monitor PR #220 /
+        # issue #197 follow-up).
+        "grid_peak_shaving": False,
         "drms_support": False,
     },
     InverterFamily.EG4_HYBRID: {
@@ -487,8 +499,8 @@ class InverterModelInfo:
                 self.power_rating, f"FlexBOSS{kw}" if kw else "FlexBOSS-Unknown"
             )
 
-        # EG4 Off-Grid Series
-        if device_type_code == DEVICE_TYPE_CODE_SNA:
+        # EG4 Off-Grid Series (54 = SNA12K/12000XP/6000XP, 38 = 6000XP variant)
+        if device_type_code in (DEVICE_TYPE_CODE_SNA, DEVICE_TYPE_CODE_SNA_6000XP):
             return f"EG4-{kw}KXP" if kw else "EG4-XP"
 
         # Luxpower EU Series

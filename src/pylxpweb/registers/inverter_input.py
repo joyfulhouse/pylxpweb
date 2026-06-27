@@ -426,8 +426,12 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
     RegisterDefinition(
         address=31,
         canonical_name="inverter_energy_today",
-        cloud_api_field="todayYielding",
-        ha_sensor_key="yield",
+        # No cloud mirror: the cloud's todayYielding is PV yield, NOT Einv_day.
+        # Proven live (2026-06-10): FlexBOSS21 todayYielding=530 (53.0 kWh) with
+        # pvPie permille rates summing to 1000 — 53.0×0.777=41.2 == todayExport,
+        # i.e. the pie distributes todayYielding as PV yield (eg4-bc0).
+        cloud_api_field=None,
+        ha_sensor_key="inverter_energy",
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
@@ -553,8 +557,10 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
     RegisterDefinition(
         address=46,
         canonical_name="inverter_energy_total",
-        cloud_api_field="totalYielding",
-        ha_sensor_key="yield_lifetime",
+        # No cloud mirror — totalYielding is lifetime PV yield, not Einv_all
+        # (same pvPie proof as reg 31, eg4-bc0).
+        cloud_api_field=None,
+        ha_sensor_key="inverter_energy_lifetime",
         bit_width=32,
         scale=ScaleFactor.DIV_10,
         unit="kWh",
@@ -1114,7 +1120,14 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
-        description="Generator energy today (Egen_day).",
+        description="Generator energy today (Egen_day). EG4_OFFGRID caveat: "
+        "the withdrawn eg4_web_monitor PR #220 claimed regs 124-126 hold "
+        "AC-couple energy in raw Wh (DIV_1000) on the 12000XP, but the "
+        "reporter's own earlier sweep (#196) read I124 == holding 179 "
+        "exactly (0x0800, the AC-couple enable bit) and successive captures "
+        "moved by exact powers of two — bit-field behavior, not energy "
+        "accrual. Semantics on the SNA platform are UNVERIFIED; do not "
+        "surface as a sensor for that family without a fresh capture.",
     ),
     RegisterDefinition(
         address=125,
@@ -1125,7 +1138,9 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_LIFETIME,
-        description="Generator cumulative energy (Egen_all, 32-bit).",
+        description="Generator cumulative energy (Egen_all, 32-bit). "
+        "EG4_OFFGRID caveat: unverified on the SNA platform — see the "
+        "register-124 note (PR #220 adjudication).",
     ),
     # =========================================================================
     # SPLIT-PHASE EPS L1/L2 (regs 127-138) — US models
@@ -1256,11 +1271,15 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
     RegisterDefinition(
         address=170,
         canonical_name="output_power",
-        cloud_api_field="consumptionPower114",
+        # pLoad170 is the reliable cloud mirror of reg 170.  consumptionPower114
+        # only mirrors it on some models: live capture (2026-06-10) showed
+        # 18kPV consumptionPower114=2395==pLoad170 but FlexBOSS21
+        # consumptionPower114=0 while pLoad170=2365 (eg4-9e4).
+        cloud_api_field="pLoad170",
         ha_sensor_key="output_power",
         signed=True,
         unit="W",
-        description="Total output power (on-grid load, split-phase systems).",
+        description="Total output power (Pload, on-grid load output).",
     ),
     # =========================================================================
     # LOAD ENERGY (regs 171-173) — from Luxpower extended regs
@@ -1508,7 +1527,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         address=223,
         canonical_name="epv4_day",
         cloud_api_field=None,  # DEFERRED: no cloud field for pv4-6 energy (epv4Today)
-        ha_sensor_key="epv4_day",
+        ha_sensor_key="pv4_yield",
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
@@ -1519,7 +1538,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         address=224,
         canonical_name="epv4_all",
         cloud_api_field=None,
-        ha_sensor_key="epv4_all",
+        ha_sensor_key="pv4_yield_lifetime",
         bit_width=32,
         scale=ScaleFactor.DIV_10,
         unit="kWh",
@@ -1531,7 +1550,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         address=226,
         canonical_name="epv5_day",
         cloud_api_field=None,  # DEFERRED: no cloud field for pv4-6 energy (epv5Today)
-        ha_sensor_key="epv5_day",
+        ha_sensor_key="pv5_yield",
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
@@ -1542,7 +1561,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         address=227,
         canonical_name="epv5_all",
         cloud_api_field=None,
-        ha_sensor_key="epv5_all",
+        ha_sensor_key="pv5_yield_lifetime",
         bit_width=32,
         scale=ScaleFactor.DIV_10,
         unit="kWh",
@@ -1554,7 +1573,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         address=229,
         canonical_name="epv6_day",
         cloud_api_field=None,  # DEFERRED: no cloud field for pv4-6 energy (epv6Today)
-        ha_sensor_key="epv6_day",
+        ha_sensor_key="pv6_yield",
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
@@ -1565,7 +1584,7 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         address=230,
         canonical_name="epv6_all",
         cloud_api_field=None,
-        ha_sensor_key="epv6_all",
+        ha_sensor_key="pv6_yield_lifetime",
         bit_width=32,
         scale=ScaleFactor.DIV_10,
         unit="kWh",

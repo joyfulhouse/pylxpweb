@@ -86,8 +86,9 @@ class GenericInverter(BaseInverter):
                     )
                 )
 
-            # PV Power
-            if hasattr(self._runtime, "ppv"):
+            # PV Power — ppv is None for an offline device (cloud omits it);
+            # skip the entity rather than emitting an unknown 0 (eg4_web_monitor#256).
+            if self._runtime.ppv is not None:
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_pv_power",
@@ -99,8 +100,13 @@ class GenericInverter(BaseInverter):
                     )
                 )
 
-            # Grid Power
-            if hasattr(self._runtime, "pToGrid"):
+            # Grid Power — NET flow (eg4-9wf): power_to_user − power_to_grid,
+            # positive = importing from grid, negative = exporting.  Omitted
+            # entirely on a partial read (one side missing) rather than
+            # treating the absent side as 0 and reporting phantom flow.
+            p_to_user = getattr(self._runtime, "pToUser", None)
+            p_to_grid = getattr(self._runtime, "pToGrid", None)
+            if p_to_user is not None and p_to_grid is not None:
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_grid_power",
@@ -108,7 +114,7 @@ class GenericInverter(BaseInverter):
                         device_class=DeviceClass.POWER,
                         state_class=StateClass.MEASUREMENT,
                         unit_of_measurement="W",
-                        value=self._runtime.pToGrid,
+                        value=p_to_user - p_to_grid,
                     )
                 )
 
@@ -125,8 +131,9 @@ class GenericInverter(BaseInverter):
                     )
                 )
 
-            # Battery Charge/Discharge Power
-            if hasattr(self._runtime, "batPower"):
+            # Battery Charge/Discharge Power — batPower is None for an offline
+            # device (cloud omits it); skip rather than emit None (eg4_web_monitor#256).
+            if self._runtime.batPower is not None:
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_battery_power",

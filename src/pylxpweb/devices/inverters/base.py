@@ -42,10 +42,19 @@ from ._runtime_properties import InverterRuntimePropertiesMixin
 
 _LOGGER = logging.getLogger(__name__)
 
+# A never-evict battery accumulator (eg4_web_monitor#258) keeps re-presenting a
+# battery the firmware stopped surfacing locally, with its last_seen frozen.  In
+# the hybrid supplemental gate, a transport battery whose last_seen lags the
+# freshest sibling by more than this window is treated as not currently surfaced,
+# so the cloud supplement that keeps it live is not silenced.  Kept below the
+# integration's 5-minute transport-freshness overlay so the cloud value is
+# refreshed before the overlay switches to it.
+_SUPPLEMENTAL_BATTERY_STALE_AFTER = timedelta(minutes=2)
+
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
-    from pylxpweb.models import EnergyInfo, InverterRuntime
+    from pylxpweb.models import EnergyInfo, InverterRuntime, QuickChargeStatus
     from pylxpweb.transports.protocol import InverterTransport
 
 
@@ -138,6 +147,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         self._battery_cache_time: datetime | None = None
         self._battery_cache_ttl = timedelta(seconds=30)  # 30-second TTL for battery
         self._battery_cache_lock = asyncio.Lock()
+        # Dedicated clock for the hybrid supplemental cloud battery refresh
+        # (eg4_web_monitor#258).  The combined read keeps _battery_cache_time
+        # fresh on its own, so the supplemental needs its own TTL gate.
+        self._supplemental_battery_http_time: datetime | None = None
 
         # ===== Firmware Update Cache =====
         # Initialize firmware update detection (from FirmwareUpdateMixin)
@@ -245,6 +258,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     def transport_battery(self) -> BatteryBankData | None:
         """Battery-bank data from the local transport, or None when not transport-backed."""
         return self._transport_battery
+
+    def _on_transport_link_down(self) -> None:
+        """Stop serving cached transport data once the link is declared down.
+
+        Runtime properties prefer ``_transport_*`` data whenever present, so
+        a dead link would otherwise keep serving the last local read forever
+        as if it were fresh (eg4-57g / integration #226).  Clearing the
+        caches makes the properties fall back to HTTP data in hybrid mode
+        (kept moving by ``_refresh_http_fallback``) and return None in
+        local-only mode (the consumer marks the device unavailable).  The
+        transport itself stays attached — reads keep being attempted every
+        cycle and a successful probe repopulates these caches immediately.
+        """
+        self._transport_runtime = None
+        self._transport_energy = None
+        self._transport_battery = None
 
     # ============================================================================
     # Factory Methods
@@ -360,9 +389,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> print(f"SOC: {inverter.battery_soc}%")
 
         Note:
-            Control operations (enable_quick_charge, set_ac_charge_power, etc.)
-            are not available when using transport mode, as they require the
-            HTTP API. Use transport mode for read-only monitoring.
+            Most control operations (e.g. set_ac_charge_power) require the
+            HTTP API and are not available in transport mode. Quick charge is
+            an exception — enable_quick_charge/disable_quick_charge/
+            set_quick_charge_minute write registers 233/234 directly over the
+            transport. Use transport mode primarily for monitoring.
         """
         # Import here to avoid circular dependency
         from pylxpweb.devices.inverters.generic import GenericInverter
@@ -545,11 +576,97 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         return self._transport is not None
 
+    @property
+    def _wants_hybrid_supplemental_runtime(self) -> bool:
+        """True when cloud-only live runtime fields need HTTP refreshes in hybrid.
+
+        The EG4 Off-Grid family carries live cloud-only runtime fields — the
+        smart-load split (``smartLoadPower`` / ``gridLoadPower``, GH
+        eg4_web_monitor#222) — that have no Modbus register, so a healthy
+        transport-only refresh loop would freeze them at the setup-time
+        ``_runtime`` snapshot.  Families without cloud-only live fields
+        return False so hybrid operation stays purely local for them.
+        Extend this consciously if another family grows cloud-only fields.
+        """
+        features = getattr(self, "_features", None)
+        if features is None:
+            return False
+        return features.model_family is InverterFamily.EG4_OFFGRID
+
+    @property
+    def _wants_hybrid_supplemental_battery(self) -> bool:
+        """True when the cloud reports more batteries than the transport surfaces.
+
+        Some firmware pins <=4 batteries to the 4 Modbus battery slots and never
+        rotates the rest into view (eg4_web_monitor#258), so a healthy
+        transport-only battery refresh leaves those extra batteries frozen at
+        their setup-time ``_battery_bank`` snapshot.  When the cloud knows more
+        batteries than the transport currently surfaces, a supplemental HTTP
+        refresh keeps them live.  Returns False once the transport surfaces them
+        all, so systems whose batteries are fully local make no extra cloud call.
+        """
+        bank = self._battery_bank
+        if bank is None:
+            return False
+        cloud_count = int(getattr(bank, "battery_count", 0) or 0)
+        if cloud_count <= 0:
+            return False
+        transport_battery = self._transport_battery
+        if transport_battery is None:
+            return True
+        # Count non-ghost slots: an empty 5002+ register slot reads 0V/0% SoC
+        # (pylxpweb's canonical ghost definition), so it must not count as a
+        # surfaced battery — otherwise the gate could never trip.
+        candidates = [
+            batt
+            for batt in (getattr(transport_battery, "batteries", None) or [])
+            if not (batt.voltage == 0 and batt.soc == 0)
+        ]
+        if not candidates:
+            return True
+        # Exclude never-evict frozen batteries (eg4_web_monitor#258): on
+        # non-rotating firmware the accumulator re-presents a battery the
+        # firmware stopped surfacing locally, with its last_seen frozen.  If it
+        # counted as surfaced, surfaced would reach cloud_count and silence this
+        # very supplement — freezing that battery at its last value.  A battery
+        # read in step with the freshest sibling is genuinely surfaced; one
+        # materially older was not refreshed this cycle.  The comparison is
+        # relative (newest sibling, not wall-clock), so it is poll-interval
+        # agnostic and needs no clock read.
+        seen = [
+            batt.last_seen for batt in candidates if getattr(batt, "last_seen", None) is not None
+        ]
+        if not seen:
+            # No timestamps (legacy transport): keep the count-only gate rather
+            # than over-fetching cloud data.
+            surfaced = len(candidates)
+        else:
+            newest = max(seen)
+            surfaced = sum(
+                1
+                for batt in candidates
+                if getattr(batt, "last_seen", None) is not None
+                and newest - batt.last_seen <= _SUPPLEMENTAL_BATTERY_STALE_AFTER
+            )
+        return cloud_count > surfaced
+
     async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
         """Refresh runtime, energy, battery, and optionally parameters from API.
 
         This method fetches data concurrently for optimal performance.
         Results are cached with different TTLs based on update frequency.
+
+        When the local transport link is down (``transport_link_down``),
+        the transport is still probed — bypassing the cache gate, since
+        degraded HTTP fallback fetches stamp the same cache timestamps —
+        so the link can recover.  Probes are rate-limited to one per
+        LINK_PROBE_MIN_INTERVAL_SECONDS (coordinator paths can call
+        refresh() twice per tick); within the interval the call behaves
+        as if caches were fresh, and ``force`` cannot exceed the probe
+        rate against a dead link.  After the reads, if the link is
+        (still) down and cloud credentials exist, runtime, energy, and
+        battery are fetched via the HTTP API so values keep moving
+        instead of freezing on the last local read (eg4-57g).
 
         Args:
             force: If True, bypass cache and force fresh data from API
@@ -558,9 +675,25 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         # Prepare tasks to fetch only expired/missing data
         tasks: list[Awaitable[None]] = []
 
-        runtime_expired = self._is_cache_expired(
-            self._runtime_cache_time, self._runtime_cache_ttl, force
-        )
+        link_down = self._transport is not None and self.transport_link_down
+        if link_down:
+            # Every transport read against a down link is a probe: collapse
+            # same-tick duplicates to one and suppress the energy/battery
+            # reads entirely (one read is enough to detect recovery; the
+            # HTTP fallback below keeps data moving meanwhile).
+            runtime_expired = self._link_probe_due()
+            energy_expired = False
+            battery_expired = False
+        else:
+            runtime_expired = self._is_cache_expired(
+                self._runtime_cache_time, self._runtime_cache_ttl, force
+            )
+            energy_expired = self._is_cache_expired(
+                self._energy_cache_time, self._energy_cache_ttl, force
+            )
+            battery_expired = self._is_cache_expired(
+                self._battery_cache_time, self._battery_cache_ttl, force
+            )
 
         # Combined read path: when transport supports read_all_input_data
         # and runtime is expired, read all input registers in one shot
@@ -575,15 +708,55 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             if runtime_expired:
                 tasks.append(self._fetch_runtime())
 
-            if self._is_cache_expired(self._energy_cache_time, self._energy_cache_ttl, force):
+            if energy_expired:
                 tasks.append(self._fetch_energy())
 
-            if self._is_cache_expired(self._battery_cache_time, self._battery_cache_ttl, force):
+            if battery_expired:
                 should_fetch_battery = self._battery_bank is None or (
                     self._battery_bank and self._battery_bank.battery_count > 0
                 )
                 if should_fetch_battery:
                     tasks.append(self._fetch_battery())
+
+        # Hybrid supplemental cloud runtime (GH eg4_web_monitor#222): with a
+        # healthy transport attached the read paths above only ever touch
+        # _transport_runtime, so cloud-only live fields (the EG4 Off-Grid
+        # smart-load split: smartLoadPower / gridLoadPower) would freeze at
+        # their setup-time _runtime snapshot.  Ride the same runtime TTL so
+        # the cloud call rate matches pure-cloud mode (client-level response
+        # caching bounds it further).  The link-down case is covered by
+        # _refresh_http_fallback() below, and pure-cloud devices refresh
+        # _runtime through _fetch_runtime() already.
+        supplemental_http_runtime = (
+            runtime_expired
+            and self._transport is not None
+            and not link_down
+            and self._cloud_fallback_available
+            and self._wants_hybrid_supplemental_runtime
+        )
+        if supplemental_http_runtime:
+            tasks.append(self._fetch_runtime_http())
+
+        # Hybrid supplemental cloud battery (eg4_web_monitor#258): mirror of the
+        # supplemental runtime above.  Some firmware exposes only 4 batteries
+        # through the 4 Modbus slots and never rotates the rest into view, so a
+        # healthy transport-only refresh freezes the extra batteries at their
+        # setup-time cloud snapshot.  When the cloud reports more batteries than
+        # the transport surfaces, refresh the cloud battery bank so those stay
+        # live.  Gated on a dedicated clock at the battery TTL — the combined
+        # read keeps _battery_cache_time fresh, so it cannot gate this.  The
+        # link-down case is covered by _refresh_http_fallback() below.
+        supplemental_http_battery = (
+            self._transport is not None
+            and not link_down
+            and self._cloud_fallback_available
+            and self._wants_hybrid_supplemental_battery
+            and self._is_cache_expired(
+                self._supplemental_battery_http_time, self._battery_cache_ttl, force
+            )
+        )
+        if supplemental_http_battery:
+            tasks.append(self._fetch_supplemental_battery_http())
 
         # Parameters (1hr TTL) - only fetch if explicitly requested
         if include_parameters and self._is_cache_expired(
@@ -595,38 +768,84 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+        # Degraded cloud fallback (hybrid only): re-check AFTER the reads so
+        # both an entry-time down link and a transition that happened during
+        # this cycle get HTTP data in the same cycle.  A successful probe
+        # above already reset the flag, in which case fresh local data was
+        # just stored and no cloud call is made.
+        if (
+            self._transport is not None
+            and self.transport_link_down
+            and self._cloud_fallback_available
+        ):
+            # On the cycle that TRANSITIONS to link-down, the hybrid
+            # supplemental fetch above already refreshed the cloud runtime —
+            # skip the runtime leg so one cycle never fetches it twice
+            # (codex r2 MEDIUM on eg4-1d0).
+            await self._refresh_http_fallback(skip_runtime=supplemental_http_runtime)
+
         self._last_refresh = datetime.now()
+
+    async def _refresh_http_fallback(self, skip_runtime: bool = False) -> None:
+        """Fetch runtime/energy/battery from the cloud while the link is down.
+
+        The transport data caches were cleared on the link-down transition
+        (``_on_transport_link_down``), so the runtime properties fall back
+        to the HTTP data refreshed here.  Client-level response caches keep
+        the actual cloud call rate bounded regardless of how often this
+        runs.
+
+        Args:
+            skip_runtime: Skip the runtime leg.  Set on the link-down
+                TRANSITION cycle when the hybrid supplemental fetch already
+                refreshed the cloud runtime this cycle (codex r2 MEDIUM).
+        """
+        fetches: list[Awaitable[None]] = [
+            self._fetch_energy_http(),
+            self._fetch_battery_http(),
+        ]
+        if not skip_runtime:
+            fetches.append(self._fetch_runtime_http())
+        await asyncio.gather(*fetches, return_exceptions=True)
 
     async def _fetch_runtime(self) -> None:
         """Fetch runtime data with caching.
 
         Uses transport if available, otherwise falls back to HTTP API.
         """
+        if self._transport is None:
+            await self._fetch_runtime_http()
+            return
         async with self._runtime_cache_lock:
             try:
-                if self._transport is not None:
-                    # Use transport for direct local communication
-                    transport_data = await self._transport.read_runtime()
-                    if self.validate_data and transport_data.is_corrupt(
-                        max_power_watts=self._max_power_watts,
-                    ):
-                        _LOGGER.warning(
-                            "Corrupt runtime data for %s, keeping cached",
-                            self.serial_number,
-                        )
-                        return
-                    # Store transport data directly - we'll expose via properties
-                    self._transport_runtime = transport_data
-                    self._runtime_cache_time = datetime.now()
-                else:
-                    # Use HTTP API
-                    runtime_data = await self._client.api.devices.get_inverter_runtime(
-                        self.serial_number
+                # Use transport for direct local communication
+                transport_data = await self._tracked_transport_read(self._transport.read_runtime())
+                if self.validate_data and transport_data.is_corrupt(
+                    max_power_watts=self._max_power_watts,
+                ):
+                    _LOGGER.warning(
+                        "Corrupt runtime data for %s, keeping cached",
+                        self.serial_number,
                     )
-                    self._runtime = runtime_data
-                    self._runtime_cache_time = datetime.now()
+                    return
+                # Store transport data directly - we'll expose via properties
+                self._transport_runtime = transport_data
+                self._runtime_cache_time = datetime.now()
             except Exception as err:
-                # Keep existing cached data on API/connection/transport errors
+                # Keep existing cached data on transport errors
+                _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
+
+    async def _fetch_runtime_http(self) -> None:
+        """Fetch runtime data from the HTTP API with caching."""
+        async with self._runtime_cache_lock:
+            try:
+                runtime_data = await self._client.api.devices.get_inverter_runtime(
+                    self.serial_number
+                )
+                self._runtime = runtime_data
+                self._runtime_cache_time = datetime.now()
+            except Exception as err:
+                # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
 
     def _energy_elapsed_seconds(self) -> float | None:
@@ -641,62 +860,66 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Uses transport if available, otherwise falls back to HTTP API.
         Validates both lifetime monotonicity and daily energy bounds.
         """
+        if self._transport is None:
+            await self._fetch_energy_http()
+            return
         async with self._energy_cache_lock:
             try:
-                if self._transport is not None:
-                    # Use transport for direct local communication
-                    transport_data = await self._transport.read_energy()
-                    if self.validate_data and transport_data.is_corrupt():
-                        _LOGGER.warning(
-                            "Corrupt energy data for %s, keeping cached",
-                            self.serial_number,
-                        )
-                        return
-                    if self._transport_energy is not None and not self._is_energy_valid(
-                        self._transport_energy.lifetime_energy_values(),
-                        transport_data.lifetime_energy_values(),
-                    ):
-                        return  # keep cached energy data
-                    prev_daily = (
-                        self._transport_energy.daily_energy_values()
-                        if self._transport_energy is not None
-                        else None
+                # Use transport for direct local communication
+                transport_data = await self._tracked_transport_read(self._transport.read_energy())
+                if self.validate_data and transport_data.is_corrupt():
+                    _LOGGER.warning(
+                        "Corrupt energy data for %s, keeping cached",
+                        self.serial_number,
                     )
-                    if not self._is_daily_energy_valid(
-                        transport_data.daily_energy_values(),
-                        prev_daily,
-                        self._energy_elapsed_seconds(),
-                    ):
-                        return  # keep cached energy data
-                    self._transport_energy = transport_data
-                    self._energy_cache_time = datetime.now()
-                else:
-                    # Use HTTP API
-                    energy_data = await self._client.api.devices.get_inverter_energy(
-                        self.serial_number
-                    )
-                    curr = InverterEnergyData.from_http_response(energy_data)
-                    prev = (
-                        InverterEnergyData.from_http_response(self._energy)
-                        if self._energy is not None
-                        else None
-                    )
-                    if prev is not None and not self._is_energy_valid(
-                        prev.lifetime_energy_values(),
-                        curr.lifetime_energy_values(),
-                    ):
-                        return  # keep cached energy data
-                    prev_daily = prev.daily_energy_values() if prev is not None else None
-                    if not self._is_daily_energy_valid(
-                        curr.daily_energy_values(),
-                        prev_daily,
-                        self._energy_elapsed_seconds(),
-                    ):
-                        return  # keep cached energy data
-                    self._energy = energy_data
-                    self._energy_cache_time = datetime.now()
+                    return
+                if self._transport_energy is not None and not self._is_energy_valid(
+                    self._transport_energy.lifetime_energy_values(),
+                    transport_data.lifetime_energy_values(),
+                ):
+                    return  # keep cached energy data
+                prev_daily = (
+                    self._transport_energy.daily_energy_values()
+                    if self._transport_energy is not None
+                    else None
+                )
+                if not self._is_daily_energy_valid(
+                    transport_data.daily_energy_values(),
+                    prev_daily,
+                ):
+                    return  # keep cached energy data
+                self._transport_energy = transport_data
+                self._energy_cache_time = datetime.now()
             except Exception as err:
-                # Keep existing cached data on API/connection/transport errors
+                # Keep existing cached data on transport errors
+                _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
+
+    async def _fetch_energy_http(self) -> None:
+        """Fetch energy data from the HTTP API with caching and validation."""
+        async with self._energy_cache_lock:
+            try:
+                energy_data = await self._client.api.devices.get_inverter_energy(self.serial_number)
+                curr = InverterEnergyData.from_http_response(energy_data)
+                prev = (
+                    InverterEnergyData.from_http_response(self._energy)
+                    if self._energy is not None
+                    else None
+                )
+                if prev is not None and not self._is_energy_valid(
+                    prev.lifetime_energy_values(),
+                    curr.lifetime_energy_values(),
+                ):
+                    return  # keep cached energy data
+                prev_daily = prev.daily_energy_values() if prev is not None else None
+                if not self._is_daily_energy_valid(
+                    curr.daily_energy_values(),
+                    prev_daily,
+                ):
+                    return  # keep cached energy data
+                self._energy = energy_data
+                self._energy_cache_time = datetime.now()
+            except Exception as err:
+                # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
 
     async def _fetch_battery(self) -> None:
@@ -706,39 +929,48 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Note: Transport returns BatteryBankData with aggregate info only
         (individual battery data requires HTTP API).
         """
+        if self._transport is None:
+            await self._fetch_battery_http()
+            return
         async with self._battery_cache_lock:
             try:
-                if self._transport is not None:
-                    # Use transport for direct local communication
-                    # Transport returns BatteryBankData with both aggregate and
-                    # individual battery data from Modbus registers (5000+)
-                    transport_battery = await self._transport.read_battery()
-                    if transport_battery is not None:
-                        if self.validate_data and transport_battery.is_corrupt():
-                            _LOGGER.warning(
-                                "Corrupt battery data for %s, keeping cached",
-                                self.serial_number,
-                            )
-                            return
-                        self._transport_battery = transport_battery
-                        # Supplement with cloud metadata (battery type, model)
-                        await self._fetch_battery_metadata()
-                        self._apply_battery_metadata()
-                    self._battery_cache_time = datetime.now()
-                else:
-                    # Use HTTP API for full battery details
-                    battery_data = await self._client.api.devices.get_battery_info(
-                        self.serial_number
-                    )
+                # Use transport for direct local communication
+                # Transport returns BatteryBankData with both aggregate and
+                # individual battery data from Modbus registers (5000+)
+                transport_battery = await self._tracked_transport_read(
+                    self._transport.read_battery()
+                )
+                if transport_battery is not None:
+                    if self.validate_data and transport_battery.is_corrupt():
+                        _LOGGER.warning(
+                            "Corrupt battery data for %s, keeping cached",
+                            self.serial_number,
+                        )
+                        return
+                    self._transport_battery = transport_battery
+                    # Supplement with cloud metadata (battery type, model)
+                    await self._fetch_battery_metadata()
+                    self._apply_battery_metadata()
+                self._battery_cache_time = datetime.now()
+            except Exception as err:
+                # Keep existing cached data on transport errors.  Debug level:
+                # this fires every poll during a link outage.
+                _LOGGER.debug("Failed to fetch battery data for %s: %s", self.serial_number, err)
 
-                    # Create/update battery bank with aggregate data
-                    await self._update_battery_bank(battery_data)
+    async def _fetch_battery_http(self) -> None:
+        """Fetch full battery details from the HTTP API with caching."""
+        async with self._battery_cache_lock:
+            try:
+                battery_data = await self._client.api.devices.get_battery_info(self.serial_number)
 
-                    # Update individual batteries
-                    if battery_data.batteryArray:
-                        await self._update_batteries(battery_data.batteryArray)
+                # Create/update battery bank with aggregate data
+                await self._update_battery_bank(battery_data)
 
-                    self._battery_cache_time = datetime.now()
+                # Update individual batteries
+                if battery_data.batteryArray:
+                    await self._update_batteries(battery_data.batteryArray)
+
+                self._battery_cache_time = datetime.now()
             except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
                 # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch battery data for %s: %s", self.serial_number, err)
@@ -752,6 +984,19 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     type(err).__name__,
                 )
 
+    async def _fetch_supplemental_battery_http(self) -> None:
+        """Refresh the cloud battery bank in hybrid (eg4_web_monitor#258).
+
+        Mirrors the supplemental cloud runtime fetch: with a healthy transport
+        the battery read path only touches ``_transport_battery``, so batteries
+        the local registers never surface freeze at their setup-time cloud
+        snapshot.  ``_fetch_battery_http`` also stamps ``_battery_cache_time``,
+        but the combined read keeps that fresh on its own clock; a dedicated
+        timestamp gates this supplemental at the battery TTL.
+        """
+        await self._fetch_battery_http()
+        self._supplemental_battery_http_time = datetime.now()
+
     async def _fetch_combined_input_data(self) -> None:
         """Fetch runtime, energy, and battery via a single combined read.
 
@@ -760,7 +1005,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         shared snapshot.  Reduces Modbus transactions by ~33%.
         """
         try:
-            runtime, energy, battery = await self._transport.read_all_input_data()  # type: ignore[union-attr]
+            # refresh() only schedules this path when the transport exposes
+            # read_all_input_data — re-fetch via getattr for type narrowing
+            # (the method is not part of the InverterTransport protocol).
+            combined_fn = getattr(self._transport, "read_all_input_data", None)
+            if combined_fn is None:
+                return
+            runtime, energy, battery = await self._tracked_transport_read(combined_fn())
             if self.validate_data:
                 if runtime.is_corrupt(max_power_watts=self._max_power_watts):
                     _LOGGER.warning(
@@ -785,27 +1036,31 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             # corrupt first read, so energy_valid is unconditionally True
             # here.  When validate_data is disabled, first reads are always
             # accepted.
-            if self._transport_energy is None:
-                energy_valid = True
-            else:
-                energy_valid = self._is_energy_valid(
-                    self._transport_energy.lifetime_energy_values(),
-                    energy.lifetime_energy_values(),
-                )
-            if energy_valid:
-                prev_daily = (
-                    self._transport_energy.daily_energy_values()
-                    if self._transport_energy is not None
-                    else None
-                )
-                energy_valid = self._is_daily_energy_valid(
-                    energy.daily_energy_values(),
-                    prev_daily,
-                    self._energy_elapsed_seconds(),
-                )
-            if energy_valid:
-                self._transport_energy = energy
-                self._energy_cache_time = datetime.now()
+            # The energy lock serializes the validate-then-assign sequence
+            # against _fetch_energy() from a concurrent external refresh()
+            # (e.g. a manual refresh button overlapping a poll), so the
+            # prev-baseline comparison and reject counters cannot interleave.
+            async with self._energy_cache_lock:
+                if self._transport_energy is None:
+                    energy_valid = True
+                else:
+                    energy_valid = self._is_energy_valid(
+                        self._transport_energy.lifetime_energy_values(),
+                        energy.lifetime_energy_values(),
+                    )
+                if energy_valid:
+                    prev_daily = (
+                        self._transport_energy.daily_energy_values()
+                        if self._transport_energy is not None
+                        else None
+                    )
+                    energy_valid = self._is_daily_energy_valid(
+                        energy.daily_energy_values(),
+                        prev_daily,
+                    )
+                if energy_valid:
+                    self._transport_energy = energy
+                    self._energy_cache_time = datetime.now()
             if battery is not None:
                 # Accept battery data only if it passes canary checks.
                 # Corrupt battery data is silently skipped, preserving the
@@ -1009,20 +1264,27 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
     @property
     def power_output(self) -> float | None:
-        """Get current power output in watts.
+        """Get current load output power (Pload) in watts.
+
+        Unified LOAD-OUTPUT semantics on both paths (eg4-9e4): the Modbus
+        source is input register 170 (``output_power``) and the cloud source
+        is its reliable mirror ``pLoad170``.  Previously the cloud path read
+        ``pinv`` (reg 16), which duplicated :attr:`inverter_power` /
+        the ``ac_power`` sensor.
 
         Returns:
-            Current AC power output in watts, or None if unavailable.
+            Load output power in watts, or None if unavailable.
         """
         # Check transport data first
         if self._transport_runtime is not None:
-            val = self._transport_runtime.inverter_power
+            val = self._transport_runtime.output_power
             return float(val) if val is not None else None
 
-        # Fall back to HTTP data
+        # Fall back to HTTP data (pLoad170 — older payloads may omit it)
         if self._runtime is None:
             return None
-        return float(getattr(self._runtime, "pinv", 0))
+        cloud_val = self._runtime.pLoad170
+        return float(cloud_val) if cloud_val is not None else None
 
     @property
     def total_energy_today(self) -> float | None:
@@ -2088,16 +2350,28 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         Universal control: Most inverters support peak shaving.
 
+        Returns None — never a fabricated 0.0 — when the parameter key is
+        absent. This matters in HYBRID mode (eg4-gfu5 codex HIGH): parameters
+        are refreshed through the local transport, whose name map deliberately
+        does not include ``_12K_HOLD_GRID_PEAK_SHAVING_POWER`` (the PS1
+        register's raw encoding is unverified), so a key-miss means "value
+        unavailable locally", not "setpoint is 0 kW".
+
         Returns:
-            Current power limit in kilowatts, or None if parameters not loaded
+            Current power limit in kilowatts, or None if parameters are not
+            loaded or do not contain the cloud-named key.
 
         Example:
             >>> power = inverter.grid_peak_shaving_power_limit
             >>> power
             7.0
         """
-        value = self._get_parameter("_12K_HOLD_GRID_PEAK_SHAVING_POWER", 0.0, float)
-        return float(value) if value is not None else None
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("_12K_HOLD_GRID_PEAK_SHAVING_POWER")
+        if value is None:
+            return None
+        return float(value)
 
     # ============================================================================
     # AC Charge SOC Limit Control (Issue #12)
@@ -2109,20 +2383,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters support AC charge SOC limits.
 
         Args:
-            soc_percent: SOC percentage (0 to 100)
+            soc_percent: SOC percentage (0 to 101). 101 = never stop AC
+                charging (the stop threshold is unreachable), used for
+                battery cell balancing.
 
         Returns:
             True if successful
 
         Raises:
-            ValueError: If soc_percent is out of valid range (0-100)
+            ValueError: If soc_percent is out of valid range (0-101)
 
         Example:
             >>> await inverter.set_ac_charge_soc_limit(90)
             True
         """
-        if not 0 <= soc_percent <= 100:
-            raise ValueError(f"AC charge SOC limit must be between 0 and 100%, got {soc_percent}")
+        if not 0 <= soc_percent <= 101:
+            raise ValueError(f"AC charge SOC limit must be between 0 and 101%, got {soc_percent}")
 
         result = await self._client.api.control.write_parameter(
             self.serial_number, "HOLD_AC_CHARGE_SOC_LIMIT", str(soc_percent)
@@ -2141,8 +2417,8 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters support AC charge SOC limits.
 
         Returns:
-            Current SOC limit percentage (0-100), or None if parameters not loaded
-            or parameter not found
+            Current SOC limit percentage (0-101; 101 = never stop AC charging),
+            or None if parameters not loaded or parameter not found
 
         Example:
             >>> limit = inverter.ac_charge_soc_limit
@@ -2152,6 +2428,356 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if self.parameters is None:
             return None
         value = self.parameters.get("HOLD_AC_CHARGE_SOC_LIMIT")
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+            return int_value if 0 <= int_value <= 101 else None
+        except (ValueError, TypeError):
+            return None
+
+    async def set_forced_discharge_power(self, power_kw: float) -> bool:
+        """Set forced discharge power command (register 82).
+
+        Controls the discharge power level used while forced discharge
+        (``FUNC_FORCED_DISCHG_EN``) is active.  The register stores 100W
+        units (0-255 = 0-25.5 kW) — the same encoding as AC charge power
+        (reg 66) and forced charge power (reg 74).  Hardware-verified via
+        dongle in eg4_web_monitor PR #249: entering 2.5 kW on the inverter
+        panel reads back raw 25.  The cloud "Forced Discharge Power 1(kW)"
+        field accepts float kW in [0, 25.5].
+
+        Args:
+            power_kw: Power limit in kilowatts (0.0 to 25.5)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If power_kw is out of valid range
+
+        Example:
+            >>> await inverter.set_forced_discharge_power(2.5)
+            True
+        """
+        if not 0.0 <= power_kw <= 25.5:
+            raise ValueError(
+                f"Forced discharge power must be between 0.0 and 25.5 kW, got {power_kw}"
+            )
+
+        # API accepts kW values directly
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, "HOLD_FORCED_DISCHG_POWER_CMD", str(power_kw)
+        )
+
+        if result.success:
+            self._parameters_cache_time = None
+
+        return result.success
+
+    @property
+    def forced_discharge_power(self) -> float | None:
+        """Get current forced discharge power command from cached parameters.
+
+        The value reflects however ``parameters`` was populated: the cloud
+        API returns kilowatts, while a local transport surfaces the raw
+        100W register value (25 = 2.5 kW). Callers reading through a local
+        transport must scale by 0.1 themselves — the same caveat as
+        :attr:`pv_charge_power_limit` / :attr:`ac_charge_power_limit`.
+
+        Returns:
+            Power limit in kilowatts when cloud-populated, or None if
+            parameters not loaded or parameter not found
+
+        Example:
+            >>> inverter.forced_discharge_power
+            2.5
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_FORCED_DISCHG_POWER_CMD")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+
+    async def set_forced_discharge_soc_limit(self, soc_percent: int) -> bool:
+        """Set forced discharge stop SOC limit (register 83).
+
+        Forced discharge stops when the battery reaches this SOC.
+
+        Args:
+            soc_percent: SOC percentage (0 to 100)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If soc_percent is out of valid range (0-100)
+
+        Example:
+            >>> await inverter.set_forced_discharge_soc_limit(20)
+            True
+        """
+        if not 0 <= soc_percent <= 100:
+            raise ValueError(
+                f"Forced discharge SOC limit must be between 0 and 100%, got {soc_percent}"
+            )
+
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, "HOLD_FORCED_DISCHG_SOC_LIMIT", str(soc_percent)
+        )
+
+        if result.success:
+            self._parameters_cache_time = None
+
+        return result.success
+
+    @property
+    def forced_discharge_soc_limit(self) -> int | None:
+        """Get current forced discharge stop SOC limit from cached parameters.
+
+        Returns:
+            SOC limit percentage (0-100), or None if parameters not loaded
+            or parameter not found
+
+        Example:
+            >>> inverter.forced_discharge_soc_limit
+            20
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_FORCED_DISCHG_SOC_LIMIT")
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+            return int_value if 0 <= int_value <= 100 else None
+        except (ValueError, TypeError):
+            return None
+
+    async def set_stop_discharge_voltage(self, voltage: float) -> bool:
+        """Set forced-discharge stop voltage (register 202).
+
+        The voltage-regime counterpart of the reg-83 stop SOC: forced
+        discharge stops when the battery voltage drops to this level while
+        the discharge control mode is Voltage (the cloud maintain page
+        gates "Stop Discharge Volt 1(V)" with ``disChgVoltEnable``).
+        Register 202 stores decivolts — raw-verified live 2026-06-11
+        (raw 400 vs cloud 40 V on an 18kPV). The cloud field accepts
+        float volts in [40, 56] (live round-trip 40 -> 41.5 -> 40 V on an
+        18kPV and a FlexBOSS21).
+
+        Args:
+            voltage: Stop voltage in volts (40.0 to 56.0)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If voltage is out of valid range
+
+        Example:
+            >>> await inverter.set_stop_discharge_voltage(41.5)
+            True
+        """
+        if not 40.0 <= voltage <= 56.0:
+            raise ValueError(
+                f"Stop discharge voltage must be between 40.0 and 56.0 V, got {voltage}"
+            )
+
+        # API accepts volt values directly (fractional volts allowed)
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, "_12K_HOLD_STOP_DISCHG_VOLT", str(voltage)
+        )
+
+        if result.success:
+            self._parameters_cache_time = None
+
+        return result.success
+
+    @property
+    def stop_discharge_voltage(self) -> float | None:
+        """Get current forced-discharge stop voltage from cached parameters.
+
+        The value reflects however ``parameters`` was populated: the cloud
+        API returns volts (41.5), while a local transport surfaces the raw
+        decivolt register value (415 = 41.5 V). Callers reading through a
+        local transport must scale by 0.1 themselves — the same caveat as
+        :attr:`forced_discharge_power`.
+
+        Returns:
+            Stop voltage in volts when cloud-populated, or None if
+            parameters not loaded or parameter not found
+
+        Example:
+            >>> inverter.stop_discharge_voltage
+            41.5
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("_12K_HOLD_STOP_DISCHG_VOLT")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+
+    # ============================================================================
+    # Grid Sell Back / Export Controls (GH eg4_web_monitor#135)
+    # ============================================================================
+
+    async def enable_feed_in_grid(self) -> bool:
+        """Enable feed-in to grid ("Grid Sell Back" in the EG4 web UI).
+
+        Register 21 bit 15 (FUNC_FEED_IN_GRID_EN), live-verified.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_feed_in_grid()
+            True
+        """
+        result = await self._client.api.control.enable_feed_in_grid(self.serial_number)
+        return result.success
+
+    async def disable_feed_in_grid(self) -> bool:
+        """Disable feed-in to grid ("Grid Sell Back" in the EG4 web UI).
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_feed_in_grid()
+            True
+        """
+        result = await self._client.api.control.disable_feed_in_grid(self.serial_number)
+        return result.success
+
+    async def get_feed_in_grid_status(self) -> bool:
+        """Get current feed-in grid (Grid Sell Back) status.
+
+        Returns:
+            True if feed-in to grid is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_feed_in_grid_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_feed_in_grid_status(self.serial_number)
+
+    async def enable_pv_sell_to_grid(self) -> bool:
+        """Enable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Cloud (HTTP) path: FUNC_PV_SELL_TO_GRID_EN — register 179 bit 3,
+        pinned 2026-06-12 via live cloud toggles raw-verified on both a
+        FlexBOSS21 (52842P0581) and an 18kPV (4512670118): raw 0x104c <->
+        0x1044, single-bit-3 XOR.  :class:`HybridInverter` overrides this
+        with the dual-path read-modify-write that also supports local
+        transports; local register decode surfaces the bit by name either
+        way.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_pv_sell_to_grid()
+            True
+        """
+        result = await self._client.api.control.enable_pv_sell_to_grid(self.serial_number)
+        return result.success
+
+    async def disable_pv_sell_to_grid(self) -> bool:
+        """Disable PV sell to grid ("Export PV Only" in the EG4 web UI).
+
+        Cloud (HTTP) path; see :meth:`enable_pv_sell_to_grid` for the
+        register 179 bit 3 pin and the HybridInverter dual-path override.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_pv_sell_to_grid()
+            True
+        """
+        result = await self._client.api.control.disable_pv_sell_to_grid(self.serial_number)
+        return result.success
+
+    async def get_pv_sell_to_grid_status(self) -> bool:
+        """Get current PV sell to grid (Export PV Only) status.
+
+        Cloud (HTTP) path; see :meth:`enable_pv_sell_to_grid` for the
+        register 179 bit 3 pin and the HybridInverter dual-path override.
+
+        Returns:
+            True if Export PV Only is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_pv_sell_to_grid_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_pv_sell_to_grid_status(self.serial_number)
+
+    async def set_feed_in_grid_power_percent(self, percent: int) -> bool:
+        """Set the maximum sell-back (feed-in) power percentage (register 103).
+
+        "Grid Sell Back Power" in the EG4 web UI: caps export power as a
+        percentage of rated output.  Whole percent on both paths — the cloud
+        named reads return 0-100 and the raw register is documented 0-100
+        (no scale ambiguity), live-pinned via single-register named reads
+        on 18kPV + FlexBOSS21 (GH eg4_web_monitor#135).
+
+        Args:
+            percent: Maximum sell-back power percentage (0 to 100)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If percent is out of valid range (0-100)
+
+        Example:
+            >>> await inverter.set_feed_in_grid_power_percent(50)
+            True
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError(
+                f"Feed-in grid power percent must be between 0 and 100%, got {percent}"
+            )
+
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, "HOLD_FEED_IN_GRID_POWER_PERCENT", str(percent)
+        )
+
+        if result.success:
+            self._parameters_cache_time = None
+
+        return result.success
+
+    @property
+    def feed_in_grid_power_percent(self) -> int | None:
+        """Get current maximum sell-back (feed-in) power percentage.
+
+        Whole percent on both the cloud and local paths (register 103 stores
+        0-100 directly), so no transport-dependent scaling caveat applies.
+
+        Returns:
+            Maximum sell-back power percentage (0-100), or None if parameters
+            not loaded or parameter not found
+
+        Example:
+            >>> inverter.feed_in_grid_power_percent
+            16
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_FEED_IN_GRID_POWER_PERCENT")
         if value is None:
             return None
         try:
@@ -2433,24 +3059,75 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     # Quick Charge Control (Issue #14)
     # ============================================================================
 
-    async def enable_quick_charge(self) -> bool:
+    async def enable_quick_charge(self, minute: int | None = None) -> bool:
         """Enable quick charge function.
 
         Quick charge is a function control (not an operating mode) that
         can be active alongside Normal or Standby operating modes.
 
+        With a local transport (Modbus/Dongle, including HYBRID — which
+        prefers local) this sets the quick-charge enable bit (register 233
+        bit 0) only. The firmware starts the timed charge at its default
+        length and rejects writes to register 234 while quick charge is off,
+        so the duration is NOT pre-written here — adjust it live afterwards
+        with :meth:`set_quick_charge_minute` (register 234 doubles as the
+        live remaining-minutes countdown). Without a transport it uses the
+        cloud Quick Charge start endpoint.
+
+        Args:
+            minute: Optional charge duration in minutes for the cloud start
+                endpoint. Newer EG4 firmware supports a fixed-duration quick
+                charge; omitting it preserves the legacy behaviour (charge
+                until manually stopped). Ignored on the local transport path
+                (the firmware starts at its default length and the duration is
+                set live via register 234). Must be a positive integer when
+                provided.
+
         Returns:
             True if successful
+
+        Raises:
+            ValueError: If minute is provided and is not a positive integer.
 
         Example:
             >>> await inverter.enable_quick_charge()
             True
+            >>> await inverter.enable_quick_charge(minute=30)
+            True
         """
-        result = await self._client.api.control.start_quick_charge(self.serial_number)
+        if minute is not None and (
+            not isinstance(minute, int) or isinstance(minute, bool) or minute <= 0
+        ):
+            raise ValueError(f"minute must be a positive integer, got {minute!r}")
+
+        if self._transport is not None:
+            # LOCAL/HYBRID: set only the enable bit (reg 233 bit 0). The
+            # firmware starts the timed charge at its default length and
+            # rejects reg 234 writes while quick charge is off, so the duration
+            # is adjusted live afterwards via set_quick_charge_minute(); the
+            # `minute` argument is honoured only on the cloud fallback below.
+            if await self.write_transport_bit(233, 0, True):
+                return True
+            # Local write failed. HYBRID (real cloud client) falls back to the
+            # cloud endpoint; local-only (client is None) fails honestly.
+            if self._client is None:
+                return False
+            _LOGGER.warning(
+                "Local quick charge enable failed for %s; falling back to cloud",
+                self.serial_number,
+            )
+
+        result = await self._client.api.control.start_quick_charge(
+            self.serial_number, minute=minute
+        )
         return result.success
 
     async def disable_quick_charge(self) -> bool:
         """Disable quick charge function.
+
+        Clears the quick-charge enable bit (register 233 bit 0) via the local
+        transport when available (HYBRID falls back to the cloud stop endpoint
+        if the local write fails), otherwise uses the cloud stop endpoint.
 
         Returns:
             True if successful
@@ -2459,11 +3136,50 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> await inverter.disable_quick_charge()
             True
         """
+        if self._transport is not None:
+            if await self.write_transport_bit(233, 0, False):
+                return True
+            if self._client is None:
+                return False
+            _LOGGER.warning(
+                "Local quick charge disable failed for %s; falling back to cloud",
+                self.serial_number,
+            )
         result = await self._client.api.control.stop_quick_charge(self.serial_number)
         return result.success
 
+    async def set_quick_charge_minute(self, minute: int) -> bool:
+        """Set the quick charge duration (holding register 234, minutes).
+
+        While a quick charge is running this register holds the remaining
+        time, so raising it extends the charge (e.g. to keep cells balancing
+        once SOC reaches 100%). LOCAL/HYBRID only — register 234 is not
+        exposed by the cloud control API.
+
+        Args:
+            minute: Duration in minutes (positive integer).
+
+        Returns:
+            True if successful, False if no local transport is available.
+
+        Raises:
+            ValueError: If minute is not a positive integer.
+        """
+        if not isinstance(minute, int) or isinstance(minute, bool) or minute <= 0:
+            raise ValueError(f"minute must be a positive integer, got {minute!r}")
+        if self._transport is None:
+            _LOGGER.warning(
+                "set_quick_charge_minute() requires a local transport for %s",
+                self.serial_number,
+            )
+            return False
+        return await self.write_transport_register(234, minute)
+
     async def get_quick_charge_status(self) -> bool:
         """Get quick charge function status.
+
+        Reads the enable bit (register 233 bit 0) via the local transport
+        when available, otherwise queries the cloud getStatusInfo endpoint.
 
         Returns:
             True if quick charge is active, False otherwise
@@ -2473,8 +3189,69 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> is_active
             False
         """
+        if self._transport is not None:
+            values = await self._transport.read_parameters(233, 1)
+            reg = values.get(233)
+            return bool(reg & 0x1) if reg is not None else False
         status = await self._client.api.control.get_quick_charge_status(self.serial_number)
         return status.hasUnclosedQuickChargeTask
+
+    async def get_quick_charge_detail(self) -> QuickChargeStatus:
+        """Get the full quick charge status model.
+
+        Unlike :meth:`get_quick_charge_status` (which returns only the boolean
+        ``hasUnclosedQuickChargeTask`` for backwards compatibility), this returns
+        the complete ``QuickChargeStatus`` model including remaining time.
+
+        With a local transport the model is reconstructed from registers:
+        register 233 bit 0 gives the active flag, and the remaining time prefers
+        input register 210 (seconds, finer-grained, newer firmware) and falls
+        back to holding register 234 (minutes × 60) when register 210 is
+        unavailable (older firmware reports 0). The raw holding register 234
+        value (minutes) is also surfaced as ``quickChargeMinute`` — idle or
+        active — so a consumer can mirror the register faithfully. Otherwise it
+        returns the cloud getStatusInfo model, whose remaining-time value comes
+        from the API (``quickChargeMinute`` stays ``None``, no such register).
+
+        Returns:
+            QuickChargeStatus: Full quick charge status
+
+        Example:
+            >>> detail = await inverter.get_quick_charge_detail()
+            >>> detail.remaining_minutes
+            10
+        """
+        if self._transport is not None:
+            from pylxpweb.models import QuickChargeStatus
+
+            # Read regs 233 (enable bit) + 234 (remaining minutes) LIVE in one
+            # call — reg 234 is the live countdown, so reading it from the
+            # cached parameter dict could report a stale/zero value right after
+            # enable/set. Reg 234 doubles as the duration setpoint + remaining.
+            values = await self._transport.read_parameters(233, 2)
+            enable = values.get(233)
+            active = bool(enable & 0x1) if enable is not None else False
+            minutes = int(values.get(234, 0) or 0)
+            # Prefer input register 210 (remaining seconds, newer firmware) for
+            # the live countdown; fall back to the minute-resolution holding
+            # register 234 when it is unavailable. Read 210 only while a charge
+            # is active (idle remaining is always 0).
+            remaining_seconds = minutes * 60 if active else 0
+            if active:
+                read_remaining = getattr(
+                    self._transport, "read_quick_charge_remaining_seconds", None
+                )
+                if read_remaining is not None:
+                    input_seconds = await read_remaining()
+                    if input_seconds:
+                        remaining_seconds = int(input_seconds)
+            return QuickChargeStatus(
+                success=True,
+                hasUnclosedQuickChargeTask=active,
+                remainTimeBeforeQuickChargeStop=remaining_seconds,
+                quickChargeMinute=minutes,
+            )
+        return await self._client.api.control.get_quick_charge_status(self.serial_number)
 
     # ============================================================================
     # Quick Discharge Control (Issue #14)
@@ -2822,6 +3599,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if has_recovery_lag or has_quick_charge:
             self._features.has_sna_registers = True
             self._features.discharge_recovery_hysteresis = True
+        if has_quick_charge:
+            # Minute-based quick charge (reg 234) is detected by register
+            # presence, not just the SNA family default — it is also present
+            # on EG4_HYBRID (18kPV/FlexBOSS) and LXP firmware, enabling the
+            # LOCAL/HYBRID quick-charge control + remaining-time sensor.
+            self._features.quick_charge_minute = True
 
         # Check for PV series registers (volt-watt curve parameters)
         if "_12K_HOLD_GRID_PEAK_SHAVING_POWER" in self.parameters:
