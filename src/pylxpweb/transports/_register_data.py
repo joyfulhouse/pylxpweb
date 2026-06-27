@@ -214,10 +214,18 @@ class RegisterDataMixin(_DataMixinBase):
         # interpret a naive datetime as its own local zone (eg4_web_monitor#258).
         now = datetime.now(UTC)
 
+        # Raw physical-slot -> identity page for rotation diagnostics
+        # (eg4_web_monitor#258): the accumulator log below reports VIRTUAL slots
+        # and the merged map hides which battery occupies each PHYSICAL slot, so
+        # firmware rotation cannot be characterized from logs.  Diffing this line
+        # across reads shows exactly when a battery rotates into/out of a slot.
+        raw_page: list[str] = []
+
         for phys_slot in range(BATTERY_MAX_COUNT):
             slot_base = BATTERY_BASE_ADDRESS + (phys_slot * BATTERY_REGISTER_COUNT)
             status = raw_registers.get(slot_base, 0)
             if not status:
+                raw_page.append(f"{phys_slot}=empty")
                 continue  # Empty physical slot — skip
 
             # Extract this slot's 30-register block (using slot-local offsets 0-29)
@@ -242,6 +250,7 @@ class RegisterDataMixin(_DataMixinBase):
             if serial and len(serial) >= _MIN_BATTERY_SERIAL_LEN:
                 identity = serial
             elif serial_reported:
+                raw_page.append(f"{phys_slot}={serial!r}~trunc")
                 _LOGGER.debug(
                     "[%s] slot %d: truncated serial %r — skipping this poll",
                     self._serial,
@@ -253,6 +262,7 @@ class RegisterDataMixin(_DataMixinBase):
                 pos = (raw_registers.get(slot_base + 24, 0) >> 8) & 0xFF
                 identity = f"pos:{pos}"
 
+            raw_page.append(f"{phys_slot}={identity}")
             if identity not in slot_index:
                 slot_index[identity] = len(slot_index)
             accumulator[identity] = slot_regs
@@ -261,6 +271,13 @@ class RegisterDataMixin(_DataMixinBase):
         self._battery_accumulator = accumulator
         self._battery_slot_index = slot_index
         self._battery_last_seen = last_seen
+
+        _LOGGER.debug(
+            "[%s] RR raw page: %s (reg96=%d)",
+            self._serial,
+            " ".join(raw_page),
+            battery_count,
+        )
 
         if not accumulator:
             return None
@@ -283,11 +300,15 @@ class RegisterDataMixin(_DataMixinBase):
         return merged
 
     def _stamp_battery_last_seen(self, battery: BatteryBankData | None) -> None:
-        """Stamp ``last_seen`` on each battery from accumulator timestamps.
+        """Stamp each battery's ``last_seen`` from the accumulator's per-slot clock.
 
-        For non-accumulated reads (battery_count <= 4), all batteries are
-        fresh — stamped with ``datetime.now(UTC)``.  For accumulated reads,
-        each battery gets the timestamp from ``_battery_last_seen[pos]``.
+        ``_battery_last_seen`` records, per virtual slot, when that slot's battery
+        was last actually read.  A battery the firmware has rotated out keeps its
+        OLD timestamp here — that staleness is exactly the signal the hybrid
+        supplemental gate and the integration's freshness overlay rely on
+        (eg4_web_monitor#258).  ``battery_index`` equals the virtual slot, so every
+        accumulated battery has an entry; the ``now`` fallback is a defensive
+        default for the unreachable case of a battery with no recorded read.
         """
         if battery is None or not battery.batteries:
             return

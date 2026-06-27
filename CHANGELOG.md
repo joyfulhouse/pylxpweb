@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Raw round-robin battery page logging** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  the accumulator logs *virtual* slots and the merged register map hides which
+  battery occupies each *physical* Modbus slot, so firmware round-robin rotation
+  could not be characterized from debug logs. `_accumulate_battery_slots` now
+  emits an `RR raw page: 0=<id> 1=<id> 2=<id> 3=<id>` line each read (physical
+  slot → battery identity, before accumulation, with empty/truncated slots
+  marked). Diffing this line across reads reveals the rotation cadence and what
+  triggers a battery to enter/leave a physical slot — the signal needed to fix
+  non-rotating-firmware systems that have no cloud fallback.
+
 - **`.xls` data-export parser** — `parse_export(content: bytes) -> list[ExportDaySheet]`
   turns the bytes returned by `ExportEndpoints.export_data()` into per-day rows, and
   `ExportEndpoints.export_and_parse()` downloads and parses in one call (offloading the
@@ -20,6 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the optional `xlrd` dependency: `pip install pylxpweb[parse]`. (#181)
 
 ### Fixed
+
+- **HYBRID `>4`-battery cloud refresh no longer stalls after a battery briefly appears locally** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  the hybrid supplemental-battery gate (`_wants_hybrid_supplemental_battery`)
+  counted every non-ghost transport battery as "surfaced", including ones the
+  never-evict accumulator re-presents after the firmware stops rotating them into
+  a slot. On non-rotating firmware a battery that entered a Modbus slot even
+  *once* made `surfaced == cloud_count`, silencing the supplemental cloud fetch
+  that kept it live — so it froze at its last value (the #258 reporter's 5th
+  battery degraded from ~5-minute to hourly updates after midnight). A transport
+  battery now counts as surfaced only when its `last_seen` is within
+  `_SUPPLEMENTAL_BATTERY_STALE_AFTER` (2 min) of the freshest sibling — a
+  relative, poll-interval-agnostic comparison — so a frozen cached battery no
+  longer suppresses the cloud refresh. Pure-local and all-batteries-surfaced
+  systems are unchanged (still no extra cloud calls).
 
 - **Login no longer fails when the "last visited device" is a parallel group** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   on a parallel system the EG4 cloud may report the parallel GROUP (e.g.

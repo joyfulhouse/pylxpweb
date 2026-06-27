@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -554,8 +555,14 @@ class TestHybridSupplementalBattery:
         bank = Mock()
         bank.battery_count = cloud_count
         inverter._battery_bank = bank
+        # In-slot batteries are stamped together each read, so they share a
+        # fresh last_seen (the never-evict frozen-battery case is covered by its
+        # own test).
+        stamp = datetime(2026, 6, 23, 0, 0, 0, tzinfo=UTC)
         transport_battery = Mock(spec=BatteryBankData)
-        transport_battery.batteries = [Mock(voltage=53.0, soc=80) for _ in range(surfaced)]
+        transport_battery.batteries = [
+            Mock(voltage=53.0, soc=80, last_seen=stamp) for _ in range(surfaced)
+        ]
         inverter._transport_battery = transport_battery
 
     @pytest.mark.asyncio
@@ -617,6 +624,74 @@ class TestHybridSupplementalBattery:
         await inverter.refresh(force=True)
 
         inverter._fetch_battery_http.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_frozen_cached_battery_does_not_count_as_surfaced(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A never-evict frozen battery must not silence the supplement (#258 firestormo).
+
+        Non-rotating firmware places battery 5 into a Modbus slot exactly once,
+        then never again.  pylxpweb's accumulator never evicts, so it re-presents
+        that frozen block forever with its stale ``last_seen``.  If the frozen
+        block counted toward "surfaced", surfaced would equal cloud_count and the
+        supplemental cloud fetch — the only thing keeping battery 5 live — would
+        stop, freezing battery 5 at its last value (the observed regression).  A
+        battery materially older than its freshest sibling was not refreshed this
+        cycle and must not count as surfaced.
+        """
+        inverter = _make_inverter(client=mock_client)
+        self._healthy_transport(inverter)
+
+        bank = Mock()
+        bank.battery_count = 5
+        inverter._battery_bank = bank
+
+        fresh = datetime(2026, 6, 23, 0, 24, 39, tzinfo=UTC)
+        frozen = datetime(2026, 6, 23, 0, 19, 28, tzinfo=UTC)  # ~5 min stale
+        batteries = [Mock(voltage=53.0, soc=80, last_seen=fresh) for _ in range(4)]
+        batteries.append(Mock(voltage=53.0, soc=80, last_seen=frozen))
+        transport_battery = Mock(spec=BatteryBankData)
+        transport_battery.batteries = batteries
+        inverter._transport_battery = transport_battery
+        inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
+
+        await inverter.refresh(force=True)
+
+        inverter._fetch_battery_http.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_rotating_system_fetches_cloud_for_lagging_batteries(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Rotating HYBRID >4-battery systems keep rotated-out batteries fresh via cloud.
+
+        Only the (up to 4) batteries in this read's physical slots are co-stamped
+        fresh; the rest lag by at least a rotation period.  In HYBRID those lagging
+        batteries would otherwise drift, so the gate fires the supplemental cloud
+        fetch whenever any battery lags the freshest sibling by more than the
+        window.  (Real cloud traffic is bounded by the client's battery_info
+        response cache; pure-LOCAL systems never reach here.)
+        """
+        inverter = _make_inverter(client=mock_client)
+        self._healthy_transport(inverter)
+
+        bank = Mock()
+        bank.battery_count = 8
+        inverter._battery_bank = bank
+
+        fresh = datetime(2026, 6, 23, 0, 24, 39, tzinfo=UTC)
+        lagging = datetime(2026, 6, 23, 0, 18, 0, tzinfo=UTC)  # > 2 min behind
+        batteries = [Mock(voltage=53.0, soc=80, last_seen=fresh) for _ in range(4)]
+        batteries += [Mock(voltage=53.0, soc=80, last_seen=lagging) for _ in range(4)]
+        transport_battery = Mock(spec=BatteryBankData)
+        transport_battery.batteries = batteries
+        inverter._transport_battery = transport_battery
+        inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
+
+        await inverter.refresh(force=True)
+
+        inverter._fetch_battery_http.assert_awaited_once()
 
 
 class TestMIDDeviceLinkHealth:
