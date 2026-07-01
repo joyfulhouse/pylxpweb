@@ -26,7 +26,7 @@ when rotation resumes.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -295,3 +295,73 @@ class TestBatteryRotationStallWarning:
                 await transport._read_individual_battery_registers(8)
 
         assert "Battery rotation stalled" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_straggler_does_not_mask_new_stall(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A permanent straggler must not latch away warnings for NEW stalls.
+
+        A physically removed/replaced battery is never evicted by design, so it
+        stays stale forever.  With a single global latch its one warning would
+        stick (re-arming required ALL identities fresh), and a later, unrelated
+        battery stall would log NOTHING — silently reproducing the exact blind
+        spot the watchdog exists to close.  Latching is per identity: each
+        battery warns once per ITS OWN stall episode.
+        """
+        transport = _transport()
+        pages: list[list[int] | Exception] = [
+            _page([0, 1, 2, 3]),  # accumulate page A
+            _page([4, 5, 6, 7]),  # accumulate page B
+            _page([0, 1, 2, 3]),  # pos:7 backdated below -> warn #1
+            _page([0, 1, 3]),  # pos:2 not refreshed; backdated below -> warn #2
+        ]
+        fake = _make_fake_read(pages)
+        with (
+            patch.object(transport, "_read_input_registers", side_effect=fake),
+            caplog.at_level(logging.INFO),
+        ):
+            await transport._read_individual_battery_registers(8)
+            await transport._read_individual_battery_registers(8)
+            self._backdate(transport, [7])  # straggler (e.g. removed battery)
+            await transport._read_individual_battery_registers(8)
+            self._backdate(transport, [2])  # NEW, unrelated stall
+            await transport._read_individual_battery_registers(8)
+
+        warnings = [r for r in caplog.records if "Battery rotation stalled" in r.message]
+        assert len(warnings) == 2
+        assert "pos:7" in warnings[0].message
+        assert "pos:2" in warnings[1].message
+
+    @pytest.mark.asyncio
+    async def test_threshold_scales_with_battery_count(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Large arrays get a proportionally longer stall threshold.
+
+        The 45-min floor is calibrated on #170's 12-battery (3-page) system
+        (~30 min worst-case reappearance).  A 24-battery array rotates 6
+        pages, so a fixed 45-min cutoff would warn on perfectly healthy
+        rotation lag.  The threshold scales at 15 min/page: 6 pages → 90 min.
+        """
+        transport = _transport()
+        pages: list[list[int] | Exception] = [
+            _page(list(range(p * 4, p * 4 + 4))) for p in range(6)
+        ]
+        fake = _make_fake_read(pages + [_page([0, 1, 2, 3])] * 2, battery_count=24)
+        with (
+            patch.object(transport, "_read_input_registers", side_effect=fake),
+            caplog.at_level(logging.WARNING),
+        ):
+            for _ in range(6):
+                await transport._read_individual_battery_registers(24)
+            # 60 min behind: past the 45-min floor but inside the scaled
+            # 90-min threshold -> healthy rotation lag on a big array, silent.
+            transport._battery_last_seen[23] = datetime.now(UTC) - timedelta(minutes=60)
+            await transport._read_individual_battery_registers(24)
+            assert "Battery rotation stalled" not in caplog.text
+            # 100 min behind: beyond the scaled threshold -> stalled, warns.
+            transport._battery_last_seen[23] = datetime.now(UTC) - timedelta(minutes=100)
+            await transport._read_individual_battery_registers(24)
+
+        assert "Battery rotation stalled" in caplog.text

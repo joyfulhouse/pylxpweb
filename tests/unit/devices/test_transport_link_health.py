@@ -10,6 +10,7 @@ MIDDevice.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -714,7 +715,8 @@ class TestHybridSupplementalBattery:
         inverter._battery_bank = bank
 
         # All 8 co-stamped (within the relative window of each other) but the
-        # whole feed is stale: newest stamp is ~10 minutes old.
+        # whole feed is stale: newest stamp is ~10 minutes old — far past the
+        # scaled backstop for the default 30 s TTL (max(2 min, 75 s) = 2 min).
         frozen = datetime.now(UTC) - timedelta(minutes=10)
         batteries = [Mock(voltage=53.0, soc=80, last_seen=frozen) for _ in range(8)]
         transport_battery = Mock(spec=BatteryBankData)
@@ -722,6 +724,110 @@ class TestHybridSupplementalBattery:
         inverter._transport_battery = transport_battery
         inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
 
+        await inverter.refresh(force=True)
+
+        inverter._fetch_battery_http.assert_awaited_once()
+
+    @staticmethod
+    def _stamped_transport(
+        inverter: GenericInverter, *, count: int, frozen_stamp: datetime | None
+    ) -> AsyncMock:
+        """Attach a combined-read transport with controllable battery stamps.
+
+        ``frozen_stamp=None`` re-stamps every battery ``now`` on each read (a
+        healthy feed, as the real transport stamps in-page batteries); a fixed
+        stamp models a frozen feed (pinned page / block reads served from the
+        accumulator), where ``last_seen`` never advances.
+        """
+
+        def _combined(*_args: object, **_kwargs: object) -> tuple[Mock, Mock, Mock]:
+            runtime, energy, battery = _make_combined_data()
+            stamp = frozen_stamp if frozen_stamp is not None else datetime.now(UTC)
+            battery.batteries = [Mock(voltage=53.0, soc=80, last_seen=stamp) for _ in range(count)]
+            return runtime, energy, battery
+
+        transport = AsyncMock()
+        transport.read_all_input_data = AsyncMock(side_effect=_combined)
+        inverter._transport = transport
+        return transport
+
+    def _seed_costamped_bank(
+        self, inverter: GenericInverter, *, count: int, stamp: datetime
+    ) -> None:
+        """Seed the cloud bank and a previous-cycle transport battery snapshot."""
+        bank = Mock()
+        bank.battery_count = count
+        inverter._battery_bank = bank
+        seed = Mock(spec=BatteryBankData)
+        seed.batteries = [Mock(voltage=53.0, soc=80, last_seen=stamp) for _ in range(count)]
+        inverter._transport_battery = seed
+
+    @pytest.mark.asyncio
+    async def test_slow_poll_healthy_cycles_do_not_fire_supplemental(
+        self, mock_client: LuxpowerClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A poll interval above the 2-min floor must NOT fire the supplement.
+
+        The gate is evaluated while refresh() BUILDS its task list — BEFORE
+        this cycle's transport read — so the newest ``last_seen`` is always
+        ~one poll interval old at evaluation time.  A fixed absolute cutoff
+        below the poll interval would therefore fire on EVERY healthy cycle
+        (intervals are UI-configurable up to 300 s and the integration pins
+        the battery cache TTL to them via set_cache_ttls) — a permanent,
+        silent every-poll cloud fetch.  The backstop must scale with the TTL.
+
+        Scaled-down clock: floor 0.2 s, TTL 0.4 s → threshold max(0.2 s,
+        2.5 x 0.4 s) = 1.0 s.  The 0.5 s inter-cycle gap is one healthy
+        "poll interval" that the unscaled floor (0.5 > 0.2) mistook for a
+        frozen feed.  Two REAL refresh cycles across real elapsed gaps.
+        """
+        from pylxpweb.devices.inverters import base as base_module
+
+        monkeypatch.setattr(
+            base_module,
+            "_SUPPLEMENTAL_BATTERY_STALE_AFTER",
+            timedelta(seconds=0.2),
+        )
+        inverter = _make_inverter(client=mock_client)
+        inverter.set_cache_ttls(battery=timedelta(seconds=0.4))
+        self._stamped_transport(inverter, count=2, frozen_stamp=None)
+        self._seed_costamped_bank(inverter, count=2, stamp=datetime.now(UTC))
+        inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
+
+        await asyncio.sleep(0.5)  # one healthy poll interval elapses
+        await inverter.refresh(force=True)
+        await asyncio.sleep(0.5)  # next healthy interval
+        await inverter.refresh(force=True)
+
+        assert inverter._fetch_battery_http.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_slow_poll_co_frozen_feed_still_fires(
+        self, mock_client: LuxpowerClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A feed frozen past the scaled threshold still fires the supplement.
+
+        Same scaled clock as the healthy test (threshold 1.0 s), but the
+        transport keeps serving batteries whose ``last_seen`` never advances
+        (pinned page / accumulator-served failed reads).  Once the elapsed
+        gap exceeds the scaled threshold, nothing counts as surfaced and the
+        cloud supplement fires.
+        """
+        from pylxpweb.devices.inverters import base as base_module
+
+        monkeypatch.setattr(
+            base_module,
+            "_SUPPLEMENTAL_BATTERY_STALE_AFTER",
+            timedelta(seconds=0.2),
+        )
+        inverter = _make_inverter(client=mock_client)
+        inverter.set_cache_ttls(battery=timedelta(seconds=0.4))
+        frozen_stamp = datetime.now(UTC)
+        self._stamped_transport(inverter, count=2, frozen_stamp=frozen_stamp)
+        self._seed_costamped_bank(inverter, count=2, stamp=frozen_stamp)
+        inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
+
+        await asyncio.sleep(1.1)  # beyond the 1.0 s scaled threshold
         await inverter.refresh(force=True)
 
         inverter._fetch_battery_http.assert_awaited_once()

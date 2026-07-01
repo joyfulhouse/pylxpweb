@@ -58,14 +58,21 @@ _LOGGER = logging.getLogger(__name__)
 _MIN_BATTERY_SERIAL_LEN = 10
 
 # Rotation-stall watchdog (eg4_web_monitor#258).  Firmware rotates >4 batteries
-# through the 4 physical slots; on the #170 12-battery system every battery
-# reappears within ~30 minutes worst-case.  A battery not surfaced for longer
-# than this means rotation has stalled/pinned — the 2026-06-28 incident pinned
-# one page for ~9 HOURS with zero non-debug logs (every block read succeeded;
-# the data was just frozen).  One latched WARNING per stall episode makes that
-# state visible; HYBRID compensates via the supplemental cloud refresh, LOCAL
-# has no compensation so the warning is the only signal.
+# through the 4 physical slots; a battery not surfaced for the effective
+# threshold means rotation has stalled/pinned for it — the 2026-06-28 incident
+# pinned one page for ~9 HOURS with zero non-debug logs (every block read
+# succeeded; the data was just frozen).  One latched WARNING per battery per
+# stall episode makes that state visible; HYBRID compensates via the
+# supplemental cloud refresh, LOCAL has no compensation so the warning is the
+# only signal.
+#
+# Calibration (#170): a 12-battery system (3 pages of 4) surfaces every battery
+# within ~30 minutes worst-case, i.e. ~10 min/page.  The effective threshold is
+# max(this 45-minute floor, pages x 15 min) — 15 min/page carries a 50% margin
+# over the measured cadence, and the floor keeps small arrays quiet, so a
+# 24-battery (6-page) array warns at 90 min instead of spamming at 45.
 BATTERY_ROTATION_STALL_WARN_AFTER = timedelta(minutes=45)
+_BATTERY_STALL_PER_PAGE = timedelta(minutes=15)
 
 # ---------------------------------------------------------------------------
 # Register group constants (unified across Modbus and Dongle transports)
@@ -342,27 +349,47 @@ class RegisterDataMixin(_DataMixinBase):
         return merged
 
     def _log_battery_rotation_stall(self, now: datetime) -> None:
-        """Latched WARNING when accumulated batteries stop being surfaced (#258).
+        """Per-battery latched WARNING when accumulation stops being surfaced (#258).
 
         The 2026-06-28 incident pinned the firmware's battery page for ~9 hours:
         every 120-register block read SUCCEEDED, so no warning ever fired while
         half the accumulated batteries silently served frozen data.  This
-        watchdog warns once when any accumulated battery has not appeared in a
-        physical slot for :data:`BATTERY_ROTATION_STALL_WARN_AFTER`, and logs an
-        INFO (re-arming the latch) once every battery is fresh again.
+        watchdog warns once per battery per stall episode when it has not
+        appeared in a physical slot for the effective threshold
+        (``max(BATTERY_ROTATION_STALL_WARN_AFTER, pages x 15 min)``), and logs
+        an INFO — re-arming that battery's latch — when it is surfaced again.
+
+        Latching is per identity, not global: a permanent straggler (e.g. a
+        physically removed battery, never evicted by design) must not hold a
+        global latch armed and mask a later, unrelated battery's stall — that
+        would silently reproduce the exact blind spot this watchdog closes.
+
+        This only covers the SUCCESS path — block reads succeeding while the
+        firmware pins the page.  Persistent block-read FAILURES never reach
+        this method; they are surfaced by the per-cycle "Failed to read
+        battery registers ... serving N accumulated batteries" warning in
+        :meth:`_read_individual_battery_registers` instead.
         """
         slot_index: dict[str, int] = getattr(self, "_battery_slot_index", {})
         last_seen: dict[int, datetime] = getattr(self, "_battery_last_seen", {})
 
-        stale: list[str] = []
+        # Threshold scales with the rotation cycle length (see the constants'
+        # calibration note): more accumulated batteries means more pages to
+        # cycle through before a battery legitimately reappears.
+        pages = max(1, -(-len(slot_index) // BATTERY_MAX_COUNT))
+        threshold = max(BATTERY_ROTATION_STALL_WARN_AFTER, pages * _BATTERY_STALL_PER_PAGE)
+
+        stale: dict[str, str] = {}
         for identity, slot in sorted(slot_index.items(), key=lambda kv: kv[1]):
             seen = last_seen.get(slot)
-            if seen is not None and now - seen > BATTERY_ROTATION_STALL_WARN_AFTER:
-                stale.append(f"{identity} ({int((now - seen).total_seconds() // 60)} min)")
+            if seen is not None and now - seen > threshold:
+                stale[identity] = f"{identity} ({int((now - seen).total_seconds() // 60)} min)"
 
-        already_logged = bool(getattr(self, "_battery_rotation_stall_logged", False))
-        if stale and not already_logged:
-            self._battery_rotation_stall_logged = True
+        warned: set[str] = getattr(self, "_battery_stall_warned", set())
+        newly_stale = [identity for identity in stale if identity not in warned]
+        recovered = sorted(warned - stale.keys())
+
+        if newly_stale:
             _LOGGER.warning(
                 "[%s] Battery rotation stalled: %d of %d accumulated batteries "
                 "not surfaced by the firmware for over %d minutes (%s); their "
@@ -371,16 +398,19 @@ class RegisterDataMixin(_DataMixinBase):
                 self._serial,
                 len(stale),
                 len(slot_index),
-                int(BATTERY_ROTATION_STALL_WARN_AFTER.total_seconds() // 60),
-                ", ".join(stale),
+                int(threshold.total_seconds() // 60),
+                ", ".join(stale.values()),
             )
-        elif not stale and already_logged:
-            self._battery_rotation_stall_logged = False
+        if recovered:
             _LOGGER.info(
-                "[%s] Battery rotation resumed: all %d accumulated batteries are fresh again",
+                "[%s] Battery rotation resumed for %d of %d accumulated batteries (%s)",
                 self._serial,
+                len(recovered),
                 len(slot_index),
+                ", ".join(recovered),
             )
+
+        self._battery_stall_warned = (warned | set(newly_stale)) - set(recovered)
 
     def _stamp_battery_last_seen(self, battery: BatteryBankData | None) -> None:
         """Stamp each battery's ``last_seen`` from the accumulator's per-slot clock.
