@@ -11,7 +11,7 @@ import logging
 from abc import abstractmethod
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from pylxpweb.constants import (
@@ -49,7 +49,20 @@ _LOGGER = logging.getLogger(__name__)
 # so the cloud supplement that keeps it live is not silenced.  Kept below the
 # integration's 5-minute transport-freshness overlay so the cloud value is
 # refreshed before the overlay switches to it.
+#
+# The same constant is the FLOOR of the whole-feed staleness backstop: the
+# effective threshold there scales with the battery cache TTL (see
+# _SUPPLEMENTAL_FEED_STALE_TTL_FACTOR) because consumers pin that TTL to their
+# poll interval, which can legitimately exceed this window.
 _SUPPLEMENTAL_BATTERY_STALE_AFTER = timedelta(minutes=2)
+
+# Whole-feed staleness backstop scale factor.  The gate is evaluated while
+# refresh() builds its task list — BEFORE this cycle's transport read — so the
+# newest last_seen is always ~one poll interval old at evaluation time.  The
+# backstop threshold is therefore max(floor, TTL x this factor): 2.5 intervals
+# tolerates scheduling jitter and one missed poll on any configured interval,
+# while a feed older than that is genuinely frozen.
+_SUPPLEMENTAL_FEED_STALE_TTL_FACTOR = 2.5
 
 
 if TYPE_CHECKING:
@@ -640,6 +653,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             # No timestamps (legacy transport): keep the count-only gate rather
             # than over-fetching cloud data.
             surfaced = len(candidates)
+        elif datetime.now(UTC) - max(seen) > self._supplemental_feed_stale_after():
+            # The WHOLE local battery feed is stale — block reads failing for a
+            # stretch, or every page pinned/frozen.  The relative check below
+            # cannot see this: co-frozen batteries all sit within the window of
+            # each other (the newest stamp IS a frozen stamp), so they would all
+            # count as "surfaced" and silence the cloud supplement during
+            # exactly the outage it exists for (eg4_web_monitor#258, the
+            # 2026-06-28 9-hour stall).  Nothing locally fresh, nothing surfaced.
+            #
+            # The threshold scales with the battery cache TTL (the consumer's
+            # poll interval): this property runs BEFORE this cycle's read, so
+            # the newest stamp is always ~one interval old — a fixed 2-minute
+            # cutoff would fire on EVERY healthy cycle for the UI-supported
+            # intervals above 2 minutes, silently turning the supplement into
+            # an every-poll cloud fetch.
+            surfaced = 0
         else:
             newest = max(seen)
             surfaced = sum(
@@ -649,6 +678,23 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 and newest - batt.last_seen <= _SUPPLEMENTAL_BATTERY_STALE_AFTER
             )
         return cloud_count > surfaced
+
+    def _supplemental_feed_stale_after(self) -> timedelta:
+        """Whole-feed staleness threshold for the supplemental battery gate.
+
+        ``max(floor, battery cache TTL x 2.5)``: default installs (30 s TTL)
+        keep the 2-minute floor so a co-frozen feed still trips promptly; a
+        user polling every 300 s gets a ~750 s threshold that a healthy
+        cycle's one-interval-old stamps never cross.  Falls back to the bare
+        floor if the TTL is unavailable.
+        """
+        ttl = getattr(self, "_battery_cache_ttl", None)
+        if isinstance(ttl, timedelta):
+            return max(
+                _SUPPLEMENTAL_BATTERY_STALE_AFTER,
+                ttl * _SUPPLEMENTAL_FEED_STALE_TTL_FACTOR,
+            )
+        return _SUPPLEMENTAL_BATTERY_STALE_AFTER
 
     async def refresh(self, force: bool = False, include_parameters: bool = False) -> None:
         """Refresh runtime, energy, battery, and optionally parameters from API.

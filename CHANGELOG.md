@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Battery rotation-stall watchdog** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  the 2026-06-28 report pinned the firmware's battery page for ~9 hours with
+  ZERO non-debug logs — every 120-register block read succeeded, so nothing
+  warned while half the accumulated batteries silently served frozen data.
+  `_log_battery_rotation_stall` now emits a WARNING when an accumulated
+  battery has not been surfaced by the firmware past a page-count-scaled
+  threshold — `max(45 min, pages x 15 min)`, calibrated on the #170
+  12-battery/3-page system's ~30 min worst-case reappearance (so a 24-battery
+  array warns at 90 min instead of spamming at 45) — and an INFO when that
+  battery is surfaced again. Latching is **per battery per stall episode**
+  (not one global latch): a permanent straggler, e.g. a physically removed
+  battery that the never-evict accumulator keeps by design, cannot mask a
+  later unrelated battery's stall. Covers only the success path (pinned page
+  with successful reads); persistent block-read failures are surfaced by the
+  per-cycle "Failed to read battery registers ... serving N accumulated"
+  warning instead. HYBRID compensates via the supplemental cloud refresh; for
+  LOCAL this warning is the only signal.
+
 - **Raw round-robin battery page logging** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   the accumulator logs *virtual* slots and the merged register map hides which
   battery occupies each *physical* Modbus slot, so firmware round-robin rotation
@@ -30,6 +48,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the optional `xlrd` dependency: `pip install pylxpweb[parse]`. (#181)
 
 ### Fixed
+
+- **A failed battery block read no longer wipes individual batteries for the cycle** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  when the atomic 5002-5121 read failed (`Failed to read battery registers
+  5002-5121, will retry next poll`) but the bms_data group succeeded,
+  `read_all_input_data`/`read_battery` built a bank with `batteries=[]` that
+  REPLACED the cached `_transport_battery` — every individual battery vanished
+  for that cycle (in the 2026-06-28 incident all battery entities flipped
+  unavailable at the exact second of the warning). The failure path now serves
+  the never-evict accumulator's last-known blocks instead, with their honest
+  stale `last_seen` stamps so the hybrid supplemental gate and the
+  integration's freshness overlay still see exactly how old each battery is.
+  A first-poll failure (nothing accumulated yet) still returns `None`.
+
+- **Hybrid supplemental battery gate: co-frozen batteries no longer silence the cloud refresh** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  `_wants_hybrid_supplemental_battery` compared each battery's `last_seen`
+  only *relative to the freshest sibling*, so when the WHOLE local battery
+  feed froze (prolonged block-read failures, or every page pinned), the
+  co-stamped batteries all sat within the window of each other and every one
+  counted as "surfaced" — switching off the supplemental cloud fetch during
+  exactly the outage it exists for. The gate now also checks the freshest
+  stamp against the wall clock. The backstop threshold **scales with the
+  battery cache TTL** — `max(2 min, TTL x 2.5)` — because the gate runs
+  before each cycle's read (the newest stamp is always ~one poll interval
+  old) and consumers pin the TTL to their poll interval, which is
+  UI-configurable up to 300 s: a fixed 2-minute cutoff would have fired on
+  every healthy slow-poll cycle, silently turning the supplement into an
+  every-poll cloud fetch. Default installs (30 s TTL) keep the 2-minute
+  floor, so a genuinely co-frozen feed still trips promptly.
 
 - **HYBRID `>4`-battery cloud refresh no longer stalls after a battery briefly appears locally** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   the hybrid supplemental-battery gate (`_wants_hybrid_supplemental_battery`)
