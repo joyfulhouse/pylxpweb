@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -557,8 +557,9 @@ class TestHybridSupplementalBattery:
         inverter._battery_bank = bank
         # In-slot batteries are stamped together each read, so they share a
         # fresh last_seen (the never-evict frozen-battery case is covered by its
-        # own test).
-        stamp = datetime(2026, 6, 23, 0, 0, 0, tzinfo=UTC)
+        # own test).  Relative to now: the gate also has an absolute-staleness
+        # backstop that must not trip for genuinely fresh batteries.
+        stamp = datetime.now(UTC)
         transport_battery = Mock(spec=BatteryBankData)
         transport_battery.batteries = [
             Mock(voltage=53.0, soc=80, last_seen=stamp) for _ in range(surfaced)
@@ -647,8 +648,8 @@ class TestHybridSupplementalBattery:
         bank.battery_count = 5
         inverter._battery_bank = bank
 
-        fresh = datetime(2026, 6, 23, 0, 24, 39, tzinfo=UTC)
-        frozen = datetime(2026, 6, 23, 0, 19, 28, tzinfo=UTC)  # ~5 min stale
+        fresh = datetime.now(UTC)
+        frozen = fresh - timedelta(minutes=5, seconds=11)  # ~5 min stale
         batteries = [Mock(voltage=53.0, soc=80, last_seen=fresh) for _ in range(4)]
         batteries.append(Mock(voltage=53.0, soc=80, last_seen=frozen))
         transport_battery = Mock(spec=BatteryBankData)
@@ -680,10 +681,42 @@ class TestHybridSupplementalBattery:
         bank.battery_count = 8
         inverter._battery_bank = bank
 
-        fresh = datetime(2026, 6, 23, 0, 24, 39, tzinfo=UTC)
-        lagging = datetime(2026, 6, 23, 0, 18, 0, tzinfo=UTC)  # > 2 min behind
+        fresh = datetime.now(UTC)
+        lagging = fresh - timedelta(minutes=6, seconds=39)  # > 2 min behind
         batteries = [Mock(voltage=53.0, soc=80, last_seen=fresh) for _ in range(4)]
         batteries += [Mock(voltage=53.0, soc=80, last_seen=lagging) for _ in range(4)]
+        transport_battery = Mock(spec=BatteryBankData)
+        transport_battery.batteries = batteries
+        inverter._transport_battery = transport_battery
+        inverter._fetch_battery_http = AsyncMock()  # type: ignore[method-assign]
+
+        await inverter.refresh(force=True)
+
+        inverter._fetch_battery_http.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_all_batteries_co_frozen_still_fires_cloud_refresh(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A fully frozen local battery feed must not silence the supplement (#258).
+
+        When block reads fail for a stretch (or every page is pinned), ALL
+        transport batteries share old, co-stamped ``last_seen`` values.  The
+        relative check alone would call them all "surfaced" — the newest stamp
+        IS the frozen stamp — silencing the cloud supplement during exactly the
+        outage it exists for.  Nothing locally fresh means nothing is surfaced.
+        """
+        inverter = _make_inverter(client=mock_client)
+        self._healthy_transport(inverter)
+
+        bank = Mock()
+        bank.battery_count = 8
+        inverter._battery_bank = bank
+
+        # All 8 co-stamped (within the relative window of each other) but the
+        # whole feed is stale: newest stamp is ~10 minutes old.
+        frozen = datetime.now(UTC) - timedelta(minutes=10)
+        batteries = [Mock(voltage=53.0, soc=80, last_seen=frozen) for _ in range(8)]
         transport_battery = Mock(spec=BatteryBankData)
         transport_battery.batteries = batteries
         inverter._transport_battery = transport_battery

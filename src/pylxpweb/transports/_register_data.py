@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from pylxpweb.registers import (
@@ -56,6 +56,16 @@ _LOGGER = logging.getLogger(__name__)
 # back to position-based identity until its full serial appears.  Mirrors the
 # integration's round-robin merge threshold (coordinator_local._MIN_SERIAL_LENGTH).
 _MIN_BATTERY_SERIAL_LEN = 10
+
+# Rotation-stall watchdog (eg4_web_monitor#258).  Firmware rotates >4 batteries
+# through the 4 physical slots; on the #170 12-battery system every battery
+# reappears within ~30 minutes worst-case.  A battery not surfaced for longer
+# than this means rotation has stalled/pinned — the 2026-06-28 incident pinned
+# one page for ~9 HOURS with zero non-debug logs (every block read succeeded;
+# the data was just frozen).  One latched WARNING per stall episode makes that
+# state visible; HYBRID compensates via the supplemental cloud refresh, LOCAL
+# has no compensation so the warning is the only signal.
+BATTERY_ROTATION_STALL_WARN_AFTER = timedelta(minutes=45)
 
 # ---------------------------------------------------------------------------
 # Register group constants (unified across Modbus and Dongle transports)
@@ -188,13 +198,33 @@ class RegisterDataMixin(_DataMixinBase):
         try:
             values = await self._read_input_registers(BATTERY_BASE_ADDRESS, total_registers)
         except Exception:
+            # eg4_web_monitor#258 (2026-06-28): returning None here while the
+            # bms_data group succeeded made the caller build a bank with
+            # batteries=[] that REPLACED the cached one — every individual
+            # battery vanished for the cycle even though the accumulator still
+            # held them all.  Serve the accumulator's last-known blocks instead;
+            # their last_seen stamps stay old (not re-stamped), so the hybrid
+            # supplemental gate and the integration's freshness overlay see the
+            # staleness honestly.  Only a first-poll failure (nothing
+            # accumulated yet) still returns None.
+            cached = self._merged_accumulator_registers()
+            if cached is None:
+                _LOGGER.warning(
+                    "[%s] Failed to read battery registers %d-%d, will retry next poll",
+                    self._serial,
+                    BATTERY_BASE_ADDRESS,
+                    BATTERY_BASE_ADDRESS + total_registers - 1,
+                )
+                return None
             _LOGGER.warning(
-                "[%s] Failed to read battery registers %d-%d, will retry next poll",
+                "[%s] Failed to read battery registers %d-%d; serving %d "
+                "accumulated batteries from the last good read, will retry next poll",
                 self._serial,
                 BATTERY_BASE_ADDRESS,
                 BATTERY_BASE_ADDRESS + total_registers - 1,
+                len(getattr(self, "_battery_accumulator", {})),
             )
-            return None
+            return cached
 
         raw_registers = self._registers_from_values(BATTERY_BASE_ADDRESS, values)
 
@@ -290,14 +320,67 @@ class RegisterDataMixin(_DataMixinBase):
             battery_count,
         )
 
-        # Build merged register map: each identity at its stable virtual slot.
+        self._log_battery_rotation_stall(now)
+
+        return self._merged_accumulator_registers()
+
+    def _merged_accumulator_registers(self) -> dict[int, int] | None:
+        """Merged register map of every accumulated battery at its virtual slot.
+
+        Returns *None* when nothing has been accumulated yet.
+        """
+        accumulator: dict[str, dict[int, int]] = getattr(self, "_battery_accumulator", {})
+        slot_index: dict[str, int] = getattr(self, "_battery_slot_index", {})
+        if not accumulator:
+            return None
+
         merged: dict[int, int] = {}
         for identity, regs in accumulator.items():
             virtual_base = BATTERY_BASE_ADDRESS + (slot_index[identity] * BATTERY_REGISTER_COUNT)
             for offset, value in regs.items():
                 merged[virtual_base + offset] = value
-
         return merged
+
+    def _log_battery_rotation_stall(self, now: datetime) -> None:
+        """Latched WARNING when accumulated batteries stop being surfaced (#258).
+
+        The 2026-06-28 incident pinned the firmware's battery page for ~9 hours:
+        every 120-register block read SUCCEEDED, so no warning ever fired while
+        half the accumulated batteries silently served frozen data.  This
+        watchdog warns once when any accumulated battery has not appeared in a
+        physical slot for :data:`BATTERY_ROTATION_STALL_WARN_AFTER`, and logs an
+        INFO (re-arming the latch) once every battery is fresh again.
+        """
+        slot_index: dict[str, int] = getattr(self, "_battery_slot_index", {})
+        last_seen: dict[int, datetime] = getattr(self, "_battery_last_seen", {})
+
+        stale: list[str] = []
+        for identity, slot in sorted(slot_index.items(), key=lambda kv: kv[1]):
+            seen = last_seen.get(slot)
+            if seen is not None and now - seen > BATTERY_ROTATION_STALL_WARN_AFTER:
+                stale.append(f"{identity} ({int((now - seen).total_seconds() // 60)} min)")
+
+        already_logged = bool(getattr(self, "_battery_rotation_stall_logged", False))
+        if stale and not already_logged:
+            self._battery_rotation_stall_logged = True
+            _LOGGER.warning(
+                "[%s] Battery rotation stalled: %d of %d accumulated batteries "
+                "not surfaced by the firmware for over %d minutes (%s); their "
+                "local data is frozen at the last read (HYBRID keeps them fresh "
+                "from the cloud; LOCAL has no fallback)",
+                self._serial,
+                len(stale),
+                len(slot_index),
+                int(BATTERY_ROTATION_STALL_WARN_AFTER.total_seconds() // 60),
+                ", ".join(stale),
+            )
+        elif not stale and already_logged:
+            self._battery_rotation_stall_logged = False
+            _LOGGER.info(
+                "[%s] Battery rotation resumed: all %d accumulated batteries are fresh again",
+                self._serial,
+                len(slot_index),
+            )
 
     def _stamp_battery_last_seen(self, battery: BatteryBankData | None) -> None:
         """Stamp each battery's ``last_seen`` from the accumulator's per-slot clock.

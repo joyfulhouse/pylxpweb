@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Battery rotation-stall watchdog** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  the 2026-06-28 report pinned the firmware's battery page for ~9 hours with
+  ZERO non-debug logs — every 120-register block read succeeded, so nothing
+  warned while half the accumulated batteries silently served frozen data.
+  `_log_battery_rotation_stall` now emits one latched WARNING when any
+  accumulated battery has not been surfaced by the firmware for over
+  `BATTERY_ROTATION_STALL_WARN_AFTER` (45 min — above the ~30 min worst-case
+  reappearance interval measured on the #170 12-battery system), and an INFO
+  (re-arming the latch) once rotation resumes. HYBRID compensates via the
+  supplemental cloud refresh; for LOCAL this warning is the only signal.
+
 - **Raw round-robin battery page logging** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   the accumulator logs *virtual* slots and the merged register map hides which
   battery occupies each *physical* Modbus slot, so firmware round-robin rotation
@@ -30,6 +41,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the optional `xlrd` dependency: `pip install pylxpweb[parse]`. (#181)
 
 ### Fixed
+
+- **A failed battery block read no longer wipes individual batteries for the cycle** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  when the atomic 5002-5121 read failed (`Failed to read battery registers
+  5002-5121, will retry next poll`) but the bms_data group succeeded,
+  `read_all_input_data`/`read_battery` built a bank with `batteries=[]` that
+  REPLACED the cached `_transport_battery` — every individual battery vanished
+  for that cycle (in the 2026-06-28 incident all battery entities flipped
+  unavailable at the exact second of the warning). The failure path now serves
+  the never-evict accumulator's last-known blocks instead, with their honest
+  stale `last_seen` stamps so the hybrid supplemental gate and the
+  integration's freshness overlay still see exactly how old each battery is.
+  A first-poll failure (nothing accumulated yet) still returns `None`.
+
+- **Hybrid supplemental battery gate: co-frozen batteries no longer silence the cloud refresh** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
+  `_wants_hybrid_supplemental_battery` compared each battery's `last_seen`
+  only *relative to the freshest sibling*, so when the WHOLE local battery
+  feed froze (prolonged block-read failures, or every page pinned), the
+  co-stamped batteries all sat within the window of each other and every one
+  counted as "surfaced" — switching off the supplemental cloud fetch during
+  exactly the outage it exists for. The gate now also checks the freshest
+  stamp against the wall clock: if even the newest is older than
+  `_SUPPLEMENTAL_BATTERY_STALE_AFTER` (2 min), nothing is surfaced and the
+  cloud refresh keeps all batteries live.
 
 - **HYBRID `>4`-battery cloud refresh no longer stalls after a battery briefly appears locally** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   the hybrid supplemental-battery gate (`_wants_hybrid_supplemental_battery`)

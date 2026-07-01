@@ -11,7 +11,7 @@ import logging
 from abc import abstractmethod
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from pylxpweb.constants import (
@@ -640,6 +640,15 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             # No timestamps (legacy transport): keep the count-only gate rather
             # than over-fetching cloud data.
             surfaced = len(candidates)
+        elif datetime.now(UTC) - max(seen) > _SUPPLEMENTAL_BATTERY_STALE_AFTER:
+            # The WHOLE local battery feed is stale — block reads failing for a
+            # stretch, or every page pinned/frozen.  The relative check below
+            # cannot see this: co-frozen batteries all sit within the window of
+            # each other (the newest stamp IS a frozen stamp), so they would all
+            # count as "surfaced" and silence the cloud supplement during
+            # exactly the outage it exists for (eg4_web_monitor#258, the
+            # 2026-06-28 9-hour stall).  Nothing locally fresh, nothing surfaced.
+            surfaced = 0
         else:
             newest = max(seen)
             surfaced = sum(
