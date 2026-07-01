@@ -313,7 +313,9 @@ PARAMETER_SCALING: dict[str, ScaleFactor] = {
     "HOLD_AC_CHARGE_POWER_CMD": ScaleFactor.SCALE_NONE,  # Watts
     "HOLD_FORCED_CHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # 100W units (0-150=0-15kW); caller scales
     "HOLD_FORCED_DISCHG_POWER_CMD": ScaleFactor.SCALE_NONE,  # 100W units like reg 74; caller scales
-    "HOLD_FEED_IN_GRID_POWER_PERCENT": ScaleFactor.SCALE_NONE,  # Percentage
+    # 100W units like regs 66/74/82 (NOT percent, GH eg4_web_monitor#274);
+    # cloud named reads return kW; caller scales the local raw value.
+    "HOLD_FEED_IN_GRID_POWER_PERCENT": ScaleFactor.SCALE_NONE,
     # SOC Parameters (percentage, no scaling)
     "HOLD_AC_CHARGE_SOC_LIMIT": ScaleFactor.SCALE_NONE,
     "HOLD_FORCED_CHG_SOC_LIMIT": ScaleFactor.SCALE_NONE,

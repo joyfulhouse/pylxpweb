@@ -2724,27 +2724,140 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         return await self._client.api.control.get_pv_sell_to_grid_status(self.serial_number)
 
-    async def set_feed_in_grid_power_percent(self, percent: int) -> bool:
-        """Set the maximum sell-back (feed-in) power percentage (register 103).
+    async def enable_fast_zero_export(self) -> bool:
+        """Enable Fast Zero Export ("Fast Zero Export" in both web UIs).
 
-        "Grid Sell Back Power" in the EG4 web UI: caps export power as a
-        percentage of rated output.  Whole percent on both paths — the cloud
-        named reads return 0-100 and the raw register is documented 0-100
-        (no scale ambiguity), live-pinned via single-register named reads
-        on 18kPV + FlexBOSS21 (GH eg4_web_monitor#135).
+        Register 110 bit 1 (FUNC_RUN_WITHOUT_GRID) —
+        "FunctionEn1.ubFastZeroExport" in the LXP protocol PDF; the EG4 and
+        Luxpower web UIs both flip this cloud param from their Grid Sell
+        tab (GH eg4_web_monitor#135 + #274). Speeds up the zero-export
+        control loop (import control slows down); the vendors advise
+        selecting it as the opposite of Grid Sell Back.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.enable_fast_zero_export()
+            True
+        """
+        result = await self._client.api.control.enable_fast_zero_export(self.serial_number)
+        return result.success
+
+    async def disable_fast_zero_export(self) -> bool:
+        """Disable Fast Zero Export.
+
+        See :meth:`enable_fast_zero_export` for the register 110 bit 1 pin.
+
+        Returns:
+            True if successful
+
+        Example:
+            >>> await inverter.disable_fast_zero_export()
+            True
+        """
+        result = await self._client.api.control.disable_fast_zero_export(self.serial_number)
+        return result.success
+
+    async def get_fast_zero_export_status(self) -> bool:
+        """Get current Fast Zero Export status (register 110 bit 1).
+
+        Returns:
+            True if Fast Zero Export is enabled, False otherwise
+
+        Example:
+            >>> is_enabled = await inverter.get_fast_zero_export_status()
+            >>> is_enabled
+            True
+        """
+        return await self._client.api.control.get_fast_zero_export_status(self.serial_number)
+
+    async def set_feed_in_grid_power_kw(self, power_kw: float) -> bool:
+        """Set the maximum sell-back (feed-in) power in kilowatts (register 103).
+
+        "Grid Sell Back Power(kW)" in BOTH the EG4 and Luxpower web UIs
+        (GH eg4_web_monitor#135 + #274 screenshots). The register stores
+        100 W units — the reg-66/74/82 encoding: the 2026-04-13 live local
+        probe read raw 160 on the 18kPV whose cloud named read returns
+        "16", and the #274 LXP-LB shows 12.1 kW (raw 121). The cloud
+        accepts kW floats directly (the server scales), like
+        :meth:`set_forced_discharge_power`.
 
         Args:
-            percent: Maximum sell-back power percentage (0 to 100)
+            power_kw: Maximum sell-back power in kilowatts (0.0 to 25.5)
 
         Returns:
             True if successful
 
         Raises:
-            ValueError: If percent is out of valid range (0-100)
+            ValueError: If power_kw is out of valid range (0-25.5)
 
         Example:
-            >>> await inverter.set_feed_in_grid_power_percent(50)
+            >>> await inverter.set_feed_in_grid_power_kw(12.1)
             True
+        """
+        if not 0.0 <= power_kw <= 25.5:
+            raise ValueError(f"Feed-in grid power must be between 0.0 and 25.5 kW, got {power_kw}")
+
+        # API accepts kW values directly; %g drops a trailing .0 (form value)
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, "HOLD_FEED_IN_GRID_POWER_PERCENT", f"{power_kw:g}"
+        )
+
+        if result.success:
+            self._parameters_cache_time = None
+
+        return result.success
+
+    @property
+    def feed_in_grid_power_kw(self) -> float | None:
+        """Get current maximum sell-back (feed-in) power from cached parameters.
+
+        The value reflects however ``parameters`` was populated: the cloud
+        API returns kilowatts, while a local transport surfaces the raw
+        100 W register value (121 = 12.1 kW). Callers reading through a
+        local transport must scale by 0.1 themselves — the same caveat as
+        :attr:`forced_discharge_power`.
+
+        Returns:
+            Power cap in kilowatts when cloud-populated, or None if
+            parameters not loaded or parameter not found
+
+        Example:
+            >>> inverter.feed_in_grid_power_kw
+            12.1
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get("HOLD_FEED_IN_GRID_POWER_PERCENT")
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+
+    async def set_feed_in_grid_power_percent(self, percent: int) -> bool:
+        """Set register 103 assuming percent semantics (DEPRECATED — it's kW).
+
+        .. deprecated:: 0.9.37
+            Register 103 is NOT a percent despite the cloud key name
+            (``HOLD_FEED_IN_GRID_POWER_PERCENT``): it stores 100 W units and
+            the cloud takes kilowatts (GH eg4_web_monitor#274 — live probe
+            raw 160 == cloud "16" == the web UIs' 16 kW field). A value
+            passed here is therefore interpreted by the server as
+            KILOWATTS: ``set_feed_in_grid_power_percent(50)`` sets a 50 kW
+            cap, not 50 %. Use :meth:`set_feed_in_grid_power_kw`.
+
+        Args:
+            percent: Historically documented as percent; the server treats
+                the number as kilowatts.
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If the value is outside 0-100
         """
         if not 0 <= percent <= 100:
             raise ValueError(
@@ -2762,18 +2875,18 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
     @property
     def feed_in_grid_power_percent(self) -> int | None:
-        """Get current maximum sell-back (feed-in) power percentage.
+        """Get register 103 assuming percent semantics (DEPRECATED — it's kW).
 
-        Whole percent on both the cloud and local paths (register 103 stores
-        0-100 directly), so no transport-dependent scaling caveat applies.
+        .. deprecated:: 0.9.37
+            Register 103 stores 100 W units and the cloud returns
+            kilowatts (GH eg4_web_monitor#274), so this int-typed 0-100
+            getter mis-reads the value: a cloud "12.1" (kW) fails int()
+            and reads None, and a local raw 121 fails the 0-100 range
+            check. Use :attr:`feed_in_grid_power_kw`.
 
         Returns:
-            Maximum sell-back power percentage (0-100), or None if parameters
-            not loaded or parameter not found
-
-        Example:
-            >>> inverter.feed_in_grid_power_percent
-            16
+            The cached value coerced to int when it happens to fall in
+            0-100, or None otherwise
         """
         if self.parameters is None:
             return None
