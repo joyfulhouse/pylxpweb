@@ -814,18 +814,25 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=103,
         canonical_name="max_backflow_power_percent",
         api_param_key="HOLD_FEED_IN_GRID_POWER_PERCENT",  # verified
-        unit="%",
+        unit="W",
         min_value=0,
-        max_value=100,
+        max_value=25500,
         category=HoldingCategory.POWER,
         description=(
-            "Maximum export (sell-back) power percentage — 'Grid Sell Back "
-            "Power' in the EG4 web UI.  The protocol spec calls reg 103 "
-            "'MaxBackflowPower', but live single-register named reads "
-            "(2026-06-12, 18kPV + FlexBOSS21, GH eg4_web_monitor#135) prove "
-            "the cloud API key is HOLD_FEED_IN_GRID_POWER_PERCENT; "
+            "Maximum export (sell-back) power — 'Grid Sell Back Power(kW)' "
+            "in BOTH the EG4 and Luxpower web UIs. Raw value in 100W units "
+            "(the reg-66/74/82 encoding), NOT the percent the protocol PDF "
+            "and the cloud key name claim: a 2026-04-13 live local probe "
+            "read raw 160 on the 18kPV whose cloud named read returns '16' "
+            "(= 16.0 kW), and the GH eg4_web_monitor#274 LXP-LB shows "
+            "12.1 kW (raw 121) — impossible as a 0-100 percent. The cloud "
+            "takes kW floats directly (server scales). The protocol spec "
+            "calls reg 103 'MaxBackflowPower'; live single-register named "
+            "reads (2026-06-12, 18kPV + FlexBOSS21, GH eg4_web_monitor#135) "
+            "prove the cloud API key is HOLD_FEED_IN_GRID_POWER_PERCENT — "
             "HOLD_MAX_BACKFLOW_POWER_PERCENT does not exist on this "
-            "hardware.  canonical_name retained for API stability."
+            "hardware. canonical_name retained for API stability despite "
+            "the misleading '_percent' suffix."
         ),
     ),
     # HOLD_EXPORT_LOCK_POWER is deliberately NOT mapped: its register is
@@ -916,7 +923,17 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         canonical_name="run_without_grid",
         api_param_key="FUNC_RUN_WITHOUT_GRID",  # verified
         category=HoldingCategory.FUNCTION,
-        description="Run without grid enable (off-grid capable).",
+        description=(
+            "Fast Zero Export — 'FunctionEn1.ubFastZeroExport' in the LXP "
+            "protocol PDF; the EG4 and Luxpower web UIs both toggle this "
+            "param from their Grid Sell tab's 'Fast Zero Export' button "
+            "(GH eg4_web_monitor#135 + #274 screenshots). Speeds up the "
+            "zero-export control loop (import control slows down); vendors "
+            "advise selecting it as the opposite of Grid Sell Back. The "
+            "canonical name mirrors the vendor param dictionary's literal "
+            "'run without grid' wording (kept for API stability) — the bit "
+            "does NOT make the inverter run without grid."
+        ),
     ),
     HoldingRegisterDefinition(
         address=110,

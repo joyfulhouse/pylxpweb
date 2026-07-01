@@ -1080,6 +1080,79 @@ class ControlEndpoints(BaseEndpoint):
         """
         return await self._get_function_status(inverter_sn, 179, "FUNC_PV_SELL_TO_GRID_EN")
 
+    async def enable_fast_zero_export(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Enable Fast Zero Export ("Fast Zero Export" in both web UIs).
+
+        Convenience wrapper for control_function(..., "FUNC_RUN_WITHOUT_GRID",
+        True). Register 110 bit 1 — "FunctionEn1.ubFastZeroExport" in the LXP
+        protocol PDF; the EG4 and Luxpower web UIs both toggle the
+        FUNC_RUN_WITHOUT_GRID cloud param for their Grid Sell tab button
+        (GH eg4_web_monitor#135 + #274 screenshots). Speeds up the
+        zero-export control loop (import control slows down); the vendors
+        advise selecting it as the opposite of Grid Sell Back.
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.enable_fast_zero_export("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_RUN_WITHOUT_GRID", True, client_type=client_type
+        )
+
+    async def disable_fast_zero_export(
+        self, inverter_sn: str, client_type: str = "WEB"
+    ) -> SuccessResponse:
+        """Disable Fast Zero Export.
+
+        Convenience wrapper for control_function(..., "FUNC_RUN_WITHOUT_GRID",
+        False); see :meth:`enable_fast_zero_export` for the register pin.
+
+        Args:
+            inverter_sn: Inverter serial number
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> result = await client.control.disable_fast_zero_export("1234567890")
+            >>> result.success
+            True
+        """
+        return await self.control_function(
+            inverter_sn, "FUNC_RUN_WITHOUT_GRID", False, client_type=client_type
+        )
+
+    async def get_fast_zero_export_status(self, inverter_sn: str) -> bool:
+        """Get current Fast Zero Export status.
+
+        Reads register 110 (system function enable) and extracts
+        FUNC_RUN_WITHOUT_GRID (bit 1 — same position in the base and SNA
+        register-110 tables).
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if Fast Zero Export is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_fast_zero_export_status("1234567890")
+            >>> if enabled:
+            >>>     print("Fast Zero Export is active")
+        """
+        return await self._get_function_status(inverter_sn, 110, "FUNC_RUN_WITHOUT_GRID")
+
     async def enable_peak_shaving_mode(
         self, inverter_sn: str, client_type: str = "WEB"
     ) -> SuccessResponse:

@@ -59,6 +59,10 @@ class TestFunctionToggleHelpers:
             ("disable_feed_in_grid", "FUNC_FEED_IN_GRID_EN", False),
             ("enable_pv_sell_to_grid", "FUNC_PV_SELL_TO_GRID_EN", True),
             ("disable_pv_sell_to_grid", "FUNC_PV_SELL_TO_GRID_EN", False),
+            # Fast Zero Export (GH eg4_web_monitor#274): reg 110 bit 1;
+            # both web UIs toggle FUNC_RUN_WITHOUT_GRID for the button.
+            ("enable_fast_zero_export", "FUNC_RUN_WITHOUT_GRID", True),
+            ("disable_fast_zero_export", "FUNC_RUN_WITHOUT_GRID", False),
         ],
     )
     async def test_toggle_delegates_to_control_function(
@@ -102,6 +106,7 @@ class TestFunctionStatusHelpers:
             ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
             ("get_feed_in_grid_status", 21, "FUNC_FEED_IN_GRID_EN"),
             ("get_pv_sell_to_grid_status", 179, "FUNC_PV_SELL_TO_GRID_EN"),
+            ("get_fast_zero_export_status", 110, "FUNC_RUN_WITHOUT_GRID"),
         ],
     )
     async def test_status_enabled(
@@ -126,6 +131,7 @@ class TestFunctionStatusHelpers:
             ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
             ("get_feed_in_grid_status", 21, "FUNC_FEED_IN_GRID_EN"),
             ("get_pv_sell_to_grid_status", 179, "FUNC_PV_SELL_TO_GRID_EN"),
+            ("get_fast_zero_export_status", 110, "FUNC_RUN_WITHOUT_GRID"),
         ],
     )
     async def test_status_disabled(

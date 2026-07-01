@@ -1704,6 +1704,9 @@ class TestGridSellBackOperations:
         [
             ("enable_feed_in_grid", "enable_feed_in_grid"),
             ("disable_feed_in_grid", "disable_feed_in_grid"),
+            # Fast Zero Export (GH eg4_web_monitor#274, reg 110 bit 1)
+            ("enable_fast_zero_export", "enable_fast_zero_export"),
+            ("disable_fast_zero_export", "disable_fast_zero_export"),
         ],
     )
     async def test_toggle_delegates_to_control_endpoint(
@@ -1827,8 +1830,131 @@ class TestGridSellBackOperations:
         assert REGISTER_TO_PARAM_KEYS[103] == ["HOLD_FEED_IN_GRID_POWER_PERCENT"]
         canonical = BY_ADDRESS[103]
         assert canonical[0].api_param_key == "HOLD_FEED_IN_GRID_POWER_PERCENT"
+        # kW pin (GH eg4_web_monitor#274): raw 100 W units like regs
+        # 66/74/82 — live probe raw 160 == cloud named read "16" == the web
+        # UIs' 16 kW; NOT the 0-100 percent the PDF and the key name claim.
         assert canonical[0].min_value == 0
-        assert canonical[0].max_value == 100
+        assert canonical[0].max_value == 25500
+        assert canonical[0].unit == "W"
+
+    @pytest.mark.asyncio
+    async def test_fast_zero_export_status_delegates(self, mock_client: LuxpowerClient) -> None:
+        """Fast Zero Export status delegates to the control endpoint."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        mock_client.api.control.get_fast_zero_export_status = AsyncMock(return_value=True)
+
+        assert await inverter.get_fast_zero_export_status() is True
+        mock_client.api.control.get_fast_zero_export_status.assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    async def test_set_feed_in_grid_power_kw(self, mock_client: LuxpowerClient) -> None:
+        """kW setter writes HOLD_FEED_IN_GRID_POWER_PERCENT as a kW string.
+
+        The cloud takes kW floats for this register (server scales to the
+        raw 100 W units) — the GH eg4_web_monitor#274 LXP-LB shows 12.1 kW.
+        """
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter._parameters_cache_time = datetime.now()
+
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        result = await inverter.set_feed_in_grid_power_kw(12.1)
+
+        mock_client.api.control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_FEED_IN_GRID_POWER_PERCENT", "12.1"
+        )
+        assert result is True
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_set_feed_in_grid_power_kw_whole_kw_string(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Whole kilowatts serialize without a trailing .0 (cloud form value)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        mock_write_response = Mock()
+        mock_write_response.success = True
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        assert await inverter.set_feed_in_grid_power_kw(16.0) is True
+        mock_client.api.control.write_parameter.assert_called_once_with(
+            "1234567890", "HOLD_FEED_IN_GRID_POWER_PERCENT", "16"
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_feed_in_grid_power_kw_out_of_range(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """kW outside 0-25.5 raises ValueError (both directions)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        with pytest.raises(ValueError, match="between 0.0 and 25.5"):
+            await inverter.set_feed_in_grid_power_kw(25.6)
+        with pytest.raises(ValueError, match="between 0.0 and 25.5"):
+            await inverter.set_feed_in_grid_power_kw(-0.1)
+
+    @pytest.mark.asyncio
+    async def test_set_feed_in_grid_power_kw_failure_keeps_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A failed kW write returns False and does NOT invalidate the cache."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        stamp = datetime.now()
+        inverter._parameters_cache_time = stamp
+
+        mock_write_response = Mock()
+        mock_write_response.success = False
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_write_response)
+
+        assert await inverter.set_feed_in_grid_power_kw(4.0) is False
+        assert inverter._parameters_cache_time == stamp
+
+    def test_feed_in_grid_power_kw_property(self, mock_client: LuxpowerClient) -> None:
+        """kW getter mirrors forced_discharge_power: float of the cached
+        value (cloud kW float; local transports surface raw 100 W units —
+        callers scale by 0.1, same caveat as forced_discharge_power)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        assert inverter.parameters is None
+        assert inverter.feed_in_grid_power_kw is None
+
+        inverter.parameters = {"HOLD_FEED_IN_GRID_POWER_PERCENT": "12.1"}
+        assert inverter.feed_in_grid_power_kw == 12.1
+
+        inverter.parameters = {"HOLD_FEED_IN_GRID_POWER_PERCENT": "16"}
+        assert inverter.feed_in_grid_power_kw == 16.0
+
+        inverter.parameters = {"HOLD_FEED_IN_GRID_POWER_PERCENT": "garbage"}
+        assert inverter.feed_in_grid_power_kw is None
+
+        inverter.parameters = {}
+        assert inverter.feed_in_grid_power_kw is None
+
+    def test_run_without_grid_is_reg110_bit1_in_both_tables(self) -> None:
+        """FUNC_RUN_WITHOUT_GRID (Fast Zero Export, GH eg4_web_monitor#274)
+        sits at register 110 bit 1 in the base AND SNA tables, matching the
+        LXP protocol PDF's FunctionEn1.ubFastZeroExport."""
+        from pylxpweb.constants.registers import (
+            OFFGRID_REGISTER_110_PARAM_KEYS,
+            REGISTER_TO_PARAM_KEYS,
+        )
+
+        assert REGISTER_TO_PARAM_KEYS[110][1] == "FUNC_RUN_WITHOUT_GRID"
+        assert OFFGRID_REGISTER_110_PARAM_KEYS[1] == "FUNC_RUN_WITHOUT_GRID"
 
     def test_pv_sell_to_grid_bit_pinned_at_bit3(self) -> None:
         """FUNC_PV_SELL_TO_GRID_EN is register 179 bit 3.
