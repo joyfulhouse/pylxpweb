@@ -144,6 +144,15 @@ class TransportConfig:
     inter_register_delay: float = field(default=0.05)
     """Delay between register group reads in seconds."""
 
+    max_input_block_size: int = field(default=40)
+    """Maximum registers per coalesced input-register read (40..125).
+
+    40 (default) keeps the plain per-group reads.  Larger values (multiples
+    of 40 recommended; 120 field-proven on newer dongles) coalesce adjacent
+    register groups into fewer reads for faster polling; hardware that
+    rejects large reads automatically falls back (eg4_web_monitor#254).
+    """
+
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
         self.validate()
@@ -157,6 +166,12 @@ class TransportConfig:
         Raises:
             ValueError: If configuration is invalid
         """
+        from ._register_data import validate_input_block_size
+
+        # Applies to every register-reading transport type (not HTTP, but
+        # harmless there: the field only matters for local transports).
+        validate_input_block_size(self.max_input_block_size)
+
         # HTTP transport has relaxed validation (used for hybrid mode reference only)
         if self.transport_type == TransportType.HTTP:
             if not self.serial:
@@ -210,6 +225,7 @@ class TransportConfig:
             "retries": self.retries,
             "retry_delay": self.retry_delay,
             "inter_register_delay": self.inter_register_delay,
+            "max_input_block_size": self.max_input_block_size,
         }
 
     @classmethod
@@ -251,6 +267,7 @@ class TransportConfig:
         instance.retries = data.get("retries", 2)
         instance.retry_delay = data.get("retry_delay", 0.5)
         instance.inter_register_delay = data.get("inter_register_delay", 0.05)
+        instance.max_input_block_size = data.get("max_input_block_size", 40)
 
         # Validate the restored config
         instance.validate()

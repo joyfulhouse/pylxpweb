@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Configurable input-register block coalescing** ([eg4_web_monitor#254](https://github.com/joyfulhouse/eg4_web_monitor/issues/254)):
+  new `max_input_block_size` parameter (40..125, default 40) on
+  `ModbusTransport`, `ModbusSerialTransport`, `DongleTransport`,
+  `TransportConfig`, and the factory functions. At the default the read
+  pattern is byte-identical to previous releases (one read per
+  `INPUT_REGISTER_GROUPS` entry). Larger values (multiples of 40
+  recommended; 120 field-proven on DG dongle firmware 2.04–2.09) coalesce
+  *adjacent/overlapping* register groups into consolidated reads — at 120
+  the 8 inverter group reads become 4 (regs 0–112 in ONE transaction),
+  cutting ~4 Modbus round-trips per poll per inverter for faster local
+  polling. Safety: coalescing only merges spans already read today (the
+  154–169 / 174–192 gaps are never bridged); the first failed or short
+  coalesced read logs one WARNING, completes the same cycle via the plain
+  grouped reads, and latches the transport back to grouped mode permanently
+  (probe-once), so old dongle firmware that caps reads at ~40 registers
+  degrades gracefully instead of hard-failing polling. GridBOSS/MID reads
+  are deliberately not coalesced (>40-register midbox reads empirically
+  failed on real GridBOSS hardware); the atomic 120-register battery block,
+  PV4-6 extended reads, and input-register 210 are unchanged.
+
 - **Battery rotation-stall watchdog** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   the 2026-06-28 report pinned the firmware's battery page for ~9 hours with
   ZERO non-debug logs — every 120-register block read succeeded, so nothing

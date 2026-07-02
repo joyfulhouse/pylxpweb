@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -104,6 +106,117 @@ MIDBOX_REGISTER_GROUPS: list[tuple[int, int]] = [
 ]
 
 # ---------------------------------------------------------------------------
+# Configurable input-register block coalescing (eg4_web_monitor#254)
+# ---------------------------------------------------------------------------
+# The vendor Modbus RTU doc (2025/6/13) specifies reads must not span
+# 40-register block boundaries on old firmware; newer dongles/firmware accept
+# up to the Modbus FC04 PDU cap (125 registers; DG dongle fw 2.04-2.09 field-
+# verified at 120).  ``max_input_block_size`` lets capable hardware coalesce
+# the adjacent INPUT_REGISTER_GROUPS into fewer transactions.  The default
+# keeps the plain per-group reads (byte-identical to previous releases).
+#
+# GridBOSS/MID reads are deliberately NOT coalesced: >40-register midbox
+# reads empirically failed on real GridBOSS hardware (see f050eb2, "fix
+# critical 40-register hardware limit bug ... for GridBOSS midbox runtime
+# reads"), so MIDBOX_REGISTER_GROUPS stays chunked at <=40 regardless of
+# this setting.
+
+DEFAULT_INPUT_BLOCK_SIZE = 40
+"""Conservative default: no coalescing — reads are exactly the group table.
+
+40 is the documented per-read cap of the oldest dongle firmware.  Multiples
+of 40 are recommended for larger values (the vendor doc's block convention);
+120 is the field-proven fast setting.
+"""
+
+MAX_INPUT_BLOCK_SIZE = 125
+"""Modbus FC04 PDU limit (the dongle frame's u8 byte count caps at 127)."""
+
+
+def validate_input_block_size(value: int) -> int:
+    """Validate a ``max_input_block_size`` setting.
+
+    Args:
+        value: Requested maximum registers per coalesced input read.
+
+    Returns:
+        The validated value.
+
+    Raises:
+        ValueError: If outside ``DEFAULT_INPUT_BLOCK_SIZE..MAX_INPUT_BLOCK_SIZE``.
+    """
+    if not DEFAULT_INPUT_BLOCK_SIZE <= value <= MAX_INPUT_BLOCK_SIZE:
+        raise ValueError(
+            f"max_input_block_size must be {DEFAULT_INPUT_BLOCK_SIZE}.."
+            f"{MAX_INPUT_BLOCK_SIZE} (40-multiples recommended; got {value})"
+        )
+    return int(value)
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadBlock:
+    """One planned input-register read (a single Modbus transaction)."""
+
+    members: tuple[str, ...]
+    """Constituent group names (length 1 = plain, unmerged group read)."""
+
+    start: int
+    count: int
+
+    @property
+    def label(self) -> str:
+        """Human-readable name for logs ('power_energy+status_energy+...')."""
+        return "+".join(self.members)
+
+    @property
+    def coalesced(self) -> bool:
+        """Whether this block merges multiple groups (fallback-eligible)."""
+        return len(self.members) > 1
+
+
+class _CoalescedReadFallback(Exception):
+    """Internal: a coalesced block read failed; retry with plain group reads."""
+
+
+def coalesce_register_groups(
+    groups: Sequence[tuple[str, tuple[int, int]]],
+    max_block_size: int,
+) -> list[_ReadBlock]:
+    """Merge contiguous/overlapping register groups into larger read blocks.
+
+    Generic span coalescing: groups are merged only when the next group's
+    start lies within (or exactly at the end of) the running block, so a
+    merged block is always the exact union of its members' spans — it never
+    reads an address the plain grouped reads don't already read.  Registers
+    in the gaps *between* groups (which may misbehave or not exist on some
+    models) are never bridged, no matter the block size.
+
+    A single group larger than ``max_block_size`` is never split; it stays
+    one read, exactly as in the plain plan.
+
+    Args:
+        groups: ``(name, (start, count))`` pairs (e.g. INPUT_REGISTER_GROUPS
+            items, or a subset).
+        max_block_size: Maximum registers per merged read.
+
+    Returns:
+        Ordered read plan covering the same addresses as ``groups``.
+    """
+    merged: list[tuple[list[str], int, int]] = []  # (names, start, end)
+    for name, (start, count) in sorted(groups, key=lambda g: (g[1][0], g[1][0] + g[1][1])):
+        end = start + count
+        if merged:
+            names, run_start, run_end = merged[-1]
+            new_end = max(run_end, end)
+            if start <= run_end and new_end - run_start <= max_block_size:
+                names.append(name)
+                merged[-1] = (names, run_start, new_end)
+                continue
+        merged.append(([name], start, end))
+    return [_ReadBlock(tuple(names), start, end - start) for names, start, end in merged]
+
+
+# ---------------------------------------------------------------------------
 # TYPE_CHECKING-only base class for mixin attribute stubs
 # ---------------------------------------------------------------------------
 
@@ -117,6 +230,7 @@ if TYPE_CHECKING:
         _inverter_family: InverterFamily | None
         _split_phase: bool
         _pv_string_count: int
+        _max_input_block_size: int
 
         async def _read_input_registers(self, start: int, count: int) -> list[int]: ...
 
@@ -526,14 +640,100 @@ class RegisterDataMixin(_DataMixinBase):
     # Register group reading
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _resolve_input_groups(
+        group_names: list[str] | None,
+    ) -> list[tuple[str, tuple[int, int]]]:
+        """Resolve group names to ``(name, (start, count))`` pairs."""
+        if group_names is None:
+            return list(INPUT_REGISTER_GROUPS.items())
+        return [
+            (name, INPUT_REGISTER_GROUPS[name])
+            for name in group_names
+            if name in INPUT_REGISTER_GROUPS
+        ]
+
+    def _plan_input_reads(
+        self,
+        groups: list[tuple[str, tuple[int, int]]],
+    ) -> list[_ReadBlock]:
+        """Plan the input reads for ``groups``, coalescing when configured.
+
+        With the conservative default block size — or after a coalesced read
+        has failed and latched the transport back (``eg4_web_monitor#254``) —
+        the plan is exactly one read per group, byte-identical to the
+        pre-feature behavior.
+        """
+        max_size = getattr(self, "_max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE)
+        if max_size <= DEFAULT_INPUT_BLOCK_SIZE or getattr(
+            self, "_input_coalescing_latched_off", False
+        ):
+            return [_ReadBlock((name,), start, count) for name, (start, count) in groups]
+        return coalesce_register_groups(groups, max_size)
+
+    def _latch_input_coalescing_off(self, block: _ReadBlock, reason: object) -> None:
+        """Disable coalescing for this transport's lifetime (probe-once).
+
+        Old dongle firmware caps reads at ~40 registers; a large read on
+        such hardware fails (or times out) every time, so the first failure
+        latches the transport back to the plain grouped reads permanently
+        (until the transport is recreated, e.g. on reload) instead of
+        re-paying retries every poll cycle.  Transient link errors (a short
+        or misrouted frame) trip the same latch — the warning names both
+        causes rather than blaming firmware for a one-off flake.
+        """
+        self._input_coalescing_latched_off = True
+        _LOGGER.warning(
+            "[%s] Coalesced input-register read %d-%d (%d registers; groups %s) "
+            "failed (%s) — falling back to the standard grouped reads for this "
+            "connection. Possible causes: older dongle firmware that only "
+            "supports ~40-register reads, or a transient link error (short or "
+            "misrouted frame). Coalescing re-arms when the transport is "
+            "recreated (e.g. on reload); lower the configured block size to "
+            "disable this probe.",
+            self._serial,
+            block.start,
+            block.start + block.count - 1,
+            block.count,
+            block.label,
+            reason,
+        )
+
+    async def _read_block(self, block: _ReadBlock) -> list[int]:
+        """Read one planned block.
+
+        A failed or short **coalesced** read latches coalescing off and
+        raises :class:`_CoalescedReadFallback` so the caller re-reads the
+        cycle with plain group reads.  Plain (single-group) reads propagate
+        errors unchanged, preserving the existing per-group semantics.
+        """
+        try:
+            values = await self._read_input_registers(block.start, block.count)
+        except Exception as err:
+            if block.coalesced:
+                self._latch_input_coalescing_off(block, err)
+                raise _CoalescedReadFallback() from err
+            raise
+        if block.coalesced and len(values) < block.count:
+            self._latch_input_coalescing_off(
+                block, f"short response ({len(values)}/{block.count} registers)"
+            )
+            raise _CoalescedReadFallback()
+        return values
+
     async def _read_register_groups(
         self,
         group_names: list[str] | None = None,
     ) -> dict[int, int]:
         """Read multiple register groups sequentially with inter-group delays.
 
+        When a larger ``max_input_block_size`` is configured, adjacent groups
+        are coalesced into fewer reads; the first failed coalesced read falls
+        back to the plain per-group reads for the cycle and latches the
+        transport back permanently (eg4_web_monitor#254).
+
         Subclasses (e.g. BaseModbusTransport) may override this to add
-        adaptive delay or auto-reconnect logic.
+        auto-reconnect logic around it.
 
         Args:
             group_names: Specific group names from ``INPUT_REGISTER_GROUPS``.
@@ -545,34 +745,51 @@ class RegisterDataMixin(_DataMixinBase):
         Raises:
             TransportReadError: If any group read fails.
         """
-        if group_names is None:
-            groups = list(INPUT_REGISTER_GROUPS.items())
-        else:
-            groups = [
-                (name, INPUT_REGISTER_GROUPS[name])
-                for name in group_names
-                if name in INPUT_REGISTER_GROUPS
-            ]
+        groups = self._resolve_input_groups(group_names)
+        try:
+            return await self._read_group_plan(self._plan_input_reads(groups))
+        except _CoalescedReadFallback:
+            # Latched off inside _read_block; the plan is now one read/group.
+            return await self._read_group_plan(self._plan_input_reads(groups))
 
+    async def _read_group_plan(self, plan: list[_ReadBlock]) -> dict[int, int]:
+        """Execute a read plan sequentially with inter-read delays.
+
+        The adaptive-delay backoff only applies to transports that track
+        ``_last_read_retried`` (the pymodbus-based ones); the dongle
+        transport has no such attribute and keeps its fixed delay.
+        """
         registers: dict[int, int] = {}
+        current_delay = self._inter_register_delay
 
-        for i, (group_name, (start, count)) in enumerate(groups):
+        for i, block in enumerate(plan):
             try:
-                values = await self._read_input_registers(start, count)
-                for offset, value in enumerate(values):
-                    registers[start + offset] = value
+                values = await self._read_block(block)
+            except _CoalescedReadFallback:
+                raise
             except Exception as e:
                 _LOGGER.error(
                     "Failed to read register group '%s': %s",
-                    group_name,
+                    block.label,
                     e,
                 )
                 raise TransportReadError(
-                    f"Failed to read register group '{group_name}': {e}"
+                    f"Failed to read register group '{block.label}': {e}"
                 ) from e
 
-            if i < len(groups) - 1:
-                await asyncio.sleep(self._inter_register_delay)
+            for offset, value in enumerate(values):
+                registers[block.start + offset] = value
+
+            # Increase delay when retries occurred to give the device breathing room
+            if getattr(self, "_last_read_retried", False):
+                current_delay = min(current_delay * 2, 1.0)
+                _LOGGER.debug(
+                    "Increasing inter-group delay to %.3fs after retries",
+                    current_delay,
+                )
+
+            if i < len(plan) - 1:
+                await asyncio.sleep(current_delay)
 
         return registers
 
@@ -793,6 +1010,62 @@ class RegisterDataMixin(_DataMixinBase):
 
         return result
 
+    async def _read_all_input_groups(
+        self,
+        plan: list[_ReadBlock],
+    ) -> tuple[dict[int, int], bool]:
+        """Execute the combined-read plan, tracking bms_data availability.
+
+        A plain ``bms_data`` read failing or coming back short is non-fatal
+        (#261): its registers stay absent and ``bms_ok`` turns False so the
+        caller suppresses the half-empty battery bank.  In a coalesced plan
+        the bms registers ride inside a merged block, whose failure raises
+        :class:`_CoalescedReadFallback` (via ``_read_block``) so the whole
+        cycle re-runs with plain group reads — restoring exactly these
+        per-group semantics.
+
+        Returns:
+            Tuple of (address→value map, bms_ok).
+        """
+        input_registers: dict[int, int] = {}
+        bms_ok = True
+
+        for i, block in enumerate(plan):
+            is_plain_bms = block.members == ("bms_data",)
+            try:
+                values = await self._read_block(block)
+                if is_plain_bms and len(values) < block.count:
+                    # A short BMS response (e.g. a misrouted/partial dongle
+                    # frame that didn't raise) would leave reg 96 / BMS fields
+                    # absent and rebuild the half-empty bank.  Treat it as
+                    # unavailable, like an outright failure (#261).
+                    _LOGGER.debug(
+                        "bms_data short read (%d/%d regs) for %s, treating as unavailable",
+                        len(values),
+                        block.count,
+                        self._serial,
+                    )
+                    bms_ok = False
+                    continue
+                for offset, value in enumerate(values):
+                    input_registers[block.start + offset] = value
+            except _CoalescedReadFallback:
+                raise
+            except Exception:
+                if is_plain_bms:
+                    _LOGGER.debug(
+                        "bms_data registers unavailable for %s, continuing",
+                        self._serial,
+                    )
+                    bms_ok = False
+                    continue
+                raise
+
+            if i < len(plan) - 1:
+                await asyncio.sleep(self._inter_register_delay)
+
+        return input_registers, bms_ok
+
     async def read_all_input_data(
         self,
     ) -> tuple[InverterRuntimeData, InverterEnergyData, BatteryBankData | None]:
@@ -806,39 +1079,17 @@ class RegisterDataMixin(_DataMixinBase):
         Returns:
             Tuple of (runtime_data, energy_data, battery_data_or_none).
         """
-        input_registers: dict[int, int] = {}
-        bms_ok = True
-
-        for i, (group_name, (start, count)) in enumerate(INPUT_REGISTER_GROUPS.items()):
-            try:
-                values = await self._read_input_registers(start, count)
-                if group_name == "bms_data" and len(values) < count:
-                    # A short BMS response (e.g. a misrouted/partial dongle
-                    # frame that didn't raise) would leave reg 96 / BMS fields
-                    # absent and rebuild the half-empty bank.  Treat it as
-                    # unavailable, like an outright failure (#261).
-                    _LOGGER.debug(
-                        "bms_data short read (%d/%d regs) for %s, treating as unavailable",
-                        len(values),
-                        count,
-                        self._serial,
-                    )
-                    bms_ok = False
-                    continue
-                for offset, value in enumerate(values):
-                    input_registers[start + offset] = value
-            except Exception:
-                if group_name == "bms_data":
-                    _LOGGER.debug(
-                        "bms_data registers unavailable for %s, continuing",
-                        self._serial,
-                    )
-                    bms_ok = False
-                    continue
-                raise
-
-            if i < len(INPUT_REGISTER_GROUPS) - 1:
-                await asyncio.sleep(self._inter_register_delay)
+        groups = self._resolve_input_groups(None)
+        try:
+            input_registers, bms_ok = await self._read_all_input_groups(
+                self._plan_input_reads(groups)
+            )
+        except _CoalescedReadFallback:
+            # Latched off inside _read_block; the plan is now one read/group,
+            # restoring the exact per-group (bms non-fatal) semantics.
+            input_registers, bms_ok = await self._read_all_input_groups(
+                self._plan_input_reads(groups)
+            )
 
         # V23-extended PV4-6 registers (only read for models with >=4 strings)
         input_registers.update(await self._read_pv4_6_registers())

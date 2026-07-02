@@ -22,6 +22,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from ._modbus_base import INPUT_REGISTER_GROUPS, BaseModbusTransport
+from ._register_data import DEFAULT_INPUT_BLOCK_SIZE
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .exceptions import TransportConnectionError
 
@@ -83,6 +84,7 @@ class ModbusTransport(BaseModbusTransport):
         retry_delay: float = 0.5,
         inter_register_delay: float = 0.05,
         pymodbus_retries: int = 3,
+        max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
     ) -> None:
         """Initialize Modbus transport.
 
@@ -102,6 +104,12 @@ class ModbusTransport(BaseModbusTransport):
                 (default 0.05)
             pymodbus_retries: Number of retries passed to pymodbus client
                 (default 3)
+            max_input_block_size: Maximum registers per coalesced input-register
+                read, 40..125 (default 40 = no coalescing, the plain per-group
+                reads).  Larger values (multiples of 40 recommended; 120 is
+                field-proven) consolidate adjacent register groups into fewer
+                reads; hardware that rejects large reads automatically falls
+                back to the plain grouped reads (eg4_web_monitor#254).
         """
         super().__init__(
             serial,
@@ -112,6 +120,7 @@ class ModbusTransport(BaseModbusTransport):
             retry_delay=retry_delay,
             inter_register_delay=inter_register_delay,
             pymodbus_retries=pymodbus_retries,
+            max_input_block_size=max_input_block_size,
         )
         self._host = host
         self._port = port
