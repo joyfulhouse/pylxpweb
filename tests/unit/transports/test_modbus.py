@@ -1411,6 +1411,148 @@ class TestBatteryAccumulatorReg96Unreliable:
         assert not any(k.startswith("pos:") for k in acc), "no phantom pos identity"
 
 
+class TestBatteryDuplicateSerialDisambiguation:
+    """Duplicate serials in one page must not silently collapse packs (#258).
+
+    Two physical batteries whose BMS-reported serials decode identically
+    (corrupt serial bytes during a misroute storm, or genuinely duplicated
+    serial strings) landed on ONE accumulator key — last-write-wins hid a
+    battery with no trace in the logs.  The colliding slot is disambiguated
+    by the battery's bank position (offset 24 high byte, stable across
+    rotation) and a single warning names the colliding serial.
+    """
+
+    def _make_transport(self) -> ModbusTransport:
+        return ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+    def _mock_client(
+        self,
+        slot_values_per_call: list[list[int]],
+    ) -> tuple[MagicMock, MagicMock]:
+        call_idx = [0]
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        mock_client.close = MagicMock()
+
+        async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
+            resp = MagicMock()
+            resp.isError.return_value = False
+            if address == BATTERY_BASE_ADDRESS:
+                idx = min(call_idx[0], len(slot_values_per_call) - 1)
+                resp.registers = slot_values_per_call[idx]
+                call_idx[0] += 1
+            else:
+                resp.registers = [0] * count
+            return resp
+
+        mock_client.read_input_registers = mock_read
+        return mock_client, MagicMock(return_value=mock_client)
+
+    @staticmethod
+    def _dup_serial_page() -> list[int]:
+        """Page where slots 1 and 3 report the same serial at different positions."""
+        page = _build_battery_slots_with_serials(
+            [
+                ("BATTERYSER0000", 0),
+                ("BATTERYSER0001", 1),
+                ("BATTERYSER0002", 2),
+                ("BATTERYSER0001", 3),  # duplicate of slot 1's serial
+            ]
+        )
+        # Distinct electrical data so a collapse is observable.
+        page[1 * BATTERY_REGISTER_COUNT + 6] = 5320
+        page[3 * BATTERY_REGISTER_COUNT + 6] = 5318
+        return page
+
+    @pytest.mark.asyncio
+    async def test_duplicate_serial_disambiguated_by_position(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Both packs stay accumulated; one warning names the colliding serial."""
+        transport = self._make_transport()
+        _, mock_class = self._mock_client([self._dup_serial_page()])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            with caplog.at_level(logging.WARNING):
+                merged = await transport._read_individual_battery_registers(4)
+
+        assert merged is not None
+        acc = transport._battery_accumulator
+        assert len(acc) == 4, f"expected 4 accumulated batteries, got {set(acc)}"
+        # The colliding slot keeps a position-derived identity.
+        assert "BATTERYSER0001" in acc
+        assert "BATTERYSER0001@pos3" in acc
+        # Both physical packs' data survives (distinct voltages).
+        assert acc["BATTERYSER0001"][6] == 5320
+        assert acc["BATTERYSER0001@pos3"][6] == 5318
+        # Exactly one warning naming the colliding serial.
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "BATTERYSER0001" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+
+    @pytest.mark.asyncio
+    async def test_duplicate_serial_identity_stable_and_warning_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Repeated pages neither grow the accumulator nor re-warn."""
+        transport = self._make_transport()
+        page = self._dup_serial_page()
+        _, mock_class = self._mock_client([page, page, page])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            with caplog.at_level(logging.WARNING):
+                await transport._read_individual_battery_registers(4)
+                await transport._read_individual_battery_registers(4)
+                await transport._read_individual_battery_registers(4)
+
+        acc = transport._battery_accumulator
+        assert len(acc) == 4, f"accumulator grew: {set(acc)}"
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "BATTERYSER0001" in r.getMessage()
+        ]
+        assert len(warnings) == 1, "warning must be latched once per serial"
+
+
+class TestBatterySlotDebugSerial:
+    """The per-slot debug dump must show the full identity serial (#258).
+
+    The dump previously decoded only offsets 17-23 (14 chars) while the
+    accumulator identity and ``BatteryData.serial_number`` include offset
+    24's low byte (the final serial character).  On a bank whose serials
+    differ only in that final character, the dump showed phantom
+    "duplicate" serials — the exact red herring in the #258 beta.18 field
+    log analysis.
+    """
+
+    def test_slot_debug_logs_full_serial(self, caplog: pytest.LogCaptureFixture) -> None:
+        transport = ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+        # Two batteries whose serials differ ONLY in the 15th character,
+        # which lives in offset 24's low byte.
+        individual: dict[int, int] = {}
+        for slot, last_char in enumerate(("5", "7")):
+            base = BATTERY_BASE_ADDRESS + slot * BATTERY_REGISTER_COUNT
+            individual[base] = 0xC003
+            individual[base + 6] = 5246
+            for i, reg_val in enumerate(_encode_serial("BATTERYSER0016")):
+                individual[base + 17 + i] = reg_val
+            # pos in high byte, final serial char in low byte.
+            individual[base + 24] = (slot << 8) | ord(last_char)
+
+        with caplog.at_level(logging.DEBUG):
+            transport._log_battery_slot_debug(individual, battery_count=2)
+
+        assert "BATTERYSER00165" in caplog.text
+        assert "BATTERYSER00167" in caplog.text
+
+
 class TestWriteConnectionException:
     """ConnectionException during writes surfaces typed and heals (eg4-1cxn).
 

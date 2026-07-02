@@ -379,6 +379,9 @@ class RegisterDataMixin(_DataMixinBase):
         # across reads shows exactly when a battery rotates into/out of a slot.
         raw_page: list[str] = []
         page_has_active_slot = False
+        # Identities already claimed by earlier slots of THIS page, for the
+        # duplicate-serial guard below (eg4_web_monitor#258).
+        page_identities: set[str] = set()
 
         for phys_slot in range(BATTERY_MAX_COUNT):
             slot_base = BATTERY_BASE_ADDRESS + (phys_slot * BATTERY_REGISTER_COUNT)
@@ -416,6 +419,31 @@ class RegisterDataMixin(_DataMixinBase):
             serial_reported = any(raw_registers.get(slot_base + off, 0) for off in range(17, 24))
             if serial and len(serial) >= _MIN_BATTERY_SERIAL_LEN:
                 identity = serial
+                if identity in page_identities:
+                    # Duplicate serial WITHIN one page: two physical slots
+                    # claiming one identity (corrupt serial bytes during a
+                    # misroute storm, or genuinely duplicated serial strings).
+                    # Silent last-write-wins would collapse two packs into one
+                    # accumulator entry and hide a battery with no log trace
+                    # (eg4_web_monitor#258).  Disambiguate the later slot by
+                    # the battery's bank position (offset 24 high byte —
+                    # stable per battery across rotation) and warn once per
+                    # colliding serial.
+                    pos = (raw_registers.get(slot_base + 24, 0) >> 8) & 0xFF
+                    identity = f"{serial}@pos{pos}"
+                    dup_warned: set[str] = getattr(self, "_battery_dup_serial_warned", set())
+                    if serial not in dup_warned:
+                        dup_warned.add(serial)
+                        self._battery_dup_serial_warned = dup_warned
+                        _LOGGER.warning(
+                            "[%s] Two battery slots in one page report the same "
+                            "serial %r; keeping both, disambiguating the second "
+                            "as %r by bank position (duplicate or corrupt BMS "
+                            "serial)",
+                            self._serial,
+                            serial,
+                            identity,
+                        )
             elif serial_reported:
                 raw_page.append(f"{phys_slot}={serial!r}~trunc")
                 _LOGGER.debug(
@@ -430,6 +458,7 @@ class RegisterDataMixin(_DataMixinBase):
                 identity = f"pos:{pos}"
 
             raw_page.append(f"{phys_slot}={identity}")
+            page_identities.add(identity)
             if identity not in slot_index:
                 slot_index[identity] = len(slot_index)
             accumulator[identity] = slot_regs
@@ -465,6 +494,7 @@ class RegisterDataMixin(_DataMixinBase):
                 self._battery_slot_index = {}
                 self._battery_last_seen = {}
                 self._battery_stall_warned: set[str] = set()
+                self._battery_dup_serial_warned = set()
                 _LOGGER.info(
                     "[%s] Battery bank converged to empty after %d consecutive "
                     "empty reads (reg 96 = 0, all slots ghost); retiring %d "
@@ -631,22 +661,19 @@ class RegisterDataMixin(_DataMixinBase):
             status = individual_registers.get(slot_base, 0)
             voltage_raw = individual_registers.get(slot_base + 6, 0)
 
-            # Offset 24: appears to encode battery position index in high byte
-            # (0x0100=pos1, 0x0200=pos2, etc.).  May change during round-robin
-            # rotation on systems with >4 batteries.
+            # Offset 24: encodes the battery position index in the high byte
+            # (0x0100=pos1, 0x0200=pos2, etc.) and the FINAL serial character
+            # in the low byte.  May change during round-robin rotation on
+            # systems with >4 batteries.
             reserved_24 = individual_registers.get(slot_base + 24, 0)
 
-            # Serial: 7 registers at offset 17-23, 2 ASCII chars per word
-            serial_chars: list[str] = []
-            for reg_offset in range(7):
-                raw_word = individual_registers.get(slot_base + 17 + reg_offset, 0)
-                lo_byte = raw_word & 0xFF
-                hi_byte = (raw_word >> 8) & 0xFF
-                if lo_byte > 0:
-                    serial_chars.append(chr(lo_byte))
-                if hi_byte > 0:
-                    serial_chars.append(chr(hi_byte))
-            slot_serial = "".join(serial_chars).strip("\x00")
+            # Serial: decode with the SAME reader the accumulator identity and
+            # BatteryData.serial_number use (offsets 17-24, non-printables
+            # filtered).  The previous manual 17-23 decode dropped the final
+            # character (offset 24 low byte), so a bank whose serials differ
+            # only there logged phantom "duplicate" serials
+            # (eg4_web_monitor#258 beta.18 red herring).
+            slot_serial = read_battery_serial(individual_registers, base_address=slot_base)
 
             _LOGGER.debug(
                 "[%s] Pos %d: status=0x%04X voltage_raw=%d serial=%r offset24=0x%04X (%d)",
