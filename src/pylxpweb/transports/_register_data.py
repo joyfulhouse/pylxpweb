@@ -76,6 +76,13 @@ _MIN_BATTERY_SERIAL_LEN = 10
 BATTERY_ROTATION_STALL_WARN_AFTER = timedelta(minutes=45)
 _BATTERY_STALL_PER_PAGE = timedelta(minutes=15)
 
+# Empty-bank convergence (#282 review): consecutive SUCCESSFUL block reads
+# reporting reg 96 = 0 with an all-ghost page before the never-evict
+# accumulator is retired.  One or two empty reads are indistinguishable from
+# a transient reg-96/bms glitch (the reason the gate guard exists); three in
+# a row on a healthy link means the batteries are genuinely gone.
+_BATTERY_EMPTY_BANK_RETIRE_STREAK = 3
+
 # ---------------------------------------------------------------------------
 # Register group constants (unified across Modbus and Dongle transports)
 # ---------------------------------------------------------------------------
@@ -371,6 +378,7 @@ class RegisterDataMixin(_DataMixinBase):
         # firmware rotation cannot be characterized from logs.  Diffing this line
         # across reads shows exactly when a battery rotates into/out of a slot.
         raw_page: list[str] = []
+        page_has_active_slot = False
 
         for phys_slot in range(BATTERY_MAX_COUNT):
             slot_base = BATTERY_BASE_ADDRESS + (phys_slot * BATTERY_REGISTER_COUNT)
@@ -378,6 +386,14 @@ class RegisterDataMixin(_DataMixinBase):
             if not status:
                 raw_page.append(f"{phys_slot}=empty")
                 continue  # Empty physical slot — skip
+
+            # Ghost slot: status set but no electrical data (canonical ghost
+            # definition, voltage=0 and soc=0).  Counted as inactive for the
+            # empty-bank convergence streak below.
+            slot_voltage = raw_registers.get(slot_base + 6, 0)
+            slot_soc = raw_registers.get(slot_base + 8, 0) & 0xFF
+            if slot_voltage or slot_soc:
+                page_has_active_slot = True
 
             # Extract this slot's 30-register block (using slot-local offsets 0-29)
             slot_regs: dict[int, int] = {}
@@ -429,6 +445,37 @@ class RegisterDataMixin(_DataMixinBase):
             " ".join(raw_page),
             battery_count,
         )
+
+        # Empty-bank convergence streak (#282 review P1): the accumulator
+        # never evicts, and since the reg96-zero gate guard it is consulted
+        # on every read — so a bank whose batteries were PHYSICALLY removed
+        # would be served from stale accumulation forever (pre-guard, the
+        # gate skip was accidentally the only convergence path, wiping
+        # transients along with real removals).  Retire the accumulator only
+        # after N consecutive SUCCESSFUL reads that report reg 96 = 0 AND an
+        # all-ghost page.  Failed reads never reach this code (the failure
+        # path above returns first), so a #258-style misroute storm cannot
+        # advance the streak, and any real slot or reg 96 > 0 resets it.
+        if battery_count == 0 and not page_has_active_slot:
+            streak = getattr(self, "_battery_empty_page_streak", 0) + 1
+            self._battery_empty_page_streak = streak
+            if streak >= _BATTERY_EMPTY_BANK_RETIRE_STREAK and accumulator:
+                retired = len(accumulator)
+                self._battery_accumulator = {}
+                self._battery_slot_index = {}
+                self._battery_last_seen = {}
+                self._battery_stall_warned: set[str] = set()
+                _LOGGER.info(
+                    "[%s] Battery bank converged to empty after %d consecutive "
+                    "empty reads (reg 96 = 0, all slots ghost); retiring %d "
+                    "accumulated batteries",
+                    self._serial,
+                    streak,
+                    retired,
+                )
+                return None
+        else:
+            self._battery_empty_page_streak = 0
 
         if not accumulator:
             return None
@@ -982,7 +1029,17 @@ class RegisterDataMixin(_DataMixinBase):
             include_individual,
         )
 
-        if include_individual and battery_count > 0:
+        # reg 96 is unreliable (#170/#258): a transient 0 on a battery-bearing
+        # unit must not bypass the block read — the accumulator would never be
+        # consulted (its failure fallback only covers RAISED reads, not a
+        # gate skip), so the bank would be built with batteries=[] and every
+        # accumulated battery would vanish for the cycle (eg4_web_monitor#282
+        # review flag, same family as the #258 wipe).  Once anything has been
+        # accumulated, read the block regardless of reg 96; a unit that never
+        # accumulated anything (genuinely battery-less) still skips the read.
+        if include_individual and (
+            battery_count > 0 or getattr(self, "_battery_accumulator", None)
+        ):
             await self._read_battery_header_registers()
             individual_registers = await self._read_individual_battery_registers(
                 battery_count,
@@ -1133,7 +1190,15 @@ class RegisterDataMixin(_DataMixinBase):
         )
 
         individual_registers: dict[int, int] | None = None
-        if battery_count > 0:
+        # reg 96 is unreliable (#170/#258): a transient 0 on a battery-bearing
+        # unit must not bypass the block read — the accumulator would never be
+        # consulted (its failure fallback only covers RAISED reads, not a
+        # gate skip), so the bank would be built with batteries=[] and every
+        # accumulated battery would vanish for the cycle (eg4_web_monitor#282
+        # review flag, same family as the #258 wipe).  Once anything has been
+        # accumulated, read the block regardless of reg 96; a unit that never
+        # accumulated anything (genuinely battery-less) still skips the read.
+        if battery_count > 0 or getattr(self, "_battery_accumulator", None):
             await self._read_battery_header_registers()
             individual_registers = await self._read_individual_battery_registers(
                 battery_count,

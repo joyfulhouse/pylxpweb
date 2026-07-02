@@ -365,3 +365,218 @@ class TestBatteryRotationStallWarning:
             await transport._read_individual_battery_registers(24)
 
         assert "Battery rotation stalled" in caplog.text
+
+
+class TestTransientReg96ZeroGate:
+    """A transient reg 96 = 0 must not bypass the block read once accumulated.
+
+    The 5002+ block read is gated on ``battery_count > 0`` (reg 96).  reg 96
+    is known-unreliable (#170/#258: under-reports on parallel systems; a
+    misrouted/degraded bms read can surface a plausible 0).  On a
+    battery-bearing unit a transient 0 used to skip the block read entirely —
+    the accumulator was never consulted (the failure fallback only covers
+    raised reads) — so the bank was built with ``batteries=[]`` and every
+    accumulated battery vanished for the cycle (eg4_web_monitor#282 review
+    flag, same family as the #258 wipe).  Once anything has been accumulated,
+    the block is read regardless of reg 96; a genuinely battery-less unit
+    (never accumulated anything) still skips the read.
+    """
+
+    @staticmethod
+    def _fake_read_with_counts(
+        block_pages: list[list[int] | Exception],
+        battery_counts: list[int],
+        reads_5002: list[int],
+    ):
+        """Like ``_make_fake_read`` but reg 96 follows a per-bms-read schedule."""
+        block_idx = [0]
+        bms_idx = [0]
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            if start == BATTERY_BASE_ADDRESS:
+                reads_5002[0] += 1
+                idx = min(block_idx[0], len(block_pages) - 1)
+                block_idx[0] += 1
+                entry = block_pages[idx]
+                if isinstance(entry, Exception):
+                    raise entry
+                return entry
+            vals = [0] * count
+            if start == _POWER_GROUP_START:
+                vals[4] = _VOLTAGE_RAW
+                vals[5] = _SOC_SOH_PACKED
+            if start == _BMS_GROUP_START:
+                idx = min(bms_idx[0], len(battery_counts) - 1)
+                bms_idx[0] += 1
+                vals[_BATTERY_COUNT_OFFSET] = battery_counts[idx]
+            return vals
+
+        return fake_read
+
+    @pytest.mark.asyncio
+    async def test_transient_reg96_zero_after_accumulation_still_reads_block(
+        self,
+    ) -> None:
+        transport = _transport()
+        reads_5002 = [0]
+        fake = self._fake_read_with_counts(
+            [_page([0, 1, 2, 3]), _page([4, 5, 6, 7]), _page([0, 1, 2, 3])],
+            battery_counts=[8, 8, 0],  # third bms read transiently reports 0
+            reads_5002=reads_5002,
+        )
+        with patch.object(transport, "_read_input_registers", side_effect=fake):
+            await transport.read_all_input_data()
+            await transport.read_all_input_data()
+            _, _, battery = await transport.read_all_input_data()
+
+        assert reads_5002[0] == 3  # the reg96=0 cycle still read the block
+        assert battery is not None
+        assert len(battery.batteries) == 8  # nothing wiped
+
+    @pytest.mark.asyncio
+    async def test_reg96_zero_with_empty_accumulator_skips_block_read(self) -> None:
+        """A genuinely battery-less unit (inv ...94 in #282) keeps skipping."""
+        transport = _transport()
+        reads_5002 = [0]
+        fake = self._fake_read_with_counts(
+            [_page([0, 1, 2, 3])],
+            battery_counts=[0],
+            reads_5002=reads_5002,
+        )
+        with patch.object(transport, "_read_input_registers", side_effect=fake):
+            _, _, battery = await transport.read_all_input_data()
+
+        assert reads_5002[0] == 0  # no pointless block read
+        assert battery is not None
+        assert battery.batteries == []
+
+
+class TestEmptyBankConvergence:
+    """Physically-removed banks converge to empty; transients never do (#282 review).
+
+    The reg96-zero gate guard means the accumulator is consulted on every
+    read — which would serve a REMOVED bank's stale batteries forever
+    (pre-guard, the gate skip was accidentally the only convergence path).
+    Convergence now requires ``_BATTERY_EMPTY_BANK_RETIRE_STREAK`` (3)
+    consecutive SUCCESSFUL reads with reg 96 = 0 and an all-ghost page;
+    failed reads (the #258 misroute-storm case) never touch the streak.
+    """
+
+    @staticmethod
+    async def _accumulate_eight(transport: ModbusTransport, fake) -> None:
+        with patch.object(transport, "_read_input_registers", side_effect=fake):
+            await transport._read_individual_battery_registers(8)
+            await transport._read_individual_battery_registers(8)
+
+    @pytest.mark.asyncio
+    async def test_transient_ghost_pages_do_not_retire(self) -> None:
+        """1-2 empty reads then a real page: accumulator intact, no flicker."""
+        transport = _transport()
+        pages: list[list[int] | Exception] = [
+            _page([0, 1, 2, 3]),
+            _page([4, 5, 6, 7]),
+            _page([]),  # transient empty read #1
+            _page([]),  # transient empty read #2
+            _page([0, 1, 2, 3]),  # bank is back
+        ]
+        fake = _make_fake_read(pages)
+        with patch.object(transport, "_read_input_registers", side_effect=fake):
+            await transport._read_individual_battery_registers(8)
+            await transport._read_individual_battery_registers(8)
+            ghost1 = await transport._read_individual_battery_registers(0)
+            ghost2 = await transport._read_individual_battery_registers(0)
+            real = await transport._read_individual_battery_registers(8)
+
+        # No flicker: the accumulator is served throughout.
+        for result in (ghost1, ghost2, real):
+            assert result is not None
+            assert len(result) == 8 * BATTERY_REGISTER_COUNT
+        # The real page reset the streak.
+        assert transport._battery_empty_page_streak == 0
+
+    @pytest.mark.asyncio
+    async def test_three_consecutive_empty_reads_retire_bank(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Physical removal: 3 successful empty reads -> bank empty + INFO."""
+        transport = _transport()
+        pages: list[list[int] | Exception] = [
+            _page([0, 1, 2, 3]),
+            _page([4, 5, 6, 7]),
+            _page([]),
+            _page([]),
+            _page([]),
+        ]
+        fake = _make_fake_read(pages)
+        with (
+            patch.object(transport, "_read_input_registers", side_effect=fake),
+            caplog.at_level(logging.INFO),
+        ):
+            await transport._read_individual_battery_registers(8)
+            await transport._read_individual_battery_registers(8)
+            assert await transport._read_individual_battery_registers(0) is not None
+            assert await transport._read_individual_battery_registers(0) is not None
+            retired = await transport._read_individual_battery_registers(0)
+
+        assert retired is None  # bank converged to empty
+        assert transport._battery_accumulator == {}
+        assert "converged to empty" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_reg96_positive_ghost_page_resets_streak(self) -> None:
+        """reg 96 > 0 means the firmware still claims batteries: no streak."""
+        transport = _transport()
+        pages: list[list[int] | Exception] = [
+            _page([0, 1, 2, 3]),
+            _page([4, 5, 6, 7]),
+            _page([]),  # ghost page but reg96 still 8 (below)
+        ]
+        fake = _make_fake_read(pages)
+        with patch.object(transport, "_read_input_registers", side_effect=fake):
+            await transport._read_individual_battery_registers(8)
+            await transport._read_individual_battery_registers(8)
+            result = await transport._read_individual_battery_registers(8)
+
+        assert result is not None
+        assert transport._battery_empty_page_streak == 0
+
+    @pytest.mark.asyncio
+    async def test_failed_reads_do_not_advance_streak(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Interleaved FAILED reads (the #258 storm) neither advance nor reset.
+
+        ghost(1) FAIL ghost(2) FAIL ghost(3) -> retirement happens exactly on
+        the third SUCCESSFUL empty read; the failed reads keep serving the
+        accumulator as today.
+        """
+        transport = _transport()
+        pages: list[list[int] | Exception] = [
+            _page([0, 1, 2, 3]),
+            _page([4, 5, 6, 7]),
+            _page([]),  # successful empty #1
+            OSError("misroute storm"),
+            _page([]),  # successful empty #2
+            OSError("misroute storm"),
+            _page([]),  # successful empty #3 -> retire
+        ]
+        fake = _make_fake_read(pages)
+        with (
+            patch.object(transport, "_read_input_registers", side_effect=fake),
+            caplog.at_level(logging.INFO),
+        ):
+            await transport._read_individual_battery_registers(8)
+            await transport._read_individual_battery_registers(8)
+            assert await transport._read_individual_battery_registers(0) is not None
+            failed1 = await transport._read_individual_battery_registers(0)
+            assert failed1 is not None  # served from the accumulator
+            assert transport._battery_empty_page_streak == 1  # untouched by FAIL
+            assert await transport._read_individual_battery_registers(0) is not None
+            failed2 = await transport._read_individual_battery_registers(0)
+            assert failed2 is not None
+            assert transport._battery_empty_page_streak == 2
+            retired = await transport._read_individual_battery_registers(0)
+
+        assert retired is None
+        assert transport._battery_accumulator == {}
+        assert "converged to empty" in caplog.text

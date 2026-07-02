@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed on real GridBOSS hardware); the atomic 120-register battery block,
   PV4-6 extended reads, and input-register 210 are unchanged.
 
+- **`BaseInverter.parameters_complete`** ([eg4_web_monitor#282](https://github.com/joyfulhouse/eg4_web_monitor/issues/282)):
+  public flag reporting whether the LAST parameter fetch read every register
+  range. After a partial/failed fetch it is `False` while `parameters` still
+  holds last-known values for the failed ranges (sticky carry-forward below).
+  Consumers — e.g. the HA integration's hourly parameter throttle — can use it
+  to retry sooner instead of serving a degraded snapshot for a full interval.
+
 - **Battery rotation-stall watchdog** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   the 2026-06-28 report pinned the firmware's battery page for ~9 hours with
   ZERO non-debug logs — every 120-register block read succeeded, so nothing
@@ -75,6 +82,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between the two spellings. The minor number is now zero-padded to two
   digits, matching both the cloud and the RS485 battery protocol's existing
   formatting.
+
+- **A failed/partial parameter read no longer blanks previously-known parameters** ([eg4_web_monitor#282](https://github.com/joyfulhouse/eg4_web_monitor/issues/282)):
+  `_fetch_parameters` swallowed per-range failures and then REPLACED
+  `parameters` with the partial result — one misrouted WiFi-dongle response
+  (`Failed to read registers 125-250`) wiped every parameter in registers
+  125-249 (e.g. `HOLD_SYSTEM_CHARGE_SOC_LIMIT`, reg 227 — the reporter's
+  "System Charge SOC Limit became unknown") — and stamped the parameter cache
+  anyway, so the degraded snapshot persisted for the whole TTL. Both the
+  transport (Modbus/dongle) and HTTP paths now merge a partial read OVER the
+  last-known parameters (only successfully re-read ranges change; a fully
+  successful read remains authoritative and prunes stale keys), stamp the
+  cache only on a FULLY successful read (so the next `include_parameters`
+  refresh retries), and log one INFO line naming the failed range(s).
+
+- **A transient reg 96 = 0 no longer wipes accumulated batteries** ([eg4_web_monitor#282](https://github.com/joyfulhouse/eg4_web_monitor/issues/282)):
+  the 5002+ individual-battery block read was gated on `battery_count > 0`
+  (reg 96), which is known-unreliable (#170/#258). On a battery-bearing unit a
+  transient 0 skipped the block read entirely — the never-evict accumulator
+  was not consulted (its failure fallback only covers *raised* reads, not a
+  gate skip) — so the bank was built with `batteries=[]` and every accumulated
+  battery vanished for the cycle. Once anything has been accumulated the block
+  is now read regardless of reg 96; genuinely battery-less units (nothing ever
+  accumulated, e.g. a second parallel inverter with no BMS connection) still
+  skip the read.
 
 - **A failed battery block read no longer wipes individual batteries for the cycle** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   when the atomic 5002-5121 read failed (`Failed to read battery registers
