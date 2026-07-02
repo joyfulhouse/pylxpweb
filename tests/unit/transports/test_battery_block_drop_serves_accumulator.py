@@ -365,3 +365,87 @@ class TestBatteryRotationStallWarning:
             await transport._read_individual_battery_registers(24)
 
         assert "Battery rotation stalled" in caplog.text
+
+
+class TestTransientReg96ZeroGate:
+    """A transient reg 96 = 0 must not bypass the block read once accumulated.
+
+    The 5002+ block read is gated on ``battery_count > 0`` (reg 96).  reg 96
+    is known-unreliable (#170/#258: under-reports on parallel systems; a
+    misrouted/degraded bms read can surface a plausible 0).  On a
+    battery-bearing unit a transient 0 used to skip the block read entirely —
+    the accumulator was never consulted (the failure fallback only covers
+    raised reads) — so the bank was built with ``batteries=[]`` and every
+    accumulated battery vanished for the cycle (eg4_web_monitor#282 review
+    flag, same family as the #258 wipe).  Once anything has been accumulated,
+    the block is read regardless of reg 96; a genuinely battery-less unit
+    (never accumulated anything) still skips the read.
+    """
+
+    @staticmethod
+    def _fake_read_with_counts(
+        block_pages: list[list[int] | Exception],
+        battery_counts: list[int],
+        reads_5002: list[int],
+    ):
+        """Like ``_make_fake_read`` but reg 96 follows a per-bms-read schedule."""
+        block_idx = [0]
+        bms_idx = [0]
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            if start == BATTERY_BASE_ADDRESS:
+                reads_5002[0] += 1
+                idx = min(block_idx[0], len(block_pages) - 1)
+                block_idx[0] += 1
+                entry = block_pages[idx]
+                if isinstance(entry, Exception):
+                    raise entry
+                return entry
+            vals = [0] * count
+            if start == _POWER_GROUP_START:
+                vals[4] = _VOLTAGE_RAW
+                vals[5] = _SOC_SOH_PACKED
+            if start == _BMS_GROUP_START:
+                idx = min(bms_idx[0], len(battery_counts) - 1)
+                bms_idx[0] += 1
+                vals[_BATTERY_COUNT_OFFSET] = battery_counts[idx]
+            return vals
+
+        return fake_read
+
+    @pytest.mark.asyncio
+    async def test_transient_reg96_zero_after_accumulation_still_reads_block(
+        self,
+    ) -> None:
+        transport = _transport()
+        reads_5002 = [0]
+        fake = self._fake_read_with_counts(
+            [_page([0, 1, 2, 3]), _page([4, 5, 6, 7]), _page([0, 1, 2, 3])],
+            battery_counts=[8, 8, 0],  # third bms read transiently reports 0
+            reads_5002=reads_5002,
+        )
+        with patch.object(transport, "_read_input_registers", side_effect=fake):
+            await transport.read_all_input_data()
+            await transport.read_all_input_data()
+            _, _, battery = await transport.read_all_input_data()
+
+        assert reads_5002[0] == 3  # the reg96=0 cycle still read the block
+        assert battery is not None
+        assert len(battery.batteries) == 8  # nothing wiped
+
+    @pytest.mark.asyncio
+    async def test_reg96_zero_with_empty_accumulator_skips_block_read(self) -> None:
+        """A genuinely battery-less unit (inv ...94 in #282) keeps skipping."""
+        transport = _transport()
+        reads_5002 = [0]
+        fake = self._fake_read_with_counts(
+            [_page([0, 1, 2, 3])],
+            battery_counts=[0],
+            reads_5002=reads_5002,
+        )
+        with patch.object(transport, "_read_input_registers", side_effect=fake):
+            _, _, battery = await transport.read_all_input_data()
+
+        assert reads_5002[0] == 0  # no pointless block read
+        assert battery is not None
+        assert battery.batteries == []

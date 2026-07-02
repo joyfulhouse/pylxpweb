@@ -982,7 +982,17 @@ class RegisterDataMixin(_DataMixinBase):
             include_individual,
         )
 
-        if include_individual and battery_count > 0:
+        # reg 96 is unreliable (#170/#258): a transient 0 on a battery-bearing
+        # unit must not bypass the block read — the accumulator would never be
+        # consulted (its failure fallback only covers RAISED reads, not a
+        # gate skip), so the bank would be built with batteries=[] and every
+        # accumulated battery would vanish for the cycle (eg4_web_monitor#282
+        # review flag, same family as the #258 wipe).  Once anything has been
+        # accumulated, read the block regardless of reg 96; a unit that never
+        # accumulated anything (genuinely battery-less) still skips the read.
+        if include_individual and (
+            battery_count > 0 or getattr(self, "_battery_accumulator", None)
+        ):
             await self._read_battery_header_registers()
             individual_registers = await self._read_individual_battery_registers(
                 battery_count,
@@ -1133,7 +1143,15 @@ class RegisterDataMixin(_DataMixinBase):
         )
 
         individual_registers: dict[int, int] | None = None
-        if battery_count > 0:
+        # reg 96 is unreliable (#170/#258): a transient 0 on a battery-bearing
+        # unit must not bypass the block read — the accumulator would never be
+        # consulted (its failure fallback only covers RAISED reads, not a
+        # gate skip), so the bank would be built with batteries=[] and every
+        # accumulated battery would vanish for the cycle (eg4_web_monitor#282
+        # review flag, same family as the #258 wipe).  Once anything has been
+        # accumulated, read the block regardless of reg 96; a unit that never
+        # accumulated anything (genuinely battery-less) still skips the read.
+        if battery_count > 0 or getattr(self, "_battery_accumulator", None):
             await self._read_battery_header_registers()
             individual_registers = await self._read_individual_battery_registers(
                 battery_count,
