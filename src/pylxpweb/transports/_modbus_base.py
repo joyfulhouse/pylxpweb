@@ -21,7 +21,12 @@ from typing import TYPE_CHECKING, Any
 
 from pymodbus.exceptions import ModbusException
 
-from ._register_data import INPUT_REGISTER_GROUPS, RegisterDataMixin
+from ._register_data import (
+    DEFAULT_INPUT_BLOCK_SIZE,
+    INPUT_REGISTER_GROUPS,
+    RegisterDataMixin,
+    validate_input_block_size,
+)
 from .exceptions import (
     TransportConnectionError,
     TransportReadError,
@@ -67,6 +72,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         retry_delay: float = 0.5,
         inter_register_delay: float = 0.05,
         pymodbus_retries: int = 3,
+        max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
     ) -> None:
         """Initialize base Modbus transport.
 
@@ -82,6 +88,13 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 (default 0.05)
             pymodbus_retries: Number of retries passed to pymodbus client
                 (default 3)
+            max_input_block_size: Maximum registers per coalesced input-register
+                read, 40..125 (default 40 = no coalescing, the plain per-group
+                reads).  Larger values (multiples of 40 recommended; 120 is
+                field-proven on newer dongles) consolidate adjacent register
+                groups into fewer reads for faster polling; hardware that
+                rejects large reads automatically falls back to the plain
+                grouped reads (eg4_web_monitor#254).
         """
         super().__init__(serial)
         self._unit_id = unit_id
@@ -93,6 +106,8 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._retry_delay = retry_delay
         self._inter_register_delay = inter_register_delay
         self._pymodbus_retries = pymodbus_retries
+        self._max_input_block_size = validate_input_block_size(max_input_block_size)
+        self._input_coalescing_latched_off: bool = False
         self._client: Any = None
         self._lock = asyncio.Lock()
         self._consecutive_errors: int = 0
@@ -365,52 +380,15 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     ) -> dict[int, int]:
         """Read register groups with adaptive delay and auto-reconnect.
 
-        Overrides ``RegisterDataMixin._read_register_groups`` to add:
-        - Auto-reconnect after consecutive errors
-        - Adaptive delay increase when retries have occurred
+        Overrides ``RegisterDataMixin._read_register_groups`` to add the
+        auto-reconnect gate.  The adaptive delay increase after low-level
+        retries lives in the shared ``_read_group_plan`` loop (keyed on
+        ``_last_read_retried``, which only Modbus transports track).
         """
-        if group_names is None:
-            groups = list(INPUT_REGISTER_GROUPS.items())
-        else:
-            groups = [
-                (name, INPUT_REGISTER_GROUPS[name])
-                for name in group_names
-                if name in INPUT_REGISTER_GROUPS
-            ]
-
         if self._consecutive_errors >= self._max_consecutive_errors:
             await self._reconnect()
 
-        registers: dict[int, int] = {}
-        current_delay = self._inter_register_delay
-
-        for i, (group_name, (start, count)) in enumerate(groups):
-            try:
-                values = await self._read_input_registers(start, count)
-                for offset, value in enumerate(values):
-                    registers[start + offset] = value
-            except Exception as e:
-                _LOGGER.error(
-                    "Failed to read register group '%s': %s",
-                    group_name,
-                    e,
-                )
-                raise TransportReadError(
-                    f"Failed to read register group '{group_name}': {e}"
-                ) from e
-
-            # Increase delay when retries occurred to give the device breathing room
-            if self._last_read_retried:
-                current_delay = min(current_delay * 2, 1.0)
-                _LOGGER.debug(
-                    "Increasing inter-group delay to %.3fs after retries",
-                    current_delay,
-                )
-
-            if i < len(groups) - 1:
-                await asyncio.sleep(current_delay)
-
-        return registers
+        return await super()._read_register_groups(group_names)
 
     # ------------------------------------------------------------------
     # Overrides: combined read + read_battery with reconnect check

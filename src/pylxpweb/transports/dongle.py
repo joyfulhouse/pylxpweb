@@ -31,7 +31,11 @@ import logging
 import struct
 from typing import TYPE_CHECKING, Any
 
-from ._register_data import RegisterDataMixin
+from ._register_data import (
+    DEFAULT_INPUT_BLOCK_SIZE,
+    RegisterDataMixin,
+    validate_input_block_size,
+)
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .exceptions import (
     TransportConnectionError,
@@ -139,6 +143,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         write_retries: int = DEFAULT_WRITE_RETRIES,
         write_step_delay: float = DEFAULT_WRITE_STEP_DELAY,
         verify_writes: bool = True,
+        max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
     ) -> None:
         """Initialize WiFi Dongle transport.
 
@@ -160,6 +165,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 that drop the TCP link on rapid function-code changes.
             verify_writes: Read back written registers to confirm the values
                 were applied (named parameter writes only, when cheap).
+            max_input_block_size: Maximum registers per coalesced input-register
+                read, 40..125 (default 40 = no coalescing, the plain per-group
+                reads).  Larger values (multiples of 40 recommended; 120 is
+                field-proven on DG dongle firmware 2.04-2.09) consolidate
+                adjacent register groups into fewer reads; dongles that reject
+                large reads automatically fall back to the plain grouped reads
+                (eg4_web_monitor#254).
         """
         super().__init__(inverter_serial)
         self._host = host
@@ -171,6 +183,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._pv_string_count: int = 3
         self._connection_retries = connection_retries
         self._inter_register_delay = 0.5  # Dongle needs slower pace than Modbus
+        self._max_input_block_size = validate_input_block_size(max_input_block_size)
+        self._input_coalescing_latched_off: bool = False
         self._write_retries = write_retries
         self._write_step_delay = write_step_delay
         self._verify_writes = verify_writes

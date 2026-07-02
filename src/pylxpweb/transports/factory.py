@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, overload
 
+from ._register_data import DEFAULT_INPUT_BLOCK_SIZE
 from .config import TransportConfig, TransportType
 from .dongle import DongleTransport
 from .http import HTTPTransport
@@ -78,6 +79,7 @@ def create_transport(
     unit_id: int = ...,
     timeout: float = ...,
     inverter_family: InverterFamily | None = ...,
+    max_input_block_size: int = ...,
 ) -> ModbusTransport: ...
 
 
@@ -93,6 +95,7 @@ def create_transport(
     unit_id: int = ...,
     timeout: float = ...,
     inverter_family: InverterFamily | None = ...,
+    max_input_block_size: int = ...,
 ) -> ModbusSerialTransport: ...
 
 
@@ -106,6 +109,7 @@ def create_transport(
     port: int = ...,
     timeout: float = ...,
     inverter_family: InverterFamily | None = ...,
+    max_input_block_size: int = ...,
 ) -> DongleTransport: ...
 
 
@@ -123,6 +127,7 @@ def create_transport(
     timeout: float = ...,
     inverter_family: InverterFamily | None = ...,
     local_retry_interval: float = ...,
+    max_input_block_size: int = ...,
 ) -> HybridTransport: ...
 
 
@@ -218,6 +223,7 @@ def create_transport(
             unit_id=config.get("unit_id", 1),
             timeout=config.get("timeout", 10.0),
             inverter_family=config.get("inverter_family"),
+            max_input_block_size=config.get("max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE),
         )
 
     if connection_type == "serial":
@@ -236,6 +242,7 @@ def create_transport(
             unit_id=config.get("unit_id", 1),
             timeout=config.get("timeout", 10.0),
             inverter_family=config.get("inverter_family"),
+            max_input_block_size=config.get("max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE),
         )
 
     if connection_type == "dongle":
@@ -255,6 +262,7 @@ def create_transport(
             port=config.get("port", 8000),
             timeout=config.get("timeout", 10.0),
             inverter_family=config.get("inverter_family"),
+            max_input_block_size=config.get("max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE),
         )
 
     if connection_type == "hybrid":
@@ -272,6 +280,7 @@ def create_transport(
         inverter_family = config.get("inverter_family")
         timeout = config.get("timeout", 10.0)
         local_retry_interval = config.get("local_retry_interval", 60.0)
+        max_input_block_size = config.get("max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE)
 
         # Create HTTP transport
         http_transport = HTTPTransport(client, serial)
@@ -285,6 +294,7 @@ def create_transport(
                 unit_id=config.get("unit_id", 1),
                 timeout=timeout,
                 inverter_family=inverter_family,
+                max_input_block_size=max_input_block_size,
             )
         elif local_type == "dongle":
             dongle_serial = config.get("dongle_serial")
@@ -297,6 +307,7 @@ def create_transport(
                 port=config.get("local_port") or 8000,
                 timeout=timeout,
                 inverter_family=inverter_family,
+                max_input_block_size=max_input_block_size,
             )
         else:
             raise ValueError(f"Invalid local_type: {local_type}")
@@ -351,6 +362,7 @@ def create_modbus_transport(
     unit_id: int = 1,
     timeout: float = 10.0,
     inverter_family: InverterFamily | None = None,
+    max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
 ) -> ModbusTransport:
     """Create a Modbus TCP transport for local network communication.
 
@@ -417,6 +429,7 @@ def create_modbus_transport(
         unit_id=unit_id,
         timeout=timeout,
         inverter_family=inverter_family,
+        max_input_block_size=max_input_block_size,
     )
 
 
@@ -428,6 +441,7 @@ def create_dongle_transport(
     port: int = 8000,
     timeout: float = 10.0,
     inverter_family: InverterFamily | None = None,
+    max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
 ) -> DongleTransport:
     """Create a WiFi dongle transport for local network communication.
 
@@ -490,6 +504,7 @@ def create_dongle_transport(
         port=port,
         timeout=timeout,
         inverter_family=inverter_family,
+        max_input_block_size=max_input_block_size,
     )
 
 
@@ -503,6 +518,7 @@ def create_serial_transport(
     unit_id: int = 1,
     timeout: float = 10.0,
     inverter_family: InverterFamily | None = None,
+    max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
 ) -> ModbusSerialTransport:
     """Create a Modbus RTU serial transport for local communication.
 
@@ -558,6 +574,7 @@ def create_serial_transport(
         unit_id=unit_id,
         timeout=timeout,
         inverter_family=inverter_family,
+        max_input_block_size=max_input_block_size,
     )
 
 
@@ -604,6 +621,7 @@ def create_transport_from_config(config: TransportConfig) -> BaseTransport:
             retries=config.retries,
             retry_delay=config.retry_delay,
             inter_register_delay=config.inter_register_delay,
+            max_input_block_size=config.max_input_block_size,
         )
     elif config.transport_type == TransportType.MODBUS_SERIAL:
         # serial_port is guaranteed to be set after validate() for MODBUS_SERIAL
@@ -620,6 +638,7 @@ def create_transport_from_config(config: TransportConfig) -> BaseTransport:
             retries=config.retries,
             retry_delay=config.retry_delay,
             inter_register_delay=config.inter_register_delay,
+            max_input_block_size=config.max_input_block_size,
         )
     elif config.transport_type == TransportType.WIFI_DONGLE:
         # dongle_serial is guaranteed to be set after validate() for WIFI_DONGLE
@@ -631,6 +650,7 @@ def create_transport_from_config(config: TransportConfig) -> BaseTransport:
             inverter_serial=config.serial,
             timeout=config.timeout,
             inverter_family=config.inverter_family,
+            max_input_block_size=config.max_input_block_size,
         )
     elif config.transport_type == TransportType.HTTP:
         raise ValueError(

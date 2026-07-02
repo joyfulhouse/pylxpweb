@@ -1359,6 +1359,7 @@ class Station(BaseDevice):
                         serial=serial,
                         timeout=config.timeout,
                         inverter_family=config.inverter_family,
+                        max_input_block_size=config.max_input_block_size,
                     )
                 elif config.transport_type == TransportType.WIFI_DONGLE:
                     # dongle_serial is guaranteed by TransportConfig validation
@@ -1370,6 +1371,7 @@ class Station(BaseDevice):
                         inverter_serial=serial,
                         timeout=config.timeout,
                         inverter_family=config.inverter_family,
+                        max_input_block_size=config.max_input_block_size,
                     )
                 else:
                     _LOGGER.error("Unknown transport type: %s", config.transport_type)
