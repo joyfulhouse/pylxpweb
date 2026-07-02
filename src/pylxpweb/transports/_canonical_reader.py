@@ -92,13 +92,18 @@ def read_battery_firmware(
     *,
     base_address: int,
 ) -> str:
-    """Read packed firmware version: high byte = major, low byte = minor."""
+    """Read packed firmware version: high byte = major, low byte = minor.
+
+    The minor number is zero-padded to two digits to match the cloud API's
+    ``fwVersionText`` rendering (raw 0x0103 -> "1.03", not "1.3"), so HYBRID
+    mode does not flap between two spellings of the same version.
+    """
     raw = read_raw(registers, reg, base_address=base_address)
     if not raw:
         return ""
     major = (raw >> 8) & 0xFF
     minor = raw & 0xFF
-    return f"{major}.{minor}"
+    return f"{major}.{minor:02d}"
 
 
 def read_battery_serial(
