@@ -1263,6 +1263,16 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                             # refresh instead of serving a degraded snapshot
                             # for the whole parameter TTL.
                             self._parameters_cache_time = datetime.now()
+                    elif failed_ranges and self.parameters:
+                        # Total failure with carried parameters: without this
+                        # the staleness signal was silent (#282 review P2).
+                        _LOGGER.info(
+                            "Parameter read for %s failed entirely (register "
+                            "range(s) %s); serving last-known parameters and "
+                            "retrying on the next parameter refresh",
+                            self.serial_number,
+                            ", ".join(failed_ranges),
+                        )
                 else:
                     # Use HTTP API for full parameter access
                     range_tasks = [
@@ -1279,24 +1289,31 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
                     responses = await asyncio.gather(*range_tasks, return_exceptions=True)
 
-                    # Merge all parameter dictionaries
+                    # Merge all parameter dictionaries.  Starts mirror the
+                    # range_tasks list above so failures can be NAMED — "N of
+                    # 3 ranges failed" hides which parameters went stale.
+                    range_starts = (0, MAX_REGISTERS_PER_READ, 240)
                     all_parameters = {}
-                    failures = 0
-                    for response in responses:
+                    failed_cloud_ranges: list[str] = []
+                    for start, response in zip(range_starts, responses, strict=True):
                         if isinstance(response, BaseException):
-                            failures += 1
+                            failed_cloud_ranges.append(
+                                f"{start}-{start + MAX_REGISTERS_PER_READ - 1}"
+                            )
                             _LOGGER.debug(
-                                "Parameter range read failed for %s: %s",
+                                "Parameter range %d-%d read failed for %s: %s",
+                                start,
+                                start + MAX_REGISTERS_PER_READ - 1,
                                 self.serial_number,
                                 response,
                             )
                         else:
                             all_parameters.update(response.parameters)
 
-                    self.parameters_complete = failures == 0
+                    self.parameters_complete = not failed_cloud_ranges
                     # Only update if we got at least some parameters
                     if all_parameters:
-                        if failures and self.parameters:
+                        if failed_cloud_ranges and self.parameters:
                             # Sticky carry-forward (eg4_web_monitor#282): keep
                             # last-known values for the dropped range(s); only
                             # successfully re-read ranges change.
@@ -1304,19 +1321,29 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                             merged.update(all_parameters)
                             all_parameters = merged
                             _LOGGER.info(
-                                "Parameter read for %s incomplete (%d of %d "
-                                "cloud ranges failed); serving last-known "
-                                "values for the failed range(s) and retrying "
-                                "on the next parameter refresh",
+                                "Parameter read for %s incomplete (cloud "
+                                "register range(s) %s failed); serving "
+                                "last-known values for the failed range(s) "
+                                "and retrying on the next parameter refresh",
                                 self.serial_number,
-                                failures,
-                                len(responses),
+                                ", ".join(failed_cloud_ranges),
                             )
                         self.parameters = all_parameters
-                        if failures == 0:
+                        if not failed_cloud_ranges:
                             # Stamp only a FULLY successful read (see the
                             # transport path above).
                             self._parameters_cache_time = datetime.now()
+                    elif failed_cloud_ranges and self.parameters:
+                        # Total failure with carried parameters: without this
+                        # the staleness signal was silent (#282 review P2).
+                        _LOGGER.info(
+                            "Parameter read for %s failed entirely (cloud "
+                            "register range(s) %s); serving last-known "
+                            "parameters and retrying on the next parameter "
+                            "refresh",
+                            self.serial_number,
+                            ", ".join(failed_cloud_ranges),
+                        )
             except (LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError) as err:
                 # Keep existing cached data on API/connection errors
                 self.parameters_complete = False

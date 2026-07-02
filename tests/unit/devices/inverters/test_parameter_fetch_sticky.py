@@ -20,6 +20,7 @@ degraded one.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -107,16 +108,23 @@ class TestTransportParameterSticky:
         assert inverter._parameters_cache_time is not None
 
     @pytest.mark.asyncio
-    async def test_total_failure_keeps_parameters_untouched(self) -> None:
+    async def test_total_failure_keeps_parameters_untouched(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         inverter = _make_inverter()
         inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
         inverter._transport = _range_transport({0: OSError("boom"), 125: OSError("boom")})
 
-        await inverter._fetch_parameters()
+        with caplog.at_level(logging.INFO):
+            await inverter._fetch_parameters()
 
         assert inverter.parameters == {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
         assert inverter.parameters_complete is False
         assert inverter._parameters_cache_time is None
+        # Total failure with carried parameters is announced, naming ranges
+        # (#282 review P2 — the staleness signal must not be silent).
+        assert "failed entirely" in caplog.text
+        assert "0-124" in caplog.text and "125-249" in caplog.text
 
     @pytest.mark.asyncio
     async def test_partial_failure_retries_on_next_unforced_refresh(self) -> None:
@@ -182,7 +190,9 @@ class TestHttpParameterSticky:
         return response
 
     @pytest.mark.asyncio
-    async def test_http_partial_failure_carries_forward(self, mock_client: LuxpowerClient) -> None:
+    async def test_http_partial_failure_carries_forward(
+        self, mock_client: LuxpowerClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
         inverter = _make_inverter(client=mock_client)
         inverter.parameters = {
             "HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101,
@@ -196,7 +206,8 @@ class TestHttpParameterSticky:
             ]
         )
 
-        await inverter._fetch_parameters()
+        with caplog.at_level(logging.INFO):
+            await inverter._fetch_parameters()
 
         assert inverter.parameters == {
             "HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101,  # carried forward
@@ -205,6 +216,30 @@ class TestHttpParameterSticky:
         }
         assert inverter.parameters_complete is False
         assert inverter._parameters_cache_time is None
+        # The INFO names WHICH cloud range failed (#282 review P2): the
+        # second range starts at MAX_REGISTERS_PER_READ = 127.
+        assert "127-253" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_http_total_failure_logs_ranges_and_keeps_parameters(
+        self, mock_client: LuxpowerClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """All three cloud ranges fail: parameters carried, ranges named."""
+        inverter = _make_inverter(client=mock_client)
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
+        mock_client.api.control.read_parameters = AsyncMock(
+            side_effect=[OSError("boom"), OSError("boom"), OSError("boom")]
+        )
+
+        with caplog.at_level(logging.INFO):
+            await inverter._fetch_parameters()
+
+        assert inverter.parameters == {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
+        assert inverter.parameters_complete is False
+        assert inverter._parameters_cache_time is None
+        assert "failed entirely" in caplog.text
+        assert "0-126" in caplog.text
+        assert "240-366" in caplog.text
 
     @pytest.mark.asyncio
     async def test_http_full_success_replaces_and_stamps(self, mock_client: LuxpowerClient) -> None:
