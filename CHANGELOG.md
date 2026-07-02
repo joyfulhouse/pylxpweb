@@ -69,6 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Battery firmware version string matches the cloud rendering** ([eg4_web_monitor#287](https://github.com/joyfulhouse/eg4_web_monitor/issues/287)):
+  the local register decode formatted the packed version as `1.3` where the
+  cloud API's `fwVersionText` reports `1.03` — HYBRID mode flapped the entity
+  between the two spellings. The minor number is now zero-padded to two
+  digits, matching both the cloud and the RS485 battery protocol's existing
+  formatting.
+
 - **A failed battery block read no longer wipes individual batteries for the cycle** ([eg4_web_monitor#258](https://github.com/joyfulhouse/eg4_web_monitor/issues/258)):
   when the atomic 5002-5121 read failed (`Failed to read battery registers
   5002-5121, will retry next poll`) but the bms_data group succeeded,
