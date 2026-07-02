@@ -806,6 +806,7 @@ class Station(BaseDevice):
                 serial=config.serial,
                 inverter_family=config.inverter_family,
                 timeout=config.timeout,
+                max_input_block_size=config.max_input_block_size,
             )
 
         if config.transport_type == TransportType.WIFI_DONGLE:
@@ -822,6 +823,7 @@ class Station(BaseDevice):
                 port=config.port,
                 inverter_family=config.inverter_family,
                 timeout=config.timeout,
+                max_input_block_size=config.max_input_block_size,
             )
 
         _LOGGER.warning("Unknown transport type: %s", config.transport_type)

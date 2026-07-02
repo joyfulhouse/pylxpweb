@@ -678,14 +678,19 @@ class RegisterDataMixin(_DataMixinBase):
         such hardware fails (or times out) every time, so the first failure
         latches the transport back to the plain grouped reads permanently
         (until the transport is recreated, e.g. on reload) instead of
-        re-paying retries every poll cycle.
+        re-paying retries every poll cycle.  Transient link errors (a short
+        or misrouted frame) trip the same latch — the warning names both
+        causes rather than blaming firmware for a one-off flake.
         """
         self._input_coalescing_latched_off = True
         _LOGGER.warning(
             "[%s] Coalesced input-register read %d-%d (%d registers; groups %s) "
-            "failed: %s — falling back to standard grouped reads for this "
-            "connection. Older dongle firmware only supports 40-register reads; "
-            "lower the configured block size to silence this probe.",
+            "failed (%s) — falling back to the standard grouped reads for this "
+            "connection. Possible causes: older dongle firmware that only "
+            "supports ~40-register reads, or a transient link error (short or "
+            "misrouted frame). Coalescing re-arms when the transport is "
+            "recreated (e.g. on reload); lower the configured block size to "
+            "disable this probe.",
             self._serial,
             block.start,
             block.start + block.count - 1,

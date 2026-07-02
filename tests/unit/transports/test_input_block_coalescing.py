@@ -467,3 +467,170 @@ class TestFactoryPlumbing:
 
         t = create_transport("modbus", host="h", serial="CE12345678")
         assert t._max_input_block_size == DEFAULT_INPUT_BLOCK_SIZE
+
+
+# ---------------------------------------------------------------------------
+# Station local-discovery plumbing (the third construction path)
+# ---------------------------------------------------------------------------
+
+
+class TestLocalDiscoveryPlumbing:
+    """`Station.from_local_discovery` must propagate the block size.
+
+    Regression: `Station._create_transport_from_config()` (used by
+    `from_local_discovery` -> `_discover_devices_from_configs`) omitted
+    `max_input_block_size` at both its call sites, so a
+    `TransportConfig(..., max_input_block_size=120)` silently got the
+    default 40 and coalescing never activated on that public path — while
+    `attach_local_transports()` and the factory paths propagated correctly.
+    """
+
+    def _modbus_config(self) -> TransportConfig:
+        return TransportConfig(
+            host="192.168.1.100",
+            port=502,
+            serial="CE12345678",
+            transport_type=TransportType.MODBUS_TCP,
+            max_input_block_size=120,
+        )
+
+    def _dongle_config(self) -> TransportConfig:
+        return TransportConfig(
+            host="192.168.1.101",
+            port=8000,
+            serial="CE87654321",
+            transport_type=TransportType.WIFI_DONGLE,
+            dongle_serial="BA12345678",
+            max_input_block_size=120,
+        )
+
+    def test_create_transport_from_config_modbus_propagates(self) -> None:
+        from pylxpweb.devices.station import Station
+
+        transport = Station._create_transport_from_config(self._modbus_config())
+        assert transport is not None
+        assert transport._max_input_block_size == 120
+
+    def test_create_transport_from_config_dongle_propagates(self) -> None:
+        from pylxpweb.devices.station import Station
+
+        transport = Station._create_transport_from_config(self._dongle_config())
+        assert transport is not None
+        assert transport._max_input_block_size == 120
+
+    def test_create_transport_from_config_default_conservative(self) -> None:
+        from pylxpweb.devices.station import Station
+
+        config = TransportConfig(
+            host="192.168.1.100",
+            port=502,
+            serial="CE12345678",
+            transport_type=TransportType.MODBUS_TCP,
+        )
+        transport = Station._create_transport_from_config(config)
+        assert transport is not None
+        assert transport._max_input_block_size == DEFAULT_INPUT_BLOCK_SIZE
+
+    @pytest.mark.asyncio
+    async def test_discovery_pipeline_propagates_for_both_types(self) -> None:
+        """The from_local_discovery pipeline carries the size end-to-end."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from pylxpweb.devices.station import Station
+
+        with (
+            patch.object(ModbusTransport, "connect", new=AsyncMock()),
+            patch.object(DongleTransport, "connect", new=AsyncMock()),
+            patch(
+                "pylxpweb.transports.discover_device_info",
+                new=AsyncMock(side_effect=lambda t: MagicMock(serial=t._serial)),
+            ),
+        ):
+            discovered, failed = await Station._discover_devices_from_configs(
+                [self._modbus_config(), self._dongle_config()]
+            )
+
+        assert failed == []
+        assert len(discovered) == 2
+        for transport, _info in discovered:
+            assert transport._max_input_block_size == 120
+
+
+# ---------------------------------------------------------------------------
+# Merge-boundary sentinels (guard against off-by-one in the offset math)
+# ---------------------------------------------------------------------------
+
+# Distinct raw values planted at the registers that sit on every coalesced
+# merge boundary: 112|113 (mega-block end / extended_data start), 153
+# (extended_data end), 170|173 (output_power start/end), 193|204
+# (split_phase_grid start/end).  Expected parsed values are pinned against
+# the GROUPED (pre-feature) parser, which is ground truth by definition.
+_BOUNDARY_SENTINELS = {
+    112: 250,  # temperature_t5, DIV_10 -> 25.0
+    113: (7 << 8) | 0b0101,  # packed parallel config -> parallel_number 7
+    153: 1530,  # ac_couple_power -> 1530.0 W
+    170: 1700,  # output_power -> 1700.0 W
+    173: 2,  # load_energy_total high word (regs 172-173) -> 13107.2 kWh
+    193: 1201,  # grid_l1_voltage, DIV_10 -> 120.1 V
+    204: 2040,  # grid_import_power_l2 -> 2040 W
+}
+
+
+def _make_sentinel_read():
+    """Fake reader serving a register image with the boundary sentinels."""
+
+    async def fake_read(start: int, count: int) -> list[int]:
+        return [_BOUNDARY_SENTINELS.get(start + offset, 0) for offset in range(count)]
+
+    return fake_read
+
+
+class TestBoundarySentinels:
+    """Each boundary register lands in its exact field in BOTH modes.
+
+    The equivalence tests elsewhere plant values only around regs 4-5, so an
+    off-by-one at a merge boundary (e.g. block (0,113) mapping register 113's
+    value onto 112) could slip through while SOC still matched.  These
+    sentinels bracket every merge seam; any regression in the offset math
+    shifts at least one of them into the wrong field.
+    """
+
+    def _parse(self, transport: ModbusTransport):
+        return transport.read_all_input_data()
+
+    @pytest.mark.parametrize("block_size", [40, 120])
+    @pytest.mark.asyncio
+    async def test_sentinels_land_in_correct_fields(self, block_size: int) -> None:
+        transport = _transport(max_input_block_size=block_size)
+        with patch.object(transport, "_read_input_registers", side_effect=_make_sentinel_read()):
+            runtime, energy, _battery = await transport.read_all_input_data()
+
+        assert runtime.temperature_t5 == 25.0  # reg 112
+        assert runtime.parallel_number == 7  # reg 113 (bits 8-15)
+        assert runtime.ac_couple_power == 1530.0  # reg 153
+        assert runtime.output_power == 1700.0  # reg 170
+        assert energy.load_energy_total == 13107.2  # regs 172-173 high word
+        assert runtime.grid_l1_voltage == 120.1  # reg 193
+        assert runtime.grid_import_power_l2 == 2040  # reg 204
+
+    @pytest.mark.asyncio
+    async def test_modes_parse_identically(self) -> None:
+        """Full-dataclass equivalence between grouped and coalesced modes."""
+        import dataclasses
+
+        results = {}
+        for block_size in (40, 120):
+            transport = _transport(max_input_block_size=block_size)
+            with patch.object(
+                transport, "_read_input_registers", side_effect=_make_sentinel_read()
+            ):
+                runtime, energy, battery = await transport.read_all_input_data()
+            rt = dataclasses.asdict(runtime)
+            en = dataclasses.asdict(energy)
+            rt.pop("timestamp", None)
+            en.pop("timestamp", None)
+            results[block_size] = (rt, en, battery)
+
+        assert results[40][0] == results[120][0]  # runtime
+        assert results[40][1] == results[120][1]  # energy
+        assert results[40][2] == results[120][2]  # battery (None == None)
