@@ -772,10 +772,14 @@ class TestOffgridRegister110Override:
         assert len(layout) == 16
         assert layout.index("FUNC_BATTERY_ECO_EN") == 15
         assert layout.index("FUNC_BUZZER_EN") == 7
-        # Green deliberately keeps the 18kPV position until SNA-verified.
-        assert layout.index("FUNC_GREEN_EN") == 8
+        # Green is NOT served on SNA: the 18kPV bit 8 is unverified there
+        # (lxp_modbus puts green at 14), and the unverified decode silently
+        # clobbered cloud-confirmed state in hybrid setups
+        # (eg4_web_monitor #310 review).
+        assert "FUNC_GREEN_EN" not in layout
         # Displaced 18kPV names become placeholders, not silent reuse.
         assert layout[6] == "FUNC_110_BIT6"
+        assert layout[8] == "FUNC_110_BIT8"
         assert layout[9] == "FUNC_110_BIT9"
         assert layout[14] == "FUNC_110_BIT14"
         assert "FUNC_GO_TO_OFFGRID" not in layout
@@ -868,6 +872,33 @@ class TestOffgridRegister110Override:
         assert result is True
         offgrid_transport.write_parameters.assert_called_once_with({110: 0x0090})
 
+    @pytest.mark.asyncio
+    async def test_offgrid_green_write_fails_closed(
+        self, offgrid_transport: ModbusTransport
+    ) -> None:
+        """FUNC_GREEN_EN writes on SNA raise instead of flipping bit 8.
+
+        The bit position is unverified on this family (lxp_modbus puts
+        green at 14); a bit-8 write would likely flip a CT-sampling
+        config bit while reporting success.  Cloud-only until pinned.
+        """
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x0080})
+
+        with pytest.raises(ValueError, match="FUNC_GREEN_EN"):
+            await offgrid_transport.write_named_parameters({"FUNC_GREEN_EN": True})
+
+        offgrid_transport.write_parameters.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hybrid_green_still_writes_bit_8(self, hybrid_transport: ModbusTransport) -> None:
+        """EG4_HYBRID keeps the 18kPV-verified green bit 8 (regression pin)."""
+        hybrid_transport.read_parameters = AsyncMock(return_value={110: 0x0000})
+
+        result = await hybrid_transport.write_named_parameters({"FUNC_GREEN_EN": True})
+
+        assert result is True
+        hybrid_transport.write_parameters.assert_called_once_with({110: 0x0100})
+
     # ------------------------------------------------------------------
     # Read path (decode)
     # ------------------------------------------------------------------
@@ -881,7 +912,9 @@ class TestOffgridRegister110Override:
 
         assert result["FUNC_BATTERY_ECO_EN"] is True
         assert result["FUNC_BUZZER_EN"] is True
-        assert result["FUNC_GREEN_EN"] is False
+        # Green is not decoded on SNA (bit 8 unverified) — an unverified
+        # False here clobbered cloud-confirmed state (eg4_web_monitor #310).
+        assert "FUNC_GREEN_EN" not in result
 
     @pytest.mark.asyncio
     async def test_offgrid_decode_eco_off(self, offgrid_transport: ModbusTransport) -> None:
