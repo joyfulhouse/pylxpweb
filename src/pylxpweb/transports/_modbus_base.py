@@ -219,8 +219,25 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                             "no registers in response"
                         )
 
+                    registers = list(result.registers)
+                    # pymodbus decodes registers from the response's own
+                    # byte_count and never checks it against the requested
+                    # count, so a device reporting fewer registers than asked
+                    # returns a short list without error.  On the holding /
+                    # parameter path that silently drops registers (skipping
+                    # the sticky-merge that keeps last-known parameters), so
+                    # reject it inside the retry loop: a transient short read
+                    # recovers on retry and, once exhausted, raises rather
+                    # than returning partial data.  Input reads keep their
+                    # existing higher-layer short-read handling (#261).
+                    if not input_registers and len(registers) < count:
+                        raise TransportReadError(
+                            f"Short holding read at address {address}: "
+                            f"expected {count} registers, got {len(registers)}"
+                        )
+
                     self._consecutive_errors = 0
-                    return list(result.registers)
+                    return registers
 
                 except ModbusException as err:
                     # Catch the pymodbus BASE class: ConnectionException

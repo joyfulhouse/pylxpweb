@@ -417,6 +417,101 @@ class TestModbusRegisterReading:
                 await transport.read_parameters(0, 10)
 
     @pytest.mark.asyncio
+    async def test_holding_short_read_raises_after_retries(self) -> None:
+        """A short holding read (fewer registers than requested) raises.
+
+        pymodbus decodes registers from the response byte_count and never
+        checks it against the requested count, so a truncated-but-well-formed
+        holding response would otherwise silently drop parameters.  The guard
+        retries and, on exhaustion, raises rather than returning partial data.
+        """
+        transport = ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+        with (
+            patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class,
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+            mock_client.close = MagicMock()
+
+            # Every attempt returns only 3 of the 5 requested registers.
+            short = MagicMock()
+            short.isError.return_value = False
+            short.registers = [100, 200, 300]
+            mock_client.read_holding_registers = AsyncMock(return_value=short)
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+            with pytest.raises(TransportReadError, match="Short holding read"):
+                await transport.read_parameters(0, 5)
+
+            # retries defaults to 2 → 3 read attempts before raising.
+            assert mock_client.read_holding_registers.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_holding_short_read_recovers_on_retry(self) -> None:
+        """A transient short holding read recovers when the retry is full."""
+        transport = ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+        with (
+            patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class,
+            patch("asyncio.sleep", AsyncMock()),
+        ):
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+            mock_client.close = MagicMock()
+
+            call_count = 0
+
+            async def make_response(**kwargs: int) -> MagicMock:
+                nonlocal call_count
+                response = MagicMock()
+                response.isError.return_value = False
+                # First attempt short (3/5), retry returns the full 5.
+                if call_count == 0:
+                    response.registers = [100, 200, 300]
+                else:
+                    response.registers = [100, 200, 300, 400, 500]
+                call_count += 1
+                return response
+
+            mock_client.read_holding_registers = make_response
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+            params = await transport.read_parameters(0, 5)
+
+            assert params[4] == 500
+            assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_input_short_read_not_guarded(self) -> None:
+        """Input reads keep returning partial data (guarded higher up, #261).
+
+        The count guard is holding-only; the input path has its own
+        short-read handling, so a short input read must NOT raise here.
+        """
+        transport = ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+        with patch("pymodbus.client.AsyncModbusTcpClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(return_value=True)
+            mock_client.close = MagicMock()
+
+            short = MagicMock()
+            short.isError.return_value = False
+            short.registers = [100, 200]  # 2 of 5 requested
+            mock_client.read_input_registers = AsyncMock(return_value=short)
+            mock_client_class.return_value = mock_client
+
+            await transport.connect()
+            values = await transport._read_input_registers(0, 5)
+
+            assert values == [100, 200]
+            assert mock_client.read_input_registers.await_count == 1
+
+    @pytest.mark.asyncio
     async def test_write_parameters_success(self) -> None:
         """Test successful parameter write."""
         transport = ModbusTransport(
