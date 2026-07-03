@@ -1197,7 +1197,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         async with self._parameters_cache_lock:
             try:
-                if self._transport is not None:
+                # Link-down guard (#206): the runtime/energy/battery legs of
+                # refresh() gate their transport reads behind
+                # transport_link_down + a rate-limited probe, but parameters
+                # walked straight into local Modbus reads.  Against a dead
+                # RS485 link a pymodbus read can hang for minutes (Python 3.11
+                # asyncio.wait_for cannot interrupt an in-flight read), so a
+                # single include_parameters refresh could stall the whole
+                # cycle.  While the link is down, skip the local read: fall
+                # back to cloud named-parameter reads when a client is
+                # available (the HTTP branch below), else skip entirely.
+                # Recovery is detected by the runtime probe — a successful
+                # transport read clears transport_link_down — so the next
+                # parameter refresh reads locally again without a parameter-
+                # side probe here.
+                link_down = self._transport is not None and self.transport_link_down
+                if self._transport is not None and not link_down:
                     # Use transport for direct register reads with named parameter mapping
                     # The read_named_parameters method handles:
                     # - Reading raw register values via Modbus/Dongle
@@ -1271,8 +1286,24 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                             self.serial_number,
                             ", ".join(failed_ranges),
                         )
+                elif link_down and not self._cloud_fallback_available:
+                    # Link-down, local-only (no cloud fallback): skip the read.
+                    # Preserve #282 sticky-merge semantics — leave
+                    # self.parameters and _parameters_cache_time untouched so
+                    # the read retries once the link recovers, and flag the
+                    # read incomplete so consumers see the degraded state.
+                    self.parameters_complete = False
+                    _LOGGER.debug(
+                        "Skipping local parameter read for %s: transport link "
+                        "down and no cloud fallback available",
+                        self.serial_number,
+                    )
+                    return
                 else:
-                    # Use HTTP API for full parameter access
+                    # Use HTTP API for full parameter access.  Reached by
+                    # pure-cloud devices and, per the link-down guard above, by
+                    # hybrid devices whose local link is down but which have a
+                    # usable cloud client (degraded cloud fallback).
                     range_tasks = [
                         self._client.api.control.read_parameters(
                             self.serial_number, 0, MAX_REGISTERS_PER_READ

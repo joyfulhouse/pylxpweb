@@ -187,36 +187,41 @@ class TestACFirstScheduleCloud:
 
 
 class TestACFirstScheduleModbus:
-    """Modbus wrappers write packed times to registers 152-157 via FC06."""
+    """Local (transport) path writes packed times to registers 152-157 via FC06."""
 
     @pytest.mark.asyncio
     async def test_set_ac_first_schedule_period_0(self, mock_client: LuxpowerClient) -> None:
-        inverter = HybridInverter(client=mock_client, serial_number=SERIAL, model="12000XP")
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        transport = Mock()
+        transport.write_parameters = AsyncMock(return_value=True)
+        inverter = HybridInverter(
+            client=mock_client, serial_number=SERIAL, model="12000XP", transport=transport
+        )
 
         result = await inverter.set_ac_first_schedule(0, 23, 0, 7, 0)
 
         # Two individual writes (FC06) — firmware rejects FC16 multi-writes
-        # on schedule registers.
-        assert mock_client.api.control.write_parameters.call_count == 2
-        mock_client.api.control.write_parameters.assert_any_call(SERIAL, {152: 23})
-        mock_client.api.control.write_parameters.assert_any_call(SERIAL, {153: 7})
+        # on schedule registers.  reg 152 = pack_time(23, 0) = 23; reg 153 =
+        # pack_time(7, 0) = 7.
+        assert transport.write_parameters.await_count == 2
+        transport.write_parameters.assert_any_await({152: 23})
+        transport.write_parameters.assert_any_await({153: 7})
+        # Cloud raw-register write is NOT used on the transport path.
+        assert not mock_client.api.control.write_parameters.called
         assert result is True
 
     @pytest.mark.asyncio
     async def test_set_ac_first_schedule_period_2_packed(self, mock_client: LuxpowerClient) -> None:
-        inverter = HybridInverter(client=mock_client, serial_number=SERIAL, model="12000XP")
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        transport = Mock()
+        transport.write_parameters = AsyncMock(return_value=True)
+        inverter = HybridInverter(
+            client=mock_client, serial_number=SERIAL, model="12000XP", transport=transport
+        )
 
         result = await inverter.set_ac_first_schedule(2, 12, 30, 14, 45)
 
         # pack_time(12, 30) = 12 | (30 << 8) = 7692; pack_time(14, 45) = 11534
-        mock_client.api.control.write_parameters.assert_any_call(SERIAL, {156: 7692})
-        mock_client.api.control.write_parameters.assert_any_call(SERIAL, {157: 11534})
+        transport.write_parameters.assert_any_await({156: 7692})
+        transport.write_parameters.assert_any_await({157: 11534})
         assert result is True
 
     @pytest.mark.asyncio
@@ -238,3 +243,47 @@ class TestACFirstScheduleModbus:
             "end_hour": 7,
             "end_minute": 30,
         }
+
+
+class TestScheduleHybridCloudWrite:
+    """Cloud (transport-less) schedule writes delegate to the named cloud setter.
+
+    Symmetric with the PR #205 read-side fix: the cloud API models schedules as
+    named per-field params (``{cloud_prefix}_START_HOUR`` etc.), not raw
+    ``reg_<n>`` writes.  ``HybridInverter._set_schedule`` used to POST a packed
+    register value to ``remoteSet/write`` keyed by register address, which would
+    not round-trip through the named cloud getter.  It now delegates to
+    ``ControlEndpoints._set_schedule``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cloud_set_delegates_to_named_setter(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(client=mock_client, serial_number=SERIAL, model="12000XP")
+        mock_client.api.control._set_schedule = AsyncMock(
+            return_value=SuccessResponse(success=True)
+        )
+        # A raw-register cloud write would go through control.write_parameters —
+        # it must NOT be used.
+        mock_client.api.control.write_parameters = AsyncMock()
+
+        result = await inverter.set_ac_first_schedule(1, 8, 30, 16, 0)
+
+        mock_client.api.control._set_schedule.assert_awaited_once_with(
+            SERIAL, ScheduleType.AC_FIRST, 1, 8, 30, 16, 0
+        )
+        assert not mock_client.api.control.write_parameters.called
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_cloud_set_propagates_failure(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(client=mock_client, serial_number=SERIAL, model="12000XP")
+        mock_client.api.control._set_schedule = AsyncMock(
+            return_value=SuccessResponse(success=False)
+        )
+
+        result = await inverter.set_forced_charge_schedule(0, 1, 0, 5, 0)
+
+        mock_client.api.control._set_schedule.assert_awaited_once_with(
+            SERIAL, ScheduleType.FORCED_CHARGE, 0, 1, 0, 5, 0
+        )
+        assert result is False

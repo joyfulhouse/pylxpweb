@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from pylxpweb import LuxpowerClient
+from pylxpweb.devices.base import TRANSPORT_LINK_DOWN_THRESHOLD
 from pylxpweb.devices.inverters.generic import GenericInverter
 
 
@@ -178,6 +179,130 @@ class TestTransportParameterSticky:
 
         assert inverter.parameters_complete is True
         assert inverter._parameters_cache_time is not None
+
+
+class TestLinkDownParameterGuard:
+    """Link-down guard (#206): never walk into local parameter reads on a dead link.
+
+    The runtime/energy/battery legs of refresh() gate transport reads behind
+    ``transport_link_down`` + a rate-limited probe; ``_fetch_parameters`` did
+    not, so an ``include_parameters`` refresh could hang for minutes on a dead
+    RS485 link.  While down, skip the local read: fall back to cloud
+    named-parameter reads when a client exists, else skip entirely — preserving
+    the #282 sticky-merge semantics.
+    """
+
+    @staticmethod
+    def _down_transport() -> Mock:
+        transport = Mock()
+        transport.read_named_parameters = AsyncMock(
+            side_effect=AssertionError("local read attempted while link down")
+        )
+        return transport
+
+    @staticmethod
+    def _param_response(params: dict[str, int]) -> Mock:
+        response = Mock()
+        response.parameters = params
+        return response
+
+    @pytest.mark.asyncio
+    async def test_local_only_link_down_skips_read_and_preserves_parameters(self) -> None:
+        """No cloud fallback: the local read is skipped, parameters untouched."""
+        inverter = _make_inverter()  # client=None -> no cloud fallback
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
+        inverter._transport = self._down_transport()
+        inverter._transport_consecutive_failures = TRANSPORT_LINK_DOWN_THRESHOLD
+        assert inverter.transport_link_down is True
+
+        await inverter._fetch_parameters()
+
+        # Dead-link local read never attempted (else the side_effect fires).
+        inverter._transport.read_named_parameters.assert_not_awaited()
+        # #282 sticky semantics: parameters carried, cache not stamped so the
+        # read retries once the link recovers, completeness flagged degraded.
+        assert inverter.parameters == {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
+        assert inverter.parameters_complete is False
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_hybrid_link_down_falls_back_to_cloud(self, mock_client: LuxpowerClient) -> None:
+        """With a usable cloud client, a down link reads parameters via HTTP."""
+        inverter = _make_inverter(client=mock_client)
+        inverter._transport = self._down_transport()
+        inverter._transport_consecutive_failures = TRANSPORT_LINK_DOWN_THRESHOLD
+        assert inverter.transport_link_down is True
+
+        mock_client.api.control.read_parameters = AsyncMock(
+            side_effect=[
+                self._param_response({"HOLD_CHG_POWER_PERCENT_CMD": 60}),
+                self._param_response({"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 90}),
+                self._param_response({}),
+            ]
+        )
+
+        await inverter._fetch_parameters()
+
+        # Local transport read skipped; cloud fallback used (3 ranges).
+        inverter._transport.read_named_parameters.assert_not_awaited()
+        assert mock_client.api.control.read_parameters.await_count == 3
+        assert inverter.parameters == {
+            "HOLD_CHG_POWER_PERCENT_CMD": 60,
+            "HOLD_SYSTEM_CHARGE_SOC_LIMIT": 90,
+        }
+        assert inverter.parameters_complete is True
+        assert inverter._parameters_cache_time is not None
+
+    @pytest.mark.asyncio
+    async def test_recovered_link_reads_locally_again(self) -> None:
+        """After recovery (failure counter reset), the local read resumes."""
+        inverter = _make_inverter()
+        transport = _range_transport(
+            {
+                0: {"HOLD_CHG_POWER_PERCENT_CMD": 60},
+                125: {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 90},
+            }
+        )
+        inverter._transport = transport
+        # Link recovered: a successful transport read elsewhere reset the
+        # counter, so transport_link_down is False again.
+        inverter._transport_consecutive_failures = 0
+        assert inverter.transport_link_down is False
+
+        await inverter._fetch_parameters()
+
+        assert transport.read_named_parameters.await_count == 2
+        assert inverter.parameters == {
+            "HOLD_CHG_POWER_PERCENT_CMD": 60,
+            "HOLD_SYSTEM_CHARGE_SOC_LIMIT": 90,
+        }
+        assert inverter.parameters_complete is True
+
+    @pytest.mark.asyncio
+    async def test_library_guard_holds_when_caller_does_not_pre_skip(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Defense-in-depth: even if the caller requests parameters on a down
+        link (call-site gate missed), the library guard alone prevents the local
+        Modbus read and carried parameters survive (double-gating is harmless —
+        both layers skipping the local read is a no-op, not a conflict).
+        """
+        inverter = _make_inverter(client=mock_client)
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 101}
+        inverter._transport = self._down_transport()
+        inverter._transport_consecutive_failures = TRANSPORT_LINK_DOWN_THRESHOLD
+        mock_client.api.control.read_parameters = AsyncMock(
+            side_effect=[
+                self._param_response({"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 95}),
+                self._param_response({}),
+                self._param_response({}),
+            ]
+        )
+
+        await inverter._fetch_parameters()
+
+        inverter._transport.read_named_parameters.assert_not_awaited()
+        assert inverter.parameters["HOLD_SYSTEM_CHARGE_SOC_LIMIT"] == 95
 
 
 class TestHttpParameterSticky:
