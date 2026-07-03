@@ -263,6 +263,15 @@ class RegisterDataMixin(_DataMixinBase):
     in their ``__init__``.
     """
 
+    # Last-seen HOLD 110 value, opportunistically stashed by
+    # read_parameters()/write_parameters() when register 110 passes through
+    # an existing call (never triggers a read of its own).  Bit 3 is
+    # FUNC_BAT_SHARED — on a shared-bank *secondary* inverter (not on the
+    # battery CAN bus) reg96=0 is expected, and the battery_count debug
+    # lines annotate that so logs are not misread (eg4_web_monitor#288,
+    # the #282/#258 red herring).
+    _last_hold_110: int | None = None
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -271,6 +280,19 @@ class RegisterDataMixin(_DataMixinBase):
     def _registers_from_values(start: int, values: list[int]) -> dict[int, int]:
         """Build address-to-value dict from a contiguous register read."""
         return {start + offset: value for offset, value in enumerate(values)}
+
+    def _shared_battery_note(self, battery_count: int) -> str:
+        """Debug-log annotation for reg96=0 on a shared-battery secondary.
+
+        Returns a suffix for the ``battery_count (reg 96)`` debug lines when
+        the last-seen HOLD 110 has FUNC_BAT_SHARED (bit 3) set and reg 96
+        reads 0 — the expected state on a secondary inverter sharing another
+        inverter's battery bank (eg4_web_monitor#288).  Empty string
+        otherwise, or when HOLD 110 has not passed through this transport yet.
+        """
+        if battery_count == 0 and self._last_hold_110 is not None and self._last_hold_110 & 0x8:
+            return " (shared-battery secondary — reg96=0 expected)"
+        return ""
 
     async def _read_individual_battery_registers(
         self,
@@ -1113,10 +1135,11 @@ class RegisterDataMixin(_DataMixinBase):
         individual_registers: dict[int, int] | None = None
 
         _LOGGER.debug(
-            "[%s] battery_count (reg 96) = %d, include_individual = %s",
+            "[%s] battery_count (reg 96) = %d, include_individual = %s%s",
             self._serial,
             battery_count,
             include_individual,
+            self._shared_battery_note(battery_count),
         )
 
         # reg 96 is unreliable (#170/#258): a transient 0 on a battery-bearing
@@ -1274,9 +1297,10 @@ class RegisterDataMixin(_DataMixinBase):
         battery_count = input_registers.get(96, 0)
 
         _LOGGER.debug(
-            "[%s] combined path: battery_count (reg 96) = %d",
+            "[%s] combined path: battery_count (reg 96) = %d%s",
             self._serial,
             battery_count,
+            self._shared_battery_note(battery_count),
         )
 
         individual_registers: dict[int, int] | None = None
@@ -1373,6 +1397,10 @@ class RegisterDataMixin(_DataMixinBase):
             current_address += chunk_size
             remaining -= chunk_size
 
+        # Opportunistic stash for _shared_battery_note() — no extra read.
+        if 110 in result:
+            self._last_hold_110 = result[110]
+
         return result
 
     async def write_parameters(
@@ -1415,6 +1443,11 @@ class RegisterDataMixin(_DataMixinBase):
 
         for start_address, values in groups:
             await self._write_holding_registers(start_address, values)
+
+        # Keep the _shared_battery_note() stash coherent with our own writes
+        # (e.g. a FUNC_BAT_SHARED bit flip via read-modify-write of reg 110).
+        if 110 in parameters:
+            self._last_hold_110 = parameters[110]
 
         return True
 
