@@ -877,12 +877,17 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
 # (buzzer -> bit 7, Battery ECO -> bit 15).  Displaced or unverifiable
 # slots become FUNC_110_BITn placeholders (same convention as register
 # 179/233 unknowns) rather than inheriting unproven 18kPV names.
-# FUNC_GREEN_EN deliberately KEEPS the 18kPV position (bit 8) for
-# continuity: no SNA hardware toggle test exists yet, and consumers
-# (green mode controls) would otherwise lose local read/write entirely.
-# If the lxp_modbus layout fully applies, green may actually be bit 14 —
-# a community toggle test (read 110, toggle Green in the EG4 cloud UI,
-# read 110 again) settles it; see eg4_web_monitor issue #197 follow-ups.
+# FUNC_GREEN_EN is deliberately ABSENT: no SNA hardware toggle test
+# exists, and lxp_modbus puts green at bit 14, not the 18kPV bit 8.  An
+# earlier revision kept the 18kPV position "for continuity", but an
+# unverified decode served as truth is worse than an honest gap — a
+# local read of bit 8 silently clobbered cloud-confirmed green-mode
+# state in hybrid setups (eg4_web_monitor #310 review), and a local
+# write would likely flip a CT-sampling config bit while reporting
+# success.  Green mode on EG4_OFFGRID is therefore cloud-only (the
+# server applies the bit correctly) until a community toggle test
+# (read 110, toggle Green in the EG4 cloud UI, read 110 again) pins the
+# bit; see eg4_web_monitor issue #197 follow-ups.
 OFFGRID_REGISTER_110_PARAM_KEYS: list[str] = [
     "FUNC_PV_GRID_OFF_EN",  # Bit 0 (all sources agree on bits 0-4)
     "FUNC_RUN_WITHOUT_GRID",  # Bit 1
@@ -892,7 +897,7 @@ OFFGRID_REGISTER_110_PARAM_KEYS: list[str] = [
     "FUNC_TAKE_LOAD_TOGETHER",  # Bit 5 (UNVERIFIED on SNA; lxp_modbus: CT ratio low bit)
     "FUNC_110_BIT6",  # Bit 6: unknown (18kPV buzzer slot; lxp_modbus: CT ratio high bit)
     "FUNC_BUZZER_EN",  # Bit 7 (SNA cloud decode + raw 0x0080; lxp_modbus agrees)
-    "FUNC_GREEN_EN",  # Bit 8 (UNVERIFIED on SNA — kept from 18kPV; lxp_modbus puts green at 14)
+    "FUNC_110_BIT8",  # Bit 8: unknown (18kPV green slot; lxp_modbus: PVCT sample type low bit)
     "FUNC_110_BIT9",  # Bit 9: unknown (18kPV ECO slot; lxp_modbus: PVCT sample type high bit)
     "BIT_WORKING_MODE",  # Bit 10 (UNVERIFIED on SNA)
     "BIT_PVCT_SAMPLE_TYPE",  # Bit 11 (UNVERIFIED on SNA)

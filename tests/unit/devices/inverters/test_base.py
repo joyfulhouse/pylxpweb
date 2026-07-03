@@ -1197,3 +1197,46 @@ class TestWorkingModeControls:
         # Verify correct endpoint call
         mock_client.api.control.get_peak_shaving_mode_status.assert_called_once_with("1234567890")
         assert status is True
+
+
+class TestGreenModeEnabledProperty:
+    """green_mode_enabled distinguishes absent (unknown) from disabled.
+
+    EG4_OFFGRID local parameter reads deliberately omit FUNC_GREEN_EN
+    (the SNA register-110 bit is unverified), so an absent key means the
+    status is UNKNOWN — returning False for it would report a
+    cloud-enabled inverter as "disabled" after any successful local
+    parameter refresh (eg4_web_monitor #310 review round 2).
+    """
+
+    def test_none_when_parameters_not_loaded(self, mock_client: LuxpowerClient) -> None:
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        assert inverter.parameters is None
+        assert inverter.green_mode_enabled is None
+
+    def test_none_when_key_absent_from_loaded_parameters(self, mock_client: LuxpowerClient) -> None:
+        """Offgrid local read: params loaded, FUNC_GREEN_EN not served."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter.parameters = {"FUNC_BUZZER_EN": True, "FUNC_CHARGE_LAST": False}
+        assert inverter.green_mode_enabled is None
+
+    def test_true_when_enabled(self, mock_client: LuxpowerClient) -> None:
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter.parameters = {"FUNC_GREEN_EN": True}
+        assert inverter.green_mode_enabled is True
+
+    def test_false_when_disabled(self, mock_client: LuxpowerClient) -> None:
+        """A present falsy value (bool or raw int 0) is a real 'disabled'."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        inverter.parameters = {"FUNC_GREEN_EN": False}
+        assert inverter.green_mode_enabled is False
+        inverter.parameters = {"FUNC_GREEN_EN": 0}
+        assert inverter.green_mode_enabled is False
