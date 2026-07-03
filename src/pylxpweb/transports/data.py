@@ -87,11 +87,6 @@ _RUNTIME_INT_FIELDS: frozenset[str] = frozenset(
 )
 
 
-# Legacy helper aliases are now imported from _canonical_reader.py:
-# _clamp_percentage = clamp_percentage
-# _sum_optional = sum_optional
-
-
 def _merge_status_code(inverter_code: int | None, bms_code: int | None) -> int | None:
     """Merge an inverter fault/warning code with its BMS fallback.
 

@@ -901,12 +901,6 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
 
-    def _energy_elapsed_seconds(self) -> float | None:
-        """Seconds since last successful energy cache, or None at startup."""
-        if self._energy_cache_time is None:
-            return None
-        return (datetime.now() - self._energy_cache_time).total_seconds()
-
     async def _fetch_energy(self) -> None:
         """Fetch energy data with caching.
 
