@@ -1689,6 +1689,128 @@ class TestBatteryDuplicateSerialDisambiguation:
         assert len(acc) == 4
 
 
+class TestPositionalFallbackReconciliation:
+    """A ``pos:N`` fallback is evicted once the serial becomes readable.
+
+    On a cold start the electrical data for a slot can arrive before the BMS
+    serial string (offsets 17-23 read zero on an otherwise good read), so the
+    accumulator mints a positional-fallback identity ``pos:N``.  When the
+    serial later becomes readable the real serial key is created, but ``pos:N``
+    does not carry the synthetic ``@posN`` suffix that the duplicate-serial
+    reconciliation evicts — so without this fix it lingers forever on its own
+    virtual slot as a frozen phantom twin, surfacing a permanent duplicate
+    battery entity in Home Assistant (eg4_web_monitor#258 follow-up).
+    """
+
+    def _make_transport(self) -> ModbusTransport:
+        return ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+    def _mock_client(
+        self,
+        slot_values_per_call: list[list[int]],
+    ) -> tuple[MagicMock, MagicMock]:
+        call_idx = [0]
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock(return_value=True)
+        mock_client.close = MagicMock()
+
+        async def mock_read(address: int, count: int, **kwargs: int) -> MagicMock:
+            resp = MagicMock()
+            resp.isError.return_value = False
+            if address == BATTERY_BASE_ADDRESS:
+                idx = min(call_idx[0], len(slot_values_per_call) - 1)
+                resp.registers = slot_values_per_call[idx]
+                call_idx[0] += 1
+            else:
+                resp.registers = [0] * count
+            return resp
+
+        mock_client.read_input_registers = mock_read
+        return mock_client, MagicMock(return_value=mock_client)
+
+    @staticmethod
+    def _serialless_page(pos: int = 0) -> list[int]:
+        """Slot 0 active (status + electrical) but serial registers all zero.
+
+        Models a cold-start read where electrical data arrives before the BMS
+        serial string, minting a ``pos:N`` fallback identity.
+        """
+        vals = [0] * (BATTERY_MAX_COUNT * BATTERY_REGISTER_COUNT)
+        vals[0] = 0xC003  # status header: connected
+        vals[6] = 5246  # voltage
+        vals[8] = (100 << 8) | 95  # SOH=100, SOC=95 packed
+        vals[24] = pos << 8  # bank position high byte; serial regs 17-23 left zero
+        return vals
+
+    @staticmethod
+    def _serial_page(serial: str = "BATTERYSER0000", pos: int = 0) -> list[int]:
+        """Slot 0 active with a readable serial at ``pos``; slots 1-3 empty."""
+        return _build_battery_slots_with_serials([(serial, pos), (None, 1), (None, 2), (None, 3)])
+
+    @pytest.mark.asyncio
+    async def test_serialless_slot_mints_positional_fallback(self) -> None:
+        """A slot with zero serial registers mints ``pos:N`` (scenario 1)."""
+        transport = self._make_transport()
+        _, mock_class = self._mock_client([self._serialless_page(0)])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(4)
+
+        assert set(transport._battery_accumulator) == {"pos:0"}
+
+    @pytest.mark.asyncio
+    async def test_positional_fallback_evicted_when_serial_readable(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A later clean read at the same position evicts ``pos:N`` (scenario 2)."""
+        transport = self._make_transport()
+        _, mock_class = self._mock_client(
+            [self._serialless_page(0), self._serial_page("BATTERYSER0000", 0)]
+        )
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(4)
+            assert "pos:0" in transport._battery_accumulator
+            with caplog.at_level(logging.INFO):
+                merged = await transport._read_individual_battery_registers(4)
+
+        # The stale positional fallback is gone; only the real serial remains.
+        acc = transport._battery_accumulator
+        assert set(acc) == {"BATTERYSER0000"}, f"pos:0 must be evicted, got {set(acc)}"
+        assert "pos:0" in caplog.text
+
+        # slot_index reservation for the retired pos:0 slot is preserved so no
+        # future identity collides with a live virtual slot.
+        assert "pos:0" in transport._battery_slot_index
+
+        # The merged output surfaces exactly one battery, with the real serial
+        # and no positional-fallback duplicate.
+        assert merged is not None
+        seen: set[str] = set()
+        for slot in range(20):
+            base = BATTERY_BASE_ADDRESS + slot * BATTERY_REGISTER_COUNT
+            if merged.get(base):
+                seen.add(read_battery_serial(merged, base_address=base))
+        assert seen == {"BATTERYSER0000"}, f"expected one battery, got {seen}"
+
+    @pytest.mark.asyncio
+    async def test_positional_fallback_persists_while_serial_unreadable(self) -> None:
+        """``pos:N`` is not evicted while the serial stays unreadable (scenario 3)."""
+        transport = self._make_transport()
+        _, mock_class = self._mock_client([self._serialless_page(0), self._serialless_page(0)])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(4)
+            await transport._read_individual_battery_registers(4)
+
+        # No valid serial was ever read at position 0, so the fallback must
+        # survive — evicting it prematurely would blank the battery's entities.
+        assert set(transport._battery_accumulator) == {"pos:0"}
+
+
 class TestBatterySlotDebugSerial:
     """The per-slot debug dump must show the full identity serial (#258).
 

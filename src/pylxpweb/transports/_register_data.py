@@ -418,7 +418,8 @@ class RegisterDataMixin(_DataMixinBase):
             serial = read_battery_serial(raw_registers, base_address=slot_base)
             serial_reported = any(raw_registers.get(slot_base + off, 0) for off in range(17, 24))
             pos = (raw_registers.get(slot_base + 24, 0) >> 8) & 0xFF
-            if serial and len(serial) >= _MIN_BATTERY_SERIAL_LEN:
+            serial_valid = bool(serial) and len(serial) >= _MIN_BATTERY_SERIAL_LEN
+            if serial_valid:
                 identity = serial
                 if identity in page_identities:
                     # Duplicate serial WITHIN one page: two physical slots
@@ -485,6 +486,36 @@ class RegisterDataMixin(_DataMixinBase):
                         "serial corruption self-healed)",
                         self._serial,
                         stale_key,
+                        pos,
+                        identity,
+                    )
+
+            # Positional-fallback reconciliation (symmetric to the @posN
+            # eviction above): a "pos:N" entry is a snapshot taken while bank
+            # position N's serial string was entirely unreadable (offsets 17-23
+            # all zero on a good read).  On a cold start the electrical data can
+            # arrive before the serial, minting pos:N; once the serial becomes
+            # readable, the real serial key is created and pos:N is stale — but
+            # it never ends with the @posN suffix, so the loop above misses it
+            # and it lingers forever as a frozen phantom twin (each key holds a
+            # distinct virtual slot).  Exactly one battery occupies a bank
+            # position, so when a VALID serial is read at position N the pos:N
+            # fallback is unambiguously the same pack — evict it.
+            if serial_valid:
+                pos_fallback_key = f"pos:{pos}"
+                if pos_fallback_key in accumulator:
+                    del accumulator[pos_fallback_key]
+                    stale_slot = slot_index.get(pos_fallback_key)
+                    if stale_slot is not None:
+                        last_seen.pop(stale_slot, None)
+                    stall_warned = getattr(self, "_battery_stall_warned", set())
+                    stall_warned.discard(pos_fallback_key)
+                    self._battery_stall_warned = stall_warned
+                    _LOGGER.info(
+                        "[%s] Evicted positional-fallback entry %r: bank position "
+                        "%d was read successfully as %r (serial became readable)",
+                        self._serial,
+                        pos_fallback_key,
                         pos,
                         identity,
                     )
