@@ -409,6 +409,68 @@ class TestACChargeScheduleCloud:
             "end_minute": 0,
         }
 
+    @pytest.mark.asyncio
+    async def test_get_schedule_present_but_null_field_defaults_zero(
+        self, control: ControlEndpoints
+    ) -> None:
+        """A field present-but-null must default to 0, not raise int(None)."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_AC_CHARGE_START_HOUR": None,
+                "HOLD_AC_CHARGE_START_MINUTE": 30,
+                # END_HOUR / END_MINUTE absent entirely
+            }
+        )
+
+        schedule = await control.get_ac_charge_schedule(SERIAL, 0)
+
+        assert schedule == {
+            "start_hour": 0,
+            "start_minute": 30,
+            "end_hour": 0,
+            "end_minute": 0,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_schedule_clamps_out_of_range(self, control: ControlEndpoints) -> None:
+        """Out-of-range cloud values are clamped to valid clock components."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_AC_CHARGE_START_HOUR": 99,  # -> 23
+                "HOLD_AC_CHARGE_START_MINUTE": 250,  # -> 59
+                "HOLD_AC_CHARGE_END_HOUR": -5,  # -> 0
+                "HOLD_AC_CHARGE_END_MINUTE": "45",  # string coerces -> 45
+            }
+        )
+
+        schedule = await control.get_ac_charge_schedule(SERIAL, 0)
+
+        assert schedule == {
+            "start_hour": 23,
+            "start_minute": 59,
+            "end_hour": 0,
+            "end_minute": 45,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_schedule_non_numeric_defaults_zero(self, control: ControlEndpoints) -> None:
+        """Non-numeric garbage coerces to 0 rather than raising."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_AC_CHARGE_START_HOUR": "",
+                "HOLD_AC_CHARGE_START_MINUTE": "oops",
+            }
+        )
+
+        schedule = await control.get_ac_charge_schedule(SERIAL, 0)
+
+        assert schedule == {
+            "start_hour": 0,
+            "start_minute": 0,
+            "end_hour": 0,
+            "end_minute": 0,
+        }
+
 
 class TestACChargeTypeCloud:
     """Test AC charge type cloud API methods."""

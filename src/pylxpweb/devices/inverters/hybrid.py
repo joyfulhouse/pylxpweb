@@ -406,7 +406,7 @@ class HybridInverter(GenericInverter):
         end_hour: int,
         end_minute: int,
     ) -> bool:
-        """Set a time period schedule via Modbus (generic helper).
+        """Set a time period schedule (generic helper, transport or cloud).
 
         Args:
             schedule_type: Which schedule to set
@@ -421,11 +421,37 @@ class HybridInverter(GenericInverter):
 
         Raises:
             ValueError: If period, hour, or minute is out of range
+
+        Note:
+            Local (Modbus) mode writes the packed-time registers directly via
+            FC06.  Cloud mode has no raw ``reg_<n>`` schedule write — the API
+            models schedules as named per-field params
+            (``{cloud_prefix}_START_HOUR`` etc.), the same convention the cloud
+            getter reads back (PR #205).  Writing a packed-time value to a raw
+            register address would not round-trip through the named getter, so
+            the cloud path delegates to the tested cloud setter, mirroring
+            :meth:`_get_schedule`'s cloud delegation.
         """
         from pylxpweb.constants import SCHEDULE_CONFIGS, pack_time
 
         if period not in (0, 1, 2):
             raise ValueError(f"period must be 0, 1, or 2, got {period}")
+
+        if self._transport is None:
+            if self._client is None:
+                raise LuxpowerDeviceError(
+                    "Setting a schedule requires a transport or a cloud client"
+                )
+            response = await self._client.api.control._set_schedule(
+                self.serial_number,
+                schedule_type,
+                period,
+                start_hour,
+                start_minute,
+                end_hour,
+                end_minute,
+            )
+            return response.success
 
         base_reg = SCHEDULE_CONFIGS[schedule_type].base_register
         start_reg = base_reg + (period * 2)

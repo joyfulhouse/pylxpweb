@@ -1407,11 +1407,26 @@ class ControlEndpoints(BaseEndpoint):
         suffix = "" if period == 0 else f"_{period}"
         params = await self.read_device_parameters_ranges(inverter_sn)
 
+        def _clock_field(value: object, upper: int) -> int:
+            """Coerce a cloud schedule field to an int in ``[0, upper]``.
+
+            The cloud API can return a key present-but-null (bare ``int(None)``
+            would raise) or, rarely, an out-of-range value; default null/garbage
+            to 0 and clamp so callers always get a valid clock component.
+            """
+            if value is None:
+                return 0
+            try:
+                parsed = int(str(value))
+            except (TypeError, ValueError):
+                return 0
+            return max(0, min(parsed, upper))
+
         return {
-            "start_hour": int(params.get(f"{prefix}_START_HOUR{suffix}", 0)),
-            "start_minute": int(params.get(f"{prefix}_START_MINUTE{suffix}", 0)),
-            "end_hour": int(params.get(f"{prefix}_END_HOUR{suffix}", 0)),
-            "end_minute": int(params.get(f"{prefix}_END_MINUTE{suffix}", 0)),
+            "start_hour": _clock_field(params.get(f"{prefix}_START_HOUR{suffix}"), 23),
+            "start_minute": _clock_field(params.get(f"{prefix}_START_MINUTE{suffix}"), 59),
+            "end_hour": _clock_field(params.get(f"{prefix}_END_HOUR{suffix}"), 23),
+            "end_minute": _clock_field(params.get(f"{prefix}_END_MINUTE{suffix}"), 59),
         }
 
     # ============================================================================

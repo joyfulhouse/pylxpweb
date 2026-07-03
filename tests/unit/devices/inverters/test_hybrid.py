@@ -8,9 +8,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from pylxpweb import BatteryControlMode, LuxpowerClient
+from pylxpweb.constants import ScheduleType
 from pylxpweb.devices.inverters.hybrid import HybridInverter
 from pylxpweb.endpoints.control import ControlEndpoints
 from pylxpweb.exceptions import LuxpowerDeviceError
+from pylxpweb.models import SuccessResponse
 
 
 @pytest.fixture
@@ -434,62 +436,80 @@ class TestChargeDischargePowerOperations:
 class TestACChargeScheduleOperations:
     """Test AC charge time schedule operations."""
 
+    @staticmethod
+    def _transport_inverter(mock_client: LuxpowerClient) -> tuple[HybridInverter, Mock]:
+        """A transport-backed hybrid inverter (LOCAL packed-register write path)."""
+        transport = Mock()
+        transport.write_parameters = AsyncMock(return_value=True)
+        inverter = HybridInverter(
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=transport,
+        )
+        return inverter, transport
+
     @pytest.mark.asyncio
     async def test_set_ac_charge_schedule_period_0(self, mock_client: LuxpowerClient) -> None:
-        """Test setting AC charge schedule period 0."""
-        inverter = HybridInverter(
-            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
-        )
-
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        """LOCAL: two packed FC06 register writes; cloud raw-write not used."""
+        inverter, transport = self._transport_inverter(mock_client)
 
         result = await inverter.set_ac_charge_schedule(0, 23, 0, 7, 0)
 
         # Two individual writes (FC06) — inverter rejects FC16 for schedule regs
-        assert mock_client.api.control.write_parameters.call_count == 2
-        mock_client.api.control.write_parameters.assert_any_call("1234567890", {68: 23})
-        mock_client.api.control.write_parameters.assert_any_call("1234567890", {69: 7})
+        assert transport.write_parameters.await_count == 2
+        transport.write_parameters.assert_any_await({68: 23})
+        transport.write_parameters.assert_any_await({69: 7})
+        assert not mock_client.api.control.write_parameters.called
         assert result is True
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_schedule_period_1(self, mock_client: LuxpowerClient) -> None:
         """Test setting AC charge schedule period 1."""
-        inverter = HybridInverter(
-            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
-        )
-
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        inverter, transport = self._transport_inverter(mock_client)
 
         result = await inverter.set_ac_charge_schedule(1, 12, 30, 14, 45)
 
         # Reg 70 = pack_time(12, 30) = 12|(30<<8) = 7692
         # Reg 71 = pack_time(14, 45) = 14|(45<<8) = 11534
-        assert mock_client.api.control.write_parameters.call_count == 2
-        mock_client.api.control.write_parameters.assert_any_call("1234567890", {70: 7692})
-        mock_client.api.control.write_parameters.assert_any_call("1234567890", {71: 11534})
+        assert transport.write_parameters.await_count == 2
+        transport.write_parameters.assert_any_await({70: 7692})
+        transport.write_parameters.assert_any_await({71: 11534})
         assert result is True
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_schedule_period_2(self, mock_client: LuxpowerClient) -> None:
         """Test setting AC charge schedule period 2."""
-        inverter = HybridInverter(
-            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
-        )
-
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        inverter, transport = self._transport_inverter(mock_client)
 
         result = await inverter.set_ac_charge_schedule(2, 0, 0, 6, 0)
 
         # Reg 72 = pack_time(0, 0) = 0, Reg 73 = pack_time(6, 0) = 6
-        assert mock_client.api.control.write_parameters.call_count == 2
-        mock_client.api.control.write_parameters.assert_any_call("1234567890", {72: 0})
-        mock_client.api.control.write_parameters.assert_any_call("1234567890", {73: 6})
+        assert transport.write_parameters.await_count == 2
+        transport.write_parameters.assert_any_await({72: 0})
+        transport.write_parameters.assert_any_await({73: 6})
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_schedule_cloud_delegates_to_named_setter(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """CLOUD (transport-less): delegate to the named cloud setter, not a raw
+        register write (mirror of the PR #205 read-side fix)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        mock_client.api.control._set_schedule = AsyncMock(
+            return_value=SuccessResponse(success=True)
+        )
+        mock_client.api.control.write_parameters = AsyncMock()
+
+        result = await inverter.set_ac_charge_schedule(1, 8, 30, 16, 0)
+
+        mock_client.api.control._set_schedule.assert_awaited_once_with(
+            "1234567890", ScheduleType.AC_CHARGE, 1, 8, 30, 16, 0
+        )
+        assert not mock_client.api.control.write_parameters.called
         assert result is True
 
     @pytest.mark.asyncio
@@ -504,10 +524,8 @@ class TestACChargeScheduleOperations:
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_schedule_invalid_hour(self, mock_client: LuxpowerClient) -> None:
-        """Test invalid hour raises ValueError via pack_time."""
-        inverter = HybridInverter(
-            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
-        )
+        """Test invalid hour raises ValueError via pack_time (LOCAL path)."""
+        inverter, _transport = self._transport_inverter(mock_client)
 
         with pytest.raises(ValueError, match="Hour must be 0-23"):
             await inverter.set_ac_charge_schedule(0, 24, 0, 7, 0)
