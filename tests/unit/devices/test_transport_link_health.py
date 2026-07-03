@@ -54,9 +54,16 @@ def _make_combined_data() -> tuple[Mock, Mock, Mock]:
 
 
 def _attach_failing_combined_transport(inverter: GenericInverter) -> AsyncMock:
-    """Attach a transport whose combined read always fails."""
+    """Attach a transport whose reads always fail.
+
+    Both the combined read (used while the link is healthy, to trip the
+    counter down) and the runtime probe (the single cheap read used once the
+    link is down) fail, so the failure counter keeps climbing through both the
+    trip-down and the degraded-probe phases.
+    """
     transport = AsyncMock()
     transport.read_all_input_data = AsyncMock(side_effect=OSError("link dead"))
+    transport.read_runtime = AsyncMock(side_effect=OSError("link dead"))
     inverter._transport = transport
     return transport
 
@@ -189,7 +196,8 @@ class TestInverterFailureCounter:
 
     @pytest.mark.asyncio
     async def test_recovery_repopulates_transport_data(self) -> None:
-        """A successful probe after link-down restores local data serving."""
+        """Recovery is detected by the cheap runtime probe; the next healthy
+        refresh repopulates energy/battery via the combined read."""
         inverter = _make_inverter()
         transport = _attach_failing_combined_transport(inverter)
 
@@ -198,12 +206,17 @@ class TestInverterFailureCounter:
         assert inverter.transport_link_down is True
 
         runtime, energy, battery = _make_combined_data()
+        # While down, only the runtime probe runs — recovery is detected there.
+        transport.read_runtime.side_effect = None
+        transport.read_runtime.return_value = runtime
+        await inverter.refresh(force=True)
+        assert inverter.transport_link_down is False
+        assert inverter._transport_runtime is runtime
+
+        # Link healthy again: the combined read resumes and repopulates energy.
         transport.read_all_input_data.side_effect = None
         transport.read_all_input_data.return_value = (runtime, energy, battery)
         await inverter.refresh(force=True)
-
-        assert inverter.transport_link_down is False
-        assert inverter._transport_runtime is runtime
         assert inverter._transport_energy is energy
 
     @pytest.mark.asyncio
@@ -238,22 +251,27 @@ class TestInverterFailureCounter:
         for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
             await inverter.refresh(force=True)
         assert inverter.transport_link_down is True
-        calls_after_down = transport.read_all_input_data.await_count
+        # While down the probe is the cheap runtime read, never the full
+        # combined read (Bug 2 fix).
+        combined_after_down = transport.read_all_input_data.await_count
+        probe_calls = transport.read_runtime.await_count
 
         # First post-down refresh probes (no force, no expired cache needed)
         await inverter.refresh()
-        assert transport.read_all_input_data.await_count == calls_after_down + 1
+        assert transport.read_runtime.await_count == probe_calls + 1
+        assert transport.read_all_input_data.await_count == combined_after_down
 
         # Same-tick duplicates collapse — no second dead-link read, even
         # with force=True (force cannot exceed the probe rate while down).
         await inverter.refresh()
         await inverter.refresh(force=True)
-        assert transport.read_all_input_data.await_count == calls_after_down + 1
+        assert transport.read_runtime.await_count == probe_calls + 1
 
         # Next coordinator tick (interval elapsed): probes again.
         inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
         await inverter.refresh()
-        assert transport.read_all_input_data.await_count == calls_after_down + 2
+        assert transport.read_runtime.await_count == probe_calls + 2
+        assert transport.read_all_input_data.await_count == combined_after_down
 
     @pytest.mark.asyncio
     async def test_probe_throttle_resets_on_recovery(self) -> None:
@@ -267,14 +285,41 @@ class TestInverterFailureCounter:
         await inverter.refresh()  # engages the probe gate
         assert inverter._last_link_probe_monotonic is not None
 
-        runtime, energy, battery = _make_combined_data()
-        transport.read_all_input_data.side_effect = None
-        transport.read_all_input_data.return_value = (runtime, energy, battery)
+        runtime, _energy, _battery = _make_combined_data()
+        # Recovery is detected by the runtime probe while the link is down.
+        transport.read_runtime.side_effect = None
+        transport.read_runtime.return_value = runtime
         inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
         await inverter.refresh()
 
         assert inverter.transport_link_down is False
         assert inverter._last_link_probe_monotonic is None
+
+    @pytest.mark.asyncio
+    async def test_link_down_probe_skips_combined_read(self) -> None:
+        """Bug 2: while down, the probe is a single runtime read.
+
+        Even when the transport exposes ``read_all_input_data``, the link-down
+        probe must NOT run the full combined input read — it issues only the
+        cheap runtime read, and link recovery is still detected from it.
+        """
+        inverter = _make_inverter()
+        transport = _attach_failing_combined_transport(inverter)
+
+        for _ in range(TRANSPORT_LINK_DOWN_THRESHOLD):
+            await inverter.refresh(force=True)
+        assert inverter.transport_link_down is True
+        combined_after_down = transport.read_all_input_data.await_count
+
+        # Probe recovers via the runtime read; the combined read is untouched.
+        runtime, _energy, _battery = _make_combined_data()
+        transport.read_runtime.side_effect = None
+        transport.read_runtime.return_value = runtime
+        await inverter.refresh(force=True)
+
+        transport.read_runtime.assert_awaited()
+        assert transport.read_all_input_data.await_count == combined_after_down
+        assert inverter.transport_link_down is False
 
     @pytest.mark.asyncio
     async def test_cloud_only_device_never_link_down(self, mock_client: LuxpowerClient) -> None:
@@ -312,9 +357,10 @@ class TestInverterLinkDownLogging:
             ]
             assert len(warnings) == 1
 
-            runtime, energy, battery = _make_combined_data()
-            transport.read_all_input_data.side_effect = None
-            transport.read_all_input_data.return_value = (runtime, energy, battery)
+            runtime, _energy, _battery = _make_combined_data()
+            # Recovery is detected by the runtime probe while down.
+            transport.read_runtime.side_effect = None
+            transport.read_runtime.return_value = runtime
             # Age the probe gate: recovery happens on a later coordinator
             # tick, not within the same-tick throttle window.
             inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
@@ -367,10 +413,15 @@ class TestInverterHttpFallback:
         # Transport data cleared -> properties now serve the HTTP values
         assert inverter._transport_runtime is None
 
-        # Next cycle: probe still attempted, fallback keeps fetching
-        probe_calls = transport.read_all_input_data.await_count
+        # Next cycle: probe still attempted, fallback keeps fetching.  The
+        # probe is the single cheap runtime read, not the full combined read
+        # (Bug 2 fix) — degraded-HYBRID polls must not spend the extra
+        # local read/timeout work before the cloud fallback runs.
+        combined_after_down = transport.read_all_input_data.await_count
+        probe_calls = transport.read_runtime.await_count
         await inverter.refresh()
-        assert transport.read_all_input_data.await_count == probe_calls + 1
+        assert transport.read_runtime.await_count == probe_calls + 1
+        assert transport.read_all_input_data.await_count == combined_after_down
         assert mock_client.api.devices.get_inverter_runtime.await_count >= 2
 
     @pytest.mark.asyncio

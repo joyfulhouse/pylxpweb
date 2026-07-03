@@ -9,6 +9,7 @@ import pytest
 
 from pylxpweb import BatteryControlMode, LuxpowerClient
 from pylxpweb.devices.inverters.hybrid import HybridInverter
+from pylxpweb.endpoints.control import ControlEndpoints
 from pylxpweb.exceptions import LuxpowerDeviceError
 
 
@@ -512,20 +513,22 @@ class TestACChargeScheduleOperations:
             await inverter.set_ac_charge_schedule(0, 24, 0, 7, 0)
 
     @pytest.mark.asyncio
-    async def test_get_ac_charge_schedule(self, mock_client: LuxpowerClient) -> None:
-        """Test reading AC charge schedule."""
+    async def test_get_ac_charge_schedule_local(self, mock_client: LuxpowerClient) -> None:
+        """LOCAL mode reads the packed-time registers via the transport."""
+        transport = Mock()
+        # Transport read_parameters returns {addr: value}; reg 68 = pack_time(23, 0)
+        # = 23, reg 69 = pack_time(7, 0) = 7.
+        transport.read_parameters = AsyncMock(return_value={68: 23, 69: 7})
         inverter = HybridInverter(
-            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=transport,
         )
-
-        # Mock read response - reg 68 = pack_time(23, 0) = 23, reg 69 = pack_time(7, 0) = 7
-        mock_response = Mock()
-        mock_response.parameters = {"reg_68": 23, "reg_69": 7}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
 
         schedule = await inverter.get_ac_charge_schedule(0)
 
-        mock_client.api.control.read_parameters.assert_called_once_with("1234567890", 68, 2)
+        transport.read_parameters.assert_awaited_once_with(68, 2)
         assert schedule == {
             "start_hour": 23,
             "start_minute": 0,
@@ -534,17 +537,20 @@ class TestACChargeScheduleOperations:
         }
 
     @pytest.mark.asyncio
-    async def test_get_ac_charge_schedule_with_minutes(self, mock_client: LuxpowerClient) -> None:
-        """Test reading AC charge schedule with non-zero minutes."""
-        inverter = HybridInverter(
-            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
-        )
-
+    async def test_get_ac_charge_schedule_local_with_minutes(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """LOCAL mode unpacks non-zero minutes from the packed-time registers."""
+        transport = Mock()
         # pack_time(22, 30) = 22 | (30 << 8) = 7702
         # pack_time(6, 45) = 6 | (45 << 8) = 11526
-        mock_response = Mock()
-        mock_response.parameters = {"reg_68": 7702, "reg_69": 11526}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+        transport.read_parameters = AsyncMock(return_value={68: 7702, 69: 11526})
+        inverter = HybridInverter(
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=transport,
+        )
 
         schedule = await inverter.get_ac_charge_schedule(0)
 
@@ -554,6 +560,98 @@ class TestACChargeScheduleOperations:
             "end_hour": 6,
             "end_minute": 45,
         }
+
+    @pytest.mark.asyncio
+    async def test_get_ac_charge_schedule_cloud(self, mock_client: LuxpowerClient) -> None:
+        """CLOUD mode resolves the schedule from named params, not reg_<n> keys.
+
+        Regression: the getter used to read reg_<n> keys, which the cloud
+        read_parameters never returns — so every cloud schedule read came back
+        00:00-00:00 regardless of the actual configuration.
+        """
+        control = ControlEndpoints(mock_client)
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_AC_CHARGE_START_HOUR": 23,
+                "HOLD_AC_CHARGE_START_MINUTE": 30,
+                "HOLD_AC_CHARGE_END_HOUR": 7,
+                "HOLD_AC_CHARGE_END_MINUTE": 15,
+            }
+        )
+        mock_client.api.control = control
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        schedule = await inverter.get_ac_charge_schedule(0)
+
+        assert schedule == {
+            "start_hour": 23,
+            "start_minute": 30,
+            "end_hour": 7,
+            "end_minute": 15,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_forced_discharge_schedule_cloud(self, mock_client: LuxpowerClient) -> None:
+        """CLOUD mode resolves a non-AC-charge schedule from its named params."""
+        control = ControlEndpoints(mock_client)
+        # Period 1 uses the _1 suffix on the HOLD_FORCED_DISCHARGE prefix.
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_FORCED_DISCHARGE_START_HOUR_1": 18,
+                "HOLD_FORCED_DISCHARGE_START_MINUTE_1": 0,
+                "HOLD_FORCED_DISCHARGE_END_HOUR_1": 21,
+                "HOLD_FORCED_DISCHARGE_END_MINUTE_1": 45,
+            }
+        )
+        mock_client.api.control = control
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        schedule = await inverter.get_forced_discharge_schedule(1)
+
+        assert schedule == {
+            "start_hour": 18,
+            "start_minute": 0,
+            "end_hour": 21,
+            "end_minute": 45,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_ac_first_schedule_cloud(self, mock_client: LuxpowerClient) -> None:
+        """CLOUD mode resolves the AC First schedule from its named params."""
+        control = ControlEndpoints(mock_client)
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_AC_FIRST_START_HOUR": 9,
+                "HOLD_AC_FIRST_START_MINUTE": 5,
+                "HOLD_AC_FIRST_END_HOUR": 17,
+                "HOLD_AC_FIRST_END_MINUTE": 55,
+            }
+        )
+        mock_client.api.control = control
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+
+        schedule = await inverter.get_ac_first_schedule(0)
+
+        assert schedule == {
+            "start_hour": 9,
+            "start_minute": 5,
+            "end_hour": 17,
+            "end_minute": 55,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_schedule_cloud_requires_client(self) -> None:
+        """CLOUD mode with neither transport nor client raises a clear error."""
+        inverter = HybridInverter(client=None, serial_number="1234567890", model="FlexBOSS21")
+
+        with pytest.raises(LuxpowerDeviceError, match="transport or a cloud client"):
+            await inverter.get_ac_charge_schedule(0)
 
     @pytest.mark.asyncio
     async def test_get_ac_charge_schedule_invalid_period(self, mock_client: LuxpowerClient) -> None:
