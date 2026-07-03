@@ -496,6 +496,143 @@ class TestDongleResponseValidation:
         assert registers == [100, 200]
 
 
+class TestDongleShortReadGuard:
+    """Tests for the short-read guard on the holding/parameter path.
+
+    A truncated frame passes serial/function/register validation and its
+    CRC (computed over the short payload), so without the length guard the
+    holding path would return a partial parameter dict — silently dropping
+    registers and skipping the sticky-parameter merge.
+    """
+
+    def _make_transport(self) -> DongleTransport:
+        return DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+
+    def test_parse_short_read_raises_when_count_expected(self) -> None:
+        """A response with fewer registers than requested raises."""
+        transport = self._make_transport()
+        # Frame carries 1 register but 3 were requested.
+        response = _build_mock_response(
+            modbus_func=MODBUS_READ_HOLDING,
+            start_register=105,
+            register_values=[42],
+        )
+
+        with pytest.raises(TransportReadError, match="Short read"):
+            transport._parse_response(
+                response,
+                expected_func=MODBUS_READ_HOLDING,
+                expected_register=105,
+                expected_count=3,
+            )
+
+    def test_parse_partial_returned_without_expected_count(self) -> None:
+        """Without expected_count the parser is unchanged (returns partial).
+
+        Input reads never pass expected_count and rely on their own
+        higher-layer short-read handling (#261), so the parser must keep
+        returning whatever the frame carried when the count is not given.
+        """
+        transport = self._make_transport()
+        response = _build_mock_response(
+            modbus_func=MODBUS_READ_HOLDING,
+            start_register=105,
+            register_values=[42],
+        )
+
+        registers = transport._parse_response(
+            response,
+            expected_func=MODBUS_READ_HOLDING,
+            expected_register=105,
+        )
+        assert registers == [42]
+
+    def test_parse_full_length_accepted(self) -> None:
+        """A full-length response passes the count guard unchanged."""
+        transport = self._make_transport()
+        response = _build_mock_response(
+            modbus_func=MODBUS_READ_HOLDING,
+            start_register=105,
+            register_values=[10, 20, 30],
+        )
+
+        registers = transport._parse_response(
+            response,
+            expected_func=MODBUS_READ_HOLDING,
+            expected_register=105,
+            expected_count=3,
+        )
+        assert registers == [10, 20, 30]
+
+    @pytest.mark.asyncio
+    async def test_holding_short_read_raises_after_retries(self) -> None:
+        """Every attempt truncated → holding read raises after retries.
+
+        ``_read_holding_registers`` wires ``expected_count=count`` through
+        ``_send_receive``; a persistently short read exhausts the retry
+        budget and surfaces as a TransportReadError (a failed range for the
+        parameter reader), never a partial list.
+        """
+        transport = self._make_transport()
+        transport._connected = True
+
+        short = _build_mock_response(
+            modbus_func=MODBUS_READ_HOLDING,
+            start_register=105,
+            register_values=[42],  # only 1 of 3 requested
+        )
+        reader = AsyncMock()
+        # Each attempt: drain read (b"") then the (short) response.  A
+        # TransportReadError does not tear the socket down, so the same
+        # reader serves all three attempts (max_retries defaults to 2).
+        reader.read = AsyncMock(side_effect=[b"", short, b"", short, b"", short])
+        writer = AsyncMock()
+        writer.write = MagicMock()
+        writer.close = MagicMock()
+        transport._reader = reader
+        transport._writer = writer
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportReadError, match="Short read"),
+        ):
+            await transport._read_holding_registers(105, 3)
+
+    @pytest.mark.asyncio
+    async def test_holding_short_read_recovers_on_retry(self) -> None:
+        """A transient short read recovers when the retry returns full data."""
+        transport = self._make_transport()
+        transport._connected = True
+
+        short = _build_mock_response(
+            modbus_func=MODBUS_READ_HOLDING,
+            start_register=105,
+            register_values=[42],
+        )
+        full = _build_mock_response(
+            modbus_func=MODBUS_READ_HOLDING,
+            start_register=105,
+            register_values=[10, 20, 30],
+        )
+        reader = AsyncMock()
+        # Attempt 0: short (raises, retries). Attempt 1: full (succeeds).
+        reader.read = AsyncMock(side_effect=[b"", short, b"", full])
+        writer = AsyncMock()
+        writer.write = MagicMock()
+        writer.close = MagicMock()
+        transport._reader = reader
+        transport._writer = writer
+
+        with patch("asyncio.sleep", AsyncMock()):
+            result = await transport._read_holding_registers(105, 3)
+
+        assert result == [10, 20, 30]
+
+
 class TestDongleRegisterOperations:
     """Tests for register read/write operations."""
 

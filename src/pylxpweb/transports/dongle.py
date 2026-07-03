@@ -587,6 +587,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         max_retries: int = 2,
         expected_func: int | None = None,
         expected_register: int | None = None,
+        expected_count: int | None = None,
         retry_on_timeout: bool = False,
     ) -> list[int]:
         """Send a packet and receive response with retry logic.
@@ -612,6 +613,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 Handles exception responses (high bit set) by masking to base code.
             expected_register: Expected starting register address.
                 When provided, rejects responses for a different register range.
+            expected_count: Expected number of registers.  When provided,
+                rejects a response carrying fewer registers than requested
+                (short read) so it retries and, on exhaustion, raises.
             retry_on_timeout: Resend the request in-call after a response
                 timeout (the connection is torn down on every timeout
                 regardless of this flag).  Safe for idempotent requests
@@ -691,7 +695,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         )
 
                     # Parse response with cross-request validation
-                    return self._parse_response(response, expected_func, expected_register)
+                    return self._parse_response(
+                        response, expected_func, expected_register, expected_count
+                    )
 
                 except TimeoutError as err:
                     # The connection is suspect after ANY response timeout:
@@ -782,6 +788,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         response: bytes,
         expected_func: int | None = None,
         expected_register: int | None = None,
+        expected_count: int | None = None,
     ) -> list[int]:
         """Parse a dongle response packet with cross-request validation.
 
@@ -797,6 +804,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 with a different base function code.
             expected_register: Expected starting register address.  When
                 provided, rejects responses for a different register range.
+            expected_count: Expected number of registers.  When provided,
+                rejects a response carrying FEWER registers than requested.
+                Serial/function/register validation all pass on a truncated
+                frame (correct header, valid CRC over the short payload), so
+                without this a short read would return a partial register
+                list — on the holding/parameter path that silently drops
+                registers from the parameter dict, skipping the #282 sticky
+                merge and blanking HA entities for the full cache TTL.
 
         Returns:
             List of register values
@@ -947,6 +962,16 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 value = struct.unpack("<H", register_data[i : i + 2])[0]
                 registers.append(value)
 
+        # Reject a short read: the frame is well-formed (matching serial /
+        # function / register, valid CRC) but carries fewer registers than
+        # requested.  Raising here — inside the _send_receive retry loop —
+        # lets a transient truncation recover on retry and, once retries are
+        # exhausted, surfaces as a failed range instead of a partial result.
+        if expected_count is not None and len(registers) < expected_count:
+            raise TransportReadError(
+                f"Short read: expected {expected_count} registers, got {len(registers)}"
+            )
+
         return registers
 
     async def _read_input_registers(
@@ -1009,6 +1034,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             packet,
             expected_func=MODBUS_READ_HOLDING,
             expected_register=address,
+            expected_count=count,
         )
 
     async def _write_holding_registers(
