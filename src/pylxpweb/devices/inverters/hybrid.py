@@ -434,8 +434,9 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import SCHEDULE_CONFIGS, pack_time
 
-        if period not in (0, 1, 2):
-            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+        config = SCHEDULE_CONFIGS[schedule_type]
+        if not 0 <= period < config.periods:
+            raise ValueError(f"period must be 0-{config.periods - 1}, got {period}")
 
         if self._transport is None:
             if self._client is None:
@@ -453,7 +454,7 @@ class HybridInverter(GenericInverter):
             )
             return response.success
 
-        base_reg = SCHEDULE_CONFIGS[schedule_type].base_register
+        base_reg = config.base_register
         start_reg = base_reg + (period * 2)
         end_reg = start_reg + 1
 
@@ -485,8 +486,9 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import SCHEDULE_CONFIGS, unpack_time
 
-        if period not in (0, 1, 2):
-            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+        config = SCHEDULE_CONFIGS[schedule_type]
+        if not 0 <= period < config.periods:
+            raise ValueError(f"period must be 0-{config.periods - 1}, got {period}")
 
         if self._transport is None:
             if self._client is None:
@@ -497,7 +499,7 @@ class HybridInverter(GenericInverter):
                 self.serial_number, schedule_type, period
             )
 
-        base_reg = SCHEDULE_CONFIGS[schedule_type].base_register
+        base_reg = config.base_register
         start_reg = base_reg + (period * 2)
         params = await self.read_parameters(start_reg, 2)
         start_val = params.get(f"reg_{start_reg}", 0)
@@ -708,6 +710,129 @@ class HybridInverter(GenericInverter):
             {'start_hour': 8, 'start_minute': 0, 'end_hour': 16, 'end_minute': 0}
         """
         return await self._get_schedule(ScheduleType.AC_FIRST, period)
+
+    async def set_gen_charge_schedule(
+        self,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+    ) -> bool:
+        """Set Generator charge time period schedule (regs 256-259, 2 windows).
+
+        Args:
+            period: Time period index (0 or 1)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+        """
+        return await self._set_schedule(
+            ScheduleType.GEN_CHARGE, period, start_hour, start_minute, end_hour, end_minute
+        )
+
+    async def get_gen_charge_schedule(self, period: int) -> dict[str, int]:
+        """Read Generator charge time period schedule (regs 256-259, 2 windows).
+
+        Args:
+            period: Time period index (0 or 1)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is out of range
+        """
+        return await self._get_schedule(ScheduleType.GEN_CHARGE, period)
+
+    async def set_off_grid_schedule(
+        self,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+    ) -> bool:
+        """Set Off-Grid time period schedule (regs 269-274, 3 windows).
+
+        Args:
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+        """
+        return await self._set_schedule(
+            ScheduleType.OFF_GRID, period, start_hour, start_minute, end_hour, end_minute
+        )
+
+    async def get_off_grid_schedule(self, period: int) -> dict[str, int]:
+        """Read Off-Grid time period schedule (regs 269-274, 3 windows).
+
+        Args:
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is out of range
+        """
+        return await self._get_schedule(ScheduleType.OFF_GRID, period)
+
+    async def set_peak_shaving_schedule(
+        self,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+    ) -> bool:
+        """Set Peak Shaving time period schedule (regs 209-212, 2 windows).
+
+        Args:
+            period: Time period index (0 or 1)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+        """
+        return await self._set_schedule(
+            ScheduleType.PEAK_SHAVING, period, start_hour, start_minute, end_hour, end_minute
+        )
+
+    async def get_peak_shaving_schedule(self, period: int) -> dict[str, int]:
+        """Read Peak Shaving time period schedule (regs 209-212, 2 windows).
+
+        Args:
+            period: Time period index (0 or 1)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is out of range
+        """
+        return await self._get_schedule(ScheduleType.PEAK_SHAVING, period)
 
     async def get_ac_charge_type(self) -> int:
         """Get AC charge type (what the charge schedule is based on).

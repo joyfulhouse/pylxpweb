@@ -164,6 +164,67 @@ class ControlEndpoints(BaseEndpoint):
 
         return result
 
+    async def write_time_parameter(
+        self,
+        inverter_sn: str,
+        time_param: str,
+        hour: int,
+        minute: int,
+        client_type: str = "WEB",
+        remote_set_type: str = "NORMAL",
+    ) -> SuccessResponse:
+        """Write a schedule time boundary via the portal's atomic ``writeTime`` API.
+
+        WARNING: This changes device configuration!
+
+        The portal exposes ``/WManage/web/maintain/remoteSet/writeTime`` for
+        schedule boundaries: a single call sets both the hour and minute of one
+        boundary (e.g. ``HOLD_GEN_START_TIME_1``) atomically, avoiding the
+        partial-failure mode of writing separate ``_HOUR`` / ``_MINUTE`` params.
+
+        Args:
+            inverter_sn: Inverter serial number
+            time_param: Composite time parameter name
+                (e.g. ``HOLD_GEN_START_TIME_1``, ``HOLD_OFF_GRID_END_TIME_2``,
+                ``HOLD_PEAK_SHAVING_START_TIME_1``)
+            hour: Boundary hour (0-23)
+            minute: Boundary minute (0-59)
+            client_type: Client type (WEB/APP)
+            remote_set_type: Set type (NORMAL/QUICK)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If hour or minute is out of range
+        """
+        if not 0 <= hour <= 23:
+            raise ValueError(f"hour must be 0-23, got {hour}")
+        if not 0 <= minute <= 59:
+            raise ValueError(f"minute must be 0-59, got {minute}")
+
+        await self.client._ensure_authenticated()
+
+        data = {
+            "inverterSn": inverter_sn,
+            "timeParam": time_param,
+            "hour": str(hour),
+            "minute": str(minute),
+            "clientType": client_type,
+            "remoteSetType": remote_set_type,
+        }
+
+        response = await self.client._request(
+            "POST", "/WManage/web/maintain/remoteSet/writeTime", data=data
+        )
+        result = SuccessResponse.model_validate(response)
+
+        # Invalidate cache after successful write to ensure fresh data on next read
+        if result.success:
+            self.client.invalidate_cache_for_device(inverter_sn)
+
+        return result
+
     async def write_parameters(
         self,
         inverter_sn: str,
@@ -1323,13 +1384,21 @@ class ControlEndpoints(BaseEndpoint):
     ) -> SuccessResponse:
         """Set a time period schedule via cloud API (generic helper).
 
-        The cloud API uses separate hour/minute parameters (not packed Modbus
-        format). Period 0 uses unsuffixed names, periods 1-2 use _1/_2 suffixes.
+        Two write conventions, selected per schedule family:
+
+        - Classic families (AC Charge/First, Forced Charge/Discharge) write four
+          separate ``{prefix}_{START|END}_{HOUR|MINUTE}{suffix}`` params. Period
+          0 is unsuffixed, periods 1-2 use ``_1``/``_2``.
+        - writeTime families (Generator/Off-Grid/Peak Shaving) issue two atomic
+          ``writeTime`` calls — one per boundary — using the composite
+          ``{prefix}_{START|END}_TIME{suffix}`` param, where all windows are
+          suffixed ``_1..._N`` (no bare window). This avoids the classic
+          convention's two-call partial-failure window.
 
         Args:
             inverter_sn: Inverter serial number
             schedule_type: Which schedule to set
-            period: Time period index (0, 1, or 2)
+            period: Time period index (0-based; valid range depends on family)
             start_hour: Schedule start hour (0-23)
             start_minute: Schedule start minute (0-59)
             end_hour: Schedule end hour (0-23)
@@ -1342,8 +1411,9 @@ class ControlEndpoints(BaseEndpoint):
         Raises:
             ValueError: If period, hour, or minute is out of range
         """
-        if period not in (0, 1, 2):
-            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+        config = SCHEDULE_CONFIGS[schedule_type]
+        if not 0 <= period < config.periods:
+            raise ValueError(f"period must be 0-{config.periods - 1}, got {period}")
         for name, value, upper in [
             ("start_hour", start_hour, 23),
             ("start_minute", start_minute, 59),
@@ -1353,8 +1423,24 @@ class ControlEndpoints(BaseEndpoint):
             if not 0 <= value <= upper:
                 raise ValueError(f"{name} must be 0-{upper}, got {value}")
 
-        prefix = SCHEDULE_CONFIGS[schedule_type].cloud_prefix
-        suffix = "" if period == 0 else f"_{period}"
+        prefix = config.cloud_prefix
+        suffix = config.period_suffixes[period]
+
+        if config.write_via_time_api:
+            await self.write_time_parameter(
+                inverter_sn,
+                f"{prefix}_START_TIME{suffix}",
+                start_hour,
+                start_minute,
+                client_type=client_type,
+            )
+            return await self.write_time_parameter(
+                inverter_sn,
+                f"{prefix}_END_TIME{suffix}",
+                end_hour,
+                end_minute,
+                client_type=client_type,
+            )
 
         await self.write_parameter(
             inverter_sn,
@@ -1392,41 +1478,74 @@ class ControlEndpoints(BaseEndpoint):
         Args:
             inverter_sn: Inverter serial number
             schedule_type: Which schedule to read
-            period: Time period index (0, 1, or 2)
+            period: Time period index (0-based; valid range depends on family)
 
         Returns:
             Dictionary with start_hour, start_minute, end_hour, end_minute
 
         Raises:
-            ValueError: If period is not 0, 1, or 2
-        """
-        if period not in (0, 1, 2):
-            raise ValueError(f"period must be 0, 1, or 2, got {period}")
+            ValueError: If period is out of range for the family
 
-        prefix = SCHEDULE_CONFIGS[schedule_type].cloud_prefix
-        suffix = "" if period == 0 else f"_{period}"
+        Note:
+            Peak Shaving reports its schedule under the interleaved
+            ``LSP_HOLD_DIS_CHG_POWER_TIME_{n}`` params rather than the
+            ``{prefix}_{START|END}_{HOUR|MINUTE}`` convention; the config's
+            ``read_lsp_base`` selects that path.
+        """
+        config = SCHEDULE_CONFIGS[schedule_type]
+        if not 0 <= period < config.periods:
+            raise ValueError(f"period must be 0-{config.periods - 1}, got {period}")
+
         params = await self.read_device_parameters_ranges(inverter_sn)
 
-        def _clock_field(value: object, upper: int) -> int:
+        def _clock_field(name: str, value: object, upper: int) -> int:
             """Coerce a cloud schedule field to an int in ``[0, upper]``.
 
             The cloud API can return a key present-but-null (bare ``int(None)``
             would raise) or, rarely, an out-of-range value; default null/garbage
-            to 0 and clamp so callers always get a valid clock component.
+            to 0 and clamp so callers always get a valid clock component. Each
+            sanitization is debug-logged (canary-logging convention) — a schedule
+            field needing coercion is a signal, not silent noise.
             """
             if value is None:
+                _LOGGER.debug("Cloud schedule field %s absent/null; using 0", name)
                 return 0
             try:
                 parsed = int(str(value))
             except (TypeError, ValueError):
+                _LOGGER.debug("Cloud schedule field %s unparseable (%r); using 0", name, value)
                 return 0
-            return max(0, min(parsed, upper))
+            if parsed < 0 or parsed > upper:
+                clamped = max(0, min(parsed, upper))
+                _LOGGER.debug(
+                    "Cloud schedule field %s out of range (%d); clamped to %d",
+                    name,
+                    parsed,
+                    clamped,
+                )
+                return clamped
+            return parsed
+
+        if config.read_lsp_base is not None:
+            # Peak Shaving: interleaved LSP_HOLD_DIS_CHG_POWER_TIME_{n} params
+            # (base+0 = start hour, +1 start minute, +2 end hour, +3 end minute).
+            base = config.read_lsp_base + period * 4
+            names = [f"LSP_HOLD_DIS_CHG_POWER_TIME_{base + i}" for i in range(4)]
+        else:
+            prefix = config.cloud_prefix
+            suffix = config.period_suffixes[period]
+            names = [
+                f"{prefix}_START_HOUR{suffix}",
+                f"{prefix}_START_MINUTE{suffix}",
+                f"{prefix}_END_HOUR{suffix}",
+                f"{prefix}_END_MINUTE{suffix}",
+            ]
 
         return {
-            "start_hour": _clock_field(params.get(f"{prefix}_START_HOUR{suffix}"), 23),
-            "start_minute": _clock_field(params.get(f"{prefix}_START_MINUTE{suffix}"), 59),
-            "end_hour": _clock_field(params.get(f"{prefix}_END_HOUR{suffix}"), 23),
-            "end_minute": _clock_field(params.get(f"{prefix}_END_MINUTE{suffix}"), 59),
+            "start_hour": _clock_field(names[0], params.get(names[0]), 23),
+            "start_minute": _clock_field(names[1], params.get(names[1]), 59),
+            "end_hour": _clock_field(names[2], params.get(names[2]), 23),
+            "end_minute": _clock_field(names[3], params.get(names[3]), 59),
         }
 
     # ============================================================================
@@ -1716,6 +1835,195 @@ class ControlEndpoints(BaseEndpoint):
             ... )
         """
         return await self._get_schedule(inverter_sn, ScheduleType.AC_FIRST, period)
+
+    # ============================================================================
+    # Generator / Off-Grid / Peak Shaving Schedule Controls (Cloud API)
+    # ============================================================================
+    # All three use the atomic writeTime endpoint for writes and number their
+    # windows _1.._N (no bare window). Generator (regs 256-259, 2 windows) and
+    # Peak Shaving (regs 209-212, 2 windows) support 2 periods; Off-Grid (regs
+    # 269-274, 3 windows) supports 3.
+
+    async def set_gen_charge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set Generator charge time period schedule via cloud API (2 windows).
+
+        Uses the atomic ``writeTime`` endpoint with composite
+        ``HOLD_GEN_{START|END}_TIME_{1,2}`` params.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0 or 1)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+        """
+        return await self._set_schedule(
+            inverter_sn,
+            ScheduleType.GEN_CHARGE,
+            period,
+            start_hour,
+            start_minute,
+            end_hour,
+            end_minute,
+            client_type,
+        )
+
+    async def get_gen_charge_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+    ) -> dict[str, int]:
+        """Read Generator charge time period schedule via cloud API (2 windows).
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0 or 1)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is out of range
+        """
+        return await self._get_schedule(inverter_sn, ScheduleType.GEN_CHARGE, period)
+
+    async def set_off_grid_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set Off-Grid time period schedule via cloud API (3 windows).
+
+        Uses the atomic ``writeTime`` endpoint with composite
+        ``HOLD_OFF_GRID_{START|END}_TIME_{1,2,3}`` params.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+        """
+        return await self._set_schedule(
+            inverter_sn,
+            ScheduleType.OFF_GRID,
+            period,
+            start_hour,
+            start_minute,
+            end_hour,
+            end_minute,
+            client_type,
+        )
+
+    async def get_off_grid_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+    ) -> dict[str, int]:
+        """Read Off-Grid time period schedule via cloud API (3 windows).
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is out of range
+        """
+        return await self._get_schedule(inverter_sn, ScheduleType.OFF_GRID, period)
+
+    async def set_peak_shaving_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set Peak Shaving time period schedule via cloud API (2 windows).
+
+        Uses the atomic ``writeTime`` endpoint with composite
+        ``HOLD_PEAK_SHAVING_{START|END}_TIME_{1,2}`` params. Reads report the
+        schedule under interleaved ``LSP_HOLD_DIS_CHG_POWER_TIME_37..44`` params.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0 or 1)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+        """
+        return await self._set_schedule(
+            inverter_sn,
+            ScheduleType.PEAK_SHAVING,
+            period,
+            start_hour,
+            start_minute,
+            end_hour,
+            end_minute,
+            client_type,
+        )
+
+    async def get_peak_shaving_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+    ) -> dict[str, int]:
+        """Read Peak Shaving time period schedule via cloud API (2 windows).
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0 or 1)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is out of range
+        """
+        return await self._get_schedule(inverter_sn, ScheduleType.PEAK_SHAVING, period)
 
     # ============================================================================
     # AC Charge Type Controls (Cloud API)

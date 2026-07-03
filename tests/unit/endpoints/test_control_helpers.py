@@ -379,7 +379,7 @@ class TestACChargeScheduleCloud:
     @pytest.mark.asyncio
     async def test_set_ac_charge_schedule_invalid_period(self, control: ControlEndpoints) -> None:
         """Test that invalid period raises ValueError."""
-        with pytest.raises(ValueError, match="period must be 0, 1, or 2"):
+        with pytest.raises(ValueError, match="period must be 0-2"):
             await control.set_ac_charge_schedule(SERIAL, 3, 0, 0, 0, 0)
 
     @pytest.mark.asyncio

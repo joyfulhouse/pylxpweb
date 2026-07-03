@@ -519,7 +519,7 @@ class TestACChargeScheduleOperations:
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        with pytest.raises(ValueError, match="period must be 0, 1, or 2"):
+        with pytest.raises(ValueError, match="period must be 0-2"):
             await inverter.set_ac_charge_schedule(3, 0, 0, 6, 0)
 
     @pytest.mark.asyncio
@@ -678,7 +678,7 @@ class TestACChargeScheduleOperations:
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        with pytest.raises(ValueError, match="period must be 0, 1, or 2"):
+        with pytest.raises(ValueError, match="period must be 0-2"):
             await inverter.get_ac_charge_schedule(3)
 
 
