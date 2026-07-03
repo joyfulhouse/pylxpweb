@@ -75,15 +75,6 @@ def _obfuscate_email(email: str) -> str:
     return f"{local[0]}{'*' * (len(local) - 1)}@{domain}"
 
 
-def _obfuscate_coordinate(coord: str | float) -> str:
-    """Obfuscate latitude/longitude to 1 decimal place."""
-    try:
-        val = float(coord)
-        return f"{val:.1f}"
-    except (ValueError, TypeError):
-        return "***"
-
-
 class BatteryType(StrEnum):
     """Battery type enumeration."""
 

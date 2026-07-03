@@ -195,12 +195,6 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
 
         return mid_device
 
-    def _runtime_elapsed_seconds(self) -> float | None:
-        """Seconds since last successful runtime cache, or None at startup."""
-        if self._runtime_cache_time is None:
-            return None
-        return (datetime.now() - self._runtime_cache_time).total_seconds()
-
     def _validate_runtime_energy(self, new_runtime: MidboxRuntimeData) -> bool:
         """Validate lifetime and daily energy in a new runtime read.
 
