@@ -1628,6 +1628,81 @@ class ControlEndpoints(BaseEndpoint):
         return await self._get_schedule(inverter_sn, ScheduleType.FORCED_DISCHARGE, period)
 
     # ============================================================================
+    # AC First Schedule Controls (Cloud API) — off-grid/SNA working mode
+    # ============================================================================
+
+    async def set_ac_first_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set AC first time period schedule via cloud API.
+
+        AC First is the off-grid (SNA) working mode's schedule — the portal
+        exposes it only on the SNA working-mode page
+        (``/WManage/web/maintain/workingMode/sna``).
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+
+        Example:
+            >>> await client.control.set_ac_first_schedule(
+            ...     "1234567890", 0, 8, 0, 16, 0
+            ... )
+        """
+        return await self._set_schedule(
+            inverter_sn,
+            ScheduleType.AC_FIRST,
+            period,
+            start_hour,
+            start_minute,
+            end_hour,
+            end_minute,
+            client_type,
+        )
+
+    async def get_ac_first_schedule(
+        self,
+        inverter_sn: str,
+        period: int,
+    ) -> dict[str, int]:
+        """Read AC first time period schedule via cloud API.
+
+        Args:
+            inverter_sn: Inverter serial number
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+
+        Example:
+            >>> schedule = await client.control.get_ac_first_schedule(
+            ...     "1234567890", 0
+            ... )
+        """
+        return await self._get_schedule(inverter_sn, ScheduleType.AC_FIRST, period)
+
+    # ============================================================================
     # AC Charge Type Controls (Cloud API)
     # ============================================================================
 

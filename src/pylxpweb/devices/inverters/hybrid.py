@@ -614,6 +614,59 @@ class HybridInverter(GenericInverter):
         """
         return await self._get_schedule(ScheduleType.FORCED_DISCHARGE, period)
 
+    async def set_ac_first_schedule(
+        self,
+        period: int,
+        start_hour: int,
+        start_minute: int,
+        end_hour: int,
+        end_minute: int,
+    ) -> bool:
+        """Set AC first time period schedule (off-grid/SNA working mode).
+
+        Registers 152-157 (packed hour|minute per register), verified by the
+        live SNA12K-US register probe (docs/inverters/SNA12KUS_52XXXXXX68.json).
+
+        Args:
+            period: Time period index (0, 1, or 2)
+            start_hour: Schedule start hour (0-23)
+            start_minute: Schedule start minute (0-59)
+            end_hour: Schedule end hour (0-23)
+            end_minute: Schedule end minute (0-59)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If period, hour, or minute is out of range
+
+        Example:
+            >>> await inverter.set_ac_first_schedule(0, 8, 0, 16, 0)
+            True
+        """
+        return await self._set_schedule(
+            ScheduleType.AC_FIRST, period, start_hour, start_minute, end_hour, end_minute
+        )
+
+    async def get_ac_first_schedule(self, period: int) -> dict[str, int]:
+        """Read AC first time period schedule (off-grid/SNA working mode).
+
+        Args:
+            period: Time period index (0, 1, or 2)
+
+        Returns:
+            Dictionary with start_hour, start_minute, end_hour, end_minute
+
+        Raises:
+            ValueError: If period is not 0, 1, or 2
+
+        Example:
+            >>> schedule = await inverter.get_ac_first_schedule(0)
+            >>> schedule
+            {'start_hour': 8, 'start_minute': 0, 'end_hour': 16, 'end_minute': 0}
+        """
+        return await self._get_schedule(ScheduleType.AC_FIRST, period)
+
     async def get_ac_charge_type(self) -> int:
         """Get AC charge type (what the charge schedule is based on).
 

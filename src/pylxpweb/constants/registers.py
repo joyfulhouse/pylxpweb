@@ -27,6 +27,7 @@ class ScheduleType(StrEnum):
     """
 
     AC_CHARGE = "ac_charge"
+    AC_FIRST = "ac_first"
     FORCED_CHARGE = "forced_charge"
     FORCED_DISCHARGE = "forced_discharge"
 
@@ -51,6 +52,12 @@ class ScheduleConfig:
 # Used by both cloud API (control.py) and Modbus (hybrid.py) code paths.
 SCHEDULE_CONFIGS: dict[ScheduleType, ScheduleConfig] = {
     ScheduleType.AC_CHARGE: ScheduleConfig("HOLD_AC_CHARGE", 68),
+    # AC First (off-grid/SNA "AC first" working mode; eg4_web_monitor #295):
+    # the portal's SNA working-mode page (/WManage/web/maintain/workingMode/sna)
+    # declares HOLD_AC_FIRST_{START|END}_{HOUR|MINUTE}{""|_1|_2} holdParams and
+    # the live SNA12K-US register probe (docs/inverters/SNA12KUS_52XXXXXX68.json,
+    # blocks 106-111) maps them to holding registers 152-157.
+    ScheduleType.AC_FIRST: ScheduleConfig("HOLD_AC_FIRST", 152),
     ScheduleType.FORCED_CHARGE: ScheduleConfig("HOLD_FORCED_CHARGE", 76),
     ScheduleType.FORCED_DISCHARGE: ScheduleConfig("HOLD_FORCED_DISCHARGE", 84),
 }
@@ -157,6 +164,18 @@ HOLD_FORCED_DISCHARGE_TIME_1_START = 86  # Period 1 start
 HOLD_FORCED_DISCHARGE_TIME_1_END = 87  # Period 1 end
 HOLD_FORCED_DISCHARGE_TIME_2_START = 88  # Period 2 start
 HOLD_FORCED_DISCHARGE_TIME_2_END = 89  # Period 2 end
+
+# AC First Time Schedule (regs 152-157) - packed time format (Modbus)
+# Off-grid/SNA "AC first" working mode (eg4_web_monitor #295). Cloud API
+# names: HOLD_AC_FIRST_{START|END}_{HOUR|MINUTE}{suffix} — declared by the
+# portal's SNA working-mode page and mapped to these registers by the live
+# SNA12K-US probe (docs/inverters/SNA12KUS_52XXXXXX68.json, blocks 106-111).
+HOLD_AC_FIRST_TIME_0_START = 152  # Period 0 start (packed hour|minute)
+HOLD_AC_FIRST_TIME_0_END = 153  # Period 0 end
+HOLD_AC_FIRST_TIME_1_START = 154  # Period 1 start
+HOLD_AC_FIRST_TIME_1_END = 155  # Period 1 end
+HOLD_AC_FIRST_TIME_2_START = 156  # Period 2 start
+HOLD_AC_FIRST_TIME_2_END = 157  # Period 2 end
 
 # Battery Protection Parameters
 HOLD_BAT_VOLT_MAX_CHG = 99  # Battery max charge voltage (V, ×10 decivolts)
@@ -530,6 +549,18 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # float kW [0, 25.5] for reg 82 and int % [0, 100] for reg 83.
     82: ["HOLD_FORCED_DISCHG_POWER_CMD"],
     83: ["HOLD_FORCED_DISCHG_SOC_LIMIT"],
+    # Forced discharge time schedule (84-89, packed hour|minute per register;
+    # eg4_web_monitor #295).  Previously unmapped — LOCAL reads surfaced raw
+    # numeric keys.  Named with the canonical packed-time constants so the
+    # values land under stable keys; the cloud's separated
+    # HOLD_FORCED_DISCHARGE_{START|END}_{HOUR|MINUTE}{suffix} names are
+    # distinct, so no collision with cloud-populated parameter caches.
+    84: ["HOLD_FORCED_DISCHARGE_TIME_0_START"],
+    85: ["HOLD_FORCED_DISCHARGE_TIME_0_END"],
+    86: ["HOLD_FORCED_DISCHARGE_TIME_1_START"],
+    87: ["HOLD_FORCED_DISCHARGE_TIME_1_END"],
+    88: ["HOLD_FORCED_DISCHARGE_TIME_2_START"],
+    89: ["HOLD_FORCED_DISCHARGE_TIME_2_END"],
     # Battery protection
     100: ["HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT"],
     # Battery charge/discharge current limits (A, confirmed 2026-02-18)
@@ -580,6 +611,15 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # Additional verified registers
     125: ["HOLD_SOC_LOW_LIMIT_EPS_DISCHG"],  # Off-grid SOC limit (verified 2026-01-27)
     150: ["HOLD_EQUALIZATION_PERIOD"],
+    # AC First time schedule (152-157, packed hour|minute per register;
+    # off-grid/SNA working mode, eg4_web_monitor #295).  Same canonical
+    # packed-time naming rationale as 84-89 above.
+    152: ["HOLD_AC_FIRST_TIME_0_START"],
+    153: ["HOLD_AC_FIRST_TIME_0_END"],
+    154: ["HOLD_AC_FIRST_TIME_1_START"],
+    155: ["HOLD_AC_FIRST_TIME_1_END"],
+    156: ["HOLD_AC_FIRST_TIME_2_START"],
+    157: ["HOLD_AC_FIRST_TIME_2_END"],
     158: ["HOLD_AC_CHARGE_START_BATTERY_VOLTAGE"],
     159: ["HOLD_AC_CHARGE_END_BATTERY_VOLTAGE"],
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
