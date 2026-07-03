@@ -438,7 +438,7 @@ class HybridInverter(GenericInverter):
         return True
 
     async def _get_schedule(self, schedule_type: ScheduleType, period: int) -> dict[str, int]:
-        """Read a time period schedule via Modbus (generic helper).
+        """Read a time period schedule (generic helper, transport or cloud).
 
         Args:
             schedule_type: Which schedule to read
@@ -449,11 +449,27 @@ class HybridInverter(GenericInverter):
 
         Raises:
             ValueError: If period is not 0, 1, or 2
+
+        Note:
+            Local (Modbus) mode reads the packed-time registers directly. Cloud
+            mode has no ``reg_<n>`` keys — the API returns named schedule params
+            (``{cloud_prefix}_START_HOUR`` etc.), so it delegates to the cloud
+            endpoint getter, which mirrors the cloud setter's named-field
+            convention.
         """
         from pylxpweb.constants import SCHEDULE_CONFIGS, unpack_time
 
         if period not in (0, 1, 2):
             raise ValueError(f"period must be 0, 1, or 2, got {period}")
+
+        if self._transport is None:
+            if self._client is None:
+                raise LuxpowerDeviceError(
+                    "Reading a schedule requires a transport or a cloud client"
+                )
+            return await self._client.api.control._get_schedule(
+                self.serial_number, schedule_type, period
+            )
 
         base_reg = SCHEDULE_CONFIGS[schedule_type].base_register
         start_reg = base_reg + (period * 2)

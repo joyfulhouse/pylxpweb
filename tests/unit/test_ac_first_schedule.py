@@ -221,14 +221,17 @@ class TestACFirstScheduleModbus:
 
     @pytest.mark.asyncio
     async def test_get_ac_first_schedule(self, mock_client: LuxpowerClient) -> None:
-        inverter = HybridInverter(client=mock_client, serial_number=SERIAL, model="12000XP")
-        mock_response = Mock()
-        mock_response.parameters = {"reg_152": 23, "reg_153": (30 << 8) | 7}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+        # LOCAL (Modbus) path: read the packed-time registers via the transport.
+        # reg 152 = pack_time(23, 0) = 23; reg 153 = pack_time(7, 30) = (30<<8)|7.
+        transport = Mock()
+        transport.read_parameters = AsyncMock(return_value={152: 23, 153: (30 << 8) | 7})
+        inverter = HybridInverter(
+            client=mock_client, serial_number=SERIAL, model="12000XP", transport=transport
+        )
 
         schedule = await inverter.get_ac_first_schedule(0)
 
-        mock_client.api.control.read_parameters.assert_called_once_with(SERIAL, 152, 2)
+        transport.read_parameters.assert_awaited_once_with(152, 2)
         assert schedule == {
             "start_hour": 23,
             "start_minute": 0,

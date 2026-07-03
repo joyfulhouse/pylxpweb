@@ -754,10 +754,14 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             getattr(self._transport, "read_all_input_data", None) if self._transport else None
         )
 
-        if runtime_expired and combined_fn is not None:
+        if runtime_expired and combined_fn is not None and not link_down:
             tasks.append(self._fetch_combined_input_data())
         else:
-            # Individual read path
+            # Individual read path.  In link-down probe mode the combined
+            # read is intentionally bypassed: energy/battery are already
+            # gated off above, so this issues only the single cheap runtime
+            # probe needed to detect link recovery — not the full
+            # all-input-groups read.
             if runtime_expired:
                 tasks.append(self._fetch_runtime())
 
