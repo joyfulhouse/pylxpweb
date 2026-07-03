@@ -417,6 +417,7 @@ class RegisterDataMixin(_DataMixinBase):
             #     the firmware slot position.
             serial = read_battery_serial(raw_registers, base_address=slot_base)
             serial_reported = any(raw_registers.get(slot_base + off, 0) for off in range(17, 24))
+            pos = (raw_registers.get(slot_base + 24, 0) >> 8) & 0xFF
             if serial and len(serial) >= _MIN_BATTERY_SERIAL_LEN:
                 identity = serial
                 if identity in page_identities:
@@ -429,7 +430,6 @@ class RegisterDataMixin(_DataMixinBase):
                     # the battery's bank position (offset 24 high byte —
                     # stable per battery across rotation) and warn once per
                     # colliding serial.
-                    pos = (raw_registers.get(slot_base + 24, 0) >> 8) & 0xFF
                     identity = f"{serial}@pos{pos}"
                     dup_warned: set[str] = getattr(self, "_battery_dup_serial_warned", set())
                     if serial not in dup_warned:
@@ -454,8 +454,40 @@ class RegisterDataMixin(_DataMixinBase):
                 )
                 continue
             else:
-                pos = (raw_registers.get(slot_base + 24, 0) >> 8) & 0xFF
                 identity = f"pos:{pos}"
+
+            # Synthetic @pos reconciliation (#258 review P1): a "{serial}@posN"
+            # entry is only a snapshot of a SUSPECT read at bank position N.
+            # When position N is next read successfully under a different
+            # identity, that snapshot is stale — evict it so transient serial
+            # corruption self-heals instead of publishing a phantom twin until
+            # full-bank retirement.  A genuine duplicate pack appears in the
+            # same page as its twin and re-mints its @pos entry right there
+            # (the entry's own read ends with the suffix, so it never evicts
+            # itself) — the collapse protection above is preserved.
+            pos_suffix = f"@pos{pos}"
+            if not identity.endswith(pos_suffix):
+                for stale_key in [k for k in accumulator if k.endswith(pos_suffix)]:
+                    del accumulator[stale_key]
+                    stale_slot = slot_index.get(stale_key)
+                    if stale_slot is not None:
+                        # Keep the slot_index reservation: virtual slots are
+                        # assigned as len(slot_index), so deleting the row
+                        # would let a future identity collide with a live
+                        # slot.  Only the data and its clock are retired.
+                        last_seen.pop(stale_slot, None)
+                    stall_warned: set[str] = getattr(self, "_battery_stall_warned", set())
+                    stall_warned.discard(stale_key)
+                    self._battery_stall_warned = stall_warned
+                    _LOGGER.info(
+                        "[%s] Evicted synthetic duplicate-serial entry %r: bank "
+                        "position %d was read successfully as %r (transient "
+                        "serial corruption self-healed)",
+                        self._serial,
+                        stale_key,
+                        pos,
+                        identity,
+                    )
 
             raw_page.append(f"{phys_slot}={identity}")
             page_identities.add(identity)
@@ -493,7 +525,7 @@ class RegisterDataMixin(_DataMixinBase):
                 self._battery_accumulator = {}
                 self._battery_slot_index = {}
                 self._battery_last_seen = {}
-                self._battery_stall_warned: set[str] = set()
+                self._battery_stall_warned = set()
                 self._battery_dup_serial_warned = set()
                 _LOGGER.info(
                     "[%s] Battery bank converged to empty after %d consecutive "

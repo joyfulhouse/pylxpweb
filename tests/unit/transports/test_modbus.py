@@ -1519,6 +1519,80 @@ class TestBatteryDuplicateSerialDisambiguation:
         ]
         assert len(warnings) == 1, "warning must be latched once per serial"
 
+    @pytest.mark.asyncio
+    async def test_synthetic_pos_entry_evicted_on_clean_read(self) -> None:
+        """A transient corrupt-serial @pos entry self-heals (#258 review P1).
+
+        A misroute-storm read that duplicates another slot's serial mints a
+        synthetic ``@posN`` entry.  Without reconciliation it persisted until
+        full-bank retirement, so the merged output carried two batteries with
+        the same raw serial forever — and eg4_web_monitor's LOCAL merge then
+        minted a lasting positional collision entity.  When bank position N is
+        next read successfully under a different identity, the snapshot is
+        stale and must be evicted.
+        """
+        transport = self._make_transport()
+        # Page 1: slot 1 (pos 1) corrupt-reads slot 0's serial.
+        corrupt = _build_battery_slots_with_serials(
+            [
+                ("BATTERYSER0000", 0),
+                ("BATTERYSER0000", 1),  # corrupt duplicate of slot 0's serial
+                ("BATTERYSER0002", 2),
+                ("BATTERYSER0003", 3),
+            ]
+        )
+        # Page 2: slot 1 (pos 1) reads its true serial.
+        clean = _build_battery_slots_with_serials(
+            [
+                ("BATTERYSER0000", 0),
+                ("BATTERYSER0001", 1),
+                ("BATTERYSER0002", 2),
+                ("BATTERYSER0003", 3),
+            ]
+        )
+        _, mock_class = self._mock_client([corrupt, clean])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(4)
+            # The suspect read minted the synthetic entry.
+            assert "BATTERYSER0000@pos1" in transport._battery_accumulator
+            merged = await transport._read_individual_battery_registers(4)
+
+        acc = transport._battery_accumulator
+        assert set(acc) == {
+            "BATTERYSER0000",
+            "BATTERYSER0001",
+            "BATTERYSER0002",
+            "BATTERYSER0003",
+        }, f"synthetic entry must be evicted, got {set(acc)}"
+
+        # The merged output carries 4 batteries with 4 DISTINCT serials.
+        assert merged is not None
+        seen: set[str] = set()
+        for slot in range(20):
+            base = BATTERY_BASE_ADDRESS + slot * BATTERY_REGISTER_COUNT
+            if merged.get(base):
+                seen.add(read_battery_serial(merged, base_address=base))
+        assert len(seen) == 4
+
+    @pytest.mark.asyncio
+    async def test_genuine_duplicate_pack_survives_reconciliation(self) -> None:
+        """A genuine dup pack re-mints its @pos entry each page it appears in."""
+        transport = self._make_transport()
+        page = self._dup_serial_page()
+        _, mock_class = self._mock_client([page, page])
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", mock_class):
+            await transport.connect()
+            await transport._read_individual_battery_registers(4)
+            await transport._read_individual_battery_registers(4)
+
+        acc = transport._battery_accumulator
+        # Reconciliation must not evict the entry the dup page itself re-mints.
+        assert "BATTERYSER0001@pos3" in acc
+        assert len(acc) == 4
+
 
 class TestBatterySlotDebugSerial:
     """The per-slot debug dump must show the full identity serial (#258).
