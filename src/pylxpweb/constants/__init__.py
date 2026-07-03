@@ -145,6 +145,13 @@ from .registers import (
     HOLD_AC_CHARGE_TIME_2_END,
     HOLD_AC_CHARGE_TIME_2_START,
     HOLD_AC_CHARGE_TYPE_REGISTER,
+    # AC First time schedule (off-grid/SNA working mode, packed time format)
+    HOLD_AC_FIRST_TIME_0_END,
+    HOLD_AC_FIRST_TIME_0_START,
+    HOLD_AC_FIRST_TIME_1_END,
+    HOLD_AC_FIRST_TIME_1_START,
+    HOLD_AC_FIRST_TIME_2_END,
+    HOLD_AC_FIRST_TIME_2_START,
     # Battery protection parameters
     HOLD_BAT_VOLT_MAX_CHG,
     HOLD_BAT_VOLT_MAX_DISCHG,  # deprecated alias for HOLD_LEAD_ACID_CHARGE_RATE
@@ -401,6 +408,13 @@ __all__ = [
     "HOLD_AC_CHARGE_TIME_1_END",
     "HOLD_AC_CHARGE_TIME_2_START",
     "HOLD_AC_CHARGE_TIME_2_END",
+    # AC First time schedule (regs 152-157, off-grid/SNA working mode)
+    "HOLD_AC_FIRST_TIME_0_START",
+    "HOLD_AC_FIRST_TIME_0_END",
+    "HOLD_AC_FIRST_TIME_1_START",
+    "HOLD_AC_FIRST_TIME_1_END",
+    "HOLD_AC_FIRST_TIME_2_START",
+    "HOLD_AC_FIRST_TIME_2_END",
     # Forced charge parameters (regs 74-81)
     "HOLD_FORCED_CHG_POWER_CMD",
     "HOLD_FORCED_CHG_SOC_LIMIT",
