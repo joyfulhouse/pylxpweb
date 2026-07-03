@@ -178,6 +178,11 @@ from .registers import (
     # Forced discharge parameters (regs 82-89)
     HOLD_FORCED_DISCHG_POWER_CMD,
     HOLD_FORCED_DISCHG_SOC_LIMIT,
+    # Generator Charge time schedule (regs 256-259, packed time format)
+    HOLD_GEN_TIME_0_END,
+    HOLD_GEN_TIME_0_START,
+    HOLD_GEN_TIME_1_END,
+    HOLD_GEN_TIME_1_START,
     HOLD_GRID_FREQ_HIGH_1,
     HOLD_GRID_FREQ_LOW_1,
     # Grid protection parameters
@@ -194,10 +199,22 @@ from .registers import (
     HOLD_MODBUS_ADDRESS,
     HOLD_MONTH,
     HOLD_OFF_GRID_EOD_VOLTAGE,
+    # Off-Grid time schedule (regs 269-274, packed time format)
+    HOLD_OFF_GRID_TIME_0_END,
+    HOLD_OFF_GRID_TIME_0_START,
+    HOLD_OFF_GRID_TIME_1_END,
+    HOLD_OFF_GRID_TIME_1_START,
+    HOLD_OFF_GRID_TIME_2_END,
+    HOLD_OFF_GRID_TIME_2_START,
     # On-grid discharge cutoff voltage
     HOLD_ON_GRID_EOD_VOLTAGE,
     # Discharge start threshold
     HOLD_P_TO_USER_START_DISCHG,
+    # Peak Shaving time schedule (regs 209-212, packed time format)
+    HOLD_PEAK_SHAVING_TIME_0_END,
+    HOLD_PEAK_SHAVING_TIME_0_START,
+    HOLD_PEAK_SHAVING_TIME_1_END,
+    HOLD_PEAK_SHAVING_TIME_1_START,
     # Reactive power control
     HOLD_Q_MODE,
     HOLD_Q_POWER,
@@ -433,6 +450,23 @@ __all__ = [
     "HOLD_FORCED_DISCHARGE_TIME_1_END",
     "HOLD_FORCED_DISCHARGE_TIME_2_START",
     "HOLD_FORCED_DISCHARGE_TIME_2_END",
+    # Peak Shaving time schedule (regs 209-212)
+    "HOLD_PEAK_SHAVING_TIME_0_START",
+    "HOLD_PEAK_SHAVING_TIME_0_END",
+    "HOLD_PEAK_SHAVING_TIME_1_START",
+    "HOLD_PEAK_SHAVING_TIME_1_END",
+    # Generator Charge time schedule (regs 256-259)
+    "HOLD_GEN_TIME_0_START",
+    "HOLD_GEN_TIME_0_END",
+    "HOLD_GEN_TIME_1_START",
+    "HOLD_GEN_TIME_1_END",
+    # Off-Grid time schedule (regs 269-274)
+    "HOLD_OFF_GRID_TIME_0_START",
+    "HOLD_OFF_GRID_TIME_0_END",
+    "HOLD_OFF_GRID_TIME_1_START",
+    "HOLD_OFF_GRID_TIME_1_END",
+    "HOLD_OFF_GRID_TIME_2_START",
+    "HOLD_OFF_GRID_TIME_2_END",
     "HOLD_BAT_VOLT_MAX_CHG",
     "HOLD_BAT_VOLT_MIN_CHG",
     "HOLD_OFF_GRID_EOD_VOLTAGE",

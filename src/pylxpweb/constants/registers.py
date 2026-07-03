@@ -30,6 +30,21 @@ class ScheduleType(StrEnum):
     AC_FIRST = "ac_first"
     FORCED_CHARGE = "forced_charge"
     FORCED_DISCHARGE = "forced_discharge"
+    GEN_CHARGE = "gen_charge"
+    OFF_GRID = "off_grid"
+    PEAK_SHAVING = "peak_shaving"
+
+
+# Per-window cloud-name suffix schemes.
+#
+# AC Charge and the other "classic" schedules number their periods
+# ``""`` (period 0), ``"_1"`` (period 1), ``"_2"`` (period 2) — a bare
+# unsuffixed first window. The Generator / Off-Grid / Peak-Shaving families
+# instead number ALL windows ``"_1".."_N"`` with no bare window. The suffix
+# scheme is therefore per-config, not a fixed formula.
+_CLASSIC_SUFFIXES = ("", "_1", "_2")
+_ONE_BASED_SUFFIXES_2 = ("_1", "_2")
+_ONE_BASED_SUFFIXES_3 = ("_1", "_2", "_3")
 
 
 @dataclass(frozen=True)
@@ -38,14 +53,40 @@ class ScheduleConfig:
 
     Attributes:
         cloud_prefix: Cloud API parameter prefix (e.g. "HOLD_AC_CHARGE").
-            Schedule params follow the pattern: ``{cloud_prefix}_START_HOUR{suffix}``
-            where suffix is "" for period 0, "_1" for period 1, "_2" for period 2.
+            Schedule params follow the pattern ``{cloud_prefix}_START_HOUR{suffix}``
+            (classic families) or the composite ``{cloud_prefix}_START_TIME{suffix}``
+            writeTime param (writeTime families), where ``suffix`` comes from
+            ``period_suffixes``.
         base_register: First packed-time register address (Modbus).
-            Each schedule occupies 6 consecutive registers (3 periods × 2 regs).
+            Each schedule occupies ``2 * len(period_suffixes)`` consecutive
+            registers (2 regs per window: start + end).
+        period_suffixes: Per-window cloud-name suffix, indexed by period. The
+            length is the number of windows. Classic families use
+            ``("", "_1", "_2")``; Generator/Off-Grid/Peak-Shaving use
+            ``("_1", "_2"[, "_3"])`` (no bare window).
+        write_via_time_api: When True, cloud writes use the portal's atomic
+            ``writeTime`` endpoint (one call per boundary sets hour+minute
+            together) with composite ``{cloud_prefix}_{START|END}_TIME{suffix}``
+            params, instead of four separate ``write`` calls. This eliminates the
+            two-call partial-failure mode.
+        read_lsp_base: When set, cloud reads pull hour/minute from the
+            interleaved ``LSP_HOLD_DIS_CHG_POWER_TIME_{n}`` params instead of
+            ``{cloud_prefix}_START_HOUR{suffix}``. Peak Shaving reports its
+            schedule under these LSP names; index ``read_lsp_base + period*4``
+            gives start-hour, ``+1`` start-minute, ``+2`` end-hour, ``+3``
+            end-minute.
     """
 
     cloud_prefix: str
     base_register: int
+    period_suffixes: tuple[str, ...] = _CLASSIC_SUFFIXES
+    write_via_time_api: bool = False
+    read_lsp_base: int | None = None
+
+    @property
+    def periods(self) -> int:
+        """Number of schedule windows this family supports."""
+        return len(self.period_suffixes)
 
 
 # Mapping from schedule type to its configuration.
@@ -60,6 +101,36 @@ SCHEDULE_CONFIGS: dict[ScheduleType, ScheduleConfig] = {
     ScheduleType.AC_FIRST: ScheduleConfig("HOLD_AC_FIRST", 152),
     ScheduleType.FORCED_CHARGE: ScheduleConfig("HOLD_FORCED_CHARGE", 76),
     ScheduleType.FORCED_DISCHARGE: ScheduleConfig("HOLD_FORCED_DISCHARGE", 84),
+    # Generator Charge schedule (regs 256-259, 2 windows). Live-verified on a
+    # FlexBOSS21 (FAAB-2525, EG4_HYBRID): write HOLD_GEN_START_MINUTE_2=47 read
+    # back reg 258=12032; reg 257 end1=23:59 correlated. The SNA12K-US probe
+    # (docs/inverters/SNA12KUS_52XXXXXX68.json blocks 255-259) reports the same
+    # HOLD_GEN_{START|END}_{HOUR|MINUTE}_{1,2} names at these registers, so this
+    # family also applies to EG4_OFFGRID. Cloud writes use the atomic writeTime
+    # composites HOLD_GEN_{START|END}_TIME_{1,2}.
+    ScheduleType.GEN_CHARGE: ScheduleConfig(
+        "HOLD_GEN", 256, period_suffixes=_ONE_BASED_SUFFIXES_2, write_via_time_api=True
+    ),
+    # Off-Grid schedule (regs 269-274, 3 windows). Live-correlated end1=23:59 on
+    # the FlexBOSS21; writes deliberately not live-tested (off-grid transitions
+    # on a live home). Cloud params HOLD_OFF_GRID_{START|END}_{HOUR|MINUTE}_{1..3}
+    # + atomic writeTime composites HOLD_OFF_GRID_{START|END}_TIME_{1..3}.
+    ScheduleType.OFF_GRID: ScheduleConfig(
+        "HOLD_OFF_GRID", 269, period_suffixes=_ONE_BASED_SUFFIXES_3, write_via_time_api=True
+    ),
+    # Peak Shaving schedule (regs 209-212, 2 windows). Write-verified: writeTime
+    # 01:05 -> reg 211 read 1281; start1 16:00 / end1 20:59 matched cloud. Cloud
+    # READS report the schedule under the interleaved LSP_HOLD_DIS_CHG_POWER_TIME_
+    # 37..44 params (37/38 = start1 hour/minute, 39/40 = end1, 41/42 = start2,
+    # 43/44 = end2); cloud WRITES use the atomic writeTime composites
+    # HOLD_PEAK_SHAVING_{START|END}_TIME_{1,2}.
+    ScheduleType.PEAK_SHAVING: ScheduleConfig(
+        "HOLD_PEAK_SHAVING",
+        209,
+        period_suffixes=_ONE_BASED_SUFFIXES_2,
+        write_via_time_api=True,
+        read_lsp_base=37,
+    ),
 }
 
 
@@ -176,6 +247,31 @@ HOLD_AC_FIRST_TIME_1_START = 154  # Period 1 start
 HOLD_AC_FIRST_TIME_1_END = 155  # Period 1 end
 HOLD_AC_FIRST_TIME_2_START = 156  # Period 2 start
 HOLD_AC_FIRST_TIME_2_END = 157  # Period 2 end
+
+# Peak Shaving time schedule (regs 209-212, 2 windows, packed hour|minute per
+# register). Live write-verified on a FlexBOSS21 (FAAB-2525): writeTime 01:05 ->
+# reg 211 read 1281; start1 16:00 / end1 20:59 matched cloud exactly.
+HOLD_PEAK_SHAVING_TIME_0_START = 209  # Period 0 start (packed hour|minute)
+HOLD_PEAK_SHAVING_TIME_0_END = 210  # Period 0 end
+HOLD_PEAK_SHAVING_TIME_1_START = 211  # Period 1 start
+HOLD_PEAK_SHAVING_TIME_1_END = 212  # Period 1 end
+
+# Generator Charge time schedule (regs 256-259, 2 windows, packed hour|minute).
+# Live-verified on a FlexBOSS21 (write HOLD_GEN_START_MINUTE_2=47 -> reg 258
+# =12032; reg 257 end1=23:59); same names on the SNA12K-US probe (EG4_OFFGRID).
+HOLD_GEN_TIME_0_START = 256  # Period 0 start (packed hour|minute)
+HOLD_GEN_TIME_0_END = 257  # Period 0 end
+HOLD_GEN_TIME_1_START = 258  # Period 1 start
+HOLD_GEN_TIME_1_END = 259  # Period 1 end
+
+# Off-Grid time schedule (regs 269-274, 3 windows, packed hour|minute per
+# register). Live-correlated end1=23:59 on the FlexBOSS21.
+HOLD_OFF_GRID_TIME_0_START = 269  # Period 0 start (packed hour|minute)
+HOLD_OFF_GRID_TIME_0_END = 270  # Period 0 end
+HOLD_OFF_GRID_TIME_1_START = 271  # Period 1 start
+HOLD_OFF_GRID_TIME_1_END = 272  # Period 1 end
+HOLD_OFF_GRID_TIME_2_START = 273  # Period 2 start
+HOLD_OFF_GRID_TIME_2_END = 274  # Period 2 end
 
 # Battery Protection Parameters
 HOLD_BAT_VOLT_MAX_CHG = 99  # Battery max charge voltage (V, ×10 decivolts)
@@ -624,6 +720,24 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     159: ["HOLD_AC_CHARGE_END_BATTERY_VOLTAGE"],
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
     169: ["HOLD_ON_GRID_EOD_VOLTAGE"],  # On-grid EOD voltage (V, ×10; cloud-confirmed name)
+    # Peak Shaving time schedule (209-212, packed hour|minute per register;
+    # 2 windows). Same canonical packed-time naming as AC First above.
+    209: ["HOLD_PEAK_SHAVING_TIME_0_START"],
+    210: ["HOLD_PEAK_SHAVING_TIME_0_END"],
+    211: ["HOLD_PEAK_SHAVING_TIME_1_START"],
+    212: ["HOLD_PEAK_SHAVING_TIME_1_END"],
+    # Generator Charge time schedule (256-259, packed hour|minute; 2 windows).
+    256: ["HOLD_GEN_TIME_0_START"],
+    257: ["HOLD_GEN_TIME_0_END"],
+    258: ["HOLD_GEN_TIME_1_START"],
+    259: ["HOLD_GEN_TIME_1_END"],
+    # Off-Grid time schedule (269-274, packed hour|minute; 3 windows).
+    269: ["HOLD_OFF_GRID_TIME_0_START"],
+    270: ["HOLD_OFF_GRID_TIME_0_END"],
+    271: ["HOLD_OFF_GRID_TIME_1_START"],
+    272: ["HOLD_OFF_GRID_TIME_1_END"],
+    273: ["HOLD_OFF_GRID_TIME_2_START"],
+    274: ["HOLD_OFF_GRID_TIME_2_END"],
     190: ["HOLD_P2"],
     # Forced-discharge stop voltage — the voltage-regime counterpart of
     # HOLD_FORCED_DISCHG_SOC_LIMIT (reg 83). Raw encoding verified DECIVOLTS
