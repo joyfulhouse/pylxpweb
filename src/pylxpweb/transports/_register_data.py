@@ -1012,7 +1012,12 @@ class RegisterDataMixin(_DataMixinBase):
                 block, f"short response ({len(values)}/{block.count} registers)"
             )
             raise _CoalescedReadFallback()
-        if block.coalesced:
+        # Only a read that actually EXCEEDED the conservative ~40-register cap
+        # proves large-read support: a <=40-register merge could succeed on
+        # old-cap firmware, so it must not count as proof.  (Today every real
+        # INPUT_REGISTER_GROUPS merge already spans >=48, so this gate is
+        # defense-in-depth against a future group-table edit, not the layout.)
+        if block.coalesced and block.count > DEFAULT_INPUT_BLOCK_SIZE:
             self._note_coalescing_proven()
         return values
 

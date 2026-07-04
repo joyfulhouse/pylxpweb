@@ -32,6 +32,7 @@ from pylxpweb.transports._register_data import (
     DEFAULT_INPUT_BLOCK_SIZE,
     INPUT_REGISTER_GROUPS,
     MAX_INPUT_BLOCK_SIZE,
+    _ReadBlock,
     coalesce_register_groups,
 )
 from pylxpweb.transports.config import TransportConfig, TransportType
@@ -682,6 +683,28 @@ class TestProvenCapableNoLatch:
         confirmations = [r for r in caplog.records if "large-read support confirmed" in r.message]
         assert len(confirmations) == 1
         assert transport._input_coalescing_proven is True
+
+    @pytest.mark.asyncio
+    async def test_proof_requires_span_above_conservative_cap(self) -> None:
+        """Only a merged read wider than the ~40-register cap counts as proof.
+
+        A <=40-register merge could succeed on old-cap firmware, so it must not
+        prove large-read support — otherwise a future group-table edit that
+        produced a small merge could wrongly disarm the old-firmware latch.
+        """
+        transport = _transport(max_input_block_size=120)
+
+        async def ok_read(start: int, count: int) -> list[int]:
+            return [0] * count
+
+        with patch.object(transport, "_read_input_registers", side_effect=ok_read):
+            # A 40-register (== cap) coalesced read succeeds but does NOT prove.
+            await transport._read_block(_ReadBlock(("a", "b"), 0, DEFAULT_INPUT_BLOCK_SIZE))
+            assert getattr(transport, "_input_coalescing_proven", False) is False
+
+            # A 41-register (> cap) coalesced read proves large-read support.
+            await transport._read_block(_ReadBlock(("a", "b"), 0, DEFAULT_INPUT_BLOCK_SIZE + 1))
+            assert transport._input_coalescing_proven is True
 
     @pytest.mark.asyncio
     async def test_cooldown_expiry_logs_reprobe_once(
