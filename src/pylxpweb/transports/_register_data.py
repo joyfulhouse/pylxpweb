@@ -837,15 +837,28 @@ class RegisterDataMixin(_DataMixinBase):
         has failed and latched the transport back (``eg4_web_monitor#254``),
         or during the post-mismatch cooldown (#320) — the plan is exactly one
         read per group, byte-identical to the pre-feature behavior.
+
+        When a cooldown expires the transport re-probes coalescing and logs it
+        once (the re-arm was previously silent), so operators can confirm the
+        connection returned to large-read mode (#320).
         """
         max_size = getattr(self, "_max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE)
-        in_cooldown = time.monotonic() < getattr(self, "_input_coalescing_retry_after", 0.0)
-        if (
-            max_size <= DEFAULT_INPUT_BLOCK_SIZE
-            or getattr(self, "_input_coalescing_latched_off", False)
-            or in_cooldown
+        if max_size <= DEFAULT_INPUT_BLOCK_SIZE or getattr(
+            self, "_input_coalescing_latched_off", False
         ):
             return self._plain_input_plan(groups)
+
+        retry_after = getattr(self, "_input_coalescing_retry_after", 0.0)
+        if retry_after:
+            if time.monotonic() < retry_after:
+                return self._plain_input_plan(groups)
+            # Cooldown elapsed: clear it and re-probe.  Clearing means this
+            # DEBUG line fires once at the re-arm, not every subsequent cycle.
+            self._input_coalescing_retry_after = 0.0
+            _LOGGER.debug(
+                "[%s] coalescing cooldown expired — re-probing large input reads",
+                self._serial,
+            )
         return coalesce_register_groups(groups, max_size)
 
     @staticmethod
@@ -871,8 +884,11 @@ class RegisterDataMixin(_DataMixinBase):
         (until the transport is recreated, e.g. on reload) instead of
         re-paying retries every poll cycle.  A short (truncated) frame trips
         the same latch.  Misrouted frames do NOT reach here — they fall back
-        for one cycle without latching (see :meth:`_read_block`, #320) — so
-        this warning always points at a genuine large-read refusal.
+        for one cycle without latching (see :meth:`_read_block`, #320).  Nor
+        does any failure once the transport has *proven* large-read support
+        (:meth:`_degrade_coalescing`), so this permanent latch is reserved for
+        a transport that has NEVER completed a coalesced read — the genuine
+        old-firmware signal.
         """
         self._input_coalescing_latched_off = True
         _LOGGER.warning(
@@ -891,6 +907,58 @@ class RegisterDataMixin(_DataMixinBase):
             reason,
         )
 
+    def _start_coalescing_cooldown(self, block: _ReadBlock, reason: object, note: str) -> None:
+        """Fall back to plain reads for a cooldown window instead of latching.
+
+        Used both for a misrouted/unsolicited frame (never a firmware signal)
+        and for any failure once the transport has proven large-read support.
+        Either way the failure is transient, so coalescing re-probes after
+        :data:`COALESCING_MISMATCH_COOLDOWN` rather than latching permanently
+        (#320).  ``note`` names the cause in the log.
+        """
+        self._input_coalescing_retry_after = time.monotonic() + COALESCING_MISMATCH_COOLDOWN
+        _LOGGER.debug(
+            "[%s] Coalesced input-register read %d-%d %s (%s) — falling back to "
+            "grouped reads; coalescing re-probes in ~%d minutes (#320)",
+            self._serial,
+            block.start,
+            block.start + block.count - 1,
+            note,
+            reason,
+            int(COALESCING_MISMATCH_COOLDOWN // 60),
+        )
+
+    def _degrade_coalescing(self, block: _ReadBlock, reason: object) -> None:
+        """Degrade coalescing after a genuine failure (exception or short read).
+
+        Latch permanently only if this transport has NEVER completed a
+        coalesced read — the true old-firmware probe.  Once a coalesced read
+        has ever succeeded (:attr:`_input_coalescing_proven`) the firmware has
+        proven it serves large reads, so a later failure can't mean the
+        ~40-register cap; treat it as transient via the cooldown instead of a
+        permanent latch (#320, reporter ivanfmartinez).
+        """
+        if getattr(self, "_input_coalescing_proven", False):
+            self._start_coalescing_cooldown(
+                block, reason, "failed but large-read support was already proven"
+            )
+        else:
+            self._latch_input_coalescing_off(block, reason)
+
+    def _note_coalescing_proven(self) -> None:
+        """Record that a coalesced read succeeded; log once on first proof.
+
+        The log fires only on the False->True transition, so it is one line
+        per transport (at startup or after a cooldown re-probe) and doubles as
+        the operator's confirmation that large-read mode is active (#320).
+        """
+        if not getattr(self, "_input_coalescing_proven", False):
+            self._input_coalescing_proven = True
+            _LOGGER.debug(
+                "[%s] Coalesced input read succeeded — large-read support confirmed",
+                self._serial,
+            )
+
     async def _read_block(self, block: _ReadBlock) -> list[int]:
         """Read one planned block.
 
@@ -899,53 +967,58 @@ class RegisterDataMixin(_DataMixinBase):
         cycle with plain group reads.  Plain (single-group) reads propagate
         errors unchanged, preserving the existing per-group semantics.
 
-        The one coalesced error that does **not** latch is a
-        :class:`TransportResponseMismatchError` — a misrouted or interleaved
-        frame (the WiFi dongle proxies cloud traffic, so a response meant for
-        the cloud server can land on a local reader; an unsolicited heartbeat
-        counts too).  A misrouted frame says nothing about the firmware's
-        ability to serve large reads, so latching off it would wrongly disable
-        coalescing for the whole transport lifetime (eg4_web_monitor#320).
-        Instead it falls back to grouped reads and starts a short cooldown
-        (:data:`COALESCING_MISMATCH_COOLDOWN`) during which reads stay plain,
-        then re-probes coalescing once — bounding the retry cost under
-        persistent misrouting without a permanent latch.  The per-read dongle
-        transport already retries 3x, so an escaping mismatch is rare (no
-        strike counter needed).
+        Two coalesced errors do **not** latch:
+
+        * A :class:`TransportResponseMismatchError` — a misrouted or
+          interleaved frame (the WiFi dongle proxies cloud traffic, so a
+          response meant for the cloud server can land on a local reader; an
+          unsolicited heartbeat counts too).  It says nothing about large-read
+          support, so it starts a cooldown instead of latching.
+        * ANY failure once the transport has proven large-read support (a
+          coalesced read has completed at least once).  Proven capability
+          rules out the old ~40-register cap, so a later exception/short read
+          is transient and also uses the cooldown (:meth:`_degrade_coalescing`,
+          #320 reporter ivanfmartinez — his dongle served coalesced reads for
+          minutes, then one bad frame would have latched permanently).
+
+        An unproven transport keeps the permanent latch on a genuine
+        exception/short read — the true old-firmware probe.  During the
+        cooldown reads stay plain, then coalescing re-probes once.  The
+        per-read dongle transport already retries 3x, so an escaping mismatch
+        is rare (no strike counter needed).
         """
         try:
             values = await self._read_input_registers(block.start, block.count)
         except TransportResponseMismatchError as err:
             if block.coalesced:
-                self._input_coalescing_retry_after = time.monotonic() + COALESCING_MISMATCH_COOLDOWN
-                _LOGGER.debug(
-                    "[%s] Coalesced input-register read %d-%d hit a misrouted "
-                    "response (%s) — falling back to grouped reads; coalescing "
-                    "re-probes in ~%d minutes (#320)",
-                    self._serial,
-                    block.start,
-                    block.start + block.count - 1,
-                    err,
-                    int(COALESCING_MISMATCH_COOLDOWN // 60),
-                )
+                self._start_coalescing_cooldown(block, err, "hit a misrouted response")
                 raise _CoalescedReadFallback() from err
             raise
         except Exception as err:
             if block.coalesced:
-                self._latch_input_coalescing_off(block, err)
+                self._degrade_coalescing(block, err)
                 raise _CoalescedReadFallback() from err
             raise
         if block.coalesced and len(values) < block.count:
             # A short-but-well-formed response (matching serial/function/start
             # register, valid CRC, just fewer registers) is the classic
             # signature of the old ~40-register firmware cap this probe exists
-            # to detect — so it LATCHES, unlike a misrouted frame.  A misrouted
-            # frame passing all three identity checks *including* start register
-            # yet truncated is too narrow a coincidence to design around (#320).
-            self._latch_input_coalescing_off(
+            # to detect — so on an UNPROVEN transport it latches, unlike a
+            # misrouted frame.  A misrouted frame passing all three identity
+            # checks *including* start register yet truncated is too narrow a
+            # coincidence to design around (#320).  On a proven transport
+            # _degrade_coalescing treats it as transient (cooldown) instead.
+            self._degrade_coalescing(
                 block, f"short response ({len(values)}/{block.count} registers)"
             )
             raise _CoalescedReadFallback()
+        # Only a read that actually EXCEEDED the conservative ~40-register cap
+        # proves large-read support: a <=40-register merge could succeed on
+        # old-cap firmware, so it must not count as proof.  (Today every real
+        # INPUT_REGISTER_GROUPS merge already spans >=48, so this gate is
+        # defense-in-depth against a future group-table edit, not the layout.)
+        if block.coalesced and block.count > DEFAULT_INPUT_BLOCK_SIZE:
+            self._note_coalescing_proven()
         return values
 
     async def _read_register_groups(
