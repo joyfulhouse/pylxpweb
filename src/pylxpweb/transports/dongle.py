@@ -41,6 +41,7 @@ from .exceptions import (
     TransportConnectionError,
     TransportError,
     TransportReadError,
+    TransportResponseMismatchError,
     TransportTimeoutError,
     TransportWriteError,
 )
@@ -60,6 +61,15 @@ TCP_FUNC_HEARTBEAT = 0xC1  # Heartbeat/keepalive
 TCP_FUNC_TRANSLATED = 0xC2  # Translated Modbus data
 TCP_FUNC_READ_PARAM = 0xC3  # Read parameters
 TCP_FUNC_WRITE_PARAM = 0xC4  # Write parameters
+
+# Human-readable labels for TCP function bytes, used when rejecting a frame
+# whose TCP function doesn't match the request's (misrouted/unsolicited).
+_TCP_FUNC_NAMES = {
+    TCP_FUNC_HEARTBEAT: "heartbeat",
+    TCP_FUNC_TRANSLATED: "translated",
+    TCP_FUNC_READ_PARAM: "read_param",
+    TCP_FUNC_WRITE_PARAM: "write_param",
+}
 
 # Modbus function codes (embedded in TCP_FUNC_TRANSLATED)
 MODBUS_READ_HOLDING = 0x03  # Read holding registers
@@ -694,9 +704,17 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                             "Try increasing timeout or check dongle firmware version."
                         )
 
-                    # Parse response with cross-request validation
+                    # Parse response with cross-request validation.  The
+                    # request's own TCP function (packet byte 7) is the
+                    # expected response function, so an unsolicited heartbeat
+                    # or proxied param frame is rejected as a mismatch rather
+                    # than mis-parsed as this reply (#320).
                     return self._parse_response(
-                        response, expected_func, expected_register, expected_count
+                        response,
+                        expected_func,
+                        expected_register,
+                        expected_count,
+                        expected_tcp_func=packet[7],
                     )
 
                 except TimeoutError as err:
@@ -789,16 +807,24 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         expected_func: int | None = None,
         expected_register: int | None = None,
         expected_count: int | None = None,
+        expected_tcp_func: int | None = None,
     ) -> list[int]:
         """Parse a dongle response packet with cross-request validation.
 
         Validates that the response matches the original request by checking
-        the inverter serial, function code, and starting register address.
-        This prevents accepting misrouted responses from the cloud server
-        that pass through the WiFi dongle.
+        the TCP function code, inverter serial, Modbus function code, and
+        starting register address.  This prevents accepting misrouted
+        responses from the cloud server — or unsolicited heartbeat frames —
+        that pass through (or originate from) the WiFi dongle.
 
         Args:
             response: Raw response bytes
+            expected_tcp_func: Expected LuxPower TCP function byte (the
+                request's own ``tcp_func``, e.g. ``TCP_FUNC_TRANSLATED``).
+                When provided, rejects a frame carrying a different TCP
+                function — an unsolicited heartbeat (0xC1) or a proxied
+                param frame (0xC3/0xC4) that shares the 0xA1 0x1A prefix and
+                would otherwise be mis-parsed as this request's response.
             expected_func: Expected Modbus function code (e.g., 0x04 for
                 input register read).  When provided, rejects responses
                 with a different base function code.
@@ -817,8 +843,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             List of register values
 
         Raises:
-            TransportReadError: If response is invalid or doesn't match
-                the original request (serial/function/register mismatch).
+            TransportReadError: If the response is invalid (junk, truncated,
+                CRC failure, Modbus exception, or short read).
+            TransportResponseMismatchError: If the response doesn't match the
+                original request (serial/function/register mismatch), i.e. a
+                misrouted or interleaved frame.  A subclass of
+                ``TransportReadError`` so existing ``except`` handlers still
+                catch it; callers that care can distinguish it (#320).
         """
         # Find the packet start (handle junk data before the response)
         packet_start = self._find_packet_start(response)
@@ -835,6 +866,34 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         # + dongle(10) + data_len(2) + some data
         if len(response) < 20:
             raise TransportReadError(f"Response too short: {len(response)} bytes")
+
+        # --- TCP function validation (must precede the data-frame checks) ---
+        # The dongle shares the 0xA1 0x1A prefix across ALL its frames — the
+        # translated-Modbus reply we want (0xC2), unsolicited heartbeats
+        # (0xC1), and proxied param frames (0xC3/0xC4).  A heartbeat racing in
+        # after _drain_buffer carries a short data frame, so without this
+        # check it would trip the generic "Data frame too short" path below —
+        # a plain TransportReadError that latches coalescing off on a coalesced
+        # read (#320).  Rejecting the wrong TCP function as a mismatch instead
+        # both keeps the latch for genuine refusals only and lets the retry
+        # loop recover the real reply.  The expectation is the REQUEST's own
+        # tcp_func (byte 7), so a future path expecting 0xC3/0xC4 stays correct
+        # without hardcoding 0xC2 here.
+        if expected_tcp_func is not None:
+            response_tcp_func = response[7]
+            if response_tcp_func != expected_tcp_func:
+                label = _TCP_FUNC_NAMES.get(response_tcp_func, "unknown")
+                _LOGGER.debug(
+                    "Response TCP function mismatch: expected 0x%02x, got 0x%02x "
+                    "(%s) — misrouted or unsolicited frame",
+                    expected_tcp_func,
+                    response_tcp_func,
+                    label,
+                )
+                raise TransportResponseMismatchError(
+                    f"Unexpected TCP function 0x{response_tcp_func:02x} ({label}): "
+                    f"expected 0x{expected_tcp_func:02x} — misrouted/unsolicited frame"
+                )
 
         # Extract data length (frame_length and tcp_func available at bytes 4-6 and 7 if needed)
         data_length = struct.unpack("<H", response[18:20])[0]
@@ -898,7 +957,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 self._serial,
                 resp_serial_str,
             )
-            raise TransportReadError(
+            raise TransportResponseMismatchError(
                 f"Response serial mismatch: expected {self._serial}, got {resp_serial_str}"
             )
 
@@ -912,7 +971,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     expected_func,
                     modbus_func,
                 )
-                raise TransportReadError(
+                raise TransportResponseMismatchError(
                     f"Response function mismatch: expected 0x{expected_func:02x}, "
                     f"got 0x{modbus_func:02x}"
                 )
@@ -927,7 +986,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     expected_register,
                     response_register,
                 )
-                raise TransportReadError(
+                raise TransportResponseMismatchError(
                     f"Response register mismatch: expected {expected_register}, "
                     f"got {response_register}"
                 )
