@@ -449,7 +449,11 @@ class BaseTransport:
             params = await transport.read_named_parameters(66, 2)
             # Returns: {"HOLD_AC_CHARGE_POWER_CMD": 50, "HOLD_AC_CHARGE_SOC_LIMIT": 95}
         """
-        from pylxpweb.constants.registers import MULTI_BIT_FIELDS
+        from pylxpweb.constants.registers import (
+            LOCAL_PARAM_SCALE_DIV10,
+            MULTI_BIT_FIELDS,
+            format_deci_as_cloud_string,
+        )
 
         register_mapping, _ = self._resolve_register_mappings()
 
@@ -475,6 +479,13 @@ class BaseTransport:
             else:
                 for param_key in param_keys:
                     result[param_key] = value
+
+        # Deci-unit value registers (peak-shaving power/voltage) surface their
+        # raw local value scaled to the cloud's engineering string, so a
+        # LOCAL/HYBRID named read matches the cloud (reg 206 raw 120 -> "12" kW,
+        # reg 208 raw 520 -> "52" V) and feeds float()-based consumers unchanged.
+        for scaled_key in LOCAL_PARAM_SCALE_DIV10 & result.keys():
+            result[scaled_key] = format_deci_as_cloud_string(int(result[scaled_key]))
 
         return result
 
@@ -521,7 +532,7 @@ class BaseTransport:
                 "BIT_MIDBOX_SP_MODE_1": 2,  # AC Couple
             })
         """
-        from pylxpweb.constants.registers import MULTI_BIT_FIELDS
+        from pylxpweb.constants.registers import LOCAL_PARAM_SCALE_DIV10, MULTI_BIT_FIELDS
 
         register_to_params, param_to_register = self._resolve_register_mappings(
             param_names=list(parameters.keys()),
@@ -541,6 +552,10 @@ class BaseTransport:
                 if register_addr not in bit_field_registers:
                     bit_field_registers[register_addr] = {}
                 bit_field_registers[register_addr][param_name] = value
+            elif param_name in LOCAL_PARAM_SCALE_DIV10:
+                # Inverse of the read scaling: the caller passes cloud
+                # engineering units (kW / V), the register holds deci-units.
+                registers_to_write[register_addr] = round(float(value) * 10)
             else:
                 registers_to_write[register_addr] = int(value)
 

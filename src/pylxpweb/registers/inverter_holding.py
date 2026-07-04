@@ -1486,6 +1486,14 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     # power (PS2), not a high word.  Register 231 itself is a real but UNKNOWN
     # field (raw 0; a past authorized raw write quantized 55 -> 54, i.e. even
     # values only) — deliberately left unmapped.
+    #
+    # The power (206/232, deci-kW) and voltage (208/219, decivolts) raw
+    # encodings are now VERIFIED (pylxpweb#158 DoubleDoc local write raw 41 ->
+    # 4.1 kW on portal/LCD; 2026-07-04 live cloud write "12" -> readback "12";
+    # SOC/volt raw-vs-named cross-check in the 2026-06-12 sweep), so the whole
+    # family is mapped in REGISTER_TO_PARAM_KEYS for local reads, with the four
+    # power/voltage members scaled to cloud engineering units by
+    # LOCAL_PARAM_SCALE_DIV10 (eg4_web_monitor#328).
     HoldingRegisterDefinition(
         address=206,
         canonical_name="grid_peak_shaving_power",
@@ -1499,16 +1507,17 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
             "Grid peak shaving power limit, time period 1.  Cloud read/write "
             "uses float kW [0, 25.5].  Register located 2026-06-12 by "
             "single-register cloud window reads on an 18kPV and a FlexBOSS21 "
-            "((206,1) names this key; (231,1) names nothing).  Raw register "
-            "encoding presumed deci-kW (sibling _12K_HOLD_START_PV_POWER at "
-            "reg 217 reads raw 5 for '0.5' kW, and 25.5 kW max fits one byte "
-            "at 0.1 kW/LSB) but UNVERIFIED — live setpoint was 0 on both "
-            "devices.  Deliberately NOT in REGISTER_TO_PARAM_KEYS until the "
-            "raw encoding is write-verified — the local parameter refresh "
-            "spans this register and would surface unscaled values.  "
-            "`writable` describes the register itself (cloud NAME-writes "
-            "work); do NOT construct local raw writes from this row while "
-            "the encoding is unverified."
+            "((206,1) names this key; (231,1) names nothing).  Raw encoding "
+            "VERIFIED deci-kW (raw = kW * 10): pylxpweb#158 (DoubleDoc) wrote "
+            "raw 41 to this register locally and the portal + LCD displayed "
+            "4.1 kW, and a 2026-07-04 live cloud test wrote '12' and read back "
+            "'12' (raw 120).  Now mapped in REGISTER_TO_PARAM_KEYS; the "
+            "transport decode scales it to the cloud kW string via "
+            "LOCAL_PARAM_SCALE_DIV10 (eg4_web_monitor#328).  Cloud NAK note: "
+            "the cloud rejects writes (DATAFRAME_TIMEOUT) while "
+            "FUNC_GRID_PEAK_SHAVING (reg 179 bit 7) is OFF, and firmware zeroes "
+            "this setpoint when the mode deactivates — the integration gates "
+            "the UX, not this row."
         ),
     ),
     HoldingRegisterDefinition(
@@ -1523,9 +1532,9 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
             "Grid peak shaving SOC threshold, time period 1.  Located "
             "2026-06-12 via (207,1) cloud reads on an 18kPV and a FlexBOSS21; "
             "raw 1:1 percent proven by raw-vs-named cross-check in the same "
-            "responses (raw 80 -> '80').  Not in REGISTER_TO_PARAM_KEYS yet — "
-            "added together with the rest of the family once the power "
-            "members' raw encodings are verified."
+            "responses (raw 80 -> '80').  Mapped in REGISTER_TO_PARAM_KEYS "
+            "(eg4_web_monitor#328); raw 1:1, so the transport decode surfaces "
+            "the value unscaled (not in LOCAL_PARAM_SCALE_DIV10)."
         ),
     ),
     HoldingRegisterDefinition(
@@ -1539,8 +1548,9 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
             "Grid peak shaving battery voltage threshold, time period 1.  "
             "Located 2026-06-12 via (208,1) cloud reads on an 18kPV and a "
             "FlexBOSS21; decivolt raw encoding proven by raw-vs-named "
-            "cross-check in the same responses (raw 520 -> '52' V).  Not in "
-            "REGISTER_TO_PARAM_KEYS yet — see grid_peak_shaving_power."
+            "cross-check in the same responses (raw 520 -> '52' V).  Mapped in "
+            "REGISTER_TO_PARAM_KEYS (eg4_web_monitor#328); the transport decode "
+            "scales it to volts via LOCAL_PARAM_SCALE_DIV10."
         ),
     ),
     HoldingRegisterDefinition(
@@ -1555,8 +1565,8 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
             "Grid peak shaving SOC threshold, time period 2.  Located "
             "2026-06-12 via (218,1) cloud reads on an 18kPV and a FlexBOSS21; "
             "raw 1:1 percent proven by raw-vs-named cross-check (raw 50 -> "
-            "'50').  Not in REGISTER_TO_PARAM_KEYS yet — see "
-            "grid_peak_shaving_power."
+            "'50').  Mapped in REGISTER_TO_PARAM_KEYS (eg4_web_monitor#328); "
+            "raw 1:1, surfaced unscaled — see grid_peak_shaving_soc."
         ),
     ),
     HoldingRegisterDefinition(
@@ -1570,8 +1580,9 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
             "Grid peak shaving battery voltage threshold, time period 2.  "
             "Located 2026-06-12 via (219,1) cloud reads on an 18kPV and a "
             "FlexBOSS21; decivolt raw encoding proven by raw-vs-named "
-            "cross-check (raw 520 -> '52' V).  Not in REGISTER_TO_PARAM_KEYS "
-            "yet — see grid_peak_shaving_power."
+            "cross-check (raw 520 -> '52' V).  Mapped in REGISTER_TO_PARAM_KEYS "
+            "(eg4_web_monitor#328); scaled to volts via LOCAL_PARAM_SCALE_DIV10 "
+            "— see grid_peak_shaving_volt."
         ),
     ),
     HoldingRegisterDefinition(
@@ -1586,11 +1597,11 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
             "Grid peak shaving power limit, time period 2.  Located "
             "2026-06-12 via (232,1) cloud reads on an 18kPV and a FlexBOSS21 "
             "(this single-register read naming PS2 also disproves the old "
-            "'PS1 is 32-bit across 231-232' claim).  Raw encoding presumed "
-            "deci-kW like grid_peak_shaving_power but UNVERIFIED (live "
-            "setpoint 0).  Not in REGISTER_TO_PARAM_KEYS yet; `writable` "
-            "describes the register itself (cloud name-writes) — no local "
-            "raw writes until the encoding is verified."
+            "'PS1 is 32-bit across 231-232' claim).  Raw encoding deci-kW like "
+            "grid_peak_shaving_power (VERIFIED — see that row's pylxpweb#158 + "
+            "2026-07-04 evidence; same family/firmware widget).  Mapped in "
+            "REGISTER_TO_PARAM_KEYS (eg4_web_monitor#328); scaled to the cloud "
+            "kW string via LOCAL_PARAM_SCALE_DIV10."
         ),
     ),
     # =========================================================================

@@ -2485,9 +2485,25 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     # ============================================================================
 
     async def set_grid_peak_shaving_power(self, power_kw: float) -> bool:
-        """Set grid peak shaving power limit.
+        """Set grid peak shaving power limit, time period 1 (register 206).
 
         Universal control: Most inverters support peak shaving.
+
+        Transport-attached (LOCAL/HYBRID) devices write the raw deci-kW value
+        (``round(power_kw * 10)``) directly to holding register 206 while the
+        local link is up, falling back to the cloud named-parameter write when
+        no transport is attached, the link is down, or the local write fails.
+        The raw encoding is VERIFIED deci-kW (pylxpweb#158 wrote raw 41 -> 4.1
+        kW on the portal/LCD; a 2026-07-04 live cloud test wrote "12" -> read
+        back "12"; eg4_web_monitor#328).
+
+        Mode-off behavior (handled by the integration UX, NOT gated here):
+        the firmware only accepts peak-shaving power writes while
+        FUNC_GRID_PEAK_SHAVING (register 179 bit 7) is ON — the cloud NAKs a
+        write with a param-specific DATAFRAME_TIMEOUT when the mode is OFF, and
+        the firmware ZEROES this setpoint when the mode deactivates (live
+        FlexBOSS21 test: write 12 with mode on -> readback 12 -> mode off ->
+        readback 0).
 
         Args:
             power_kw: Power limit in kilowatts (0.0 to 25.5)
@@ -2507,7 +2523,25 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 f"Grid peak shaving power must be between 0.0 and 25.5 kW, got {power_kw}"
             )
 
-        # API accepts kW values directly
+        from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_POWER
+
+        # Local transport path (LOCAL/HYBRID): write the raw deci-kW value
+        # straight to register 206 when the link is up. write_transport_register
+        # invalidates the parameter cache on success.
+        if self._transport is not None and not self.transport_link_down:
+            raw = round(power_kw * 10)
+            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_POWER, raw):
+                return True
+            # Local write failed — fall back to cloud if a client is available.
+            if self._client is None:
+                return False
+
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                "Grid peak shaving power write requires a transport or a cloud client"
+            )
+
+        # Cloud path: the API accepts kW values directly.
         result = await self._client.api.control.write_parameter(
             self.serial_number, "_12K_HOLD_GRID_PEAK_SHAVING_POWER", str(power_kw)
         )
@@ -2524,16 +2558,21 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         Universal control: Most inverters support peak shaving.
 
+        Works across all transports: the local name map now includes register
+        206 (``_12K_HOLD_GRID_PEAK_SHAVING_POWER``, raw encoding VERIFIED
+        deci-kW), and the transport decode scales the raw value to the cloud kW
+        string (raw 120 -> "12"), so a LOCAL/HYBRID parameter refresh feeds this
+        property the same kW value the cloud path does — ``float()`` then yields
+        the correct kW either way (eg4_web_monitor#328).
+
         Returns None — never a fabricated 0.0 — when the parameter key is
-        absent. This matters in HYBRID mode (eg4-gfu5 codex HIGH): parameters
-        are refreshed through the local transport, whose name map deliberately
-        does not include ``_12K_HOLD_GRID_PEAK_SHAVING_POWER`` (the PS1
-        register's raw encoding is unverified), so a key-miss means "value
-        unavailable locally", not "setpoint is 0 kW".
+        absent (parameters not yet loaded, or a partial read that missed the
+        register), so a key-miss reads as "value unavailable", not "setpoint is
+        0 kW" (eg4-gfu5 codex HIGH).
 
         Returns:
             Current power limit in kilowatts, or None if parameters are not
-            loaded or do not contain the cloud-named key.
+            loaded or do not contain the key.
 
         Example:
             >>> power = inverter.grid_peak_shaving_power_limit

@@ -1397,7 +1397,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             TransportTimeoutError: If the readback read times out.
             TransportConnectionError: If reconnecting for the readback fails.
         """
-        from pylxpweb.constants.registers import MULTI_BIT_FIELDS
+        from pylxpweb.constants.registers import LOCAL_PARAM_SCALE_DIV10, MULTI_BIT_FIELDS
 
         register_to_params, param_to_register = self._resolve_register_mappings(
             param_names=list(parameters.keys()),
@@ -1437,6 +1437,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     got_bit = bool((raw >> param_keys.index(name)) & 1)
                     if got_bit is not bool(value):
                         mismatches.append(f"{name}: wrote {bool(value)}, read back {got_bit}")
+            elif name in LOCAL_PARAM_SCALE_DIV10:
+                # Deci-unit params: the request is in cloud units (kW / V),
+                # the readback register is raw deci-units. Compare in raw.
+                wrote_raw = round(float(value) * 10) & 0xFFFF
+                if wrote_raw != raw:
+                    mismatches.append(f"{name}: wrote {wrote_raw} (raw), read back {raw}")
             elif (int(value) & 0xFFFF) != raw:
                 mismatches.append(f"{name}: wrote {int(value)}, read back {raw}")
 
