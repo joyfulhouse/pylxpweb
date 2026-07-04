@@ -41,6 +41,7 @@ from .exceptions import (
     TransportConnectionError,
     TransportError,
     TransportReadError,
+    TransportResponseMismatchError,
     TransportTimeoutError,
     TransportWriteError,
 )
@@ -817,8 +818,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             List of register values
 
         Raises:
-            TransportReadError: If response is invalid or doesn't match
-                the original request (serial/function/register mismatch).
+            TransportReadError: If the response is invalid (junk, truncated,
+                CRC failure, Modbus exception, or short read).
+            TransportResponseMismatchError: If the response doesn't match the
+                original request (serial/function/register mismatch), i.e. a
+                misrouted or interleaved frame.  A subclass of
+                ``TransportReadError`` so existing ``except`` handlers still
+                catch it; callers that care can distinguish it (#320).
         """
         # Find the packet start (handle junk data before the response)
         packet_start = self._find_packet_start(response)
@@ -898,7 +904,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 self._serial,
                 resp_serial_str,
             )
-            raise TransportReadError(
+            raise TransportResponseMismatchError(
                 f"Response serial mismatch: expected {self._serial}, got {resp_serial_str}"
             )
 
@@ -912,7 +918,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     expected_func,
                     modbus_func,
                 )
-                raise TransportReadError(
+                raise TransportResponseMismatchError(
                     f"Response function mismatch: expected 0x{expected_func:02x}, "
                     f"got 0x{modbus_func:02x}"
                 )
@@ -927,7 +933,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     expected_register,
                     response_register,
                 )
-                raise TransportReadError(
+                raise TransportResponseMismatchError(
                     f"Response register mismatch: expected {expected_register}, "
                     f"got {response_register}"
                 )

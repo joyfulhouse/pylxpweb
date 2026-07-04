@@ -46,7 +46,11 @@ from .data import (
     InverterRuntimeData,
     MidboxRuntimeData,
 )
-from .exceptions import TransportReadError, TransportTimeoutError
+from .exceptions import (
+    TransportReadError,
+    TransportResponseMismatchError,
+    TransportTimeoutError,
+)
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
@@ -827,8 +831,22 @@ class RegisterDataMixin(_DataMixinBase):
         if max_size <= DEFAULT_INPUT_BLOCK_SIZE or getattr(
             self, "_input_coalescing_latched_off", False
         ):
-            return [_ReadBlock((name,), start, count) for name, (start, count) in groups]
+            return self._plain_input_plan(groups)
         return coalesce_register_groups(groups, max_size)
+
+    @staticmethod
+    def _plain_input_plan(
+        groups: list[tuple[str, tuple[int, int]]],
+    ) -> list[_ReadBlock]:
+        """One read per group — the plain, never-coalesced plan.
+
+        The coalesced-read fallback handlers use this directly so the retry is
+        always plain, regardless of whether the failing block latched
+        coalescing off.  A misrouted-frame fallback (#320) deliberately does
+        *not* latch, so re-planning via :meth:`_plan_input_reads` could
+        coalesce again and fail a second time — this bypasses that.
+        """
+        return [_ReadBlock((name,), start, count) for name, (start, count) in groups]
 
     def _latch_input_coalescing_off(self, block: _ReadBlock, reason: object) -> None:
         """Disable coalescing for this transport's lifetime (probe-once).
@@ -837,17 +855,18 @@ class RegisterDataMixin(_DataMixinBase):
         such hardware fails (or times out) every time, so the first failure
         latches the transport back to the plain grouped reads permanently
         (until the transport is recreated, e.g. on reload) instead of
-        re-paying retries every poll cycle.  Transient link errors (a short
-        or misrouted frame) trip the same latch — the warning names both
-        causes rather than blaming firmware for a one-off flake.
+        re-paying retries every poll cycle.  A short (truncated) frame trips
+        the same latch.  Misrouted frames do NOT reach here — they fall back
+        for one cycle without latching (see :meth:`_read_block`, #320) — so
+        this warning always points at a genuine large-read refusal.
         """
         self._input_coalescing_latched_off = True
         _LOGGER.warning(
             "[%s] Coalesced input-register read %d-%d (%d registers; groups %s) "
             "failed (%s) — falling back to the standard grouped reads for this "
             "connection. Possible causes: older dongle firmware that only "
-            "supports ~40-register reads, or a transient link error (short or "
-            "misrouted frame). Coalescing re-arms when the transport is "
+            "supports ~40-register reads, or a persistent link error (e.g. a "
+            "truncated frame). Coalescing re-arms when the transport is "
             "recreated (e.g. on reload); lower the configured block size to "
             "disable this probe.",
             self._serial,
@@ -865,9 +884,34 @@ class RegisterDataMixin(_DataMixinBase):
         raises :class:`_CoalescedReadFallback` so the caller re-reads the
         cycle with plain group reads.  Plain (single-group) reads propagate
         errors unchanged, preserving the existing per-group semantics.
+
+        The one coalesced error that does **not** latch is a
+        :class:`TransportResponseMismatchError` — a misrouted or interleaved
+        frame (the WiFi dongle proxies cloud traffic, so a response meant for
+        the cloud server can land on a local reader).  A misrouted frame says
+        nothing about the firmware's ability to serve large reads, so latching
+        off it would wrongly disable coalescing for the whole transport
+        lifetime (eg4_web_monitor#320).  Instead it falls back to grouped
+        reads for this cycle only and re-probes coalescing next cycle.  The
+        per-read dongle transport already retries 3x, so an escaping mismatch
+        is rare and a non-latched fallback costs at most one failed big read
+        next cycle — the intended trade-off (no strike counter).
         """
         try:
             values = await self._read_input_registers(block.start, block.count)
+        except TransportResponseMismatchError as err:
+            if block.coalesced:
+                _LOGGER.debug(
+                    "[%s] Coalesced input-register read %d-%d hit a misrouted "
+                    "response (%s) — falling back to grouped reads for this cycle "
+                    "only; coalescing re-probes next cycle (#320)",
+                    self._serial,
+                    block.start,
+                    block.start + block.count - 1,
+                    err,
+                )
+                raise _CoalescedReadFallback() from err
+            raise
         except Exception as err:
             if block.coalesced:
                 self._latch_input_coalescing_off(block, err)
@@ -908,8 +952,11 @@ class RegisterDataMixin(_DataMixinBase):
         try:
             return await self._read_group_plan(self._plan_input_reads(groups))
         except _CoalescedReadFallback:
-            # Latched off inside _read_block; the plan is now one read/group.
-            return await self._read_group_plan(self._plan_input_reads(groups))
+            # A coalesced block fell back — either it latched coalescing off,
+            # or it was a misrouted frame that intentionally did not (#320).
+            # Re-read with an explicit plain plan so the retry is one
+            # read/group regardless of whether the latch fired.
+            return await self._read_group_plan(self._plain_input_plan(groups))
 
     async def _read_group_plan(self, plan: list[_ReadBlock]) -> dict[int, int]:
         """Execute a read plan sequentially with inter-read delays.
@@ -1255,10 +1302,13 @@ class RegisterDataMixin(_DataMixinBase):
                 self._plan_input_reads(groups)
             )
         except _CoalescedReadFallback:
-            # Latched off inside _read_block; the plan is now one read/group,
-            # restoring the exact per-group (bms non-fatal) semantics.
+            # A coalesced block fell back — either it latched coalescing off,
+            # or it was a non-latching misrouted frame (#320).  Re-read with
+            # an explicit plain plan (one read/group) so the retry never
+            # coalesces again, restoring the exact per-group (bms non-fatal)
+            # semantics regardless of whether the latch fired.
             input_registers, bms_ok = await self._read_all_input_groups(
-                self._plan_input_reads(groups)
+                self._plain_input_plan(groups)
             )
 
         # V23-extended PV4-6 registers (only read for models with >=4 strings)

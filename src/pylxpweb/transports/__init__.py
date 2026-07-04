@@ -72,6 +72,7 @@ from .exceptions import (
     TransportConnectionError,
     TransportError,
     TransportReadError,
+    TransportResponseMismatchError,
     TransportTimeoutError,
     TransportWriteError,
     UnsupportedOperationError,
@@ -158,6 +159,7 @@ __all__ = [
     "TransportConnectionError",
     "TransportTimeoutError",
     "TransportReadError",
+    "TransportResponseMismatchError",
     "TransportWriteError",
     "UnsupportedOperationError",
 ]

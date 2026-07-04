@@ -37,6 +37,21 @@ class TransportReadError(TransportError):
     pass
 
 
+class TransportResponseMismatchError(TransportReadError):
+    """A response frame failed cross-request validation.
+
+    Raised when a received frame carries the wrong serial, function code, or
+    start register for the request that was sent — i.e. a misrouted or
+    interleaved frame (the WiFi dongle proxies cloud traffic and can deliver a
+    response meant for the cloud server to a local reader).  This is a
+    transport-level routing hiccup, **not** a device/firmware refusal of the
+    request, so callers that latch behavior off a genuine refusal (e.g. the
+    large-read coalescing probe) must not treat it as one.
+    """
+
+    pass
+
+
 class TransportWriteError(TransportError):
     """Failed to write data to device."""
 

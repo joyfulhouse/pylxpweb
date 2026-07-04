@@ -26,6 +26,7 @@ from pylxpweb.transports.exceptions import (
     TransportConnectionError,
     TransportError,
     TransportReadError,
+    TransportResponseMismatchError,
     TransportTimeoutError,
     TransportWriteError,
 )
@@ -494,6 +495,72 @@ class TestDongleResponseValidation:
 
         registers = transport._parse_response(response)
         assert registers == [100, 200]
+
+    def test_mismatches_raise_response_mismatch_subclass(self) -> None:
+        """All three cross-request mismatches raise the mismatch subclass (#320).
+
+        The subclass lets the coalescing probe distinguish a misrouted frame
+        (a proxied cloud response) from a genuine large-read refusal, so it
+        never latches coalescing off on a one-off routing hiccup.
+        """
+        transport = self._make_transport()
+
+        with pytest.raises(TransportResponseMismatchError, match="serial mismatch"):
+            transport._parse_response(_build_mock_response(inverter_serial="XX99999999"))
+
+        with pytest.raises(TransportResponseMismatchError, match="function mismatch"):
+            transport._parse_response(
+                _build_mock_response(modbus_func=MODBUS_READ_HOLDING),
+                expected_func=MODBUS_READ_INPUT,
+                expected_register=0,
+            )
+
+        with pytest.raises(TransportResponseMismatchError, match="register mismatch"):
+            transport._parse_response(
+                _build_mock_response(start_register=80),
+                expected_func=MODBUS_READ_INPUT,
+                expected_register=0,
+            )
+
+    def test_modbus_exception_is_not_a_mismatch(self) -> None:
+        """A genuine Modbus exception stays a plain TransportReadError (#320).
+
+        Only cross-request mismatches are the misrouted-frame subclass; a
+        device refusal (Modbus exception) must still latch the coalescing
+        probe, so it must NOT be a TransportResponseMismatchError.
+        """
+        transport = self._make_transport()
+        response = _build_mock_response(modbus_func=0x84, exception_code=2)
+
+        with pytest.raises(TransportReadError) as exc_info:
+            transport._parse_response(response)
+        assert not isinstance(exc_info.value, TransportResponseMismatchError)
+
+    @pytest.mark.asyncio
+    async def test_send_receive_preserves_mismatch_type_after_retries(self) -> None:
+        """Exhausted retries on a misrouted frame re-raise the mismatch type (#320).
+
+        The coalescing probe relies on the exception type surviving the
+        ``_send_receive`` retry loop; a bare ``raise`` on the final attempt
+        must preserve ``TransportResponseMismatchError`` rather than wrapping
+        it in a generic ``TransportReadError``.
+        """
+        transport = self._make_transport()
+        # Valid CRC, wrong inverter serial: a misrouted frame on every attempt.
+        misrouted = _build_mock_response(inverter_serial="XX99999999")
+        transport._reader = AsyncMock()
+        transport._reader.read = AsyncMock(return_value=misrouted)
+        transport._writer = MagicMock()
+        transport._writer.drain = AsyncMock()
+        transport._connected = True
+
+        with (
+            patch.object(transport, "_drain_buffer", new=AsyncMock()),
+            patch.object(transport, "connect", new=AsyncMock()),
+            patch("asyncio.sleep", new=AsyncMock()),
+            pytest.raises(TransportResponseMismatchError, match="serial mismatch"),
+        ):
+            await transport._read_input_registers(0, 2)
 
 
 class TestDongleShortReadGuard:

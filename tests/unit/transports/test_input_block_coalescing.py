@@ -34,7 +34,10 @@ from pylxpweb.transports._register_data import (
 )
 from pylxpweb.transports.config import TransportConfig, TransportType
 from pylxpweb.transports.dongle import DongleTransport
-from pylxpweb.transports.exceptions import TransportReadError
+from pylxpweb.transports.exceptions import (
+    TransportReadError,
+    TransportResponseMismatchError,
+)
 from pylxpweb.transports.modbus import ModbusTransport
 from pylxpweb.transports.modbus_serial import ModbusSerialTransport
 
@@ -392,6 +395,132 @@ class TestFallbackLatch:
         with patch.object(transport, "_read_input_registers", side_effect=fake_read):
             runtime, _energy, battery = await transport.read_all_input_data()
 
+        assert runtime is not None
+        assert battery is None  # degraded bank suppressed, cache preserved
+
+
+# ---------------------------------------------------------------------------
+# Misrouted-frame fallback does NOT latch (eg4_web_monitor#320)
+# ---------------------------------------------------------------------------
+
+
+class TestMisroutedFrameNoLatch:
+    """A misrouted dongle frame falls back for one cycle WITHOUT latching (#320).
+
+    The WiFi dongle proxies cloud traffic, so a response meant for the cloud
+    server can land on a coalesced read (surfacing as
+    ``TransportResponseMismatchError``).  It says nothing about the firmware's
+    large-read support, so — unlike a genuine refusal (exception/timeout/short
+    frame) — it must NOT permanently disable coalescing; the cycle degrades to
+    grouped reads once and coalescing re-probes next cycle.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mismatch_falls_back_without_latch_and_reprobes(self) -> None:
+        transport = _transport(max_input_block_size=120)
+        # Fail ONLY the first coalesced 0-112 read with a mismatch; the plain
+        # group reads (and later coalesced reads) all succeed.
+        raised = {"done": False}
+        calls: list[tuple[int, int]] = []
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            calls.append((start, count))
+            if (start, count) == (0, 113) and not raised["done"]:
+                raised["done"] = True
+                raise TransportResponseMismatchError("misrouted cloud frame")
+            vals = [0] * count
+            for reg, value in ((4, _VOLTAGE_RAW), (5, _SOC_SOH_PACKED)):
+                if start <= reg < start + count:
+                    vals[reg - start] = value
+            return vals
+
+        # Cycle 1: coalesced read hits the mismatch -> plain grouped fallback.
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            runtime, energy, battery = await transport.read_all_input_data()
+
+        assert transport._input_coalescing_latched_off is False
+        assert calls == [(0, 113), *_GROUPED_READS]
+        assert runtime is not None
+        assert energy is not None
+        assert battery is not None
+
+        # Cycle 2: not latched -> it plans a coalesced read again (#320).
+        calls.clear()
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            await transport.read_all_input_data()
+        assert calls == _COALESCED_READS_120
+
+    @pytest.mark.asyncio
+    async def test_read_runtime_mismatch_falls_back_without_latch(self) -> None:
+        """The read_runtime path (via _read_register_groups) degrades too."""
+        transport = _transport(max_input_block_size=120)
+        calls: list[tuple[int, int]] = []
+        raised = {"done": False}
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            calls.append((start, count))
+            if (start, count) == (0, 113) and not raised["done"]:
+                raised["done"] = True
+                raise TransportResponseMismatchError("misrouted cloud frame")
+            vals = [0] * count
+            for reg, value in ((4, _VOLTAGE_RAW), (5, _SOC_SOH_PACKED)):
+                if start <= reg < start + count:
+                    vals[reg - start] = value
+            return vals
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            await transport.read_runtime()
+
+        assert transport._input_coalescing_latched_off is False
+        assert calls == [(0, 113), *_GROUPED_READS]
+
+    @pytest.mark.asyncio
+    async def test_generic_read_error_still_latches(self) -> None:
+        """A non-mismatch TransportReadError latches exactly as before (#320)."""
+        transport = _transport(max_input_block_size=120)
+        calls: list[tuple[int, int]] = []
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            calls.append((start, count))
+            if (start, count) == (0, 113):
+                raise TransportReadError("device refused the large read")
+            vals = [0] * count
+            for reg, value in ((4, _VOLTAGE_RAW), (5, _SOC_SOH_PACKED)):
+                if start <= reg < start + count:
+                    vals[reg - start] = value
+            return vals
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            runtime, energy, battery = await transport.read_all_input_data()
+
+        assert transport._input_coalescing_latched_off is True
+        assert calls == [(0, 113), *_GROUPED_READS]
+        assert runtime is not None
+        assert energy is not None
+        assert battery is not None
+
+    @pytest.mark.asyncio
+    async def test_bms_semantics_preserved_on_mismatch_fallback(self) -> None:
+        """Mismatch fallback keeps bms-drop non-fatal, without latching."""
+        transport = _transport(max_input_block_size=120)
+        raised = {"done": False}
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            if (start, count) == (0, 113) and not raised["done"]:
+                raised["done"] = True
+                raise TransportResponseMismatchError("misrouted cloud frame")
+            if start == 80:  # bms_data group drops in the plain fallback too
+                raise OSError("bms flaky")
+            vals = [0] * count
+            for reg, value in ((4, _VOLTAGE_RAW), (5, _SOC_SOH_PACKED)):
+                if start <= reg < start + count:
+                    vals[reg - start] = value
+            return vals
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            runtime, _energy, battery = await transport.read_all_input_data()
+
+        assert transport._input_coalescing_latched_off is False
         assert runtime is not None
         assert battery is None  # degraded bank suppressed, cache preserved
 
