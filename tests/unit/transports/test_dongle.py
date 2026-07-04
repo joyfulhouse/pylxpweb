@@ -18,6 +18,7 @@ from pylxpweb.transports.dongle import (
     MODBUS_WRITE_SINGLE,
     PACKET_PREFIX,
     PROTOCOL_VERSION,
+    TCP_FUNC_HEARTBEAT,
     TCP_FUNC_TRANSLATED,
     DongleTransport,
     compute_crc16,
@@ -274,6 +275,7 @@ def _build_mock_response(
     start_register: int = 0,
     register_values: list[int] | None = None,
     exception_code: int | None = None,
+    tcp_func: int = TCP_FUNC_TRANSLATED,
 ) -> bytes:
     """Build a complete mock dongle response packet for testing.
 
@@ -285,6 +287,9 @@ def _build_mock_response(
         register_values: Register values to include.  Defaults to [100, 200].
         exception_code: If set, builds an exception response (short frame
             with only the exception code byte after the start register).
+        tcp_func: LuxPower TCP function byte (packet byte 7).  Defaults to
+            translated Modbus; set to ``TCP_FUNC_HEARTBEAT`` to simulate an
+            unsolicited heartbeat sharing the 0xA1 0x1A prefix.
 
     Returns:
         Complete response packet bytes.
@@ -309,7 +314,7 @@ def _build_mock_response(
     response = PACKET_PREFIX
     response += struct.pack("<H", PROTOCOL_VERSION)
     response += struct.pack("<H", 14 + len(data_frame) + 2)
-    response += bytes([0x01, TCP_FUNC_TRANSLATED])
+    response += bytes([0x01, tcp_func])
     response += dongle_serial.encode("ascii").ljust(10, b"\x00")[:10]
     response += struct.pack("<H", len(data_frame) + 2)
     response += data_frame
@@ -561,6 +566,59 @@ class TestDongleResponseValidation:
             pytest.raises(TransportResponseMismatchError, match="serial mismatch"),
         ):
             await transport._read_input_registers(0, 2)
+
+    def test_heartbeat_tcp_function_rejected_as_mismatch(self) -> None:
+        """An unsolicited heartbeat (0xC1) is rejected as a mismatch (#320).
+
+        The dongle shares the 0xA1 0x1A prefix across heartbeats and translated
+        Modbus replies.  Without the TCP-function check a heartbeat racing in
+        would hit the generic 'Data frame too short' path and latch coalescing
+        off; validating byte 7 against the request's TCP function makes it a
+        recoverable mismatch instead.
+        """
+        transport = self._make_transport()
+        heartbeat = _build_mock_response(tcp_func=TCP_FUNC_HEARTBEAT)
+
+        with pytest.raises(TransportResponseMismatchError, match="heartbeat"):
+            transport._parse_response(
+                heartbeat,
+                expected_func=MODBUS_READ_INPUT,
+                expected_register=0,
+                expected_tcp_func=TCP_FUNC_TRANSLATED,
+            )
+
+    def test_tcp_function_not_checked_when_not_specified(self) -> None:
+        """Without expected_tcp_func the byte is not validated (back-compat)."""
+        transport = self._make_transport()
+        heartbeat = _build_mock_response(tcp_func=TCP_FUNC_HEARTBEAT, register_values=[7, 8])
+
+        # No expected_tcp_func -> the frame parses on its serial/data alone.
+        assert transport._parse_response(heartbeat) == [7, 8]
+
+    @pytest.mark.asyncio
+    async def test_send_receive_recovers_after_heartbeat_then_valid(self) -> None:
+        """A heartbeat then a valid reply recovers via retry, registers intact (#320)."""
+        transport = self._make_transport()
+        heartbeat = _build_mock_response(tcp_func=TCP_FUNC_HEARTBEAT)
+        valid = _build_mock_response(
+            modbus_func=MODBUS_READ_INPUT,
+            start_register=0,
+            register_values=[111, 222],
+        )
+        transport._reader = AsyncMock()
+        transport._reader.read = AsyncMock(side_effect=[heartbeat, valid])
+        transport._writer = MagicMock()
+        transport._writer.drain = AsyncMock()
+        transport._connected = True
+
+        with (
+            patch.object(transport, "_drain_buffer", new=AsyncMock()),
+            patch.object(transport, "connect", new=AsyncMock()),
+            patch("asyncio.sleep", new=AsyncMock()),
+        ):
+            registers = await transport._read_input_registers(0, 2)
+
+        assert registers == [111, 222]
 
 
 class TestDongleShortReadGuard:
@@ -820,8 +878,14 @@ class TestDongleRegisterOperations:
 
         transport.connect = AsyncMock(side_effect=mock_connect)
 
+        packet = transport._build_packet(
+            tcp_func=TCP_FUNC_TRANSLATED,
+            modbus_func=MODBUS_READ_HOLDING,
+            start_register=105,
+            register_count=1,
+        )
         result = await transport._send_receive(
-            b"\x00" * 10,
+            packet,
             expected_func=MODBUS_READ_HOLDING,
             expected_register=105,
         )
@@ -1480,9 +1544,15 @@ class TestDongleSendReceiveTimeoutRetry:
 
         transport.connect = AsyncMock(side_effect=mock_connect)  # type: ignore[method-assign]
 
+        packet = transport._build_packet(
+            tcp_func=TCP_FUNC_TRANSLATED,
+            modbus_func=MODBUS_WRITE_SINGLE,
+            start_register=110,
+            values=[0x0100],
+        )
         with patch("asyncio.sleep", AsyncMock()):
             result = await transport._send_receive(
-                b"\x00" * 10,
+                packet,
                 expected_func=MODBUS_WRITE_SINGLE,
                 expected_register=110,
                 retry_on_timeout=True,

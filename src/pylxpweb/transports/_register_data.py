@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -142,6 +143,16 @@ of 40 are recommended for larger values (the vendor doc's block convention);
 
 MAX_INPUT_BLOCK_SIZE = 125
 """Modbus FC04 PDU limit (the dongle frame's u8 byte count caps at 127)."""
+
+COALESCING_MISMATCH_COOLDOWN = 300.0
+"""Seconds of plain grouped reads after a misrouted-frame coalesced fallback.
+
+A misrouted/unsolicited dongle frame does not latch coalescing off (#320) —
+it re-probes automatically.  But under *persistent* misrouting (e.g. a busy
+parallel cloud poller) that would re-fail a big read every cycle.  After a
+mismatch fallback the transport reverts to plain reads for this window, then
+re-probes coalescing once — bounding the retry cost without a permanent latch.
+"""
 
 
 def validate_input_block_size(value: int) -> int:
@@ -823,13 +834,16 @@ class RegisterDataMixin(_DataMixinBase):
         """Plan the input reads for ``groups``, coalescing when configured.
 
         With the conservative default block size — or after a coalesced read
-        has failed and latched the transport back (``eg4_web_monitor#254``) —
-        the plan is exactly one read per group, byte-identical to the
-        pre-feature behavior.
+        has failed and latched the transport back (``eg4_web_monitor#254``),
+        or during the post-mismatch cooldown (#320) — the plan is exactly one
+        read per group, byte-identical to the pre-feature behavior.
         """
         max_size = getattr(self, "_max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE)
-        if max_size <= DEFAULT_INPUT_BLOCK_SIZE or getattr(
-            self, "_input_coalescing_latched_off", False
+        in_cooldown = time.monotonic() < getattr(self, "_input_coalescing_retry_after", 0.0)
+        if (
+            max_size <= DEFAULT_INPUT_BLOCK_SIZE
+            or getattr(self, "_input_coalescing_latched_off", False)
+            or in_cooldown
         ):
             return self._plain_input_plan(groups)
         return coalesce_register_groups(groups, max_size)
@@ -888,27 +902,31 @@ class RegisterDataMixin(_DataMixinBase):
         The one coalesced error that does **not** latch is a
         :class:`TransportResponseMismatchError` — a misrouted or interleaved
         frame (the WiFi dongle proxies cloud traffic, so a response meant for
-        the cloud server can land on a local reader).  A misrouted frame says
-        nothing about the firmware's ability to serve large reads, so latching
-        off it would wrongly disable coalescing for the whole transport
-        lifetime (eg4_web_monitor#320).  Instead it falls back to grouped
-        reads for this cycle only and re-probes coalescing next cycle.  The
-        per-read dongle transport already retries 3x, so an escaping mismatch
-        is rare and a non-latched fallback costs at most one failed big read
-        next cycle — the intended trade-off (no strike counter).
+        the cloud server can land on a local reader; an unsolicited heartbeat
+        counts too).  A misrouted frame says nothing about the firmware's
+        ability to serve large reads, so latching off it would wrongly disable
+        coalescing for the whole transport lifetime (eg4_web_monitor#320).
+        Instead it falls back to grouped reads and starts a short cooldown
+        (:data:`COALESCING_MISMATCH_COOLDOWN`) during which reads stay plain,
+        then re-probes coalescing once — bounding the retry cost under
+        persistent misrouting without a permanent latch.  The per-read dongle
+        transport already retries 3x, so an escaping mismatch is rare (no
+        strike counter needed).
         """
         try:
             values = await self._read_input_registers(block.start, block.count)
         except TransportResponseMismatchError as err:
             if block.coalesced:
+                self._input_coalescing_retry_after = time.monotonic() + COALESCING_MISMATCH_COOLDOWN
                 _LOGGER.debug(
                     "[%s] Coalesced input-register read %d-%d hit a misrouted "
-                    "response (%s) — falling back to grouped reads for this cycle "
-                    "only; coalescing re-probes next cycle (#320)",
+                    "response (%s) — falling back to grouped reads; coalescing "
+                    "re-probes in ~%d minutes (#320)",
                     self._serial,
                     block.start,
                     block.start + block.count - 1,
                     err,
+                    int(COALESCING_MISMATCH_COOLDOWN // 60),
                 )
                 raise _CoalescedReadFallback() from err
             raise
@@ -918,6 +936,12 @@ class RegisterDataMixin(_DataMixinBase):
                 raise _CoalescedReadFallback() from err
             raise
         if block.coalesced and len(values) < block.count:
+            # A short-but-well-formed response (matching serial/function/start
+            # register, valid CRC, just fewer registers) is the classic
+            # signature of the old ~40-register firmware cap this probe exists
+            # to detect — so it LATCHES, unlike a misrouted frame.  A misrouted
+            # frame passing all three identity checks *including* start register
+            # yet truncated is too narrow a coincidence to design around (#320).
             self._latch_input_coalescing_off(
                 block, f"short response ({len(values)}/{block.count} registers)"
             )

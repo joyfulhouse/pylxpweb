@@ -22,11 +22,13 @@ Safety contract under test:
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+import pylxpweb.transports._register_data as _register_data
 from pylxpweb.transports._register_data import (
+    COALESCING_MISMATCH_COOLDOWN,
     DEFAULT_INPUT_BLOCK_SIZE,
     INPUT_REGISTER_GROUPS,
     MAX_INPUT_BLOCK_SIZE,
@@ -405,18 +407,19 @@ class TestFallbackLatch:
 
 
 class TestMisroutedFrameNoLatch:
-    """A misrouted dongle frame falls back for one cycle WITHOUT latching (#320).
+    """A misrouted dongle frame falls back WITHOUT latching (#320).
 
     The WiFi dongle proxies cloud traffic, so a response meant for the cloud
     server can land on a coalesced read (surfacing as
     ``TransportResponseMismatchError``).  It says nothing about the firmware's
     large-read support, so — unlike a genuine refusal (exception/timeout/short
-    frame) — it must NOT permanently disable coalescing; the cycle degrades to
-    grouped reads once and coalescing re-probes next cycle.
+    frame) — it must NOT permanently disable coalescing.  The cycle degrades to
+    grouped reads and a short cooldown holds reads plain (bounding the retry
+    cost under persistent misrouting), after which coalescing re-probes.
     """
 
     @pytest.mark.asyncio
-    async def test_mismatch_falls_back_without_latch_and_reprobes(self) -> None:
+    async def test_mismatch_falls_back_then_reprobes_after_cooldown(self) -> None:
         transport = _transport(max_input_block_size=120)
         # Fail ONLY the first coalesced 0-112 read with a mismatch; the plain
         # group reads (and later coalesced reads) all succeed.
@@ -434,21 +437,37 @@ class TestMisroutedFrameNoLatch:
                     vals[reg - start] = value
             return vals
 
-        # Cycle 1: coalesced read hits the mismatch -> plain grouped fallback.
-        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+        # Drive a controllable monotonic clock so the cooldown is deterministic.
+        mock_time = MagicMock()
+        with (
+            patch.object(_register_data, "time", mock_time),
+            patch.object(transport, "_read_input_registers", side_effect=fake_read),
+        ):
+            # Cycle 1 @ t=1000: coalesced read hits the mismatch -> plain
+            # grouped fallback, and the cooldown is stamped (no latch).
+            mock_time.monotonic.return_value = 1000.0
             runtime, energy, battery = await transport.read_all_input_data()
 
-        assert transport._input_coalescing_latched_off is False
-        assert calls == [(0, 113), *_GROUPED_READS]
-        assert runtime is not None
-        assert energy is not None
-        assert battery is not None
+            assert transport._input_coalescing_latched_off is False
+            assert calls == [(0, 113), *_GROUPED_READS]
+            assert runtime is not None
+            assert energy is not None
+            assert battery is not None
+            assert transport._input_coalescing_retry_after == pytest.approx(
+                1000.0 + COALESCING_MISMATCH_COOLDOWN
+            )
 
-        # Cycle 2: not latched -> it plans a coalesced read again (#320).
-        calls.clear()
-        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            # Cycle 2 still inside the cooldown: stays plain, no coalesce.
+            calls.clear()
+            mock_time.monotonic.return_value = 1000.0 + COALESCING_MISMATCH_COOLDOWN - 1.0
             await transport.read_all_input_data()
-        assert calls == _COALESCED_READS_120
+            assert calls == _GROUPED_READS
+
+            # Cycle 3 past the cooldown: coalescing re-probes (#320).
+            calls.clear()
+            mock_time.monotonic.return_value = 1000.0 + COALESCING_MISMATCH_COOLDOWN + 1.0
+            await transport.read_all_input_data()
+            assert calls == _COALESCED_READS_120
 
     @pytest.mark.asyncio
     async def test_read_runtime_mismatch_falls_back_without_latch(self) -> None:
