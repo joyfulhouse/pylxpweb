@@ -248,6 +248,14 @@ HOLD_AC_FIRST_TIME_1_END = 155  # Period 1 end
 HOLD_AC_FIRST_TIME_2_START = 156  # Period 2 start
 HOLD_AC_FIRST_TIME_2_END = 157  # Period 2 end
 
+# Grid Peak Shaving power setpoints (regs 206/232). Raw is deci-kW: raw 120 =
+# 12.0 kW, raw 41 = 4.1 kW (encoding VERIFIED — pylxpweb#158 DoubleDoc local
+# write of raw 41 rendered 4.1 on the portal/LCD, and a 2026-07-04 live cloud
+# write of "12" read back "12"; eg4_web_monitor#328). Time-period-1 (PS1) and
+# time-period-2 (PS2), same family/encoding.
+HOLD_GRID_PEAK_SHAVING_POWER = 206  # PS1 power, deci-kW (0-255 = 0.0-25.5 kW)
+HOLD_GRID_PEAK_SHAVING_POWER_2 = 232  # PS2 power, deci-kW (0-255 = 0.0-25.5 kW)
+
 # Peak Shaving time schedule (regs 209-212, 2 windows, packed hour|minute per
 # register). Live write-verified on a FlexBOSS21 (FAAB-2525): writeTime 01:05 ->
 # reg 211 read 1281; start1 16:00 / end1 20:59 matched cloud exactly.
@@ -801,22 +809,34 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     228: ["HOLD_SYSTEM_CHARGE_VOLT_LIMIT"],
     # Grid peak shaving family (eg4-gfu5, located 2026-06-12 via single-register
     # cloud window reads on an 18kPV AND a FlexBOSS21 — both devices agree):
-    #   206 = _12K_HOLD_GRID_PEAK_SHAVING_POWER   (PS1; raw kW encoding UNVERIFIED)
+    #   206 = _12K_HOLD_GRID_PEAK_SHAVING_POWER   (PS1; deci-kW: raw 120 -> "12")
     #   207 = _12K_HOLD_GRID_PEAK_SHAVING_SOC     (%, raw 1:1: raw 80 -> "80")
     #   208 = _12K_HOLD_GRID_PEAK_SHAVING_VOLT    (decivolts: raw 520 -> "52")
     #   218 = _12K_HOLD_GRID_PEAK_SHAVING_SOC_2   (%, raw 1:1: raw 50 -> "50")
     #   219 = _12K_HOLD_GRID_PEAK_SHAVING_VOLT_2  (decivolts: raw 520 -> "52")
-    #   232 = _12K_HOLD_GRID_PEAK_SHAVING_POWER_2 (PS2; raw kW encoding UNVERIFIED)
+    #   232 = _12K_HOLD_GRID_PEAK_SHAVING_POWER_2 (PS2; deci-kW: raw 120 -> "12")
     # The old `231: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER"]` entry here was WRONG:
     # single-register cloud reads of (231,1) return ZERO named parameters on both
     # inverters while (206,1) names PS1.  Local name-writes through the old entry
     # landed in register 231 — a real but UNKNOWN field (raw 0; a past raw write
-    # quantized 55 -> 54, i.e. even values only).  None of the family is mapped
-    # here yet: the local parameter refresh spans these registers and would
-    # surface raw values (decivolts / unverified kW encoding) as engineering
-    # units.  Map them together with raw-encoding verification + scaling support
-    # (same discipline as register 202 above).  See the canonical table rows in
-    # registers/inverter_holding.py for the full evidence trail.
+    # quantized 55 -> 54, i.e. even values only) — deliberately left unmapped.
+    #
+    # The power (206/232) and voltage (208/219) raw encodings are now VERIFIED,
+    # so the whole family is mapped for local reads: pylxpweb#158 (DoubleDoc)
+    # wrote raw 41 to PS1 locally and the portal + LCD displayed 4.1 (deci-kW),
+    # and a 2026-07-04 live cloud test wrote "12" -> read back "12" (raw 120);
+    # the SOC (207/218, raw 1:1) and volt (208/219, decivolts) encodings were
+    # cross-checked raw-vs-named in the 2026-06-12 sweep responses.  The four
+    # power/voltage members carry a DIV_10 raw encoding, so the transport decode
+    # scales them to the cloud's engineering string (LOCAL_PARAM_SCALE_DIV10
+    # below); the two SOC members are raw 1:1 and surface unchanged.  See the
+    # canonical table rows in registers/inverter_holding.py for the evidence.
+    206: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER"],
+    207: ["_12K_HOLD_GRID_PEAK_SHAVING_SOC"],
+    208: ["_12K_HOLD_GRID_PEAK_SHAVING_VOLT"],
+    218: ["_12K_HOLD_GRID_PEAK_SHAVING_SOC_2"],
+    219: ["_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2"],
+    232: ["_12K_HOLD_GRID_PEAK_SHAVING_POWER_2"],
     # Register 233: Extended function enable 2 bit field (verified via Modbus probe 2026-02-13)
     # API returns 9 params for this register (alphabetical, NOT bit order).
     # Bit 1 (FUNC_BATTERY_BACKUP_CTRL) confirmed via live toggle test.
@@ -941,6 +961,35 @@ MULTI_BIT_FIELDS: dict[str, tuple[int, int]] = {
     "BIT_MIDBOX_SP_MODE_3": (4, 2),  # bits 4-5
     "BIT_MIDBOX_SP_MODE_4": (6, 2),  # bits 6-7
 }
+
+# Named value parameters whose raw local register holds a deci-unit encoding
+# (raw = value * 10) that the cloud API surfaces already scaled to engineering
+# units.  The transport named-parameter decode scales these on read and applies
+# the inverse on write, so LOCAL/HYBRID reads match the cloud string (reg 206
+# raw 120 -> "12" kW; reg 208 raw 520 -> "52" V) and named writes land the
+# right raw value.  The peak-shaving SOC members (207/218) are raw 1:1 and are
+# deliberately absent.  See the REGISTER_TO_PARAM_KEYS peak-shaving block.
+LOCAL_PARAM_SCALE_DIV10: frozenset[str] = frozenset(
+    {
+        "_12K_HOLD_GRID_PEAK_SHAVING_POWER",
+        "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2",
+        "_12K_HOLD_GRID_PEAK_SHAVING_VOLT",
+        "_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2",
+    }
+)
+
+
+def format_deci_as_cloud_string(raw: int) -> str:
+    """Render a deci-unit raw register value the way the EG4 cloud does.
+
+    The cloud returns peak-shaving power/voltage as a decimal string with no
+    trailing ``.0`` (reg 206 raw 120 -> ``"12"`` kW, raw 41 -> ``"4.1"``; reg
+    208 raw 520 -> ``"52"`` V).  Mirroring that formatting lets LOCAL/HYBRID
+    named reads compare equal to the cloud value and feed ``float()``-based
+    consumers (e.g. ``grid_peak_shaving_power_limit``) unchanged.
+    """
+    return f"{raw / 10:g}"
+
 
 # Reverse mapping: API Parameter Key → Register (for 18KPV)
 # Note: Some parameters appear in multiple registers (bit fields)
