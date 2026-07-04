@@ -545,6 +545,180 @@ class TestMisroutedFrameNoLatch:
 
 
 # ---------------------------------------------------------------------------
+# Proven-capable flag: once large reads work, a later failure never latches
+# (eg4_web_monitor#320, reporter ivanfmartinez)
+# ---------------------------------------------------------------------------
+
+
+class TestProvenCapableNoLatch:
+    """A transport that has ever completed a coalesced read never latches (#320).
+
+    A successful coalesced read proves the firmware serves large reads, so no
+    later failure (exception, timeout, short frame) can mean the old
+    ~40-register cap.  Proven transports degrade transiently (cooldown), only
+    an UNPROVEN transport keeps the permanent latch (the true old-firmware
+    probe).  This is the reporter's scenario: coalesced reads worked for
+    minutes, then one bad frame — which under the prior code would have
+    latched permanently for a non-mismatch error.
+    """
+
+    @staticmethod
+    def _reg_values(start: int, count: int) -> list[int]:
+        vals = [0] * count
+        for reg, value in ((4, _VOLTAGE_RAW), (5, _SOC_SOH_PACKED)):
+            if start <= reg < start + count:
+                vals[reg - start] = value
+        return vals
+
+    @pytest.mark.asyncio
+    async def test_proven_transport_generic_error_uses_cooldown_not_latch(self) -> None:
+        transport = _transport(max_input_block_size=120)
+        state = {"fail": False}
+        calls: list[tuple[int, int]] = []
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            calls.append((start, count))
+            if (start, count) == (0, 113) and state["fail"]:
+                raise TransportReadError("transient CRC error after minutes of success")
+            return self._reg_values(start, count)
+
+        mock_time = MagicMock()
+        with (
+            patch.object(_register_data, "time", mock_time),
+            patch.object(transport, "_read_input_registers", side_effect=fake_read),
+        ):
+            # Cycle 1 @ t=1000: coalesced read succeeds -> transport is proven.
+            mock_time.monotonic.return_value = 1000.0
+            await transport.read_all_input_data()
+            assert transport._input_coalescing_proven is True
+            assert calls == _COALESCED_READS_120
+
+            # Cycle 2 @ t=1050: coalesced read fails with a generic (non-mismatch)
+            # error.  Proven -> NO permanent latch; cooldown stamped; plain fallback.
+            state["fail"] = True
+            calls.clear()
+            mock_time.monotonic.return_value = 1050.0
+            await transport.read_all_input_data()
+            assert transport._input_coalescing_latched_off is False
+            assert transport._input_coalescing_retry_after == pytest.approx(
+                1050.0 + COALESCING_MISMATCH_COOLDOWN
+            )
+            assert calls == [(0, 113), *_GROUPED_READS]
+
+            # Cycle 3 inside the cooldown: stays plain.
+            calls.clear()
+            mock_time.monotonic.return_value = 1050.0 + COALESCING_MISMATCH_COOLDOWN - 1.0
+            await transport.read_all_input_data()
+            assert calls == _GROUPED_READS
+
+            # Cycle 4 past the cooldown, error cleared: coalescing re-probes.
+            state["fail"] = False
+            calls.clear()
+            mock_time.monotonic.return_value = 1050.0 + COALESCING_MISMATCH_COOLDOWN + 1.0
+            await transport.read_all_input_data()
+            assert calls == _COALESCED_READS_120
+
+    @pytest.mark.asyncio
+    async def test_proven_transport_short_read_uses_cooldown_not_latch(self) -> None:
+        transport = _transport(max_input_block_size=120)
+        state = {"short": False}
+        calls: list[tuple[int, int]] = []
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            calls.append((start, count))
+            if (start, count) == (0, 113) and state["short"]:
+                return [0] * 5  # truncated coalesced frame
+            return self._reg_values(start, count)
+
+        mock_time = MagicMock()
+        with (
+            patch.object(_register_data, "time", mock_time),
+            patch.object(transport, "_read_input_registers", side_effect=fake_read),
+        ):
+            mock_time.monotonic.return_value = 1000.0
+            await transport.read_all_input_data()
+            assert transport._input_coalescing_proven is True
+
+            state["short"] = True
+            calls.clear()
+            mock_time.monotonic.return_value = 1100.0
+            await transport.read_all_input_data()
+
+            assert transport._input_coalescing_latched_off is False
+            assert transport._input_coalescing_retry_after == pytest.approx(
+                1100.0 + COALESCING_MISMATCH_COOLDOWN
+            )
+            assert calls == [(0, 113), *_GROUPED_READS]
+
+    @pytest.mark.asyncio
+    async def test_unproven_transport_generic_error_latches(self) -> None:
+        """An UNPROVEN transport keeps the permanent latch (old-firmware probe)."""
+        transport = _transport(max_input_block_size=120)
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            if (start, count) == (0, 113):  # fails on the very first coalesced read
+                raise TransportReadError("old firmware: large read unsupported")
+            return self._reg_values(start, count)
+
+        with patch.object(transport, "_read_input_registers", side_effect=fake_read):
+            await transport.read_all_input_data()
+
+        assert transport._input_coalescing_latched_off is True
+        assert getattr(transport, "_input_coalescing_proven", False) is False
+
+    @pytest.mark.asyncio
+    async def test_proven_confirmation_logged_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The False->True proven transition logs exactly once per transport."""
+        transport = _transport(max_input_block_size=120)
+        fake = _make_fake_read()
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="pylxpweb.transports._register_data"),
+            patch.object(transport, "_read_input_registers", side_effect=fake),
+        ):
+            await transport.read_all_input_data()
+            await transport.read_all_input_data()  # second success, already proven
+
+        confirmations = [r for r in caplog.records if "large-read support confirmed" in r.message]
+        assert len(confirmations) == 1
+        assert transport._input_coalescing_proven is True
+
+    @pytest.mark.asyncio
+    async def test_cooldown_expiry_logs_reprobe_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Cooldown expiry logs the re-probe once (re-arm was previously silent)."""
+        transport = _transport(max_input_block_size=120)
+        raised = {"done": False}
+
+        async def fake_read(start: int, count: int) -> list[int]:
+            if (start, count) == (0, 113) and not raised["done"]:
+                raised["done"] = True
+                raise TransportResponseMismatchError("misrouted cloud frame")
+            return self._reg_values(start, count)
+
+        mock_time = MagicMock()
+        with (
+            caplog.at_level(logging.DEBUG, logger="pylxpweb.transports._register_data"),
+            patch.object(_register_data, "time", mock_time),
+            patch.object(transport, "_read_input_registers", side_effect=fake_read),
+        ):
+            # Mismatch stamps the cooldown at t=1000.
+            mock_time.monotonic.return_value = 1000.0
+            await transport.read_all_input_data()
+
+            # Past the cooldown: the re-probe fires the DEBUG line...
+            mock_time.monotonic.return_value = 1000.0 + COALESCING_MISMATCH_COOLDOWN + 1.0
+            await transport.read_all_input_data()
+            # ...and does NOT repeat on the following cycle (retry_after cleared).
+            await transport.read_all_input_data()
+
+        reprobes = [r for r in caplog.records if "coalescing cooldown expired" in r.message]
+        assert len(reprobes) == 1
+        assert transport._input_coalescing_retry_after == 0.0
+
+
+# ---------------------------------------------------------------------------
 # TransportConfig plumbing (hybrid attach path)
 # ---------------------------------------------------------------------------
 
