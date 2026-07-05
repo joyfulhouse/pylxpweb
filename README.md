@@ -11,10 +11,11 @@ A Python client library for Luxpower/EG4 solar inverters and energy storage syst
 
 ## What It Does
 
-pylxpweb provides programmatic access to the Luxpower/EG4 web monitoring API, 
-and also local connection, enabling Python applications and Home Assistant integrations 
-to read real-time inverter data, energy statistics, battery information, and GridBOSS 
-metrics. It is the library backing the [EG4 Web Monitor][crosslink] Home Assistant integration.
+pylxpweb provides programmatic access to Luxpower/EG4 inverters — via the cloud web
+monitoring API or a direct local connection — enabling Python applications and Home
+Assistant integrations to read real-time inverter data, energy statistics, battery
+information, and GridBOSS metrics. It is the library backing the
+[EG4 Web Monitor][crosslink] Home Assistant integration.
 
 ## Features
 
@@ -27,8 +28,7 @@ metrics. It is the library backing the [EG4 Web Monitor][crosslink] Home Assista
 - **Error Handling**: Robust error handling with automatic retry and backoff
 - **Regional Endpoints**: Supports all global Luxpower and EG4 endpoints
 - **Control Operations**: Read and write inverter parameters, enable quick charge, set SOC limits
-- **Multiple connection/transport types**: can be used with cloud API and also with local connection 
- 
+- **Multiple Transports**: cloud API, local WiFi dongle, direct Modbus (RS-485), or hybrid local+cloud
 
 ## Supported Devices
 
@@ -51,23 +51,22 @@ metrics. It is the library backing the [EG4 Web Monitor][crosslink] Home Assista
 The base URL is fully configurable to support regional variations and future endpoints.
 
 ## Supported Transports
-- **cloud / web API** - original supported method
-- **dongle** - connect to the dongle of inverter which is used to send data to cloud
-  - the dongle allow to communicate with cloud and locally at same time
-  - but it does not control clearly which one requested data
-  - this will raise some "Response mismatch" messages on log, 
-    when the library get an response that does not match what was requested
-  - the dongle uses modbus encapsulated on proprietary protocol
-  - it will not work with dongles that have encription enabled (**E-WIFI   ENC**), 
-    if you have a dongle with this description ask Luxpower Support to downgrade it 
-- **modbus** - direct modbus connection which needs an connection to the RS-485 port of the inverter
-- **hybrid** - allow to combine one local connection with cloud
 
-Local connections should be used by single apps, using same type of connection by multiple
- apps can result in data corruption, intermitent errors.
+- **Cloud (web API)** — the original access method, via the regional endpoints above.
+- **WiFi dongle** — connects locally to the inverter's WiFi dongle (the same device that
+  uploads data to the cloud), using Modbus encapsulated in a proprietary frame format.
+  - The dongle serves the cloud and local clients at the same time but does not clearly
+    separate which side requested what, so occasional *"Response mismatch"* debug messages
+    are expected — the library detects a response meant for the cloud and retries.
+  - Dongles with encryption enabled (label **E-WIFI ENC**) do not work locally; if you
+    have one, ask Luxpower support to downgrade its firmware.
+- **Modbus** — a direct Modbus connection to the inverter's RS-485 port.
+- **Hybrid** — combines one local connection with the cloud API (local polling with cloud
+  fallback and cloud-only supplemental data).
 
-You can't use the same local connection by multiple clients like Home Assistant + script, 
-or multiple Home Assistant instances.
+A local connection must have a **single client**: sharing the same dongle or RS-485 line
+between multiple applications (e.g. Home Assistant plus a script, or two Home Assistant
+instances) causes interleaved responses, data corruption, and intermittent errors.
 
 
 ## Installation
