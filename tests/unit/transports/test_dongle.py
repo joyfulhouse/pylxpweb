@@ -455,6 +455,41 @@ class TestDongleResponseValidation:
                 response, expected_func=MODBUS_READ_INPUT, expected_register=0
             )
 
+    def test_mismatch_message_carries_serial_and_frame_context(self) -> None:
+        """Mismatch messages include the serial prefix + expected/received blocks.
+
+        Multi-device log analysis (joyfulhouse/pylxpweb#213) needs each
+        validation failure to name its device and show the full request-vs-
+        response frame context in one uniform, grep-able shape.
+        """
+        transport = self._make_transport()
+        # Response is for register 5000 but we asked for register 113.
+        response = _build_mock_response(
+            modbus_func=MODBUS_READ_INPUT,
+            start_register=5000,
+        )
+
+        with pytest.raises(TransportResponseMismatchError) as exc_info:
+            transport._parse_response(
+                response,
+                expected_func=MODBUS_READ_INPUT,
+                expected_register=113,
+                expected_count=41,
+                expected_tcp_func=TCP_FUNC_TRANSLATED,
+            )
+
+        message = str(exc_info.value)
+        # Serial prefix identifies the device.
+        assert message.startswith("[CE12345678]")
+        # Uniform expected/received context, both frame blocks present.
+        assert "expected [" in message
+        assert "received [" in message
+        assert "tcp_func=0xc2" in message
+        assert "func=0x04" in message
+        assert "register=113" in message
+        assert "count=41" in message
+        assert "register=5000" in message
+
     def test_all_matching_accepted(self) -> None:
         """Response matching serial, func, and register is accepted."""
         transport = self._make_transport()

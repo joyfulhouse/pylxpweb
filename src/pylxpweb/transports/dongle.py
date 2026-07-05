@@ -112,6 +112,40 @@ def compute_crc16(data: bytes) -> int:
     return crc & 0xFFFF
 
 
+def _format_frame_fields(
+    *,
+    tcp_func: int | None = None,
+    func: int | None = None,
+    register: int | None = None,
+    count: int | None = None,
+) -> str:
+    """Format the known fields of a request or response frame for logging.
+
+    Fields left as ``None`` are omitted, so the same helper builds both the
+    full "expected" block (the request knows everything) and the partial
+    "received" block (a misrouted frame is only trusted for what parses).
+    """
+    parts: list[str] = []
+    if tcp_func is not None:
+        parts.append(f"tcp_func=0x{tcp_func:02x}")
+    if func is not None:
+        parts.append(f"func=0x{func:02x}")
+    if register is not None:
+        parts.append(f"register={register}")
+    if count is not None:
+        parts.append(f"count={count}")
+    return " ".join(parts)
+
+
+def _mismatch_context(expected: str, received: str) -> str:
+    """Build a uniform ``expected [...], received [...]`` context block.
+
+    Used for every cross-request validation failure so multi-device logs
+    share one grep-able shape (joyfulhouse/pylxpweb#213).
+    """
+    return f"expected [{expected}], received [{received}]"
+
+
 class DongleTransport(RegisterDataMixin, BaseTransport):
     """WiFi Dongle TCP transport for local inverter communication.
 
@@ -658,7 +692,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # bounded to ONE connect sequence).
                     if self._writer is None or self._reader is None or not self._connected:
                         _LOGGER.info(
-                            "Dongle %s:%s disconnected, attempting reconnect",
+                            "[%s] Dongle %s:%s disconnected, attempting reconnect",
+                            self._serial,
                             self._host,
                             self._port,
                         )
@@ -688,7 +723,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         self._teardown_connection()
                         if attempt < max_retries:
                             _LOGGER.debug(
-                                "Empty response from dongle (attempt %d/%d), retrying...",
+                                "[%s] Empty response from dongle (attempt %d/%d), retrying...",
+                                self._serial,
                                 attempt + 1,
                                 max_retries + 1,
                             )
@@ -697,7 +733,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                             continue
                         # Final attempt failed
                         raise TransportReadError(
-                            "Empty response from dongle. This may indicate: "
+                            f"[{self._serial}] Empty response from dongle. This may indicate: "
                             "(1) Dongle firmware is blocking local Modbus access, "
                             "(2) Connection was closed by dongle, or "
                             "(3) Dongle requires more time to respond. "
@@ -729,16 +765,17 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     self._teardown_connection()
                     if retry_on_timeout and attempt < max_retries:
                         _LOGGER.warning(
-                            "Timeout on attempt %d/%d, will reconnect and resend",
+                            "[%s] Timeout on attempt %d/%d, will reconnect and resend",
+                            self._serial,
                             attempt + 1,
                             max_retries + 1,
                         )
                         await asyncio.sleep(0.5)
                         continue
 
-                    _LOGGER.error("Timeout waiting for dongle response")
+                    _LOGGER.error("[%s] Timeout waiting for dongle response", self._serial)
                     raise TransportTimeoutError(
-                        "Timeout waiting for dongle response. "
+                        f"[{self._serial}] Timeout waiting for dongle response. "
                         "Recent dongle firmware may block port 8000 for security. "
                         "Consider using Modbus TCP with RS485 adapter instead."
                     ) from err
@@ -749,7 +786,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
                     if attempt < max_retries:
                         _LOGGER.warning(
-                            "Socket error on attempt %d/%d: %s, will reconnect on next retry",
+                            "[%s] Socket error on attempt %d/%d: %s, will reconnect on next retry",
+                            self._serial,
                             attempt + 1,
                             max_retries + 1,
                             err,
@@ -757,13 +795,16 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         await asyncio.sleep(0.5)
                         continue
 
-                    _LOGGER.error("Socket error communicating with dongle: %s", err)
-                    raise TransportReadError(f"Socket error: {err}") from err
+                    _LOGGER.error(
+                        "[%s] Socket error communicating with dongle: %s", self._serial, err
+                    )
+                    raise TransportReadError(f"[{self._serial}] Socket error: {err}") from err
                 except TransportReadError as err:
                     last_error = err
                     if attempt < max_retries:
                         _LOGGER.debug(
-                            "Read error (attempt %d/%d): %s, retrying...",
+                            "[%s] Read error (attempt %d/%d): %s, retrying...",
+                            self._serial,
                             attempt + 1,
                             max_retries + 1,
                             err,
@@ -855,7 +896,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         packet_start = self._find_packet_start(response)
         if packet_start < 0:
             raise TransportReadError(
-                f"No valid packet found in response ({len(response)} bytes): "
+                f"[{self._serial}] No valid packet found in response "
+                f"({len(response)} bytes): "
                 f"{response[:40].hex() if response else 'empty'}"
             )
 
@@ -865,7 +907,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         # Minimum response: prefix(2) + version(2) + length(2) + addr(1) + func(1)
         # + dongle(10) + data_len(2) + some data
         if len(response) < 20:
-            raise TransportReadError(f"Response too short: {len(response)} bytes")
+            raise TransportReadError(f"[{self._serial}] Response too short: {len(response)} bytes")
 
         # --- TCP function validation (must precede the data-frame checks) ---
         # The dongle shares the 0xA1 0x1A prefix across ALL its frames — the
@@ -883,16 +925,25 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             response_tcp_func = response[7]
             if response_tcp_func != expected_tcp_func:
                 label = _TCP_FUNC_NAMES.get(response_tcp_func, "unknown")
+                context = _mismatch_context(
+                    _format_frame_fields(
+                        tcp_func=expected_tcp_func,
+                        func=expected_func,
+                        register=expected_register,
+                        count=expected_count,
+                    ),
+                    _format_frame_fields(tcp_func=response_tcp_func),
+                )
                 _LOGGER.debug(
-                    "Response TCP function mismatch: expected 0x%02x, got 0x%02x "
-                    "(%s) — misrouted or unsolicited frame",
-                    expected_tcp_func,
-                    response_tcp_func,
+                    "[%s] Response TCP function mismatch (%s): %s — misrouted or unsolicited frame",
+                    self._serial,
                     label,
+                    context,
                 )
                 raise TransportResponseMismatchError(
-                    f"Unexpected TCP function 0x{response_tcp_func:02x} ({label}): "
-                    f"expected 0x{expected_tcp_func:02x} — misrouted/unsolicited frame"
+                    f"[{self._serial}] Unexpected TCP function "
+                    f"0x{response_tcp_func:02x} ({label}): {context} "
+                    "— misrouted/unsolicited frame"
                 )
 
         # Extract data length (frame_length and tcp_func available at bytes 4-6 and 7 if needed)
@@ -906,7 +957,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
         if crc_end > len(response):
             raise TransportReadError(
-                f"Response truncated: expected {crc_end} bytes, got {len(response)}"
+                f"[{self._serial}] Response truncated: expected {crc_end} bytes, "
+                f"got {len(response)}"
             )
 
         # Extract data frame and CRC
@@ -917,14 +969,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         computed_crc = compute_crc16(data_frame)
         if computed_crc != received_crc:
             _LOGGER.warning(
-                "CRC mismatch: computed 0x%04X, received 0x%04X. "
+                "[%s] CRC mismatch: computed 0x%04X, received 0x%04X. "
                 "Data may be corrupted. Raw response: %s",
+                self._serial,
                 computed_crc,
                 received_crc,
                 response[:60].hex(),
             )
             raise TransportReadError(
-                f"CRC verification failed: computed 0x{computed_crc:04X}, "
+                f"[{self._serial}] CRC verification failed: computed 0x{computed_crc:04X}, "
                 f"received 0x{received_crc:04X}"
             )
 
@@ -937,7 +990,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         # - register_data (N bytes)
         # Total header before data: 1 + 1 + 10 + 2 + 1 = 15 bytes
         if len(data_frame) < 15:
-            raise TransportReadError(f"Data frame too short: {len(data_frame)} bytes")
+            raise TransportReadError(
+                f"[{self._serial}] Data frame too short: {len(data_frame)} bytes"
+            )
 
         modbus_func = data_frame[1]
 
@@ -947,55 +1002,78 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         # valid CRC but wrong serial/function/register.  Reject them so the
         # retry logic can resend and get the correct response.
 
+        # The received register is parseable on any read-layout data frame
+        # (offset 12-13), so include it in every "received" context block.
+        response_register = struct.unpack("<H", data_frame[12:14])[0]
+
+        def _expected_fields() -> str:
+            return _format_frame_fields(
+                tcp_func=expected_tcp_func,
+                func=expected_func,
+                register=expected_register,
+                count=expected_count,
+            )
+
         # 1. Inverter serial must match (always checked)
         response_serial = data_frame[2:12]
         expected_serial = self._serial.encode("ascii").ljust(10, b"\x00")[:10]
         if response_serial != expected_serial:
             resp_serial_str = response_serial.decode("ascii", errors="replace").rstrip("\x00")
+            context = _mismatch_context(
+                _expected_fields(),
+                _format_frame_fields(func=modbus_func, register=response_register),
+            )
             _LOGGER.debug(
-                "Response serial mismatch: expected %s, got %s — likely a misrouted cloud response",
+                "[%s] Response serial mismatch: expected %s, got %s (%s) "
+                "— likely a misrouted cloud response",
+                self._serial,
                 self._serial,
                 resp_serial_str,
+                context,
             )
             raise TransportResponseMismatchError(
-                f"Response serial mismatch: expected {self._serial}, got {resp_serial_str}"
+                f"[{self._serial}] Response serial mismatch: expected {self._serial}, "
+                f"got {resp_serial_str} ({context})"
             )
 
         # 2. Function code must match (mask high bit for exception responses)
         if expected_func is not None:
             response_base_func = modbus_func & 0x7F
             if response_base_func != expected_func:
+                context = _mismatch_context(
+                    _expected_fields(),
+                    _format_frame_fields(func=modbus_func, register=response_register),
+                )
                 _LOGGER.debug(
-                    "Response function mismatch: expected 0x%02x, got 0x%02x — "
-                    "likely a misrouted cloud response",
-                    expected_func,
-                    modbus_func,
+                    "[%s] Response function mismatch: %s — likely a misrouted cloud response",
+                    self._serial,
+                    context,
                 )
                 raise TransportResponseMismatchError(
-                    f"Response function mismatch: expected 0x{expected_func:02x}, "
-                    f"got 0x{modbus_func:02x}"
+                    f"[{self._serial}] Response function mismatch: {context}"
                 )
 
         # 3. Start register must match
-        if expected_register is not None:
-            response_register = struct.unpack("<H", data_frame[12:14])[0]
-            if response_register != expected_register:
-                _LOGGER.debug(
-                    "Response register mismatch: expected %d, got %d — "
-                    "likely a misrouted cloud response",
-                    expected_register,
-                    response_register,
-                )
-                raise TransportResponseMismatchError(
-                    f"Response register mismatch: expected {expected_register}, "
-                    f"got {response_register}"
-                )
+        if expected_register is not None and response_register != expected_register:
+            context = _mismatch_context(
+                _expected_fields(),
+                _format_frame_fields(func=modbus_func, register=response_register),
+            )
+            _LOGGER.debug(
+                "[%s] Response register mismatch: %s — likely a misrouted cloud response",
+                self._serial,
+                context,
+            )
+            raise TransportResponseMismatchError(
+                f"[{self._serial}] Response register mismatch: {context}"
+            )
 
         # Check for Modbus exception (function code with high bit set)
         if modbus_func & 0x80:
             exception_code = data_frame[14] if len(data_frame) > 14 else 0
             raise TransportReadError(
-                f"Modbus exception: function=0x{modbus_func:02x}, code={exception_code}"
+                f"[{self._serial}] Modbus exception: function=0x{modbus_func:02x}, "
+                f"code={exception_code}"
             )
 
         # Write ACKs (FC06/FC16) are not read frames: the dongle echoes
@@ -1028,7 +1106,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         # exhausted, surfaces as a failed range instead of a partial result.
         if expected_count is not None and len(registers) < expected_count:
             raise TransportReadError(
-                f"Short read: expected {expected_count} registers, got {len(registers)}"
+                f"[{self._serial}] Short read: expected {expected_count} registers, "
+                f"got {len(registers)}"
             )
 
         return registers
