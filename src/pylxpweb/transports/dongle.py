@@ -934,12 +934,6 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     ),
                     _format_frame_fields(tcp_func=response_tcp_func),
                 )
-                _LOGGER.debug(
-                    "[%s] Response TCP function mismatch (%s): %s — misrouted or unsolicited frame",
-                    self._serial,
-                    label,
-                    context,
-                )
                 raise TransportResponseMismatchError(
                     f"[{self._serial}] Unexpected TCP function "
                     f"0x{response_tcp_func:02x} ({label}): {context} "
@@ -1023,14 +1017,6 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 _expected_fields(),
                 _format_frame_fields(func=modbus_func, register=response_register),
             )
-            _LOGGER.debug(
-                "[%s] Response serial mismatch: expected %s, got %s (%s) "
-                "— likely a misrouted cloud response",
-                self._serial,
-                self._serial,
-                resp_serial_str,
-                context,
-            )
             raise TransportResponseMismatchError(
                 f"[{self._serial}] Response serial mismatch: expected {self._serial}, "
                 f"got {resp_serial_str} ({context})"
@@ -1044,11 +1030,6 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     _expected_fields(),
                     _format_frame_fields(func=modbus_func, register=response_register),
                 )
-                _LOGGER.debug(
-                    "[%s] Response function mismatch: %s — likely a misrouted cloud response",
-                    self._serial,
-                    context,
-                )
                 raise TransportResponseMismatchError(
                     f"[{self._serial}] Response function mismatch: {context}"
                 )
@@ -1058,11 +1039,6 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             context = _mismatch_context(
                 _expected_fields(),
                 _format_frame_fields(func=modbus_func, register=response_register),
-            )
-            _LOGGER.debug(
-                "[%s] Response register mismatch: %s — likely a misrouted cloud response",
-                self._serial,
-                context,
             )
             raise TransportResponseMismatchError(
                 f"[{self._serial}] Response register mismatch: {context}"
