@@ -202,13 +202,21 @@ AC_CHARGE_TYPE_TIME_SOC_VOLT = 2  # Time + SOC/Voltage combined
 HOLD_AC_CHARGE_START_VOLTAGE = 158  # Start AC charge voltage (÷10, whole volts only)
 HOLD_AC_CHARGE_END_VOLTAGE = 159  # Stop AC charge voltage (÷10, whole volts only)
 HOLD_AC_CHARGE_START_SOC = 160  # Battery SOC to start AC charging (0-90%)
-# Note: the overall AC-charge SOC LIMIT (the reg-21 AC-charge function's stop
-# threshold) is register 67 (HOLD_AC_CHARGE_SOC_LIMIT), NOT register 161.
-# Register 161 (HOLD_AC_CHARGE_END_BATTERY_SOC) is the distinct AC-charge-WINDOW
-# end SOC, paired with the reg-160 window start SOC; it is a normal read/write
-# holding parameter (canonical row, 20-100%) mapped in the transport name map
-# for named local access (eg4_web_monitor#331/#332). Verified on FlexBOSS21
-# firmware FAAB-2525.
+# Register 161 (HOLD_AC_CHARGE_END_BATTERY_SOC) is the AC-charge-WINDOW end SOC,
+# paired with the reg-160 window start SOC. Its role is FAMILY-DEPENDENT, so the
+# canonical row is mapped in the transport name map (canonical row, 20-100%) for
+# named local access (eg4_web_monitor#331/#332):
+#   - EG4_OFFGRID: reg 161 IS the portal's writable "stop AC charge SOC" control
+#     — the off-grid portal exposes it as a holdParam and a live cloud REMOTE_SET
+#     writes it (eg4_web_monitor#331). This is why it must be named/mapped.
+#   - Grid-tied hybrid (FlexBOSS21 FAAB-2525, Modbus probe 2026-02-13): the
+#     overall AC-charge SOC LIMIT (the reg-21 AC-charge function's stop
+#     threshold) is register 67 (HOLD_AC_CHARGE_SOC_LIMIT), NOT reg 161, and
+#     reg 161 read back as an unused / read-only field on that unit.
+# CLOUD writes to reg 161 are the PROVEN path (offgrid REMOTE_SET). LOCAL Modbus
+# writes to 161 on offgrid are UNVERIFIED — if the firmware silently ignores the
+# write, the dongle named-write verify (readback compare in _verify_named_
+# parameters) surfaces it as a mismatch rather than a false success.
 
 # Forced Charge (ChgFirst / PV Charge Priority) Parameters
 # Per EG4-18KPV-12LV Modbus PDF, regs 74-81 are "Charging Priority" (ChgFirst).
