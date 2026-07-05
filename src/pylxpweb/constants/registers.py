@@ -202,9 +202,21 @@ AC_CHARGE_TYPE_TIME_SOC_VOLT = 2  # Time + SOC/Voltage combined
 HOLD_AC_CHARGE_START_VOLTAGE = 158  # Start AC charge voltage (÷10, whole volts only)
 HOLD_AC_CHARGE_END_VOLTAGE = 159  # Stop AC charge voltage (÷10, whole volts only)
 HOLD_AC_CHARGE_START_SOC = 160  # Battery SOC to start AC charging (0-90%)
-# Note: Stop AC Charge SOC is register 67 (HOLD_AC_CHARGE_SOC_LIMIT), NOT register 161.
-# Register 161 is read-only via Modbus and not used for this purpose.
-# Verified on FlexBOSS21 firmware FAAB-2525.
+# Register 161 (HOLD_AC_CHARGE_END_BATTERY_SOC) is the AC-charge-WINDOW end SOC,
+# paired with the reg-160 window start SOC. Its role is FAMILY-DEPENDENT, so the
+# canonical row is mapped in the transport name map (canonical row, 20-100%) for
+# named local access (eg4_web_monitor#331/#332):
+#   - EG4_OFFGRID: reg 161 IS the portal's writable "stop AC charge SOC" control
+#     — the off-grid portal exposes it as a holdParam and a live cloud REMOTE_SET
+#     writes it (eg4_web_monitor#331). This is why it must be named/mapped.
+#   - Grid-tied hybrid (FlexBOSS21 FAAB-2525, Modbus probe 2026-02-13): the
+#     overall AC-charge SOC LIMIT (the reg-21 AC-charge function's stop
+#     threshold) is register 67 (HOLD_AC_CHARGE_SOC_LIMIT), NOT reg 161, and
+#     reg 161 read back as an unused / read-only field on that unit.
+# CLOUD writes to reg 161 are the PROVEN path (offgrid REMOTE_SET). LOCAL Modbus
+# writes to 161 on offgrid are UNVERIFIED — if the firmware silently ignores the
+# write, the dongle named-write verify (readback compare in _verify_named_
+# parameters) surfaces it as a mismatch rather than a false success.
 
 # Forced Charge (ChgFirst / PV Charge Priority) Parameters
 # Per EG4-18KPV-12LV Modbus PDF, regs 74-81 are "Charging Priority" (ChgFirst).
@@ -727,6 +739,11 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     158: ["HOLD_AC_CHARGE_START_BATTERY_VOLTAGE"],
     159: ["HOLD_AC_CHARGE_END_BATTERY_VOLTAGE"],
     160: ["HOLD_AC_CHARGE_START_BATTERY_SOC"],
+    # Register 161 completes the AC-charge-window family (the START/END volt +
+    # START soc siblings above were mapped, END soc was missed by historical
+    # accident). Canonical row is SCALE_NONE % like reg 160, so the local named
+    # read/write pass through raw 1:1 (eg4_web_monitor#331/#332).
+    161: ["HOLD_AC_CHARGE_END_BATTERY_SOC"],
     169: ["HOLD_ON_GRID_EOD_VOLTAGE"],  # On-grid EOD voltage (V, ×10; cloud-confirmed name)
     # Peak Shaving time schedule (209-212, packed hour|minute per register;
     # 2 windows). Same canonical packed-time naming as AC First above.

@@ -101,6 +101,23 @@ class TestReadNamedParametersModbus:
         assert "HOLD_FORCED_CHG_POWER_CMD" in result
         assert result["HOLD_FORCED_CHG_POWER_CMD"] == 120
 
+    @pytest.mark.asyncio
+    async def test_read_named_parameters_ac_charge_end_soc(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Register 161 (HOLD_AC_CHARGE_END_BATTERY_SOC) decodes to its named
+        param, raw 1:1 percent like its reg-160 window-start sibling.
+
+        Regression: reg 161 was the only member of the AC-charge-window family
+        missing from the local register map (eg4_web_monitor#331/#332).
+        """
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={161: 85})
+
+        result = await mock_modbus_transport.read_named_parameters(161, 1)
+
+        assert "HOLD_AC_CHARGE_END_BATTERY_SOC" in result
+        assert result["HOLD_AC_CHARGE_END_BATTERY_SOC"] == 85
+
 
 class TestWriteNamedParametersModbus:
     """Tests for Modbus transport write_named_parameters."""
@@ -145,6 +162,22 @@ class TestWriteNamedParametersModbus:
 
         assert result is True
         mock_modbus_transport.write_parameters.assert_called_once_with({74: 10})
+
+    @pytest.mark.asyncio
+    async def test_write_named_parameters_ac_charge_end_soc(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Writing HOLD_AC_CHARGE_END_BATTERY_SOC resolves to register 161.
+
+        Symmetric raw 1:1 passthrough with the read path (SCALE_NONE), mirroring
+        the reg-160 window-start sibling (eg4_web_monitor#331/#332).
+        """
+        result = await mock_modbus_transport.write_named_parameters(
+            {"HOLD_AC_CHARGE_END_BATTERY_SOC": 85}
+        )
+
+        assert result is True
+        mock_modbus_transport.write_parameters.assert_called_once_with({161: 85})
 
     @pytest.mark.asyncio
     async def test_write_named_parameters_bit_field_single(
