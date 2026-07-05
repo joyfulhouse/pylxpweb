@@ -277,7 +277,8 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 self._last_read_retried = True
                 delay = self._retry_delay * (2**attempt)
                 _LOGGER.debug(
-                    "Retry %d/%d reading %s registers at %d after %.1fs",
+                    "[%s] Retry %d/%d reading %s registers at %d after %.1fs",
+                    self._serial,
                     attempt + 1,
                     self._retries,
                     reg_type,
@@ -287,7 +288,8 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 await asyncio.sleep(delay)
 
         _LOGGER.error(
-            "Failed to read %s registers at %d after %d attempts: %s",
+            "[%s] Failed to read %s registers at %d after %d attempts: %s",
+            self._serial,
             reg_type,
             address,
             self._retries + 1,
@@ -354,7 +356,8 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     # the link is fine — NOT a transport failure.  Propagates
                     # untouched (no consecutive-error accounting).
                     _LOGGER.error(
-                        "Modbus error writing registers at %d: %s",
+                        "[%s] Modbus error writing registers at %d: %s",
+                        self._serial,
                         address,
                         result,
                     )
@@ -374,18 +377,30 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 # _reconnect() gate never fired for write-only ops (eg4-1cxn).
                 self._consecutive_errors += 1
                 if "timeout" in str(err).lower():
-                    _LOGGER.error("Timeout writing registers at %d", address)
-                    raise TransportTimeoutError(f"Timeout writing registers at {address}") from err
-                _LOGGER.error("Failed to write registers at %d: %s", address, err)
-                raise TransportWriteError(f"Failed to write registers at {address}: {err}") from err
+                    _LOGGER.error("[%s] Timeout writing registers at %d", self._serial, address)
+                    raise TransportTimeoutError(
+                        f"[{self._serial}] Timeout writing registers at {address}"
+                    ) from err
+                _LOGGER.error(
+                    "[%s] Failed to write registers at %d: %s", self._serial, address, err
+                )
+                raise TransportWriteError(
+                    f"[{self._serial}] Failed to write registers at {address}: {err}"
+                ) from err
             except TimeoutError as err:
                 self._consecutive_errors += 1
-                _LOGGER.error("Timeout writing registers at %d", address)
-                raise TransportTimeoutError(f"Timeout writing registers at {address}") from err
+                _LOGGER.error("[%s] Timeout writing registers at %d", self._serial, address)
+                raise TransportTimeoutError(
+                    f"[{self._serial}] Timeout writing registers at {address}"
+                ) from err
             except OSError as err:
                 self._consecutive_errors += 1
-                _LOGGER.error("Failed to write registers at %d: %s", address, err)
-                raise TransportWriteError(f"Failed to write registers at {address}: {err}") from err
+                _LOGGER.error(
+                    "[%s] Failed to write registers at %d: %s", self._serial, address, err
+                )
+                raise TransportWriteError(
+                    f"[{self._serial}] Failed to write registers at {address}: {err}"
+                ) from err
 
     # ------------------------------------------------------------------
     # Override: adaptive inter-group delay + auto-reconnect
