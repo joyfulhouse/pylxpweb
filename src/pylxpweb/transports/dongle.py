@@ -1019,7 +1019,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             )
             raise TransportResponseMismatchError(
                 f"[{self._serial}] Response serial mismatch: expected {self._serial}, "
-                f"got {resp_serial_str} ({context})"
+                f"got {resp_serial_str} ({context}) — likely a misrouted cloud response"
             )
 
         # 2. Function code must match (mask high bit for exception responses)
@@ -1031,7 +1031,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     _format_frame_fields(func=modbus_func, register=response_register),
                 )
                 raise TransportResponseMismatchError(
-                    f"[{self._serial}] Response function mismatch: {context}"
+                    f"[{self._serial}] Response function mismatch: {context} "
+                    "— likely a misrouted cloud response"
                 )
 
         # 3. Start register must match
@@ -1041,7 +1042,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 _format_frame_fields(func=modbus_func, register=response_register),
             )
             raise TransportResponseMismatchError(
-                f"[{self._serial}] Response register mismatch: {context}"
+                f"[{self._serial}] Response register mismatch: {context} "
+                "— likely a misrouted cloud response"
             )
 
         # Check for Modbus exception (function code with high bit set)
