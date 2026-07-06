@@ -464,13 +464,16 @@ class TestSmartLoadProperties:
         inverter = inverter_with_runtime
         inverter._runtime.smartLoadPower = 2999
         inverter._runtime.gridLoadPower = 0
+        inverter._runtime.epsLoadPower = 365
         assert inverter.smart_load_power == 2999
         assert inverter.grid_load_power == 0
+        assert inverter.eps_load_power == 365
 
     def test_none_without_runtime(self, inverter_without_runtime):
         """No cloud runtime → None (sensor unavailable, not a false 0)."""
         assert inverter_without_runtime.smart_load_power is None
         assert inverter_without_runtime.grid_load_power is None
+        assert inverter_without_runtime.eps_load_power is None
 
     def test_hybrid_transport_does_not_mask_cloud_value(self, inverter_with_transport):
         """HYBRID: attached transport must NOT short-circuit the cloud read.
@@ -488,6 +491,7 @@ class TestSmartLoadProperties:
         )
         assert inverter.smart_load_power == 2999
         assert inverter.grid_load_power == 0
+        assert inverter.eps_load_power == 365
 
     def test_hybrid_transport_without_cloud_is_none(self, inverter_with_transport):
         """Transport attached but no cloud runtime yet → None, not 0."""
@@ -495,6 +499,7 @@ class TestSmartLoadProperties:
         inverter._runtime = None
         assert inverter.smart_load_power is None
         assert inverter.grid_load_power is None
+        assert inverter.eps_load_power is None
 
 
 class TestConsumptionPowerCloudFallback:

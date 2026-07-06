@@ -724,6 +724,31 @@ class InverterRuntimePropertiesMixin:
             return None
         return self._runtime.gridLoadPower
 
+    @property
+    def eps_load_power(self) -> int | None:
+        """Get EPS-loads output power in watts.
+
+        Cloud-only field (``epsLoadPower``): the EPS-loads subset of the
+        backup-path output. Distinct from the COMBINED backup figures — ``peps``
+        / ``pEpsL1N`` / ``pEpsL2N`` (and their Modbus counterparts, input
+        registers 129/130) carry the combined backup output, verified as the
+        summed legs in eg4_web_monitor#335. On the EG4 Off-Grid family the cloud
+        splits that combined output into ``smartLoadPower`` (GEN port) +
+        ``epsLoadPower`` (EPS loads) + ``gridLoadPower``, the same identity that
+        feeds :attr:`consumption_power` (live-confirmed on a 6000XP: peps
+        3371 W = smartLoadPower 2999 W + epsLoadPower 365 W, GH
+        eg4_web_monitor#222). There is therefore no validated local register for
+        the EPS-loads subset alone, so this reads the HTTP runtime even in
+        HYBRID mode — mirroring :attr:`smart_load_power` / :attr:`grid_load_power`.
+
+        Returns:
+            EPS load power in watts, or None when cloud runtime data is
+            unavailable (for example pure-LOCAL operation).
+        """
+        if self._runtime is None:
+            return None
+        return self._runtime.epsLoadPower
+
     # ===========================================
     # Status & Info Properties
     # ===========================================
