@@ -47,6 +47,19 @@ class ModbusSerialTransport(BaseModbusTransport):
     This transport connects directly to the inverter via a USB-to-RS485
     serial adapter using Modbus RTU protocol.
 
+    Network Serial Bridges (Proxies)
+    --------------------------------
+    The ``port`` argument is passed straight through to pymodbus'
+    ``AsyncModbusSerialClient``, which opens it via pyserial's
+    ``serial.serial_for_url``. Any pyserial URL therefore works without code
+    changes, so a remote RS485 adapter can be reached over the network:
+
+        # Raw TCP serial bridge
+        transport = ModbusSerialTransport(port="socket://10.0.0.5:502", ...)
+
+        # RFC 2217 proxy (ESPHome, ser2net, etc.)
+        transport = ModbusSerialTransport(port="rfc2217://10.0.0.5:2217", ...)
+
     IMPORTANT: Single-Client Limitation
     ------------------------------------
     Serial ports support only ONE concurrent connection.
@@ -92,7 +105,12 @@ class ModbusSerialTransport(BaseModbusTransport):
         """Initialize Modbus serial transport.
 
         Args:
-            port: Serial port path (e.g., /dev/ttyUSB0, COM3, /dev/tty.usbserial)
+            port: Serial port path or pyserial URL. Local devices use a path
+                (e.g., /dev/ttyUSB0, COM3, /dev/tty.usbserial). Network serial
+                bridges use a pyserial URL that is passed through unchanged to
+                ``serial.serial_for_url`` (e.g., ``socket://10.0.0.5:502`` for a
+                raw TCP bridge, or ``rfc2217://10.0.0.5:2217`` for an RFC 2217
+                proxy such as ESPHome or ser2net). See #180.
             baudrate: Serial baud rate (default 19200 for EG4 inverters)
             bytesize: Data bits per byte (default 8)
             parity: Parity setting - 'N' (none), 'E' (even), 'O' (odd)
