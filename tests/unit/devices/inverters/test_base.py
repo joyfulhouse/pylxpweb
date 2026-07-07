@@ -729,6 +729,26 @@ class TestInverterControlOperations:
         assert result is True
 
     @pytest.mark.asyncio
+    async def test_write_parameters_cloud_value_error_returns_false(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Bitfield/unmapped ValueError from the cloud endpoint degrades to
+        False (the method's bool contract, mirroring the transport branch)
+        instead of crashing callers like set_standby_mode."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+
+        mock_client.api.control = Mock()
+        mock_client.api.control.write_parameters = AsyncMock(
+            side_effect=ValueError("Register 21 is a bitfield")
+        )
+
+        result = await inverter.write_parameters({21: 512})
+
+        assert result is False
+
+    @pytest.mark.asyncio
     async def test_set_standby_mode_to_standby(self, mock_client: LuxpowerClient) -> None:
         """Test setting inverter to standby mode."""
         inverter = ConcreteInverter(

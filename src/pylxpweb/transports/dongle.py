@@ -1209,18 +1209,34 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         # payload so a misrouted ACK for the same register cannot pass as a
         # confirmation of OUR value.
         if modbus_func == MODBUS_WRITE_SINGLE:
-            if ack and ack[0] != values[0]:
+            if not ack:
+                # An empty/short ACK carries no echoed value to confirm the
+                # write landed — treat it as a failure rather than silently
+                # reporting success.
+                raise TransportWriteError(
+                    f"Write ACK empty/short for register {address}: no echoed "
+                    "value to confirm the write"
+                )
+            if ack[0] != values[0]:
                 raise TransportWriteError(
                     f"Write ACK echo mismatch for register {address}: wrote "
                     f"{values[0]}, ACK echoed {ack[0]} — possible misrouted "
                     "response"
                 )
-        elif ack and len(ack) == 1 and ack[0] != len(values):
-            # FC16 ACK echoes the written register count.
-            raise TransportWriteError(
-                f"Write ACK count mismatch for register {address}: wrote "
-                f"{len(values)} registers, ACK echoed {ack[0]}"
-            )
+        else:
+            if not ack:
+                # FC16 ACK must echo the written register count; an empty/short
+                # ACK cannot confirm the multi-register write.
+                raise TransportWriteError(
+                    f"Write ACK empty/short for register {address}: no echoed "
+                    "register count to confirm the write"
+                )
+            if len(ack) == 1 and ack[0] != len(values):
+                # FC16 ACK echoes the written register count.
+                raise TransportWriteError(
+                    f"Write ACK count mismatch for register {address}: wrote "
+                    f"{len(values)} registers, ACK echoed {ack[0]}"
+                )
         return True
 
     # Data reading/writing methods (read_runtime, read_energy, read_battery,

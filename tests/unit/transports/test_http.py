@@ -473,3 +473,38 @@ class TestHTTPTransport:
 
         with pytest.raises(TransportWriteError, match="Failed to write parameters"):
             await transport.write_parameters({0: 100})
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_success_false_raises(self) -> None:
+        """A cloud success=false reply raises instead of returning True."""
+        from pylxpweb.models import SuccessResponse
+        from pylxpweb.transports.exceptions import TransportWriteError
+
+        client = MagicMock()
+        client.login = AsyncMock()
+        client.api.control.write_parameters = AsyncMock(
+            return_value=SuccessResponse(success=False, message="REMOTE_SET_ERROR")
+        )
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        with pytest.raises(TransportWriteError, match="REMOTE_SET_ERROR"):
+            await transport.write_parameters({228: 595})
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_value_error_wrapped(self) -> None:
+        """A bitfield/unmapped-register ValueError surfaces as TransportWriteError."""
+        from pylxpweb.transports.exceptions import TransportWriteError
+
+        client = MagicMock()
+        client.login = AsyncMock()
+        client.api.control.write_parameters = AsyncMock(
+            side_effect=ValueError("Register 21 is a bitfield")
+        )
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        with pytest.raises(TransportWriteError, match="Register 21 is a bitfield"):
+            await transport.write_parameters({21: 512})

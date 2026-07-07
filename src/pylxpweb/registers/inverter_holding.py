@@ -1199,7 +1199,12 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     HoldingRegisterDefinition(
         address=158,
         canonical_name="ac_charge_start_voltage",
-        api_param_key="HOLD_AC_CHARGE_START_VOLTAGE",
+        # Write name is the READ name: the server rejects
+        # "HOLD_AC_CHARGE_START_VOLTAGE" for writes with HTTP 400, but accepts
+        # "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE" (live-validated 2026-07-07 on
+        # FlexBOSS21 52842P0581, delta write→readback→restore 40→40.5→40). The
+        # legacy "_VOLTAGE" name stays reachable via PARAM_ALIASES.
+        api_param_key="HOLD_AC_CHARGE_START_BATTERY_VOLTAGE",
         scale=ScaleFactor.DIV_10,
         unit="V",
         min_value=38.4,
@@ -1210,7 +1215,10 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     HoldingRegisterDefinition(
         address=159,
         canonical_name="ac_charge_end_voltage",
-        api_param_key="HOLD_AC_CHARGE_END_VOLTAGE",
+        # Write name is the READ name (see reg 158); the server rejects
+        # "HOLD_AC_CHARGE_END_VOLTAGE" for writes with HTTP 400 but accepts
+        # "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE" (live-validated 2026-07-07).
+        api_param_key="HOLD_AC_CHARGE_END_BATTERY_VOLTAGE",
         scale=ScaleFactor.DIV_10,
         unit="V",
         min_value=48.0,

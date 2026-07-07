@@ -996,6 +996,23 @@ LOCAL_PARAM_SCALE_DIV10: frozenset[str] = frozenset(
 )
 
 
+# Value registers whose canonical HoldingRegisterDefinition scale is NONE but
+# whose CLOUD named-write endpoint expects engineering units (raw ÷ 10), so a
+# register→named cloud write must divide by 10 to match the portal.  These are
+# NOT in LOCAL_PARAM_SCALE_DIV10 (that set is keyed by the _12K_* peak-shaving
+# param NAMES used by local reads); this set is keyed by register ADDRESS for
+# the cloud write path.  Evidence:
+#   - 202 _12K_HOLD_STOP_DISCHG_VOLT: raw decivolts, cloud float volts [40, 56].
+#   - 66 HOLD_AC_CHARGE_POWER_CMD, 74 HOLD_FORCED_CHG_POWER_CMD,
+#     82 HOLD_FORCED_DISCHG_POWER_CMD, 103 HOLD_FEED_IN_GRID_POWER_PERCENT:
+#     raw 100 W units, cloud kW (raw 120 -> "12"); see the reg-74/66 100W-unit
+#     findings (eg4_web_monitor PV-charge-power reg74 + Grid Sell Back #274).
+# The peak-shaving power regs 206/232 (raw deci-kW, cloud kW) are already
+# covered by LOCAL_PARAM_SCALE_DIV10 via their _12K_* names (pylxpweb#158 live
+# PS tests, eg4_web_monitor#328), so they are intentionally omitted here.
+CLOUD_WRITE_DIV10_REGISTERS: frozenset[int] = frozenset({202, 66, 74, 82, 103})
+
+
 def format_deci_as_cloud_string(raw: int) -> str:
     """Render a deci-unit raw register value the way the EG4 cloud does.
 
