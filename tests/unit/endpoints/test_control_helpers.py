@@ -258,26 +258,182 @@ class TestCacheInvalidation:
 
     @pytest.mark.asyncio
     async def test_write_parameters_invalidates_cache(self, api_client: Mock) -> None:
-        """Test that write_parameters invalidates cache on successful write."""
+        """A successful register write invalidates the device cache."""
         api_client._request = AsyncMock(return_value={"success": True})
         control = ControlEndpoints(api_client)
 
-        result = await control.write_parameters(SERIAL, {21: 512})
+        # Reg 67 = HOLD_AC_CHARGE_SOC_LIMIT (a pure value register, scale NONE).
+        result = await control.write_parameters(SERIAL, {67: 90})
 
         assert result.success is True
         api_client.invalidate_cache_for_device.assert_called_once_with(SERIAL)
 
     @pytest.mark.asyncio
-    async def test_write_parameters_sends_all_registers(self, api_client: Mock) -> None:
-        """Test that write_parameters sends all registers in data dict."""
+    async def test_write_parameters_translates_to_named_writes(self, api_client: Mock) -> None:
+        """Each register is sent as a NAMED holdParam/valueText write, never as
+        the old malformed nested ``data={reg: val}`` form field."""
         api_client._request = AsyncMock(return_value={"success": True})
         control = ControlEndpoints(api_client)
 
-        result = await control.write_parameters(SERIAL, {160: 20, 67: 100})
+        # 228 = HOLD_SYSTEM_CHARGE_VOLT_LIMIT (÷10 → "59.5"); 67 = SOC (1:1).
+        result = await control.write_parameters(SERIAL, {228: 595, 67: 90})
 
         assert result.success is True
-        call_data = api_client._request.call_args[1]["data"]
-        assert call_data["data"] == {"160": 20, "67": 100}
+        assert api_client._request.await_count == 2
+        sent = [call.kwargs["data"] for call in api_client._request.await_args_list]
+        # No call carries a dict-valued "data" form field anymore.
+        assert all(isinstance(d.get("valueText"), str) for d in sent)
+        assert all(not isinstance(d.get("data"), dict) for d in sent)
+        assert {
+            "inverterSn": SERIAL,
+            "holdParam": "HOLD_SYSTEM_CHARGE_VOLT_LIMIT",
+            "valueText": "59.5",
+            "clientType": "WEB",
+            "remoteSetType": "NORMAL",
+        } in sent
+        assert {
+            "inverterSn": SERIAL,
+            "holdParam": "HOLD_AC_CHARGE_SOC_LIMIT",
+            "valueText": "90",
+            "clientType": "WEB",
+            "remoteSetType": "NORMAL",
+        } in sent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("register", "raw", "expected_name", "expected_value"),
+        [
+            # Decivolt (DIV_10) registers via the canonical table.
+            (228, 595, "HOLD_SYSTEM_CHARGE_VOLT_LIMIT", "59.5"),
+            (158, 400, "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE", "40"),
+            (159, 480, "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE", "48"),
+            (169, 485, "HOLD_ON_GRID_EOD_VOLTAGE", "48.5"),
+            (100, 480, "HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT", "48"),
+            # CLOUD_WRITE_DIV10_REGISTERS: table scale is NONE but the cloud
+            # named-write expects engineering units (raw ÷ 10).
+            (202, 480, "_12K_HOLD_STOP_DISCHG_VOLT", "48"),
+            (202, 505, "_12K_HOLD_STOP_DISCHG_VOLT", "50.5"),
+            (66, 120, "HOLD_AC_CHARGE_POWER_CMD", "12"),
+            (74, 120, "HOLD_FORCED_CHG_POWER_CMD", "12"),
+            (82, 120, "HOLD_FORCED_DISCHG_POWER_CMD", "12"),
+            (103, 120, "HOLD_FEED_IN_GRID_POWER_PERCENT", "12"),
+            # LOCAL_PARAM_SCALE_DIV10 peak-shaving power regs (raw deci-kW).
+            (206, 120, "_12K_HOLD_GRID_PEAK_SHAVING_POWER", "12"),
+            (232, 41, "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2", "4.1"),
+            # 1:1 (NONE) registers pass the raw value straight through.
+            (67, 90, "HOLD_AC_CHARGE_SOC_LIMIT", "90"),
+        ],
+    )
+    async def test_write_parameters_scaling(
+        self,
+        register: int,
+        raw: int,
+        expected_name: str,
+        expected_value: str,
+    ) -> None:
+        """Register raw values scale to the cloud's string form by divisor."""
+        name, value = ControlEndpoints._resolve_named_write(register, raw)
+        assert name == expected_name
+        assert value == expected_value
+
+    def test_cloud_write_div10_registers_all_covered(self) -> None:
+        """Every register in CLOUD_WRITE_DIV10_REGISTERS resolves with a ÷10
+        divisor (guards against the set drifting out of sync with the resolver)."""
+        from pylxpweb.constants.registers import CLOUD_WRITE_DIV10_REGISTERS
+
+        for register in CLOUD_WRITE_DIV10_REGISTERS:
+            _, value = ControlEndpoints._resolve_named_write(register, 120)
+            assert value == "12", f"register {register} did not scale ÷10"
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_pre_validates_atomically(self, api_client: Mock) -> None:
+        """A bad register anywhere in the batch raises BEFORE any write, so a
+        valid earlier register is NOT written (all-or-nothing resolution)."""
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
+
+        # 67 is valid; 21 is a bitfield. Insertion order writes 67 first, but
+        # resolution happens up front so nothing is sent.
+        with pytest.raises(ValueError, match="bitfield"):
+            await control.write_parameters(SERIAL, {67: 90, 21: 128})
+        api_client._request.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "register",
+        [68, 76, 84, 152, 209, 256, 269],  # one per schedule family base.
+        ids=[
+            "ac_charge",
+            "forced_chg",
+            "forced_dischg",
+            "ac_first",
+            "peak_shaving",
+            "gen",
+            "offgrid",
+        ],
+    )
+    async def test_write_parameters_rejects_schedule_register(
+        self, api_client: Mock, register: int
+    ) -> None:
+        """Packed-time schedule registers raise, directing to the schedule setters."""
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
+
+        with pytest.raises(ValueError, match="schedule register"):
+            await control.write_parameters(SERIAL, {register: 1})
+        api_client._request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_stops_on_first_failure(self, api_client: Mock) -> None:
+        """A failed write returns immediately; later registers are not written."""
+        failure = {"success": False}
+        api_client._request = AsyncMock(return_value=failure)
+        control = ControlEndpoints(api_client)
+
+        # dict preserves insertion order: 228 is attempted first and fails.
+        result = await control.write_parameters(SERIAL, {228: 595, 67: 90})
+
+        assert result.success is False
+        api_client._request.assert_awaited_once()
+        assert api_client._request.await_args.kwargs["data"]["holdParam"] == (
+            "HOLD_SYSTEM_CHARGE_VOLT_LIMIT"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "register",
+        [21, 110],  # register 21 / 110 pack many FUNC_ bits.
+        ids=["reg21_bitfield", "reg110_bitfield"],
+    )
+    async def test_write_parameters_rejects_bitfield(self, api_client: Mock, register: int) -> None:
+        """Bitfield registers raise ValueError instead of a malformed write."""
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
+
+        with pytest.raises(ValueError, match="bitfield"):
+            await control.write_parameters(SERIAL, {register: 1})
+        api_client._request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_rejects_unmapped(self, api_client: Mock) -> None:
+        """An unmapped register raises ValueError, never a silent no-op body."""
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
+
+        with pytest.raises(ValueError, match="not mapped"):
+            await control.write_parameters(SERIAL, {9999: 1})
+        api_client._request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_parameters_empty_is_noop_success(self, api_client: Mock) -> None:
+        """An empty dict is a successful no-op with no requests sent."""
+        api_client._request = AsyncMock(return_value={"success": True})
+        control = ControlEndpoints(api_client)
+
+        result = await control.write_parameters(SERIAL, {})
+
+        assert result.success is True
+        api_client._request.assert_not_called()
 
 
 class TestSystemChargeSocLimit:
@@ -375,6 +531,44 @@ class TestACChargeScheduleCloud:
         control.write_parameter.assert_any_call(
             SERIAL, "HOLD_AC_CHARGE_END_MINUTE_1", "0", client_type="WEB"
         )
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_schedule_stops_on_first_write_failure(
+        self, control: ControlEndpoints
+    ) -> None:
+        """Legacy four-param path returns the first failed write and stops.
+
+        If HOLD_AC_CHARGE_START_HOUR is rejected, the remaining three params
+        must not be written (no half-applied schedule window).
+        """
+        failure = SuccessResponse(success=False)
+        control.write_parameter = AsyncMock(return_value=failure)
+
+        result = await control.set_ac_charge_schedule(SERIAL, 0, 23, 0, 7, 0)
+
+        assert result is failure
+        control.write_parameter.assert_called_once_with(
+            SERIAL, "HOLD_AC_CHARGE_START_HOUR", "23", client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_schedule_stops_on_later_write_failure(
+        self, control: ControlEndpoints
+    ) -> None:
+        """A failure on the third write stops before the final END_MINUTE."""
+        results = [
+            SuccessResponse(success=True),
+            SuccessResponse(success=True),
+            SuccessResponse(success=False),
+            SuccessResponse(success=True),
+        ]
+        control.write_parameter = AsyncMock(side_effect=results)
+
+        result = await control.set_ac_charge_schedule(SERIAL, 0, 23, 0, 7, 0)
+
+        assert result.success is False
+        # START_HOUR, START_MINUTE, END_HOUR only — END_MINUTE skipped.
+        assert control.write_parameter.call_count == 3
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_schedule_invalid_period(self, control: ControlEndpoints) -> None:
@@ -569,17 +763,18 @@ class TestACChargeVoltageLimitsCloud:
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_voltage_limits(self, control: ControlEndpoints) -> None:
-        """Test setting AC charge voltage limits (decivolts conversion)."""
+        """The cloud API takes VOLTS, not decivolts (live-verified 2026-07-07):
+        40V is sent as "40", never "400"."""
         control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
 
         result = await control.set_ac_charge_voltage_limits(SERIAL, 40, 58)
 
         assert result.success is True
         control.write_parameter.assert_any_call(
-            SERIAL, "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE", "400", client_type="WEB"
+            SERIAL, "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE", "40", client_type="WEB"
         )
         control.write_parameter.assert_any_call(
-            SERIAL, "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE", "580", client_type="WEB"
+            SERIAL, "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE", "58", client_type="WEB"
         )
 
     @pytest.mark.asyncio
@@ -592,13 +787,53 @@ class TestACChargeVoltageLimitsCloud:
 
     @pytest.mark.asyncio
     async def test_get_ac_charge_voltage_limits(self, control: ControlEndpoints) -> None:
-        """Test getting AC charge voltage limits (decivolts conversion)."""
+        """The cloud read returns VOLTS; parse as float, no ÷10.
+
+        A whole-volt read ("40") must come back as 40.0V, not 4V.
+        """
         control.read_device_parameters_ranges = AsyncMock(
             return_value={
-                "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE": 400,
-                "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE": 580,
+                "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE": "40",
+                "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE": "58",
             }
         )
 
         limits = await control.get_ac_charge_voltage_limits(SERIAL)
-        assert limits == {"start_voltage": 40, "end_voltage": 58}
+        assert limits == {"start_voltage": 40.0, "end_voltage": 58.0}
+
+    @pytest.mark.asyncio
+    async def test_get_ac_charge_voltage_limits_fractional(self, control: ControlEndpoints) -> None:
+        """A fractional-volt read ("40.5") parses as 40.5, not a ValueError."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE": "40.5",
+                "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE": "58",
+            }
+        )
+
+        limits = await control.get_ac_charge_voltage_limits(SERIAL)
+        assert limits == {"start_voltage": 40.5, "end_voltage": 58.0}
+
+
+class TestSignedRegisterInvariant:
+    """No signed holding register may be silently writable via write_parameters.
+
+    The cloud wire format for negative values is unvalidated; the resolver
+    refuses signed registers. This invariant test forces an explicit decision
+    if a signed register is ever added to REGISTER_TO_PARAM_KEYS.
+    """
+
+    def test_no_mapped_register_is_signed(self) -> None:
+        from pylxpweb.constants.registers import REGISTER_TO_PARAM_KEYS
+        from pylxpweb.registers import HOLDING_BY_ADDRESS
+
+        signed_mapped = [
+            addr
+            for addr in REGISTER_TO_PARAM_KEYS
+            if any(d.signed for d in HOLDING_BY_ADDRESS.get(addr, ()))
+        ]
+        assert signed_mapped == [], (
+            f"Signed registers {signed_mapped} are mapped in "
+            "REGISTER_TO_PARAM_KEYS; validate their cloud negative-value "
+            "format before allowing them through write_parameters"
+        )

@@ -1775,6 +1775,30 @@ class TestWriteAckEchoValidation:
             await transport._write_holding_registers(110, [1, 2])
 
     @pytest.mark.asyncio
+    async def test_fc06_empty_ack_raises(self) -> None:
+        """An empty FC06 ACK carries no echoed value — must raise, not pass."""
+        transport = self._connected_transport()
+        transport._send_receive = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError, match="empty/short"),
+        ):
+            await transport._write_holding_registers(110, [0x0100])
+
+    @pytest.mark.asyncio
+    async def test_fc16_empty_ack_raises(self) -> None:
+        """An empty FC16 ACK carries no echoed count — must raise, not pass."""
+        transport = self._connected_transport()
+        transport._send_receive = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+        with (
+            patch("asyncio.sleep", AsyncMock()),
+            pytest.raises(TransportWriteError, match="empty/short"),
+        ):
+            await transport._write_holding_registers(110, [1, 2])
+
+    @pytest.mark.asyncio
     async def test_write_timeout_propagates_without_inner_resend(self) -> None:
         """Write timeout tears down and raises — NO request-level resend.
 
@@ -1875,7 +1899,10 @@ class TestDongleForceReconnect:
         transport = _make_write_test_transport(write_step_delay=0.05, verify_writes=False)
 
         mock_read = AsyncMock(return_value=[0x0000])
-        mock_send = AsyncMock(return_value=[])
+        # FUNC_EPS_EN is register 21 bit 0: enabling from 0x0000 writes value 1,
+        # and the FC06 ACK echoes the written value. A non-empty echo is now
+        # required — an empty ACK raises TransportWriteError.
+        mock_send = AsyncMock(return_value=[1])
         sleep_mock = AsyncMock()
 
         with (

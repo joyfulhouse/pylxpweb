@@ -1844,9 +1844,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 return False
         else:
             # Use HTTP API
-            response = await self._client.api.control.write_parameters(
-                self.serial_number, parameters
-            )
+            try:
+                response = await self._client.api.control.write_parameters(
+                    self.serial_number, parameters
+                )
+            except ValueError as err:
+                # Bitfield/unmapped registers have no cloud parameter name to
+                # write (control.write_parameters raises rather than sending a
+                # malformed body). Keep this method's documented bool contract
+                # — mirroring the transport branch's catch-and-False — so
+                # callers like set_standby_mode degrade instead of crashing.
+                _LOGGER.error(
+                    "Cannot write parameters via cloud for %s: %s",
+                    self.serial_number,
+                    err,
+                )
+                return False
 
             # Invalidate parameter cache on successful write
             if response.success:

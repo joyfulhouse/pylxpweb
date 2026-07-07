@@ -5,7 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.37] - 2026-07-07
+
+### Fixed
+
+- **Cloud raw-register writes never reached the inverter**
+  ([eg4_web_monitor#48](https://github.com/joyfulhouse/eg4_web_monitor/issues/48) voltage-limit
+  controls, historical `DATAFRAME_TIMEOUT`-style cloud write failures):
+  `control.write_parameters(sn, {register: raw})` form-encoded a nested dict,
+  which aiohttp serialises as `data=<reg>&data=<reg>` — the VALUES were
+  dropped and the server rejected or ignored the malformed body. Rewritten to
+  the portal's named singular write (`holdParam`/`valueText`): register
+  addresses resolve to their cloud parameter names via
+  `REGISTER_TO_PARAM_KEYS` with `ScaleFactor`-based value conversion (e.g.
+  raw 595 → `"59.5"`). Bitfield and unmapped registers now raise `ValueError`
+  instead of silently sending a bad body. Live-validated 2026-07-07 on a
+  FlexBOSS21 (delta write → readback → restore on registers 228 and 158).
+- **Registers 158/159 cloud write name corrected**: the server rejects
+  `HOLD_AC_CHARGE_START/END_VOLTAGE` with HTTP 400; the accepted name is the
+  read name `HOLD_AC_CHARGE_START/END_BATTERY_VOLTAGE` (live-validated).
+- **Cloud schedule writes report partial failures**: `_set_schedule` ignored
+  every write result except the last, so a failed start-boundary write
+  followed by a successful end write returned success with a half-applied
+  window. Both the `writeTime` and classic four-parameter paths now stop at
+  the first failed write and return it.
+- **Local schedule writes report failures**: `HybridInverter._set_schedule`
+  ignored the boolean results of its two register writes and returned `True`
+  unconditionally, masking firmware NAKs and link drops. It now returns
+  `False` on the first failed write without touching the end register.
+- **Dongle write ACK: empty acknowledgement no longer passes as success**:
+  `_write_holding_registers` skipped echo validation entirely when the ACK
+  payload was empty (for both FC06 and FC16), reporting success on a frame
+  that confirmed nothing. Empty ACKs now raise `TransportWriteError`.
+- **AC charge voltage limits use volts, not decivolts** (cloud API):
+  `set_ac_charge_voltage_limits` wrote `str(voltage * 10)` (e.g. `"400"` for
+  40 V) and `get_ac_charge_voltage_limits` divided the read by 10 — both wrong.
+  Live-verified 2026-07-07 on a FlexBOSS21: the cloud takes and returns whole
+  volts (`"40.5"` → readback 40.5 V). The setter now writes `f"{voltage:g}"`
+  and the getter parses the reading as a float and returns volts unchanged
+  (`get_ac_charge_voltage_limits` now returns `dict[str, float]`); the old
+  `int(...) // 10` truncated whole-volt reads to a tenth and raised on
+  fractional strings.
+
+## [0.9.36] - 2026-07-06
+
+_First stable release of the 0.9.36 line, consolidating 0.9.36b1–b28. The
+entries below were accumulated during the beta cycle._
+
 
 ### Added
 

@@ -22,6 +22,17 @@ from pylxpweb.models import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Holding-register addresses occupied by the packed-time schedule families
+# (each config spans 2 * periods registers from its base). These are writable
+# only via the schedule setters (_set_schedule / write_time_parameter); a raw
+# single-register cloud write of a packed value would not round-trip, so
+# write_parameters rejects them. Derived once from SCHEDULE_CONFIGS.
+_SCHEDULE_REGISTER_ADDRESSES: frozenset[int] = frozenset(
+    address
+    for config in SCHEDULE_CONFIGS.values()
+    for address in range(config.base_register, config.base_register + 2 * config.periods)
+)
+
 
 class ControlEndpoints(BaseEndpoint):
     """Device control endpoints for parameters, functions, and quick charge."""
@@ -231,48 +242,158 @@ class ControlEndpoints(BaseEndpoint):
         parameters: dict[int, int],
         client_type: str = "WEB",
     ) -> SuccessResponse:
-        """Write multiple configuration parameters to the inverter.
+        """Write multiple configuration parameters to the inverter by register.
 
          WARNING: This changes device configuration!
 
-        This is a convenience method that writes register values directly.
-        For named parameters, use write_parameter() instead.
+        Each ``{address: raw_value}`` pair is translated to the server's NAMED
+        singular write (``write_parameter`` holdParam/valueText) — the only
+        cloud write format the portal accepts. The register address is resolved
+        to its cloud param name via ``REGISTER_TO_PARAM_KEYS`` (first key only,
+        for pure value registers) and the raw value is scaled to the cloud's
+        string form using the canonical ``HoldingRegisterDefinition`` table
+        (``ScaleFactor.NONE`` → ``str(raw)``; ``DIV_10`` → ``raw / 10``, etc.).
+
+        The previous implementation form-encoded a nested ``data={reg: val}``
+        dict, which serialised as ``data=<reg>&data=<reg>`` with the values
+        dropped — a malformed body the server rejected as a no-op. Only pure
+        value registers can be written this way; bitfield registers (which pack
+        several named FUNC_/BIT_ params into one address) and unmapped
+        registers raise ``ValueError`` rather than silently sending a bad body.
 
         Args:
             inverter_sn: Inverter serial number
-            parameters: Dict mapping register addresses to values
+            parameters: Dict mapping register addresses to raw register values
             client_type: Client type (WEB/APP)
 
         Returns:
-            SuccessResponse: Operation result
+            SuccessResponse: Result of the last write, or the first failed
+                write (remaining writes are not attempted after a failure).
+
+        Raises:
+            ValueError: If any address is a bitfield register or is not mapped
+                to a single cloud parameter name.
+
+        Live validation (2026-07-07, FlexBOSS21 52842P0581):
+            Named writes with these exact names were delta-tested
+            (write → readback → restore): HOLD_SYSTEM_CHARGE_VOLT_LIMIT
+            (reg 228, 59.5 → 59.4 → 59.5 confirmed) and
+            HOLD_AC_CHARGE_START_BATTERY_VOLTAGE (reg 158, 40 → 40.5 → 40
+            confirmed, readback via reg-158 remoteRead). No-op writes were
+            accepted for HOLD_ON_GRID_EOD_VOLTAGE (169),
+            HOLD_LEAD_ACID_DISCHARGE_CUT_OFF_VOLT (100) and
+            HOLD_AC_CHARGE_END_BATTERY_VOLTAGE (159).
 
         Example:
-            # Set multiple registers at once
-            await client.control.write_parameters(
-                "1234567890",
-                {21: 512, 66: 50, 67: 100}  # Register addresses and values
-            )
+            # Set the system charge voltage limit (reg 228, ÷10 → "59.5")
+            await client.control.write_parameters("1234567890", {228: 595})
         """
         if not parameters:
             return SuccessResponse(success=True)
 
-        await self.client._ensure_authenticated()
+        # Resolve every (holdParam, valueText) pair BEFORE writing anything, so a
+        # bad register in the batch raises ValueError without a partial write.
+        resolved = [
+            self._resolve_named_write(address, raw_value)
+            for address, raw_value in parameters.items()
+        ]
 
-        data = {
-            "inverterSn": inverter_sn,
-            "data": {str(reg): val for reg, val in parameters.items()},
-            "clientType": client_type,
-        }
-
-        response = await self.client._request(
-            "POST", "/WManage/web/maintain/remoteSet/write", data=data
-        )
-        result = SuccessResponse.model_validate(response)
-
-        if result.success:
-            self.client.invalidate_cache_for_device(inverter_sn)
-
+        result = SuccessResponse(success=True)
+        for hold_param, value_text in resolved:
+            result = await self.write_parameter(
+                inverter_sn, hold_param, value_text, client_type=client_type
+            )
+            if not result.success:
+                return result
         return result
+
+    @staticmethod
+    def _resolve_named_write(address: int, raw_value: int) -> tuple[str, str]:
+        """Resolve a raw register write to its (holdParam, valueText) named form.
+
+        Args:
+            address: Modbus holding register address
+            raw_value: Raw 16-bit register value to write
+
+        Returns:
+            Tuple of (cloud param name, cloud value string)
+
+        Raises:
+            ValueError: If the address is a bitfield register (packs multiple
+                named params), is a packed-time schedule register, or is not
+                mapped to a cloud parameter name.
+        """
+        from pylxpweb.constants.registers import (
+            CLOUD_WRITE_DIV10_REGISTERS,
+            LOCAL_PARAM_SCALE_DIV10,
+            REGISTER_TO_PARAM_KEYS,
+        )
+        from pylxpweb.registers import HOLDING_BY_ADDRESS
+        from pylxpweb.registers.inverter_input import ScaleFactor
+
+        # Packed-time schedule registers only exist for LOCAL packed reads; the
+        # cloud schedule write path is per-field (_set_schedule) or the atomic
+        # writeTime endpoint, never a single raw register value.
+        if address in _SCHEDULE_REGISTER_ADDRESSES:
+            raise ValueError(
+                f"Register {address} is a packed-time schedule register; write "
+                "schedules via _set_schedule / write_time_parameter, not "
+                "write_parameters"
+            )
+
+        param_keys = REGISTER_TO_PARAM_KEYS.get(address)
+        if not param_keys:
+            raise ValueError(
+                f"Register {address} is not mapped to a cloud parameter name; "
+                "cannot write it as a named parameter"
+            )
+        if len(param_keys) > 1:
+            raise ValueError(
+                f"Register {address} is a bitfield ({len(param_keys)} named "
+                "params share it); write its individual FUNC_/BIT_ params via "
+                "control_function/control_bit_param instead of write_parameters"
+            )
+
+        definitions = HOLDING_BY_ADDRESS.get(address, ())
+        if any(d.bit_position is not None for d in definitions):
+            raise ValueError(
+                f"Register {address} is a bitfield register; write its "
+                "individual FUNC_/BIT_ params instead of write_parameters"
+            )
+
+        param_key = param_keys[0]
+
+        # Signed registers: the cloud's wire format for negative values is
+        # UNVALIDATED (no mapped signed register exists today — an invariant
+        # test enforces that). Refuse rather than guess whether the server
+        # wants "-1" or 65535.
+        if any(d.signed for d in definitions):
+            raise ValueError(
+                f"Register {address} is signed; its cloud negative-value "
+                "format is unvalidated — write it via a dedicated named "
+                "setter instead of write_parameters"
+            )
+
+        # Cloud write divisor: the canonical table's ScaleFactor wins when it is
+        # not NONE; otherwise fall back to the two known-DIV10 sources — the
+        # _12K_* peak-shaving names (keyed by param name) and the explicit
+        # cloud-write DIV10 register set (keyed by address). Both map raw
+        # register units to the engineering units the portal expects.
+        scale = ScaleFactor.NONE
+        for d in definitions:
+            if d.bit_position is None:
+                scale = d.scale
+                break
+
+        if scale != ScaleFactor.NONE:
+            divisor = scale.value
+        elif param_key in LOCAL_PARAM_SCALE_DIV10 or address in CLOUD_WRITE_DIV10_REGISTERS:
+            divisor = 10
+        else:
+            divisor = 1
+
+        value_text = str(raw_value) if divisor == 1 else f"{raw_value / divisor:g}"
+        return param_key, value_text
 
     async def control_function(
         self,
@@ -1427,13 +1548,18 @@ class ControlEndpoints(BaseEndpoint):
         suffix = config.period_suffixes[period]
 
         if config.write_via_time_api:
-            await self.write_time_parameter(
+            # Write the start boundary first; if it fails, return that failure
+            # immediately without writing the end boundary (which would leave a
+            # half-applied schedule window).
+            start_result = await self.write_time_parameter(
                 inverter_sn,
                 f"{prefix}_START_TIME{suffix}",
                 start_hour,
                 start_minute,
                 client_type=client_type,
             )
+            if not start_result.success:
+                return start_result
             return await self.write_time_parameter(
                 inverter_sn,
                 f"{prefix}_END_TIME{suffix}",
@@ -1442,24 +1568,32 @@ class ControlEndpoints(BaseEndpoint):
                 client_type=client_type,
             )
 
-        await self.write_parameter(
+        # Classic four-param path: stop at the first failed write so we don't
+        # push later fields over a schedule that was only partially accepted.
+        start_hour_result = await self.write_parameter(
             inverter_sn,
             f"{prefix}_START_HOUR{suffix}",
             str(start_hour),
             client_type=client_type,
         )
-        await self.write_parameter(
+        if not start_hour_result.success:
+            return start_hour_result
+        start_minute_result = await self.write_parameter(
             inverter_sn,
             f"{prefix}_START_MINUTE{suffix}",
             str(start_minute),
             client_type=client_type,
         )
-        await self.write_parameter(
+        if not start_minute_result.success:
+            return start_minute_result
+        end_hour_result = await self.write_parameter(
             inverter_sn,
             f"{prefix}_END_HOUR{suffix}",
             str(end_hour),
             client_type=client_type,
         )
+        if not end_hour_result.success:
+            return end_hour_result
         return await self.write_parameter(
             inverter_sn,
             f"{prefix}_END_MINUTE{suffix}",
@@ -2179,37 +2313,51 @@ class ControlEndpoints(BaseEndpoint):
         if not 48 <= end_voltage <= 59:
             raise ValueError(f"end_voltage must be 48-59V, got {end_voltage}")
 
-        # Cloud API expects decivolts (×10)
-        await self.write_parameter(
+        # Cloud API expects VOLTS, not decivolts — live-refuted 2026-07-07 on a
+        # FlexBOSS21: "40.5" written to HOLD_AC_CHARGE_START_BATTERY_VOLTAGE read
+        # back as 40.5V, so "400" would be garbage. Format with :g so a whole
+        # volt has no trailing ".0".
+        start_result = await self.write_parameter(
             inverter_sn,
             "HOLD_AC_CHARGE_START_BATTERY_VOLTAGE",
-            str(start_voltage * 10),
+            f"{start_voltage:g}",
             client_type=client_type,
         )
+        if not start_result.success:
+            # Don't write the end limit over a rejected start write — return
+            # the failure so callers see exactly what was (not) applied.
+            return start_result
         return await self.write_parameter(
             inverter_sn,
             "HOLD_AC_CHARGE_END_BATTERY_VOLTAGE",
-            str(end_voltage * 10),
+            f"{end_voltage:g}",
             client_type=client_type,
         )
 
-    async def get_ac_charge_voltage_limits(self, inverter_sn: str) -> dict[str, int]:
+    async def get_ac_charge_voltage_limits(self, inverter_sn: str) -> dict[str, float]:
         """Get AC charge start/stop voltage thresholds via cloud API.
 
         Returns:
-            Dictionary with start_voltage and end_voltage (whole volts)
+            Dictionary with start_voltage and end_voltage in VOLTS.
+
+        Note:
+            The cloud read returns volts (e.g. "40" or "40.5"), NOT decivolts —
+            so the value is parsed as a float and returned as-is with no ÷10
+            (live-verified 2026-07-07). The old ``int(...) // 10`` both truncated
+            whole-volt reads to a tenth of their value and raised on fractional
+            strings.
 
         Example:
             >>> limits = await client.control.get_ac_charge_voltage_limits("1234567890")
             >>> limits
-            {'start_voltage': 40, 'end_voltage': 58}
+            {'start_voltage': 40.0, 'end_voltage': 58.0}
         """
         params = await self.read_device_parameters_ranges(inverter_sn)
-        start_raw = int(params.get("HOLD_AC_CHARGE_START_BATTERY_VOLTAGE", 0))
-        end_raw = int(params.get("HOLD_AC_CHARGE_END_BATTERY_VOLTAGE", 0))
+        start_v = float(params.get("HOLD_AC_CHARGE_START_BATTERY_VOLTAGE", 0) or 0)
+        end_v = float(params.get("HOLD_AC_CHARGE_END_BATTERY_VOLTAGE", 0) or 0)
         return {
-            "start_voltage": start_raw // 10,
-            "end_voltage": end_raw // 10,
+            "start_voltage": start_v,
+            "end_voltage": end_v,
         }
 
     # ============================================================================

@@ -460,9 +460,12 @@ class HybridInverter(GenericInverter):
 
         # Write each register individually — inverter rejects FC16 (write
         # multiple) for schedule registers, only FC06 (write single) works.
-        await self.write_parameters({start_reg: pack_time(start_hour, start_minute)})
-        await self.write_parameters({end_reg: pack_time(end_hour, end_minute)})
-        return True
+        # write_parameters returns False (rather than raising) on failure, so
+        # check the start write before touching the end register to avoid a
+        # half-applied window, and surface either failure to the caller.
+        if not await self.write_parameters({start_reg: pack_time(start_hour, start_minute)}):
+            return False
+        return await self.write_parameters({end_reg: pack_time(end_hour, end_minute)})
 
     async def _get_schedule(self, schedule_type: ScheduleType, period: int) -> dict[str, int]:
         """Read a time period schedule (generic helper, transport or cloud).

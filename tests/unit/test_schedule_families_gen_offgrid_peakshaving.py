@@ -243,6 +243,20 @@ class TestCloudWrites:
         )
 
     @pytest.mark.asyncio
+    async def test_write_time_start_failure_skips_end(self, control: ControlEndpoints) -> None:
+        """writeTime path: a failed start boundary returns immediately and the
+        end boundary is never written (no half-applied window)."""
+        failure = SuccessResponse(success=False)
+        control.write_time_parameter = AsyncMock(return_value=failure)
+
+        result = await control.set_gen_charge_schedule(SERIAL, 0, 16, 0, 20, 59)
+
+        assert result is failure
+        control.write_time_parameter.assert_called_once_with(
+            SERIAL, "HOLD_GEN_START_TIME_1", 16, 0, client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
     async def test_off_grid_period_out_of_range_for_two_window(
         self, control: ControlEndpoints
     ) -> None:
@@ -367,6 +381,32 @@ class TestModbusWrites:
 
         transport.write_parameters.assert_any_await({209: pack_time(16, 0)})
         transport.write_parameters.assert_any_await({210: pack_time(20, 59)})
+
+    @pytest.mark.asyncio
+    async def test_local_start_write_failure_skips_end(self, mock_client: LuxpowerClient) -> None:
+        """A False start-register write returns False without writing the end
+        register (BaseInverter.write_parameters returns False on failure)."""
+        inverter, transport = self._local_inverter(mock_client)
+        transport.write_parameters = AsyncMock(return_value=False)
+
+        result = await inverter.set_gen_charge_schedule(0, 16, 0, 20, 59)
+
+        assert result is False
+        # Only the start-register write is attempted; the end register (259/258)
+        # is never written.
+        assert transport.write_parameters.await_count == 1
+        transport.write_parameters.assert_awaited_once_with({256: pack_time(16, 0)})
+
+    @pytest.mark.asyncio
+    async def test_local_end_write_failure_returns_false(self, mock_client: LuxpowerClient) -> None:
+        """A False end-register write propagates as False."""
+        inverter, transport = self._local_inverter(mock_client)
+        transport.write_parameters = AsyncMock(side_effect=[True, False])
+
+        result = await inverter.set_gen_charge_schedule(0, 16, 0, 20, 59)
+
+        assert result is False
+        assert transport.write_parameters.await_count == 2
 
     @pytest.mark.asyncio
     async def test_gen_charge_local_period_out_of_range(self, mock_client: LuxpowerClient) -> None:

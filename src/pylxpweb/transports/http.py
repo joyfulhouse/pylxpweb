@@ -348,15 +348,26 @@ class HTTPTransport(BaseTransport):
 
         try:
             # Use the batch write_parameters method which takes dict[int, int]
-            await self._client.api.control.write_parameters(
+            result = await self._client.api.control.write_parameters(
                 self._serial,
                 parameters=parameters,
             )
+            if not result.success:
+                raise TransportWriteError(
+                    f"Cloud rejected parameter write for {self._serial}: "
+                    f"{result.message or 'success=false'}"
+                )
             return True
 
         except TimeoutError as err:
             _LOGGER.error("Timeout writing parameters for %s", self._serial)
             raise TransportTimeoutError(f"Timeout writing parameters for {self._serial}") from err
+        except ValueError as err:
+            # write_parameters raises ValueError for bitfield/unmapped
+            # registers (no cloud parameter name to write) — surface it under
+            # the transport error contract like every other write failure.
+            _LOGGER.error("Cannot write parameters for %s: %s", self._serial, err)
+            raise TransportWriteError(f"Cannot write parameters for {self._serial}: {err}") from err
         except (LuxpowerAPIError, LuxpowerDeviceError, LuxpowerConnectionError) as err:
             _LOGGER.error("Failed to write parameters for %s: %s", self._serial, err)
             raise TransportWriteError(
