@@ -175,6 +175,15 @@ MAX_ELAPSED_HOURS = 24.0
 # would reject the smallest possible real increment.
 MIN_DAILY_DELTA = 0.1
 
+# Floating-point tolerance (kWh) for the delta-vs-bound comparison.  Register
+# deltas are exact multiples of 0.1 kWh, but IEEE-754 subtraction does not
+# preserve that: e.g. ``4.4 - 4.3 == 0.10000000000000053``, which spuriously
+# exceeds a 0.1 bound and rejected valid single ticks on low-usage inverters
+# (#346).  This tolerance absorbs representation error only; it is ~5 orders
+# of magnitude below the 0.1 resolution, so genuine corrupt spikes (which are
+# orders of magnitude *above* the bound) remain rejected.
+DELTA_FLOAT_TOLERANCE = 1e-6
+
 
 def validate_daily_energy_bounds(
     curr_values: dict[str, float | None],
@@ -248,7 +257,7 @@ def validate_daily_energy_bounds(
             prev = prev_values.get(key)
             if prev is not None and curr > prev:
                 delta = curr - prev
-                if delta > delta_bound:
+                if delta > delta_bound + DELTA_FLOAT_TOLERANCE:
                     _LOGGER.warning(
                         "%s daily energy spike rejected: %s jumped "
                         "%.1f -> %.1f (delta %.1f > %.1f max, "
