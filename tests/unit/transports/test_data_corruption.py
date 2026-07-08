@@ -38,6 +38,36 @@ class TestInverterRuntimeDataCorruption:
         )
         assert data.is_corrupt() is False
 
+    def test_battery_temperature_sentinel_from_registers_is_none(self) -> None:
+        """A shared-battery secondary (reg 96 = 0, no local BMS) reports reg 67 =
+        0x7F (127 C) as "no reading".  from_modbus_registers() must map that
+        sentinel to None so the sensor reads unknown rather than a bogus 127 C
+        (eg4_web_monitor#348)."""
+        input_regs: dict[int, int] = {
+            1: 5100,  # PV1 voltage
+            2: 5050,  # PV2 voltage
+            7: 1000,  # PV1 power
+            8: 1500,  # PV2 power
+            15: 5998,  # Grid frequency 59.98 Hz
+            64: 25,  # Internal temp (valid)
+            65: 40,  # Radiator temp 1 (valid)
+            66: 38,  # Radiator temp 2 (valid)
+            67: 127,  # Battery temp sentinel (0x7F "no reading")
+        }
+        data = InverterRuntimeData.from_modbus_registers(input_regs)
+        assert data.battery_temperature is None
+        # The lone battery-temp sentinel must NOT invalidate the whole runtime.
+        assert data.is_corrupt() is False
+        assert data.pv1_voltage == 510.0
+        assert data.internal_temperature == 25.0
+
+    def test_battery_temperature_valid_reading_preserved(self) -> None:
+        """A real battery temperature is unaffected by the sentinel handling."""
+        input_regs: dict[int, int] = {67: 25}  # 25 C
+        data = InverterRuntimeData.from_modbus_registers(input_regs)
+        assert data.battery_temperature == 25.0
+        assert data.is_corrupt() is False
+
     def test_raw_soc_above_100_is_corrupt(self) -> None:
         """is_corrupt() returns True when _raw_soc > 100 (e.g. battery_soc=144)."""
         data = InverterRuntimeData(battery_soc=144)
@@ -277,6 +307,13 @@ class TestBatteryBankDataCorruption:
         """is_corrupt() returns False for empty batteries list with valid bank SoC/SoH."""
         data = BatteryBankData(soc=85, soh=95, batteries=[])
         assert data.is_corrupt() is False
+
+    def test_battery_temperature_sentinel_normalized(self) -> None:
+        """The 127°C "no reading" sentinel is normalized to None on the bank path
+        too, so a no-BMS secondary never surfaces a bogus 127°C
+        (eg4_web_monitor#348)."""
+        assert BatteryBankData(soc=85, soh=95, temperature=127.0).temperature is None
+        assert BatteryBankData(soc=85, soh=95, temperature=22.0).temperature == 22.0
 
     def test_battery_count_above_20_is_corrupt(self) -> None:
         """is_corrupt() returns True when battery_count exceeds physical maximum."""
@@ -520,6 +557,20 @@ class TestInverterTemperatureCanary:
     def test_bms_cell_temperature_below_minus40_is_corrupt(self) -> None:
         """BMS cell temperature < -40°C triggers corruption."""
         data = InverterRuntimeData(bms_min_cell_temperature=-50.0)
+        assert data.is_corrupt() is True
+
+    def test_battery_temperature_sentinel_normalized_not_fatal(self) -> None:
+        """The exact 127°C sentinel is normalized to None (any construction
+        path), so it never trips the canary (eg4_web_monitor#348)."""
+        data = InverterRuntimeData(battery_temperature=127.0)
+        assert data.battery_temperature is None
+        assert data.is_corrupt() is False
+
+    def test_battery_temperature_genuine_corruption_still_fatal(self) -> None:
+        """A non-sentinel out-of-range battery temperature is still treated as
+        corruption — only the exact 127°C sentinel is excused."""
+        data = InverterRuntimeData(battery_temperature=150.0)
+        assert data.battery_temperature == 150.0
         assert data.is_corrupt() is True
 
     def test_none_temperatures_bypass_check(self) -> None:

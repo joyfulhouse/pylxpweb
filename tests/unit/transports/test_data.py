@@ -208,8 +208,10 @@ class TestInverterRuntimeData:
         assert data.inverter_power is None
         assert data.eps_power is None
         assert data.device_status is None
-        # Fields the offline payload DOES carry still convert.
+        # Fields the offline payload DOES carry still convert (offline devices
+        # still report temperatures — tBat is a required field).
         assert data.internal_temperature == 33.0  # tinner present
+        assert data.battery_temperature == 5.0  # tBat present in this payload
 
     def test_from_http_response_omitted_pv3_is_none(self) -> None:
         """A 2-string payload omitting vpv3/ppv3 → pv3 stays None, not 0.
