@@ -2044,6 +2044,19 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     # Register-bit helpers (transport ↔ cloud)
     # ============================================================================
 
+    def _require_client(self, register: int, op: str) -> LuxpowerClient:
+        """Return the cloud client for a register op, or raise if it is absent.
+
+        Used by the register-bit helpers' cloud branches: with no transport and
+        no client there is nowhere to send the read/write. ``op`` is ``"read"``
+        or ``"write"`` to reproduce the exact message.
+        """
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                f"Register {register} {op} requires a transport or a cloud client"
+            )
+        return self._client
+
     @staticmethod
     def _cloud_param_key(register: int, bit: int = 0) -> str:
         """Resolve the cloud API parameter name for a register value or bit.
@@ -2094,12 +2107,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     f"Register {register} read requires a successful Modbus read"
                 )
             return int(value)
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                f"Register {register} read requires a transport or a cloud client"
-            )
+        client = self._require_client(register, "read")
         param_key = self._cloud_param_key(register)
-        response = await self._client.api.control.read_parameters(self.serial_number, register, 1)
+        response = await client.api.control.read_parameters(self.serial_number, register, 1)
         # Cloud returns engineering units (possibly a float-like string, e.g.
         # "59.5"); reconstruct the raw register value so callers that re-apply
         # the register scale get the same result as the transport path.
@@ -2120,13 +2130,8 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     f"Register {register} write requires a successful Modbus write"
                 )
             return True
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                f"Register {register} write requires a transport or a cloud client"
-            )
-        response = await self._client.api.control.write_parameters(
-            self.serial_number, {register: value}
-        )
+        client = self._require_client(register, "write")
+        response = await client.api.control.write_parameters(self.serial_number, {register: value})
         return bool(response.success)
 
     async def _get_register_bit(self, register: int, bit: int) -> bool:
@@ -2138,12 +2143,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     f"Register {register} read requires a successful Modbus read"
                 )
             return bool(raw & (1 << bit))
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                f"Register {register} read requires a transport or a cloud client"
-            )
+        client = self._require_client(register, "read")
         param_key = self._cloud_param_key(register, bit)
-        response = await self._client.api.control.read_parameters(self.serial_number, register, 1)
+        response = await client.api.control.read_parameters(self.serial_number, register, 1)
         return bool(response.parameters.get(param_key, False))
 
     async def _set_modbus_register_bit(self, register: int, bit: int, enabled: bool) -> bool:
@@ -2158,14 +2160,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             current_value = await self._read_modbus_register(register)
             new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
             return await self._write_modbus_register(register, new_value)
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                f"Register {register} write requires a transport or a cloud client"
-            )
+        client = self._require_client(register, "write")
         param_key = self._cloud_param_key(register, bit)
-        response = await self._client.api.control.control_function(
-            self.serial_number, param_key, enabled
-        )
+        response = await client.api.control.control_function(self.serial_number, param_key, enabled)
         return bool(response.success)
 
     def _get_parameter(
@@ -2220,6 +2217,52 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             return value
 
         return cast(value) if value is not None else cast(default)
+
+    def _param_float(self, key: str) -> float | None:
+        """Return a cached parameter as float, or None on miss.
+
+        None-on-miss semantics (distinct from :meth:`_get_parameter`, which
+        substitutes a default): returns None when parameters have not been
+        loaded, or when the key is absent/None; otherwise ``float(value)``.
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get(key)
+        if value is None:
+            return None
+        return float(value)
+
+    def _param_int_in_range(self, key: str, low: int, high: int) -> int | None:
+        """Return a cached parameter as a range-clamped int, or None on miss.
+
+        None-on-miss semantics like :meth:`_param_float`, but casts to int and
+        returns the value only when ``low <= v <= high``; anything outside the
+        range, or a value that cannot be cast, yields None.
+        """
+        if self.parameters is None:
+            return None
+        value = self.parameters.get(key)
+        if value is None:
+            return None
+        try:
+            int_value = int(value)
+            return int_value if low <= int_value <= high else None
+        except (ValueError, TypeError):
+            return None
+
+    async def _write_named_parameter(self, param_key: str, value: object) -> bool:
+        """Write a named parameter and invalidate the cache on success.
+
+        Consolidates the common setter tail: write ``str(value)`` to
+        ``param_key`` via the cloud control API, drop the parameter cache
+        timestamp when the write succeeds, and return the success flag.
+        """
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, param_key, str(value)
+        )
+        if result.success:
+            self._parameters_cache_time = None
+        return result.success
 
     async def set_standby_mode(self, standby: bool) -> bool:
         """Enable or disable standby mode.
@@ -2536,15 +2579,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             raise ValueError(f"AC charge power must be between 0.0 and 15.0 kW, got {power_kw}")
 
         # API accepts kW values directly
-        result = await self._client.api.control.write_parameter(
-            self.serial_number, "HOLD_AC_CHARGE_POWER_CMD", str(power_kw)
-        )
-
-        # Invalidate parameter cache on successful write
-        if result.success:
-            self._parameters_cache_time = None
-
-        return result.success
+        return await self._write_named_parameter("HOLD_AC_CHARGE_POWER_CMD", power_kw)
 
     @property
     def ac_charge_power_limit(self) -> float | None:
@@ -2589,15 +2624,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             raise ValueError(f"PV charge power must be between 0 and 15 kW, got {power_kw}")
 
         # API accepts integer kW values directly
-        result = await self._client.api.control.write_parameter(
-            self.serial_number, "HOLD_FORCED_CHG_POWER_CMD", str(power_kw)
-        )
-
-        # Invalidate parameter cache on successful write
-        if result.success:
-            self._parameters_cache_time = None
-
-        return result.success
+        return await self._write_named_parameter("HOLD_FORCED_CHG_POWER_CMD", power_kw)
 
     @property
     def pv_charge_power_limit(self) -> int | None:
@@ -2678,15 +2705,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             )
 
         # Cloud path: the API accepts kW values directly.
-        result = await self._client.api.control.write_parameter(
-            self.serial_number, "_12K_HOLD_GRID_PEAK_SHAVING_POWER", str(power_kw)
-        )
-
-        # Invalidate parameter cache on successful write
-        if result.success:
-            self._parameters_cache_time = None
-
-        return result.success
+        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_POWER", power_kw)
 
     @property
     def grid_peak_shaving_power_limit(self) -> float | None:
@@ -2715,12 +2734,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> power
             7.0
         """
-        if self.parameters is None:
-            return None
-        value = self.parameters.get("_12K_HOLD_GRID_PEAK_SHAVING_POWER")
-        if value is None:
-            return None
-        return float(value)
+        return self._param_float("_12K_HOLD_GRID_PEAK_SHAVING_POWER")
 
     # ============================================================================
     # AC Charge SOC Limit Control (Issue #12)
@@ -2749,15 +2763,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if not 0 <= soc_percent <= 101:
             raise ValueError(f"AC charge SOC limit must be between 0 and 101%, got {soc_percent}")
 
-        result = await self._client.api.control.write_parameter(
-            self.serial_number, "HOLD_AC_CHARGE_SOC_LIMIT", str(soc_percent)
-        )
-
-        # Invalidate parameter cache on successful write
-        if result.success:
-            self._parameters_cache_time = None
-
-        return result.success
+        return await self._write_named_parameter("HOLD_AC_CHARGE_SOC_LIMIT", soc_percent)
 
     @property
     def ac_charge_soc_limit(self) -> int | None:
@@ -2774,16 +2780,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> limit
             90
         """
-        if self.parameters is None:
-            return None
-        value = self.parameters.get("HOLD_AC_CHARGE_SOC_LIMIT")
-        if value is None:
-            return None
-        try:
-            int_value = int(value)
-            return int_value if 0 <= int_value <= 101 else None
-        except (ValueError, TypeError):
-            return None
+        return self._param_int_in_range("HOLD_AC_CHARGE_SOC_LIMIT", 0, 101)
 
     async def set_forced_discharge_power(self, power_kw: float) -> bool:
         """Set forced discharge power command (register 82).
@@ -2815,14 +2812,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             )
 
         # API accepts kW values directly
-        result = await self._client.api.control.write_parameter(
-            self.serial_number, "HOLD_FORCED_DISCHG_POWER_CMD", str(power_kw)
-        )
-
-        if result.success:
-            self._parameters_cache_time = None
-
-        return result.success
+        return await self._write_named_parameter("HOLD_FORCED_DISCHG_POWER_CMD", power_kw)
 
     @property
     def forced_discharge_power(self) -> float | None:
@@ -2875,14 +2865,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 f"Forced discharge SOC limit must be between 0 and 100%, got {soc_percent}"
             )
 
-        result = await self._client.api.control.write_parameter(
-            self.serial_number, "HOLD_FORCED_DISCHG_SOC_LIMIT", str(soc_percent)
-        )
-
-        if result.success:
-            self._parameters_cache_time = None
-
-        return result.success
+        return await self._write_named_parameter("HOLD_FORCED_DISCHG_SOC_LIMIT", soc_percent)
 
     @property
     def forced_discharge_soc_limit(self) -> int | None:
@@ -2896,16 +2879,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> inverter.forced_discharge_soc_limit
             20
         """
-        if self.parameters is None:
-            return None
-        value = self.parameters.get("HOLD_FORCED_DISCHG_SOC_LIMIT")
-        if value is None:
-            return None
-        try:
-            int_value = int(value)
-            return int_value if 0 <= int_value <= 100 else None
-        except (ValueError, TypeError):
-            return None
+        return self._param_int_in_range("HOLD_FORCED_DISCHG_SOC_LIMIT", 0, 100)
 
     async def set_stop_discharge_voltage(self, voltage: float) -> bool:
         """Set forced-discharge stop voltage (register 202).
@@ -2938,14 +2912,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             )
 
         # API accepts volt values directly (fractional volts allowed)
-        result = await self._client.api.control.write_parameter(
-            self.serial_number, "_12K_HOLD_STOP_DISCHG_VOLT", str(voltage)
-        )
-
-        if result.success:
-            self._parameters_cache_time = None
-
-        return result.success
+        return await self._write_named_parameter("_12K_HOLD_STOP_DISCHG_VOLT", voltage)
 
     @property
     def stop_discharge_voltage(self) -> float | None:
@@ -3213,14 +3180,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 f"Feed-in grid power percent must be between 0 and 100%, got {percent}"
             )
 
-        result = await self._client.api.control.write_parameter(
-            self.serial_number, "HOLD_FEED_IN_GRID_POWER_PERCENT", str(percent)
-        )
-
-        if result.success:
-            self._parameters_cache_time = None
-
-        return result.success
+        return await self._write_named_parameter("HOLD_FEED_IN_GRID_POWER_PERCENT", percent)
 
     @property
     def feed_in_grid_power_percent(self) -> int | None:
@@ -3237,16 +3197,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             The cached value coerced to int when it happens to fall in
             0-100, or None otherwise
         """
-        if self.parameters is None:
-            return None
-        value = self.parameters.get("HOLD_FEED_IN_GRID_POWER_PERCENT")
-        if value is None:
-            return None
-        try:
-            int_value = int(value)
-            return int_value if 0 <= int_value <= 100 else None
-        except (ValueError, TypeError):
-            return None
+        return self._param_int_in_range("HOLD_FEED_IN_GRID_POWER_PERCENT", 0, 100)
 
     @property
     def system_charge_soc_limit(self) -> int | None:
@@ -3267,16 +3218,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> limit
             80
         """
-        if self.parameters is None:
-            return None
-        value = self.parameters.get("HOLD_SYSTEM_CHARGE_SOC_LIMIT")
-        if value is None:
-            return None
-        try:
-            int_value = int(value)
-            return int_value if 0 <= int_value <= 101 else None
-        except (ValueError, TypeError):
-            return None
+        return self._param_int_in_range("HOLD_SYSTEM_CHARGE_SOC_LIMIT", 0, 101)
 
     # ============================================================================
     # Battery Current Control (Issue #13)
@@ -3391,16 +3333,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> power
             100
         """
-        if self.parameters is None:
-            return None
-        value = self.parameters.get("HOLD_DISCHG_POWER_PERCENT_CMD")
-        if value is None:
-            return None
-        try:
-            int_value = int(value)
-            return int_value if 0 <= int_value <= 100 else None
-        except (ValueError, TypeError):
-            return None
+        return self._param_int_in_range("HOLD_DISCHG_POWER_PERCENT_CMD", 0, 100)
 
     # ============================================================================
     # Battery Voltage Limits

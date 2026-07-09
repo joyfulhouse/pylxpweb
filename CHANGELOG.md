@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Legacy cloud bitfield writes silently no-opped** ([#223](https://github.com/joyfulhouse/pylxpweb/issues/223)):
+  `set_standby_mode` (reg 21), `set_ac_charge` (reg 21) and
+  `set_ac_charge_type` / `get_ac_charge_type` (reg 120) did a full-register
+  read-modify-write through the deprecated `read_parameters`/`write_parameters`
+  pair. In cloud mode the read never matched the `reg_N` key shape (so it
+  computed from `0`) and the raw bitfield write was rejected by
+  `control.write_parameters`, so the calls returned `False`/no-opped. They now
+  route through the transport↔cloud register-bit helpers — `control_function`
+  (reg 21 named bits) and `control.{set,get}_ac_charge_type`
+  (`BIT_AC_CHARGE_TYPE`) in cloud mode, and an atomic on-device
+  read-modify-write in transport mode. The shared helper suite
+  (`_cloud_param_key`, `_read`/`_write_modbus_register`, `_get_register_bit`,
+  `_set_modbus_register_bit`) moved from `HybridInverter` up to `BaseInverter`.
+- **Dongle teardown left the socket half-open**: `_teardown_connection` closed
+  the writer without awaiting `wait_closed()`, so a stale socket could block
+  the next reconnect (the dongle allows one connection at a time). It is now
+  async and awaits `wait_closed()` under a 5s timeout.
+
+### Changed
+
+- Internal DRY refactors (no behavior change): `_op_guard()` async context
+  manager collapses the reconnect-gate + op-lock preambles in the Modbus
+  transport; `_param_float`/`_param_int_in_range`/`_write_named_parameter`/
+  `_require_client` helpers on `BaseInverter`; `_raise_mismatch` in the dongle
+  response parser; and `_init_input_coalescing()` shared by both transport
+  constructors. Documented why the reg 66/74/82/103/202 canonical `scale`
+  stays `NONE` (local reads use raw units; the cloud-write ÷10 lives in
+  `CLOUD_WRITE_DIV10_REGISTERS`).
+
 ## [0.9.37] - 2026-07-07
 
 ### Fixed

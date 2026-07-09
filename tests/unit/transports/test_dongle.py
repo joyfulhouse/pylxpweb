@@ -194,6 +194,37 @@ class TestDongleConnection:
             assert transport.is_connected is False
 
     @pytest.mark.asyncio
+    async def test_teardown_connection_awaits_wait_closed(self) -> None:
+        """_teardown_connection closes AND awaits wait_closed(), clearing state.
+
+        Regression for #223: the teardown path previously closed the writer
+        without awaiting wait_closed(), so the socket could still be half-open
+        when the next dial ran (the dongle allows only one connection).
+        """
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+
+        mock_reader = AsyncMock()
+        mock_reader.read = AsyncMock(side_effect=TimeoutError())
+        mock_writer = MagicMock()
+        mock_writer.close = MagicMock()
+        mock_writer.wait_closed = AsyncMock()
+
+        with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
+            await transport.connect()
+
+        await transport._teardown_connection()
+
+        mock_writer.close.assert_called_once()
+        mock_writer.wait_closed.assert_awaited_once()
+        assert transport.is_connected is False
+        assert transport._writer is None
+        assert transport._reader is None
+
+    @pytest.mark.asyncio
     async def test_context_manager(self) -> None:
         """Test async context manager."""
         transport = DongleTransport(

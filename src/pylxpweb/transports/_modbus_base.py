@@ -16,7 +16,9 @@ Subclasses must implement:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 from pymodbus.exceptions import ModbusException
@@ -25,7 +27,6 @@ from ._register_data import (
     DEFAULT_INPUT_BLOCK_SIZE,
     INPUT_REGISTER_GROUPS,
     RegisterDataMixin,
-    validate_input_block_size,
 )
 from .exceptions import (
     TransportConnectionError,
@@ -106,8 +107,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._retry_delay = retry_delay
         self._inter_register_delay = inter_register_delay
         self._pymodbus_retries = pymodbus_retries
-        self._max_input_block_size = validate_input_block_size(max_input_block_size)
-        self._input_coalescing_latched_off: bool = False
+        self._init_input_coalescing(max_input_block_size)
         self._client: Any = None
         self._lock = asyncio.Lock()
         self._consecutive_errors: int = 0
@@ -403,6 +403,18 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 ) from err
 
     # ------------------------------------------------------------------
+    # Operation guard: reconnect gate + op lock
+    # ------------------------------------------------------------------
+
+    @contextlib.asynccontextmanager
+    async def _op_guard(self) -> AsyncIterator[None]:
+        """Reconnect if the error gate is tripped, then hold the op lock."""
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            await self._reconnect()
+        async with self._op_lock:
+            yield
+
+    # ------------------------------------------------------------------
     # Override: adaptive inter-group delay + auto-reconnect
     # ------------------------------------------------------------------
 
@@ -438,10 +450,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         entirely, so ``_consecutive_errors`` accumulates but the reconnect
         gate never fires.
         """
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
-
-        async with self._op_lock:
+        async with self._op_guard():
             return await super().read_all_input_data()
 
     async def read_battery(
@@ -449,10 +458,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         include_individual: bool = True,
     ) -> BatteryBankData | None:
         """Read battery information with reconnect on consecutive errors."""
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
-
-        async with self._op_lock:
+        async with self._op_guard():
             return await super().read_battery(include_individual)
 
     async def read_midbox_runtime(self) -> MidboxRuntimeData:
@@ -463,10 +469,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         serialisation, concurrent writes (e.g. smart-port mode changes) can
         interleave during those sleeps and cause protocol errors.
         """
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
-
-        async with self._op_lock:
+        async with self._op_guard():
             return await super().read_midbox_runtime()
 
     async def read_parameters(
@@ -480,10 +483,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
 
     async def read_quick_charge_remaining_seconds(self) -> int | None:
         """Read quick-charge remaining seconds (input reg 210) with op lock."""
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
-
-        async with self._op_lock:
+        async with self._op_guard():
             return await super().read_quick_charge_remaining_seconds()
 
     async def write_parameters(
@@ -496,10 +496,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         consecutive transport errors (reads or writes), the next write heals
         the link first instead of failing on the dead session (eg4-1cxn).
         """
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
-
-        async with self._op_lock:
+        async with self._op_guard():
             return await super().write_parameters(parameters)
 
     async def write_named_parameters(
@@ -512,10 +509,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         concurrent reads.  The internal calls to read_parameters /
         write_parameters re-enter the reentrant lock without blocking.
         """
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
-
-        async with self._op_lock:
+        async with self._op_guard():
             return await super().write_named_parameters(parameters)
 
     # ------------------------------------------------------------------

@@ -29,12 +29,11 @@ import asyncio
 import contextlib
 import logging
 import struct
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from ._register_data import (
     DEFAULT_INPUT_BLOCK_SIZE,
     RegisterDataMixin,
-    validate_input_block_size,
 )
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .exceptions import (
@@ -227,8 +226,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._pv_string_count: int = 3
         self._connection_retries = connection_retries
         self._inter_register_delay = 0.5  # Dongle needs slower pace than Modbus
-        self._max_input_block_size = validate_input_block_size(max_input_block_size)
-        self._input_coalescing_latched_off: bool = False
+        self._init_input_coalescing(max_input_block_size)
         self._write_retries = write_retries
         self._write_step_delay = write_step_delay
         self._verify_writes = verify_writes
@@ -382,7 +380,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
             # Clean slate: drop any stale half-open socket from a previous
             # session before dialing a new one (the dongle has ONE TCP slot).
-            self._teardown_connection()
+            await self._teardown_connection()
 
             for attempt in range(self._connection_retries):
                 try:
@@ -424,7 +422,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
                 except TimeoutError as err:
                     last_error = err
-                    self._teardown_connection()
+                    await self._teardown_connection()
                     _LOGGER.warning(
                         "Timeout connecting to dongle at %s:%s (attempt %d/%d)",
                         self._host,
@@ -434,7 +432,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     )
                 except OSError as err:
                     last_error = err
-                    self._teardown_connection()
+                    await self._teardown_connection()
                     _LOGGER.warning(
                         "Connection failed to %s:%s: %s (attempt %d/%d)",
                         self._host,
@@ -445,7 +443,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     )
 
             # All retries exhausted
-            self._teardown_connection()
+            await self._teardown_connection()
         if isinstance(last_error, TimeoutError):
             raise TransportConnectionError(
                 f"Timeout connecting to {self._host}:{self._port} after "
@@ -602,18 +600,23 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         except Exception as err:
             _LOGGER.debug("Error draining buffer: %s", err)
 
-    def _teardown_connection(self) -> None:
+    async def _teardown_connection(self) -> None:
         """Mark the connection broken and close the socket without handshake.
 
         Used after socket errors and suspected-dead connections so the next
         request (or retry attempt) re-establishes a fresh TCP connection.
+        Awaits ``wait_closed()`` (bounded by a timeout) so the transport is
+        flushed before the next dial — the dongle only allows one connection
+        at a time, so a half-closed socket would block reconnection.
         """
         self._connected = False
         self._reader = None
-        if self._writer is not None:
-            with contextlib.suppress(Exception):
-                self._writer.close()
+        writer = self._writer
         self._writer = None
+        if writer is not None:
+            with contextlib.suppress(Exception):
+                writer.close()
+                await asyncio.wait_for(writer.wait_closed(), timeout=5.0)
 
     async def _force_reconnect(self) -> None:
         """Tear down the (possibly broken) connection for a fresh start.
@@ -623,7 +626,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         ``_send_receive`` re-establishes the connection on the next request.
         """
         async with self._lock:
-            self._teardown_connection()
+            await self._teardown_connection()
 
     async def _send_receive(
         self,
@@ -720,7 +723,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         # socket can never yield a response again — tear it
                         # down so the retry below (or the next request)
                         # reconnects instead of re-reading a dead socket.
-                        self._teardown_connection()
+                        await self._teardown_connection()
                         if attempt < max_retries:
                             _LOGGER.debug(
                                 "[%s] Empty response from dongle (attempt %d/%d), retrying...",
@@ -762,7 +765,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # unconditionally so the next request — or the resend
                     # below — dials a fresh connection instead of polling
                     # the dead flow forever (#226).
-                    self._teardown_connection()
+                    await self._teardown_connection()
                     if retry_on_timeout and attempt < max_retries:
                         _LOGGER.warning(
                             "[%s] Timeout on attempt %d/%d, will reconnect and resend",
@@ -782,7 +785,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 except OSError as err:
                     # Tear down the broken connection; next iteration
                     # will reconnect via the top-of-loop guard.
-                    self._teardown_connection()
+                    await self._teardown_connection()
 
                     if attempt < max_retries:
                         _LOGGER.warning(
@@ -1000,12 +1003,24 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         # (offset 12-13), so include it in every "received" context block.
         response_register = struct.unpack("<H", data_frame[12:14])[0]
 
-        def _expected_fields() -> str:
-            return _format_frame_fields(
-                tcp_func=expected_tcp_func,
-                func=expected_func,
-                register=expected_register,
-                count=expected_count,
+        # The expected/received framing is identical for every cross-request
+        # mismatch below (same modbus_func + response_register), so build the
+        # context once and raise through one helper to keep the three messages
+        # byte-for-byte consistent (joyfulhouse/pylxpweb#213).
+        expected_fields = _format_frame_fields(
+            tcp_func=expected_tcp_func,
+            func=expected_func,
+            register=expected_register,
+            count=expected_count,
+        )
+        mismatch_context = _mismatch_context(
+            expected_fields,
+            _format_frame_fields(func=modbus_func, register=response_register),
+        )
+
+        def _raise_mismatch(detail: str) -> NoReturn:
+            raise TransportResponseMismatchError(
+                f"[{self._serial}] {detail} — likely a misrouted cloud response"
             )
 
         # 1. Inverter serial must match (always checked)
@@ -1013,38 +1028,20 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         expected_serial = self._serial.encode("ascii").ljust(10, b"\x00")[:10]
         if response_serial != expected_serial:
             resp_serial_str = response_serial.decode("ascii", errors="replace").rstrip("\x00")
-            context = _mismatch_context(
-                _expected_fields(),
-                _format_frame_fields(func=modbus_func, register=response_register),
-            )
-            raise TransportResponseMismatchError(
-                f"[{self._serial}] Response serial mismatch: expected {self._serial}, "
-                f"got {resp_serial_str} ({context}) — likely a misrouted cloud response"
+            _raise_mismatch(
+                f"Response serial mismatch: expected {self._serial}, "
+                f"got {resp_serial_str} ({mismatch_context})"
             )
 
         # 2. Function code must match (mask high bit for exception responses)
         if expected_func is not None:
             response_base_func = modbus_func & 0x7F
             if response_base_func != expected_func:
-                context = _mismatch_context(
-                    _expected_fields(),
-                    _format_frame_fields(func=modbus_func, register=response_register),
-                )
-                raise TransportResponseMismatchError(
-                    f"[{self._serial}] Response function mismatch: {context} "
-                    "— likely a misrouted cloud response"
-                )
+                _raise_mismatch(f"Response function mismatch: {mismatch_context}")
 
         # 3. Start register must match
         if expected_register is not None and response_register != expected_register:
-            context = _mismatch_context(
-                _expected_fields(),
-                _format_frame_fields(func=modbus_func, register=response_register),
-            )
-            raise TransportResponseMismatchError(
-                f"[{self._serial}] Response register mismatch: {context} "
-                "— likely a misrouted cloud response"
-            )
+            _raise_mismatch(f"Response register mismatch: {mismatch_context}")
 
         # Check for Modbus exception (function code with high bit set)
         if modbus_func & 0x80:
