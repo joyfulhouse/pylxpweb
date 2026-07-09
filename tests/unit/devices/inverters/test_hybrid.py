@@ -86,79 +86,74 @@ class TestACChargeOperations:
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_enable(self, mock_client: LuxpowerClient) -> None:
-        """Test enabling AC charge."""
+        """Enabling AC charge (cloud) → control_function(FUNC_AC_CHARGE, True)."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
+        mock_client.api.control.control_function = AsyncMock(return_value=_cloud_success())
 
-        # Mock read response - AC charge currently disabled
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_21": 0}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        # Mock write response
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
-
-        # Enable AC charge
         result = await inverter.set_ac_charge(enabled=True)
 
-        # Verify write call - bit 7 should be set (128)
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {21: 128})
-
+        mock_client.api.control.control_function.assert_awaited_once_with(
+            "1234567890", "FUNC_AC_CHARGE", True
+        )
         assert result is True
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_disable(self, mock_client: LuxpowerClient) -> None:
-        """Test disabling AC charge."""
+        """Disabling AC charge (cloud) → control_function(FUNC_AC_CHARGE, False)."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
+        mock_client.api.control.control_function = AsyncMock(return_value=_cloud_success())
 
-        # Mock read response - AC charge currently enabled
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_21": 128}  # Bit 7 set
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        # Mock write response
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
-
-        # Disable AC charge
         result = await inverter.set_ac_charge(enabled=False)
 
-        # Verify write call - bit 7 should be cleared (0)
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {21: 0})
+        mock_client.api.control.control_function.assert_awaited_once_with(
+            "1234567890", "FUNC_AC_CHARGE", False
+        )
+        assert result is True
 
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_enable_transport_preserves_bits(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Transport mode RMW sets bit 7 while preserving other reg-21 bits."""
+        inverter = HybridInverter(
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=Mock(),
+        )
+        inverter.read_transport_register = AsyncMock(return_value=2048)  # bit 11 set
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        result = await inverter.set_ac_charge(enabled=True)
+
+        inverter.read_transport_register.assert_awaited_once_with(21)
+        inverter.write_transport_register.assert_awaited_once_with(21, 2176)  # 2048|128
         assert result is True
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_with_power_and_soc(self, mock_client: LuxpowerClient) -> None:
-        """Test setting AC charge with power and SOC parameters."""
+        """Cloud AC charge with power+SOC: named bit, then value-register writes."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-
-        # Mock read response
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_21": 0}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        # Mock write response
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        mock_client.api.control.control_function = AsyncMock(return_value=_cloud_success())
+        mock_client.api.control.write_parameters = AsyncMock(return_value=_cloud_success())
 
         # Enable AC charge with power and SOC
         result = await inverter.set_ac_charge(enabled=True, power_percent=75, soc_limit=95)
 
-        # Verify write call with all three parameters
-        mock_client.api.control.write_parameters.assert_called_once_with(
-            "1234567890", {21: 128, 66: 75, 67: 95}
+        # Enable bit via named function control; power (reg 66) and SOC (reg 67)
+        # written as value registers.
+        mock_client.api.control.control_function.assert_awaited_once_with(
+            "1234567890", "FUNC_AC_CHARGE", True
         )
-
+        mock_client.api.control.write_parameters.assert_any_await("1234567890", {66: 75})
+        mock_client.api.control.write_parameters.assert_any_await("1234567890", {67: 95})
+        assert mock_client.api.control.write_parameters.await_count == 2
         assert result is True
 
     @pytest.mark.asyncio
@@ -220,20 +215,15 @@ class TestACChargeOperations:
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_21": 0}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        mock_client.api.control.control_function = AsyncMock(return_value=_cloud_success())
+        mock_client.api.control.write_parameters = AsyncMock(return_value=_cloud_success())
 
         result = await inverter.set_ac_charge(enabled=True, soc_limit=101)
 
-        mock_client.api.control.write_parameters.assert_called_once_with(
-            "1234567890", {21: 128, 67: 101}
+        mock_client.api.control.control_function.assert_awaited_once_with(
+            "1234567890", "FUNC_AC_CHARGE", True
         )
+        mock_client.api.control.write_parameters.assert_awaited_once_with("1234567890", {67: 101})
         assert result is True
 
 
@@ -687,148 +677,118 @@ class TestACChargeTypeOperations:
 
     @pytest.mark.asyncio
     async def test_get_ac_charge_type_time(self, mock_client: LuxpowerClient) -> None:
-        """Test reading AC charge type when set to Time."""
+        """Cloud read delegates to the named BIT_AC_CHARGE_TYPE param."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-
-        mock_response = Mock()
-        mock_response.parameters = {"reg_120": 0}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+        mock_client.api.control.get_ac_charge_type = AsyncMock(return_value=0)
 
         result = await inverter.get_ac_charge_type()
 
-        mock_client.api.control.read_parameters.assert_called_once_with("1234567890", 120, 1)
+        mock_client.api.control.get_ac_charge_type.assert_awaited_once_with("1234567890")
         assert result == 0
 
     @pytest.mark.asyncio
     async def test_get_ac_charge_type_soc_volt(self, mock_client: LuxpowerClient) -> None:
-        """Test reading AC charge type when set to SOC/Volt."""
+        """Cloud read returns the SOC/Volt type value from the API."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-
-        mock_response = Mock()
-        mock_response.parameters = {"reg_120": 2}  # Bits 1-2 = 01
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+        mock_client.api.control.get_ac_charge_type = AsyncMock(return_value=1)
 
         result = await inverter.get_ac_charge_type()
         assert result == 1
 
     @pytest.mark.asyncio
     async def test_get_ac_charge_type_time_soc_volt(self, mock_client: LuxpowerClient) -> None:
-        """Test reading AC charge type when set to Time+SOC/Volt."""
+        """Cloud read returns the Time+SOC/Volt type value from the API."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-
-        mock_response = Mock()
-        mock_response.parameters = {"reg_120": 4}  # Bits 1-2 = 10
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+        mock_client.api.control.get_ac_charge_type = AsyncMock(return_value=2)
 
         result = await inverter.get_ac_charge_type()
         assert result == 2
 
     @pytest.mark.asyncio
-    async def test_get_ac_charge_type_preserves_other_bits(
+    async def test_get_ac_charge_type_transport_extracts_field(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Test reading AC charge type ignores other bits in register 120."""
+        """Transport read masks bits 1-3 out of the raw reg-120 value."""
         inverter = HybridInverter(
-            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=Mock(),
         )
-
         # Bit 0 and bit 4 set, plus SOC/Volt (bit 1) = 0b00010011 = 19
-        mock_response = Mock()
-        mock_response.parameters = {"reg_120": 19}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+        inverter.read_transport_register = AsyncMock(return_value=19)
 
         result = await inverter.get_ac_charge_type()
+
+        inverter.read_transport_register.assert_awaited_once_with(120)
         assert result == 1  # Only bits 1-3 extracted
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_type_time(self, mock_client: LuxpowerClient) -> None:
-        """Test setting AC charge type to Time."""
+        """Cloud set delegates to control.set_ac_charge_type (Time)."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_120": 2}  # Currently SOC/Volt
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        mock_client.api.control.set_ac_charge_type = AsyncMock(return_value=_cloud_success())
 
         result = await inverter.set_ac_charge_type(0)
 
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {120: 0})
+        mock_client.api.control.set_ac_charge_type.assert_awaited_once_with("1234567890", 0)
         assert result is True
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_type_soc_volt(self, mock_client: LuxpowerClient) -> None:
-        """Test setting AC charge type to SOC/Volt."""
+        """Cloud set delegates to control.set_ac_charge_type (SOC/Volt)."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_120": 0}  # Currently Time
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        mock_client.api.control.set_ac_charge_type = AsyncMock(return_value=_cloud_success())
 
         result = await inverter.set_ac_charge_type(1)
 
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {120: 2})
+        mock_client.api.control.set_ac_charge_type.assert_awaited_once_with("1234567890", 1)
         assert result is True
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_type_time_soc_volt(self, mock_client: LuxpowerClient) -> None:
-        """Test setting AC charge type to Time+SOC/Volt."""
+        """Cloud set delegates to control.set_ac_charge_type (Time+SOC/Volt)."""
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
-
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_120": 0}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        mock_client.api.control.set_ac_charge_type = AsyncMock(return_value=_cloud_success())
 
         result = await inverter.set_ac_charge_type(2)
 
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {120: 4})
+        mock_client.api.control.set_ac_charge_type.assert_awaited_once_with("1234567890", 2)
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_set_ac_charge_type_preserves_other_bits(
+    async def test_set_ac_charge_type_transport_preserves_bits(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Test setting AC charge type preserves other bits in register 120."""
+        """Transport RMW sets the bits 1-3 field while preserving other bits."""
         inverter = HybridInverter(
-            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=Mock(),
         )
-
         # Bit 0 and bit 4 set (other features enabled) = 0b00010001 = 17
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_120": 17}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
+        inverter.read_transport_register = AsyncMock(return_value=17)
+        inverter.write_transport_register = AsyncMock(return_value=True)
 
         result = await inverter.set_ac_charge_type(1)  # SOC/Volt
 
-        # Should set bits 1-2 to 01 (value 2) while preserving bits 0 and 4
-        # 17 & ~0x06 = 17 & 0xFFF9 = 17 (bits 1-2 were 0) | 2 = 19
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {120: 19})
+        # Set bits 1-3 to value 1 (raw 2) while preserving bits 0 and 4:
+        # 17 & ~0x0E = 16 (bit 4) | 1 (bit 0) = 17 → | (1 << 1) = 19
+        inverter.read_transport_register.assert_awaited_once_with(120)
+        inverter.write_transport_register.assert_awaited_once_with(120, 19)
         assert result is True
 
     @pytest.mark.asyncio

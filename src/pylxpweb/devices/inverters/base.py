@@ -2040,6 +2040,134 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             )
             return None
 
+    # ============================================================================
+    # Register-bit helpers (transport ↔ cloud)
+    # ============================================================================
+
+    @staticmethod
+    def _cloud_param_key(register: int, bit: int = 0) -> str:
+        """Resolve the cloud API parameter name for a register value or bit.
+
+        Uses ``REGISTER_TO_PARAM_KEYS`` so the cloud (HTTP) path can name the
+        register the same way the EG4 API does. For a value register the bit
+        index defaults to 0 (the single value key); for a bit field the index
+        is the bit position.
+        """
+        from pylxpweb.constants.registers import REGISTER_TO_PARAM_KEYS
+
+        keys = REGISTER_TO_PARAM_KEYS.get(register)
+        if not keys or bit >= len(keys):
+            raise LuxpowerDeviceError(
+                f"No cloud parameter mapping for register {register} bit {bit}"
+            )
+        return keys[bit]
+
+    @staticmethod
+    def _register_scale_divisor(register: int) -> int:
+        """Return the raw→engineering divisor for a value register (default 1).
+
+        The cloud API returns parameter values already in engineering units
+        (e.g. ``59.5`` V for a DIV_10 register), whereas the local transport
+        returns the raw register integer (e.g. ``595``). This divisor lets the
+        cloud path reconstruct the raw value so both transports agree on what
+        :meth:`_read_modbus_register` returns.
+        """
+        from pylxpweb.registers.inverter_holding import BY_ADDRESS
+
+        defs = BY_ADDRESS.get(register)
+        if not defs:
+            return 1
+        return int(defs[0].scale.value)
+
+    async def _read_modbus_register(self, register: int) -> int:
+        """Read a single value register, via transport (raw) or cloud (named param).
+
+        Transport mode reads the raw register directly. Cloud mode reads the
+        single named value parameter the API exposes for this register. Bit
+        fields must use :meth:`_get_register_bit` instead — the cloud API does
+        not return a raw 16-bit value for them.
+        """
+        if self._transport is not None:
+            value = await self.read_transport_register(register)
+            if value is None:
+                raise LuxpowerDeviceError(
+                    f"Register {register} read requires a successful Modbus read"
+                )
+            return int(value)
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                f"Register {register} read requires a transport or a cloud client"
+            )
+        param_key = self._cloud_param_key(register)
+        response = await self._client.api.control.read_parameters(self.serial_number, register, 1)
+        # Cloud returns engineering units (possibly a float-like string, e.g.
+        # "59.5"); reconstruct the raw register value so callers that re-apply
+        # the register scale get the same result as the transport path.
+        raw = float(response.parameters.get(param_key, 0))
+        return int(round(raw * self._register_scale_divisor(register)))
+
+    async def _write_modbus_register(self, register: int, value: int) -> bool:
+        """Write a single raw register value, via transport or cloud.
+
+        Cloud mode writes the raw register value directly (``write_parameters``
+        keys by register address), so no name mapping or scaling translation is
+        needed — the same raw value used by the transport path is written.
+        """
+        if self._transport is not None:
+            success = await self.write_transport_register(register, value)
+            if not success:
+                raise LuxpowerDeviceError(
+                    f"Register {register} write requires a successful Modbus write"
+                )
+            return True
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                f"Register {register} write requires a transport or a cloud client"
+            )
+        response = await self._client.api.control.write_parameters(
+            self.serial_number, {register: value}
+        )
+        return bool(response.success)
+
+    async def _get_register_bit(self, register: int, bit: int) -> bool:
+        """Read a single bit, via transport (raw mask) or cloud (named bool param)."""
+        if self._transport is not None:
+            raw = await self.read_transport_register(register)
+            if raw is None:
+                raise LuxpowerDeviceError(
+                    f"Register {register} read requires a successful Modbus read"
+                )
+            return bool(raw & (1 << bit))
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                f"Register {register} read requires a transport or a cloud client"
+            )
+        param_key = self._cloud_param_key(register, bit)
+        response = await self._client.api.control.read_parameters(self.serial_number, register, 1)
+        return bool(response.parameters.get(param_key, False))
+
+    async def _set_modbus_register_bit(self, register: int, bit: int, enabled: bool) -> bool:
+        """Set/clear a single register bit, via transport or cloud.
+
+        Transport mode performs an atomic read-modify-write that preserves the
+        other bits. Cloud mode uses the function-control API, which applies the
+        bit update server-side (also preserving the other bits) — avoiding a
+        read-modify-write race across the slower HTTP round-trip.
+        """
+        if self._transport is not None:
+            current_value = await self._read_modbus_register(register)
+            new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
+            return await self._write_modbus_register(register, new_value)
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                f"Register {register} write requires a transport or a cloud client"
+            )
+        param_key = self._cloud_param_key(register, bit)
+        response = await self._client.api.control.control_function(
+            self.serial_number, param_key, enabled
+        )
+        return bool(response.success)
+
     def _get_parameter(
         self,
         key: str,
@@ -2110,19 +2238,14 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         from pylxpweb.constants import FUNC_EN_BIT_SET_TO_STANDBY, FUNC_EN_REGISTER
 
-        # Read current function enable register
-        params = await self.read_parameters(FUNC_EN_REGISTER, 1)
-        current_value = params.get(f"reg_{FUNC_EN_REGISTER}", 0)
-
-        # Bit logic: 0=Standby, 1=Power On (inverse of parameter)
-        if standby:
-            # Clear bit 9 to enter standby
-            new_value = current_value & ~(1 << FUNC_EN_BIT_SET_TO_STANDBY)
-        else:
-            # Set bit 9 to power on
-            new_value = current_value | (1 << FUNC_EN_BIT_SET_TO_STANDBY)
-
-        result = await self.write_parameters({FUNC_EN_REGISTER: new_value})
+        # Bit 9 semantics: 0=Standby, 1=Power On (inverse of the ``standby``
+        # argument). Transport mode does an atomic read-modify-write; cloud mode
+        # sets the named FUNC_SET_TO_STANDBY bit server-side via control_function
+        # instead of the old raw-register RMW (which no-opped in cloud mode
+        # because named reads never returned a ``reg_N`` key).
+        result = await self._set_modbus_register_bit(
+            FUNC_EN_REGISTER, FUNC_EN_BIT_SET_TO_STANDBY, enabled=not standby
+        )
 
         # Invalidate parameter cache on successful write
         if result:
