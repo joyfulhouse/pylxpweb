@@ -59,6 +59,16 @@ _LOGGER = logging.getLogger(__name__)
 # and this canary agree on what "absurd" means.
 _MAX_LIFETIME_ENERGY_KWH = MAX_LIFETIME_KWH
 
+# Battery temperature "no reading" sentinel (input reg 67, unscaled °C).  An
+# inverter without a local battery temperature sensor (e.g. a shared-battery
+# secondary, reg 96 = 0) reports 0x7F (127) as an int8 placeholder rather than a
+# real reading.  Normalized to None on construction so the sensor reads unknown
+# and the value never trips the runtime temperature canary and rejects the whole
+# payload (eg4_web_monitor#348).  Only the EXACT sentinel is treated this way —
+# any other out-of-range temperature is left intact so is_corrupt() still
+# catches genuine register corruption (e.g. a 0xFFFF frame shift).
+BATTERY_TEMPERATURE_SENTINEL_C = 127.0
+
 # Fields on InverterRuntimeData that store raw int values (no ÷10/÷100 scaling).
 # Used by from_modbus_registers() to decide between read_raw() and read_scaled().
 _RUNTIME_INT_FIELDS: frozenset[str] = frozenset(
@@ -305,6 +315,10 @@ class InverterRuntimeData:
         self._raw_soh = self.battery_soh
         self.battery_soc = _clamp_percentage(self.battery_soc, "battery_soc")
         self.battery_soh = _clamp_percentage(self.battery_soh, "battery_soh")
+        # Normalize the battery-temperature "no reading" sentinel for every
+        # construction path (Modbus, cloud, direct) — see the constant above.
+        if self.battery_temperature == BATTERY_TEMPERATURE_SENTINEL_C:
+            self.battery_temperature = None
 
     @property
     def grid_power(self) -> float | None:
@@ -395,7 +409,11 @@ class InverterRuntimeData:
             if v is not None and v > 300:
                 _LOGGER.warning("Canary: %s=%.1f > 300V", label, v)
                 return True
-        # Temperatures: -40 to 100°C covers all operating conditions.
+        # Temperatures: -40 to 100°C covers all operating conditions.  The
+        # battery-temperature "no reading" sentinel (127 °C) is already None by
+        # this point (normalized in __post_init__, eg4_web_monitor#348), so it
+        # never trips this check — but a genuinely corrupt out-of-range read on
+        # any of the temperature registers below still rejects the frame.
         for label, t in (
             ("internal_temperature", self.internal_temperature),
             ("radiator_temperature_1", self.radiator_temperature_1),
@@ -488,7 +506,9 @@ class InverterRuntimeData:
             battery_soc=runtime.soc,
             battery_charge_power=_opt_power(runtime.pCharge),
             battery_discharge_power=_opt_power(runtime.pDisCharge),
-            battery_temperature=float(runtime.tBat or 0),
+            # Preserve None for an offline device (see comment above); the 0x7F
+            # sentinel is normalized to None in __post_init__ (eg4_web_monitor#348).
+            battery_temperature=_opt_power(runtime.tBat),
             # Grid
             grid_voltage_r=scale_runtime_value("vacr", runtime.vacr),
             grid_voltage_s=scale_runtime_value("vacs", runtime.vacs),
@@ -698,6 +718,9 @@ class InverterRuntimeData:
             if not kwargs.get("eps_apparent_power") and (eps_va_l1 or eps_va_l2):
                 kwargs["eps_apparent_power"] = eps_va_l1 + eps_va_l2
 
+        # The battery-temperature "no reading" sentinel (reg 67 = 0x7F) is
+        # normalized to None in __post_init__, shared with every construction
+        # path — no per-factory handling needed here (eg4_web_monitor#348).
         return cls(timestamp=datetime.now(), **kwargs)
 
 
@@ -1370,6 +1393,10 @@ class BatteryBankData:
             self.soc = _clamp_percentage(self.soc, "battery_bank_soc")
         if self.soh is not None:
             self.soh = _clamp_percentage(self.soh, "battery_bank_soh")
+        # Battery temperature "no reading" sentinel (reg 67 = 0x7F), same as the
+        # inverter runtime path (eg4_web_monitor#348).
+        if self.temperature == BATTERY_TEMPERATURE_SENTINEL_C:
+            self.temperature = None
 
     def is_corrupt(self) -> bool:
         """Check if battery bank data contains physically impossible values.

@@ -42,6 +42,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from pylxpweb.constants import derive_pv_current, scale_runtime_value
+from pylxpweb.transports.data import BATTERY_TEMPERATURE_SENTINEL_C
 
 from ._features import InverterFamily
 
@@ -412,8 +413,18 @@ class InverterRuntimePropertiesMixin:
 
     @property
     def battery_temperature(self) -> int | None:
-        """Get battery temperature in Celsius."""
-        return self._raw_int("battery_temperature", "tBat")
+        """Get battery temperature in Celsius.
+
+        The 0x7F (127) "no reading" sentinel emitted by inverters without a
+        local battery temperature sensor (e.g. shared-battery secondaries,
+        reg 96 = 0) is normalized to None (eg4_web_monitor#348): on the
+        transport path via ``InverterRuntimeData.__post_init__``, and here for
+        the pure-cloud path where ``_runtime`` is the raw ``InverterRuntime``.
+        """
+        value = self._raw_int("battery_temperature", "tBat")
+        if value == BATTERY_TEMPERATURE_SENTINEL_C:
+            return None
+        return value
 
     @property
     def max_charge_current(self) -> float | None:

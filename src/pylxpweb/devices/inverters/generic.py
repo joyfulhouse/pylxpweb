@@ -158,7 +158,10 @@ class GenericInverter(BaseInverter):
                     )
                 )
 
-            if hasattr(self._runtime, "tBat"):
+            # Use the normalized property so the 0x7F (127 °C) "no reading"
+            # sentinel surfaces as unknown rather than a bogus reading
+            # (eg4_web_monitor#348).
+            if (battery_temp := self.battery_temperature) is not None:
                 entities.append(
                     Entity(
                         unique_id=f"{self.serial_number}_temp_battery",
@@ -166,7 +169,7 @@ class GenericInverter(BaseInverter):
                         device_class=DeviceClass.TEMPERATURE,
                         state_class=StateClass.MEASUREMENT,
                         unit_of_measurement="°C",
-                        value=self._runtime.tBat,
+                        value=battery_temp,
                     )
                 )
 

@@ -229,6 +229,19 @@ class TestBatteryProperties:
         """Verify battery temperature has no scaling."""
         assert inverter_with_runtime.battery_temperature == 25
 
+    def test_battery_temperature_cloud_sentinel_is_none(self):
+        """Pure-cloud path: the raw InverterRuntime tBat=127 "no reading"
+        sentinel is normalized to None so a no-BMS secondary reads unknown
+        rather than a bogus 127°C (eg4_web_monitor#348)."""
+        inverter = GenericInverter(
+            client=MagicMock(), serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter._runtime = InverterRuntime.model_construct(tBat=127)
+        assert inverter.battery_temperature is None
+        # A real cloud reading is still surfaced.
+        inverter._runtime = InverterRuntime.model_construct(tBat=25)
+        assert inverter.battery_temperature == 25
+
     def test_battery_currents_scaled_correctly(self, inverter_with_runtime):
         """Verify battery currents use ÷100 scaling."""
         assert inverter_with_runtime.max_charge_current == 100.0
