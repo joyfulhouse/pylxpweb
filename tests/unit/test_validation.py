@@ -488,6 +488,30 @@ class TestMinDailyDelta:
             prev_values=prev,
         )
 
+    def test_single_tick_accepted_despite_float_error(self) -> None:
+        """A single 0.1 kWh tick must be accepted for every base value.
+
+        Regression for #346: ``curr - prev`` for one register tick is not
+        exactly 0.1 in IEEE-754 (e.g. ``4.4 - 4.3 == 0.10000000000000053``),
+        so a bare ``delta > 0.1`` floor rejected valid minimum increments on
+        low-usage inverters.  These are the exact pairs from the bug report
+        plus others whose float subtraction overshoots 0.1.
+        """
+        for prev_val, curr_val in [
+            (4.3, 4.4),
+            (6.1, 6.2),
+            (8.7, 8.8),
+            (0.1, 0.2),
+            (2.6, 2.7),
+        ]:
+            assert validate_daily_energy_bounds(
+                {"load_energy_today": curr_val},
+                "test_dev",
+                rated_power_kw=10.0,
+                elapsed_seconds=4.1,
+                prev_values={"load_energy_today": prev_val},
+            ), f"single tick {prev_val} -> {curr_val} should be accepted"
+
     def test_floor_value(self) -> None:
         """MIN_DAILY_DELTA matches energy register resolution (0.1 kWh)."""
         assert MIN_DAILY_DELTA == 0.1
