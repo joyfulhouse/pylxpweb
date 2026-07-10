@@ -108,7 +108,12 @@ class HybridInverter(GenericInverter):
                 stop AC charging (used for battery cell balancing).
 
         Returns:
-            True if successful
+            True if successful; in cloud mode, False if the API rejected a write
+
+        Raises:
+            ValueError: If power_percent or soc_limit is out of range.
+            LuxpowerDeviceError: In transport mode, if a Modbus write fails
+                (consistent with the other register-bit control operations).
 
         Example:
             >>> # Enable AC charge at 50% power to 100% SOC
@@ -142,6 +147,12 @@ class HybridInverter(GenericInverter):
         ):
             return False
 
+        # The enable bit has changed device state; invalidate the parameter
+        # cache now so that a later value-write failure below cannot leave
+        # refresh(include_parameters=True) serving a stale reg-21 for up to the
+        # parameter TTL (cloud endpoint invalidation does not clear this cache).
+        self._parameters_cache_time = None
+
         # Power and SOC limit are value registers; write them by address so the
         # cloud path resolves the named param + scaling (behaviour unchanged).
         for register, value in (
@@ -153,7 +164,6 @@ class HybridInverter(GenericInverter):
             if not await self._write_modbus_register(register, value):
                 return False
 
-        self._parameters_cache_time = None
         return True
 
     async def set_eps_enabled(self, enabled: bool) -> bool:
@@ -744,10 +754,12 @@ class HybridInverter(GenericInverter):
             charge_type: 0 = Time, 1 = SOC/Volt, 2 = Time + SOC/Volt
 
         Returns:
-            True if successful
+            True if successful; in cloud mode, False if the API rejected the write
 
         Raises:
             ValueError: If charge_type is not 0, 1, or 2
+            LuxpowerDeviceError: In transport mode, if a Modbus write fails
+                (consistent with the other register-bit control operations).
 
         Example:
             >>> await inverter.set_ac_charge_type(0)  # Time-based

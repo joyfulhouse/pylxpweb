@@ -2273,7 +2273,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             standby: True to enter standby (power off), False for normal operation
 
         Returns:
-            True if successful
+            True if successful; in cloud mode, False if the API rejected the write
+
+        Raises:
+            LuxpowerDeviceError: In transport mode, if the Modbus write fails
+                (consistent with the other register-bit control operations).
 
         Example:
             >>> await inverter.set_standby_mode(False)  # Power on

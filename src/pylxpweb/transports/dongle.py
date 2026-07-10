@@ -380,7 +380,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
             # Clean slate: drop any stale half-open socket from a previous
             # session before dialing a new one (the dongle has ONE TCP slot).
-            await self._teardown_connection()
+            await self._close_connection()
 
             for attempt in range(self._connection_retries):
                 try:
@@ -422,7 +422,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
                 except TimeoutError as err:
                     last_error = err
-                    await self._teardown_connection()
+                    await self._close_connection()
                     _LOGGER.warning(
                         "Timeout connecting to dongle at %s:%s (attempt %d/%d)",
                         self._host,
@@ -432,7 +432,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     )
                 except OSError as err:
                     last_error = err
-                    await self._teardown_connection()
+                    await self._close_connection()
                     _LOGGER.warning(
                         "Connection failed to %s:%s: %s (attempt %d/%d)",
                         self._host,
@@ -443,7 +443,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     )
 
             # All retries exhausted
-            await self._teardown_connection()
+            await self._close_connection()
         if isinstance(last_error, TimeoutError):
             raise TransportConnectionError(
                 f"Timeout connecting to {self._host}:{self._port} after "
@@ -601,13 +601,29 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             _LOGGER.debug("Error draining buffer: %s", err)
 
     async def _teardown_connection(self) -> None:
+        """Tear down the connection, serialised on ``_connect_lock``.
+
+        For callers that do NOT already hold ``_connect_lock`` (``_send_receive``
+        and ``_force_reconnect``, which hold the per-transaction ``_lock``).
+        Holding ``_connect_lock`` for the whole close — including the awaited
+        ``wait_closed()`` — prevents a concurrent ``connect()`` from dialing the
+        dongle's single TCP slot while this socket is still closing (the async
+        ``wait_closed()`` yields control, so without the lock ``connect()`` could
+        interleave and hit the very reconnect failure this teardown prevents).
+        ``connect()`` already holds ``_connect_lock`` and calls
+        :meth:`_close_connection` directly to avoid re-entrant acquisition.
+        """
+        async with self._connect_lock:
+            await self._close_connection()
+
+    async def _close_connection(self) -> None:
         """Mark the connection broken and close the socket without handshake.
 
-        Used after socket errors and suspected-dead connections so the next
-        request (or retry attempt) re-establishes a fresh TCP connection.
-        Awaits ``wait_closed()`` (bounded by a timeout) so the transport is
-        flushed before the next dial — the dongle only allows one connection
-        at a time, so a half-closed socket would block reconnection.
+        Caller must hold ``_connect_lock`` (``connect()`` does; other callers go
+        through :meth:`_teardown_connection`). Awaits ``wait_closed()`` (bounded
+        by a timeout) so the transport is flushed before the next dial — the
+        dongle only allows one connection at a time, so a half-closed socket
+        would block reconnection.
         """
         self._connected = False
         self._reader = None

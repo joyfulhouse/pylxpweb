@@ -9,6 +9,7 @@ import pytest
 from pylxpweb import LuxpowerClient
 from pylxpweb.devices.inverters.base import BaseInverter
 from pylxpweb.devices.models import DeviceInfo, Entity
+from pylxpweb.exceptions import LuxpowerDeviceError
 from pylxpweb.models import EnergyInfo, InverterRuntime, SuccessResponse
 
 
@@ -791,6 +792,26 @@ class TestInverterControlOperations:
         )
 
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_standby_mode_transport_write_failure_raises(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Transport-mode Modbus write failure raises LuxpowerDeviceError.
+
+        Consistent with every other register-bit control operation (which go
+        through the same _write_modbus_register helper). The pre-refactor
+        deprecated write path returned False here; the loud failure is the
+        library's control-op convention.
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel", transport=Mock()
+        )
+        inverter.read_transport_register = AsyncMock(return_value=512)
+        inverter.write_transport_register = AsyncMock(return_value=False)
+
+        with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
+            await inverter.set_standby_mode(True)
 
     @pytest.mark.asyncio
     async def test_get_battery_soc_limits(self, mock_client: LuxpowerClient) -> None:

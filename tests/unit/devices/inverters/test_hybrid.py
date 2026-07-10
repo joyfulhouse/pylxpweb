@@ -226,6 +226,44 @@ class TestACChargeOperations:
         mock_client.api.control.write_parameters.assert_awaited_once_with("1234567890", {67: 101})
         assert result is True
 
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_transport_write_failure_raises(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Transport-mode Modbus write failure raises (control-op convention)."""
+        inverter = HybridInverter(
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=Mock(),
+        )
+        inverter.read_transport_register = AsyncMock(return_value=0)
+        inverter.write_transport_register = AsyncMock(return_value=False)
+
+        with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
+            await inverter.set_ac_charge(enabled=True)
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_partial_cloud_failure_invalidates_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Enable bit succeeds, value write fails → cache still invalidated.
+
+        The enable bit mutated device state, so refresh() must not keep serving
+        the stale reg-21 even though the overall call returns False.
+        """
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        inverter._parameters_cache_time = 12345.0  # pretend the cache is fresh
+        mock_client.api.control.control_function = AsyncMock(return_value=_cloud_success())
+        mock_client.api.control.write_parameters = AsyncMock(return_value=_cloud_success(False))
+
+        result = await inverter.set_ac_charge(enabled=True, power_percent=50)
+
+        assert result is False
+        assert inverter._parameters_cache_time is None
+
 
 class TestEPSOperations:
     """Test EPS (backup) mode operations.
@@ -790,6 +828,23 @@ class TestACChargeTypeOperations:
         inverter.read_transport_register.assert_awaited_once_with(120)
         inverter.write_transport_register.assert_awaited_once_with(120, 19)
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_ac_charge_type_transport_write_failure_raises(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Transport-mode Modbus write failure raises (control-op convention)."""
+        inverter = HybridInverter(
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=Mock(),
+        )
+        inverter.read_transport_register = AsyncMock(return_value=0)
+        inverter.write_transport_register = AsyncMock(return_value=False)
+
+        with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
+            await inverter.set_ac_charge_type(1)
 
     @pytest.mark.asyncio
     async def test_set_ac_charge_type_invalid_value(self, mock_client: LuxpowerClient) -> None:

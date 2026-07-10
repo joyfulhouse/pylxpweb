@@ -25,9 +25,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dongle teardown left the socket half-open**: `_teardown_connection` closed
   the writer without awaiting `wait_closed()`, so a stale socket could block
   the next reconnect (the dongle allows one connection at a time). It is now
-  async and awaits `wait_closed()` under a 5s timeout.
+  async and awaits `wait_closed()` under a 5s timeout, serialized on
+  `_connect_lock` (via an unlocked `_close_connection` helper for `connect()`,
+  which already holds the lock) so the awaited close can't overlap a concurrent
+  `connect()` dialing the single TCP slot.
+- **AC-charge partial-write left a stale parameter cache**: `set_ac_charge`
+  now invalidates `_parameters_cache_time` as soon as the enable bit is written,
+  so a subsequent power/SOC value-write failure can't leave
+  `refresh(include_parameters=True)` serving the old reg-21 for the cache TTL.
 
 ### Changed
+
+- **Transport-mode write failures on `set_standby_mode`, `set_ac_charge`, and
+  `set_ac_charge_type` now raise `LuxpowerDeviceError`** instead of returning
+  `False` (they previously used the deprecated `write_parameters` path). This
+  aligns them with every other register-bit control operation, which already
+  raise on a failed Modbus write. Cloud mode still returns `False` when the API
+  rejects a write.
 
 - Internal DRY refactors (no behavior change): `_op_guard()` async context
   manager collapses the reconnect-gate + op-lock preambles in the Modbus
