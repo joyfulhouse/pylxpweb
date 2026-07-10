@@ -515,6 +515,13 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         category=HoldingCategory.POWER,
         description="Battery discharge power percentage.",
     ),
+    # Scaling metadata note (regs 66/74/82/103, the "100W-unit" family): scale
+    # stays NONE here on purpose. LOCAL reads want the raw 100W/decivolt value;
+    # only the CLOUD named-write path divides by 10 to reach engineering units,
+    # and that ÷10 is recorded once in constants.registers.CLOUD_WRITE_DIV10_
+    # REGISTERS (keyed by address). min_value/max_value are the post-scaling
+    # engineering bounds (0-15000 W here). Do NOT fold the ÷10 into `scale` — it
+    # would wrongly divide local reads too.
     HoldingRegisterDefinition(
         address=66,
         canonical_name="ac_charge_power",
@@ -1423,6 +1430,10 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     # =========================================================================
     # STOP DISCHARGE VOLTAGE (reg 202, live-verified 2026-06-11)
     # =========================================================================
+    # Scale stays NONE (raw decivolts for LOCAL reads); the CLOUD named-write
+    # ÷10 (decivolts→volts) lives in constants.registers.CLOUD_WRITE_DIV10_
+    # REGISTERS. min_value/max_value are post-scaling volts [40, 56]. See the
+    # reg-66 "100W-unit family" note for why the ÷10 is not in `scale`.
     HoldingRegisterDefinition(
         address=202,
         canonical_name="stop_discharge_voltage",

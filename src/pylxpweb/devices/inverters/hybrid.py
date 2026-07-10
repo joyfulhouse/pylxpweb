@@ -49,134 +49,6 @@ class HybridInverter(GenericInverter):
     """
 
     # ============================================================================
-    # Private Helpers
-    # ============================================================================
-
-    @staticmethod
-    def _cloud_param_key(register: int, bit: int = 0) -> str:
-        """Resolve the cloud API parameter name for a register value or bit.
-
-        Uses ``REGISTER_TO_PARAM_KEYS`` so the cloud (HTTP) path can name the
-        register the same way the EG4 API does. For a value register the bit
-        index defaults to 0 (the single value key); for a bit field the index
-        is the bit position.
-        """
-        from pylxpweb.constants.registers import REGISTER_TO_PARAM_KEYS
-
-        keys = REGISTER_TO_PARAM_KEYS.get(register)
-        if not keys or bit >= len(keys):
-            raise LuxpowerDeviceError(
-                f"No cloud parameter mapping for register {register} bit {bit}"
-            )
-        return keys[bit]
-
-    @staticmethod
-    def _register_scale_divisor(register: int) -> int:
-        """Return the raw→engineering divisor for a value register (default 1).
-
-        The cloud API returns parameter values already in engineering units
-        (e.g. ``59.5`` V for a DIV_10 register), whereas the local transport
-        returns the raw register integer (e.g. ``595``). This divisor lets the
-        cloud path reconstruct the raw value so both transports agree on what
-        :meth:`_read_modbus_register` returns.
-        """
-        from pylxpweb.registers.inverter_holding import BY_ADDRESS
-
-        defs = BY_ADDRESS.get(register)
-        if not defs:
-            return 1
-        return int(defs[0].scale.value)
-
-    async def _read_modbus_register(self, register: int) -> int:
-        """Read a single value register, via transport (raw) or cloud (named param).
-
-        Transport mode reads the raw register directly. Cloud mode reads the
-        single named value parameter the API exposes for this register. Bit
-        fields must use :meth:`_get_register_bit` instead — the cloud API does
-        not return a raw 16-bit value for them.
-        """
-        if self._transport is not None:
-            value = await self.read_transport_register(register)
-            if value is None:
-                raise LuxpowerDeviceError(
-                    f"Register {register} read requires a successful Modbus read"
-                )
-            return int(value)
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                f"Register {register} read requires a transport or a cloud client"
-            )
-        param_key = self._cloud_param_key(register)
-        response = await self._client.api.control.read_parameters(self.serial_number, register, 1)
-        # Cloud returns engineering units (possibly a float-like string, e.g.
-        # "59.5"); reconstruct the raw register value so callers that re-apply
-        # the register scale get the same result as the transport path.
-        raw = float(response.parameters.get(param_key, 0))
-        return int(round(raw * self._register_scale_divisor(register)))
-
-    async def _write_modbus_register(self, register: int, value: int) -> bool:
-        """Write a single raw register value, via transport or cloud.
-
-        Cloud mode writes the raw register value directly (``write_parameters``
-        keys by register address), so no name mapping or scaling translation is
-        needed — the same raw value used by the transport path is written.
-        """
-        if self._transport is not None:
-            success = await self.write_transport_register(register, value)
-            if not success:
-                raise LuxpowerDeviceError(
-                    f"Register {register} write requires a successful Modbus write"
-                )
-            return True
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                f"Register {register} write requires a transport or a cloud client"
-            )
-        response = await self._client.api.control.write_parameters(
-            self.serial_number, {register: value}
-        )
-        return bool(response.success)
-
-    async def _get_register_bit(self, register: int, bit: int) -> bool:
-        """Read a single bit, via transport (raw mask) or cloud (named bool param)."""
-        if self._transport is not None:
-            raw = await self.read_transport_register(register)
-            if raw is None:
-                raise LuxpowerDeviceError(
-                    f"Register {register} read requires a successful Modbus read"
-                )
-            return bool(raw & (1 << bit))
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                f"Register {register} read requires a transport or a cloud client"
-            )
-        param_key = self._cloud_param_key(register, bit)
-        response = await self._client.api.control.read_parameters(self.serial_number, register, 1)
-        return bool(response.parameters.get(param_key, False))
-
-    async def _set_modbus_register_bit(self, register: int, bit: int, enabled: bool) -> bool:
-        """Set/clear a single register bit, via transport or cloud.
-
-        Transport mode performs an atomic read-modify-write that preserves the
-        other bits. Cloud mode uses the function-control API, which applies the
-        bit update server-side (also preserving the other bits) — avoiding a
-        read-modify-write race across the slower HTTP round-trip.
-        """
-        if self._transport is not None:
-            current_value = await self._read_modbus_register(register)
-            new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
-            return await self._write_modbus_register(register, new_value)
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                f"Register {register} write requires a transport or a cloud client"
-            )
-        param_key = self._cloud_param_key(register, bit)
-        response = await self._client.api.control.control_function(
-            self.serial_number, param_key, enabled
-        )
-        return bool(response.success)
-
-    # ============================================================================
     # Hybrid-Specific Control Operations
     # ============================================================================
 
@@ -236,7 +108,12 @@ class HybridInverter(GenericInverter):
                 stop AC charging (used for battery cell balancing).
 
         Returns:
-            True if successful
+            True if successful; in cloud mode, False if the API rejected a write
+
+        Raises:
+            ValueError: If power_percent or soc_limit is out of range.
+            LuxpowerDeviceError: In transport mode, if a Modbus write fails
+                (consistent with the other register-bit control operations).
 
         Example:
             >>> # Enable AC charge at 50% power to 100% SOC
@@ -261,25 +138,33 @@ class HybridInverter(GenericInverter):
         if soc_limit is not None and not 0 <= soc_limit <= 101:
             raise ValueError("soc_limit must be between 0 and 101")
 
-        # Update function enable bit
-        func_params = await self.read_parameters(FUNC_EN_REGISTER, 1)
-        current_func = func_params.get(f"reg_{FUNC_EN_REGISTER}", 0)
+        # Toggle the AC-charge enable via the named FUNC_AC_CHARGE bit: the
+        # transport does an atomic reg-21 read-modify-write, the cloud applies
+        # the bit server-side via control_function. The old raw reg-21 write was
+        # rejected by the cloud (reg 21 is a bitfield), silently no-opping.
+        if not await self._set_modbus_register_bit(
+            FUNC_EN_REGISTER, FUNC_EN_BIT_AC_CHARGE_EN, enabled
+        ):
+            return False
 
-        if enabled:
-            new_func = current_func | (1 << FUNC_EN_BIT_AC_CHARGE_EN)
-        else:
-            new_func = current_func & ~(1 << FUNC_EN_BIT_AC_CHARGE_EN)
+        # The enable bit has changed device state; invalidate the parameter
+        # cache now so that a later value-write failure below cannot leave
+        # refresh(include_parameters=True) serving a stale reg-21 for up to the
+        # parameter TTL (cloud endpoint invalidation does not clear this cache).
+        self._parameters_cache_time = None
 
-        params_to_write = {FUNC_EN_REGISTER: new_func}
+        # Power and SOC limit are value registers; write them by address so the
+        # cloud path resolves the named param + scaling (behaviour unchanged).
+        for register, value in (
+            (HOLD_AC_CHARGE_POWER_CMD, power_percent),
+            (HOLD_AC_CHARGE_SOC_LIMIT, soc_limit),
+        ):
+            if value is None:
+                continue
+            if not await self._write_modbus_register(register, value):
+                return False
 
-        # Add power and SOC limit if provided (already validated)
-        if power_percent is not None:
-            params_to_write[HOLD_AC_CHARGE_POWER_CMD] = power_percent
-
-        if soc_limit is not None:
-            params_to_write[HOLD_AC_CHARGE_SOC_LIMIT] = soc_limit
-
-        return await self.write_parameters(params_to_write)
+        return True
 
     async def set_eps_enabled(self, enabled: bool) -> bool:
         """Enable or disable EPS (backup/off-grid) mode.
@@ -854,9 +739,13 @@ class HybridInverter(GenericInverter):
             HOLD_AC_CHARGE_TYPE_REGISTER,
         )
 
-        params = await self.read_parameters(HOLD_AC_CHARGE_TYPE_REGISTER, 1)
-        raw: int = params.get(f"reg_{HOLD_AC_CHARGE_TYPE_REGISTER}", 0)
-        return (raw & AC_CHARGE_TYPE_MASK) >> AC_CHARGE_TYPE_SHIFT
+        if self._transport is not None:
+            raw = await self._read_modbus_register(HOLD_AC_CHARGE_TYPE_REGISTER)
+            return (raw & AC_CHARGE_TYPE_MASK) >> AC_CHARGE_TYPE_SHIFT
+        # Reg 120 is a bitfield; the cloud exposes the type as the named
+        # BIT_AC_CHARGE_TYPE multi-value bit param, not a raw ``reg_120`` value.
+        client = self._require_client(HOLD_AC_CHARGE_TYPE_REGISTER, "read")
+        return await client.api.control.get_ac_charge_type(self.serial_number)
 
     async def set_ac_charge_type(self, charge_type: int) -> bool:
         """Set AC charge type (what the charge schedule is based on).
@@ -865,10 +754,12 @@ class HybridInverter(GenericInverter):
             charge_type: 0 = Time, 1 = SOC/Volt, 2 = Time + SOC/Volt
 
         Returns:
-            True if successful
+            True if successful; in cloud mode, False if the API rejected the write
 
         Raises:
             ValueError: If charge_type is not 0, 1, or 2
+            LuxpowerDeviceError: In transport mode, if a Modbus write fails
+                (consistent with the other register-bit control operations).
 
         Example:
             >>> await inverter.set_ac_charge_type(0)  # Time-based
@@ -883,12 +774,23 @@ class HybridInverter(GenericInverter):
         if charge_type not in (0, 1, 2):
             raise ValueError(f"charge_type must be 0, 1, or 2, got {charge_type}")
 
-        # Read-modify-write to preserve other bits in register 120
-        params = await self.read_parameters(HOLD_AC_CHARGE_TYPE_REGISTER, 1)
-        current = params.get(f"reg_{HOLD_AC_CHARGE_TYPE_REGISTER}", 0)
-        new_value = (current & ~AC_CHARGE_TYPE_MASK) | (charge_type << AC_CHARGE_TYPE_SHIFT)
+        if self._transport is not None:
+            # Transport: atomic read-modify-write preserves the other reg-120 bits.
+            current = await self._read_modbus_register(HOLD_AC_CHARGE_TYPE_REGISTER)
+            new_value = (current & ~AC_CHARGE_TYPE_MASK) | (charge_type << AC_CHARGE_TYPE_SHIFT)
+            result = await self._write_modbus_register(HOLD_AC_CHARGE_TYPE_REGISTER, new_value)
+        else:
+            # Reg 120 is a bitfield (the raw cloud write is rejected); set the
+            # named BIT_AC_CHARGE_TYPE multi-value bit param server-side, which
+            # preserves the other bits without a cross-HTTP read-modify-write.
+            client = self._require_client(HOLD_AC_CHARGE_TYPE_REGISTER, "write")
+            response = await client.api.control.set_ac_charge_type(self.serial_number, charge_type)
+            result = bool(response.success)
 
-        return await self.write_parameters({HOLD_AC_CHARGE_TYPE_REGISTER: new_value})
+        if result:
+            self._parameters_cache_time = None
+
+        return result
 
     # ============================================================================
     # AC Charge SOC/Voltage Threshold Operations

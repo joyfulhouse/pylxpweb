@@ -9,6 +9,7 @@ import pytest
 from pylxpweb import LuxpowerClient
 from pylxpweb.devices.inverters.base import BaseInverter
 from pylxpweb.devices.models import DeviceInfo, Entity
+from pylxpweb.exceptions import LuxpowerDeviceError
 from pylxpweb.models import EnergyInfo, InverterRuntime, SuccessResponse
 
 
@@ -755,27 +756,18 @@ class TestInverterControlOperations:
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        # Mock control API
+        # Mock control API - cloud mode drives the named function-control bit
         mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.control_function = AsyncMock(return_value=mock_response)
 
-        # Mock read response - bit 9 currently set (power on)
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_21": 512}  # Bit 9 set (1 << 9 = 512)
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        # Mock write response
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
-
-        # Set to standby (should clear bit 9)
+        # Set to standby (bit 9 → 0, i.e. disable the "power on" named bit)
         result = await inverter.set_standby_mode(True)
 
-        # Verify read call
-        mock_client.api.control.read_parameters.assert_called_once_with("1234567890", 21, 1)
-
-        # Verify write call - bit 9 should be cleared (0)
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {21: 0})
+        mock_client.api.control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_SET_TO_STANDBY", False
+        )
 
         assert result is True
 
@@ -786,26 +778,40 @@ class TestInverterControlOperations:
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        # Mock control API
+        # Mock control API - cloud mode drives the named function-control bit
         mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.control_function = AsyncMock(return_value=mock_response)
 
-        # Mock read response - bit 9 currently clear (standby)
-        mock_read_response = Mock()
-        mock_read_response.parameters = {"reg_21": 0}
-        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_read_response)
-
-        # Mock write response
-        mock_write_response = Mock()
-        mock_write_response.success = True
-        mock_client.api.control.write_parameters = AsyncMock(return_value=mock_write_response)
-
-        # Power on (should set bit 9)
+        # Power on (bit 9 → 1, i.e. enable the "power on" named bit)
         result = await inverter.set_standby_mode(False)
 
-        # Verify write call - bit 9 should be set (512)
-        mock_client.api.control.write_parameters.assert_called_once_with("1234567890", {21: 512})
+        mock_client.api.control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_SET_TO_STANDBY", True
+        )
 
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_standby_mode_transport_write_failure_raises(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Transport-mode Modbus write failure raises LuxpowerDeviceError.
+
+        Consistent with every other register-bit control operation (which go
+        through the same _write_modbus_register helper). The pre-refactor
+        deprecated write path returned False here; the loud failure is the
+        library's control-op convention.
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel", transport=Mock()
+        )
+        inverter.read_transport_register = AsyncMock(return_value=512)
+        inverter.write_transport_register = AsyncMock(return_value=False)
+
+        with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
+            await inverter.set_standby_mode(True)
 
     @pytest.mark.asyncio
     async def test_get_battery_soc_limits(self, mock_client: LuxpowerClient) -> None:

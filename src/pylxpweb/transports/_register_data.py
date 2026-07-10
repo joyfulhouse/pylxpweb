@@ -253,6 +253,7 @@ if TYPE_CHECKING:
         _split_phase: bool
         _pv_string_count: int
         _max_input_block_size: int
+        _input_coalescing_latched_off: bool
 
         async def _read_input_registers(self, start: int, count: int) -> list[int]: ...
 
@@ -290,6 +291,15 @@ class RegisterDataMixin(_DataMixinBase):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _init_input_coalescing(self, max_input_block_size: int) -> None:
+        """Validate and store the input-register coalescing block size + latch.
+
+        Shared by the Modbus and dongle transport constructors (both mix in
+        ``RegisterDataMixin``) so the coalescing init lives in one place.
+        """
+        self._max_input_block_size = validate_input_block_size(max_input_block_size)
+        self._input_coalescing_latched_off = False
 
     @staticmethod
     def _registers_from_values(start: int, values: list[int]) -> dict[int, int]:
