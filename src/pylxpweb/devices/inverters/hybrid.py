@@ -137,22 +137,24 @@ class HybridInverter(GenericInverter):
         # transport does an atomic reg-21 read-modify-write, the cloud applies
         # the bit server-side via control_function. The old raw reg-21 write was
         # rejected by the cloud (reg 21 is a bitfield), silently no-opping.
-        result = await self._set_modbus_register_bit(
+        if not await self._set_modbus_register_bit(
             FUNC_EN_REGISTER, FUNC_EN_BIT_AC_CHARGE_EN, enabled
-        )
+        ):
+            return False
 
         # Power and SOC limit are value registers; write them by address so the
         # cloud path resolves the named param + scaling (behaviour unchanged).
-        if result and power_percent is not None:
-            result = await self._write_modbus_register(HOLD_AC_CHARGE_POWER_CMD, power_percent)
+        for register, value in (
+            (HOLD_AC_CHARGE_POWER_CMD, power_percent),
+            (HOLD_AC_CHARGE_SOC_LIMIT, soc_limit),
+        ):
+            if value is None:
+                continue
+            if not await self._write_modbus_register(register, value):
+                return False
 
-        if result and soc_limit is not None:
-            result = await self._write_modbus_register(HOLD_AC_CHARGE_SOC_LIMIT, soc_limit)
-
-        if result:
-            self._parameters_cache_time = None
-
-        return result
+        self._parameters_cache_time = None
+        return True
 
     async def set_eps_enabled(self, enabled: bool) -> bool:
         """Enable or disable EPS (backup/off-grid) mode.
@@ -730,14 +732,10 @@ class HybridInverter(GenericInverter):
         if self._transport is not None:
             raw = await self._read_modbus_register(HOLD_AC_CHARGE_TYPE_REGISTER)
             return (raw & AC_CHARGE_TYPE_MASK) >> AC_CHARGE_TYPE_SHIFT
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                f"Register {HOLD_AC_CHARGE_TYPE_REGISTER} read requires a transport "
-                "or a cloud client"
-            )
         # Reg 120 is a bitfield; the cloud exposes the type as the named
         # BIT_AC_CHARGE_TYPE multi-value bit param, not a raw ``reg_120`` value.
-        return await self._client.api.control.get_ac_charge_type(self.serial_number)
+        client = self._require_client(HOLD_AC_CHARGE_TYPE_REGISTER, "read")
+        return await client.api.control.get_ac_charge_type(self.serial_number)
 
     async def set_ac_charge_type(self, charge_type: int) -> bool:
         """Set AC charge type (what the charge schedule is based on).
@@ -770,17 +768,11 @@ class HybridInverter(GenericInverter):
             new_value = (current & ~AC_CHARGE_TYPE_MASK) | (charge_type << AC_CHARGE_TYPE_SHIFT)
             result = await self._write_modbus_register(HOLD_AC_CHARGE_TYPE_REGISTER, new_value)
         else:
-            if self._client is None:
-                raise LuxpowerDeviceError(
-                    f"Register {HOLD_AC_CHARGE_TYPE_REGISTER} write requires a "
-                    "transport or a cloud client"
-                )
             # Reg 120 is a bitfield (the raw cloud write is rejected); set the
             # named BIT_AC_CHARGE_TYPE multi-value bit param server-side, which
             # preserves the other bits without a cross-HTTP read-modify-write.
-            response = await self._client.api.control.set_ac_charge_type(
-                self.serial_number, charge_type
-            )
+            client = self._require_client(HOLD_AC_CHARGE_TYPE_REGISTER, "write")
+            response = await client.api.control.set_ac_charge_type(self.serial_number, charge_type)
             result = bool(response.success)
 
         if result:
