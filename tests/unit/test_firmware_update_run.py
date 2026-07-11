@@ -249,7 +249,9 @@ async def test_failed_step_stops_the_chain() -> None:
     advanced partially, firing another run against a failed chain is the
     blind-write class this orchestrator exists to prevent (codex P1)."""
     device = ScriptedDevice(
-        checks=[STEP1_PENDING],
+        # Post-FAILED re-check shows a partial advance (1414 -> 1415): the
+        # result must report the actual current version, not the pre-step one.
+        checks=[STEP1_PENDING, STEP2_PENDING],
         failed_statuses=[True],
     )
 
@@ -259,6 +261,7 @@ async def test_failed_step_stops_the_chain() -> None:
     assert result.steps_run == 1
     assert device.start_calls == 1
     assert "FAILED" in result.message
+    assert result.final_version == "ccaa-1E1415"
 
 
 @pytest.mark.asyncio

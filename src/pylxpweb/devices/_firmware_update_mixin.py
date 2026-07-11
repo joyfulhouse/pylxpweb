@@ -394,6 +394,7 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             app_version_latest=self._firmware_update_info.app_version_latest,
             param_version_current=self._firmware_update_info.param_version_current,
             param_version_latest=self._firmware_update_info.param_version_latest,
+            needs_run_steps=self._firmware_update_info.needs_run_steps,
         )
 
         # Update cache with progress data
@@ -482,6 +483,7 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                     app_version_latest=self._firmware_update_info.app_version_latest,
                     param_version_current=self._firmware_update_info.param_version_current,
                     param_version_latest=self._firmware_update_info.param_version_latest,
+                    needs_run_steps=self._firmware_update_info.needs_run_steps,
                 )
                 # Update timestamp so next progress call uses 10-second cache
                 self._firmware_update_cache_time = datetime.now()
@@ -678,6 +680,11 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             # run against a device whose previous step failed is exactly the
             # class of blind write this orchestrator exists to prevent.
             if await self._update_step_reported_failed():
+                # Re-check so the reported version reflects any partial
+                # advance the failed step made before stopping.
+                info = await self.check_firmware_updates(force=True)
+                if info.latest_version:
+                    last_target = info.latest_version
                 return FirmwareUpdateRunResult(
                     success=False,
                     converged=False,
