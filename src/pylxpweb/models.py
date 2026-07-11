@@ -1420,6 +1420,11 @@ class FirmwareUpdateInfo(BaseModel):
     param_version_latest: int | None = None  # lastV2 from API
     app_filename: str | None = None  # lastV1FileName from API
     param_filename: str | None = None  # lastV2FileName from API
+    # Multi-step chain advertisement (needRunStep2..5 from API). Diagnostic:
+    # the orchestrator's re-run decision is driven by the post-step re-check
+    # (an update remaining available), not these flags — their exact firmware
+    # semantics are unverified, so they must not gate writes either way.
+    needs_run_steps: list[int] = []
 
     @property
     def update_available(self) -> bool:
@@ -1549,6 +1554,16 @@ class FirmwareUpdateInfo(BaseModel):
             param_version_latest=details.lastV2,
             app_filename=details.lastV1FileName,
             param_filename=details.lastV2FileName,
+            needs_run_steps=[
+                step
+                for step, needed in (
+                    (2, details.needRunStep2),
+                    (3, details.needRunStep3),
+                    (4, details.needRunStep4),
+                    (5, details.needRunStep5),
+                )
+                if needed
+            ],
         )
 
 

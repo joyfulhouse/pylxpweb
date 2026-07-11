@@ -354,3 +354,32 @@ class TestLatestVersionPrefixPreservation:
         info = FirmwareUpdateInfo.from_api_response(check, title="T")
 
         assert info.latest_version == "IAAB-0E00"
+
+    def test_gridboss_iaab_prefix_unchanged(self) -> None:
+        """GridBOSS IAAB codes keep the classic construction."""
+        check = _create_firmware_check("IAAB", v1=0x13, v2=0x00, last_v1=0x16, last_v2=None)
+
+        info = FirmwareUpdateInfo.from_api_response(check, title="GridBOSS Firmware")
+
+        assert info.latest_version == "IAAB-1600"
+
+    def test_eg4_iaab_build_prefix_preserved(self) -> None:
+        """EG4-branded GridBOSS builds (EG4_IAAB-xxxx) keep the full prefix
+        including the underscore segment."""
+        details = _create_firmware_details("IAAB", v1=0x13, v2=0x00, last_v1=0x16, last_v2=None)
+        details = details.model_copy(update={"fwCodeBeforeUpload": "EG4_IAAB-1300"})
+        check = FirmwareUpdateCheck(success=True, details=details, infoForwardUrl=None)
+
+        info = FirmwareUpdateInfo.from_api_response(check, title="GridBOSS Firmware")
+
+        assert info.latest_version == "EG4_IAAB-1600"
+
+    def test_needs_run_steps_threaded_through(self) -> None:
+        """needRunStep2..5 flags surface as needs_run_steps for diagnostics."""
+        details = _create_firmware_details("IAAB", v1=0x13, v2=0x00, last_v1=0x16, last_v2=None)
+        details = details.model_copy(update={"needRunStep2": True, "needRunStep4": True})
+        check = FirmwareUpdateCheck(success=True, details=details, infoForwardUrl=None)
+
+        info = FirmwareUpdateInfo.from_api_response(check, title="T")
+
+        assert info.needs_run_steps == [2, 4]

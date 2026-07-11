@@ -514,6 +514,23 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         eligibility = await client.api.firmware.check_update_eligibility(serial)
         return eligibility.is_allowed
 
+    async def _update_step_reported_failed(self) -> bool:
+        """Whether ``remoteUpdate/info`` reports this device's update as FAILED.
+
+        Consulted by the run-to-completion orchestrator after each step ends:
+        the aggregated progress conversion collapses every non-installing
+        state to ``in_progress=False``, so the terminal FAILED status must be
+        read from the raw status row.
+        """
+        client: LuxpowerClient = self._client
+        serial: str = self.serial_number
+        status = await client.api.firmware.get_firmware_update_status()
+        row = next(
+            (item for item in status.deviceInfos if item.inverterSn == serial),
+            None,
+        )
+        return row is not None and row.is_failed
+
     async def run_firmware_update_to_completion(
         self,
         *,
@@ -522,6 +539,8 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         max_steps: int = 5,
         step_timeout: float = 3600.0,
         start_grace: float = 300.0,
+        settle_checks: int = 3,
+        settle_interval: float = 30.0,
     ) -> FirmwareUpdateRunResult:
         """Run firmware updates until the device converges on the latest version.
 
@@ -553,6 +572,10 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                 server registers an accepted run in ``remoteUpdate/info``
                 asynchronously — without this grace, an early poll seeing
                 idle status would be mistaken for instant completion.
+            settle_checks: Extra post-step version re-checks before an
+                unchanged version is declared "no progress" (the check
+                endpoint can lag the status endpoint's terminal state).
+            settle_interval: Seconds between those settle re-checks.
 
         Returns:
             FirmwareUpdateRunResult describing convergence, steps run, and a
@@ -566,8 +589,19 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         # Import here to avoid circular imports
         from pylxpweb.models import FirmwareUpdateRunResult
 
-        def _versions(info: FirmwareUpdateInfo) -> tuple[int | None, int | None]:
-            return (info.app_version_current, info.param_version_current)
+        def _progress_key(
+            info: FirmwareUpdateInfo,
+        ) -> tuple[str | None, int | None, int | None]:
+            # The full installed code is the primary progress signal: it
+            # also captures prefix-byte movement (ccaa-1D.. -> ccaa-1E..)
+            # that the trailing v1/v2 pair cannot see (lastV3 does not
+            # exist in the API). The pair rides along for layouts where
+            # the code string is empty.
+            return (
+                info.installed_version or None,
+                info.app_version_current,
+                info.param_version_current,
+            )
 
         info = await self.check_firmware_updates(force=True)
         if not info.update_available:
@@ -580,9 +614,13 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             )
 
         steps_run = 0
+        # The converged version to report: once the device is up to date the
+        # check endpoint answers with the bare "already latest" sentinel
+        # (empty fwCodeBeforeUpload), so remember the target we converged to.
+        last_target = info.latest_version or None
         loop = asyncio.get_running_loop()
         for _ in range(max_steps):
-            before = _versions(info)
+            before = _progress_key(info)
 
             if not await self.check_update_eligibility():
                 return FirmwareUpdateRunResult(
@@ -636,18 +674,43 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                     )
                 await asyncio.sleep(poll_interval)
 
-            info = await self.check_firmware_updates(force=True)
-            if not info.update_available:
+            # A step that ended in FAILED must stop the chain: firing another
+            # run against a device whose previous step failed is exactly the
+            # class of blind write this orchestrator exists to prevent.
+            if await self._update_step_reported_failed():
                 return FirmwareUpdateRunResult(
-                    success=True,
-                    converged=True,
+                    success=False,
+                    converged=False,
                     steps_run=steps_run,
-                    message=(f"Firmware update complete after {steps_run} step(s)"),
+                    message=(
+                        f"Firmware update step {steps_run} reported FAILED by "
+                        "the server; not issuing further update commands"
+                    ),
                     final_version=info.installed_version,
                 )
 
-            if _versions(info) == before:
-                # A run completed but neither component advanced — do not
+            # Post-step re-check with a bounded settle window: the check
+            # endpoint's version data can lag the status endpoint's terminal
+            # state (cloud eventual consistency), and a single immediate
+            # re-check could mistake that lag for a dead chain.
+            for settle in range(settle_checks + 1):
+                if settle:
+                    await asyncio.sleep(settle_interval)
+                info = await self.check_firmware_updates(force=True)
+                if info.latest_version:
+                    last_target = info.latest_version
+                if not info.update_available:
+                    return FirmwareUpdateRunResult(
+                        success=True,
+                        converged=True,
+                        steps_run=steps_run,
+                        message=(f"Firmware update complete after {steps_run} step(s)"),
+                        final_version=info.installed_version or last_target,
+                    )
+                if _progress_key(info) != before:
+                    break  # component advanced — continue the chain
+            else:
+                # No version movement across the settle window — do not
                 # keep issuing writes against an unresponsive chain.
                 return FirmwareUpdateRunResult(
                     success=False,

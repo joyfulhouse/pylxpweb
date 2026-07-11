@@ -45,12 +45,14 @@ class ScriptedDevice(FirmwareUpdateMixin):
         progresses: list[FirmwareUpdateInfo] | None = None,
         start_results: list[bool] | None = None,
         eligibility: list[bool] | None = None,
+        failed_statuses: list[bool] | None = None,
     ) -> None:
         self._init_firmware_update_cache()
         self._checks = checks
         self._progresses = progresses or []
         self._start_results = start_results or []
         self._eligibility = eligibility or []
+        self._failed_statuses = failed_statuses or []
         self.start_calls = 0
         self.check_calls = 0
 
@@ -74,6 +76,11 @@ class ScriptedDevice(FirmwareUpdateMixin):
         if self._eligibility:
             return self._eligibility.pop(0)
         return True
+
+    async def _update_step_reported_failed(self) -> bool:
+        if self._failed_statuses:
+            return self._failed_statuses.pop(0)
+        return False
 
 
 UP_TO_DATE = _info("ccaa-1E1515", "ccaa-1E1515", app_current=0x15, param_current=0x15)
@@ -144,7 +151,9 @@ async def test_no_progress_after_step_aborts() -> None:
     """A completed run with no version delta must stop, not loop writes."""
     device = ScriptedDevice(checks=[STEP1_PENDING, STEP1_PENDING])
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, settle_checks=0
+    )
 
     assert not result.success
     assert result.steps_run == 1
@@ -162,7 +171,7 @@ async def test_step_budget_exhaustion() -> None:
     device = ScriptedDevice(checks=checks)
 
     result = await device.run_firmware_update_to_completion(
-        poll_interval=0, max_steps=2, start_grace=0
+        poll_interval=0, max_steps=2, start_grace=0, settle_checks=0
     )
 
     assert not result.success
@@ -234,9 +243,75 @@ async def test_grace_expiry_with_completed_fast_step_still_converges() -> None:
     assert result.steps_run == 1
 
 
+@pytest.mark.asyncio
+async def test_failed_step_stops_the_chain() -> None:
+    """A step the server reports as FAILED must abort — even if versions
+    advanced partially, firing another run against a failed chain is the
+    blind-write class this orchestrator exists to prevent (codex P1)."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING],
+        failed_statuses=[True],
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+
+    assert not result.success and not result.converged
+    assert result.steps_run == 1
+    assert device.start_calls == 1
+    assert "FAILED" in result.message
+
+
+@pytest.mark.asyncio
+async def test_settle_window_recovers_lagging_check_data() -> None:
+    """The check endpoint can lag the status endpoint: an unchanged version
+    on the immediate re-check must retry within the settle window instead of
+    declaring no progress (codex P2)."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP1_PENDING, STEP2_PENDING, UP_TO_DATE],
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, settle_checks=2, settle_interval=0
+    )
+
+    assert result.success and result.converged
+    assert result.steps_run == 2  # lagging first re-check did not abort step 1
+
+
+@pytest.mark.asyncio
+async def test_prefix_only_progress_is_progress() -> None:
+    """A step that advances only the leading prefix byte (ccaa-1D -> ccaa-1E)
+    with unchanged trailing v1/v2 counts as progress — the comparison uses
+    the full installed code, not just the (v1, v2) pair (codex P1)."""
+    before = _info("ccaa-1D1415", "ccaa-1E1515", app_current=0x14, param_current=0x15)
+    after = _info("ccaa-1E1415", "ccaa-1E1515", app_current=0x14, param_current=0x15)
+    device = ScriptedDevice(checks=[before, after, UP_TO_DATE])
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, settle_checks=0
+    )
+
+    assert result.success and result.converged
+    assert result.steps_run == 2
+
+
 def test_scripted_device_is_mixin() -> None:
     """Guard: the scripted host really exercises the production mixin method."""
     assert (
         ScriptedDevice.run_firmware_update_to_completion
         is FirmwareUpdateMixin.run_firmware_update_to_completion
     )
+
+
+@pytest.mark.asyncio
+async def test_converged_final_version_survives_up_to_date_sentinel() -> None:
+    """When the post-step check answers with the bare 'already latest'
+    sentinel (empty version strings), the result reports the target we
+    converged to, not an empty string (agy review finding)."""
+    sentinel = _info("", "")  # create_up_to_date shape: both fields empty
+    device = ScriptedDevice(checks=[STEP2_PENDING, sentinel])
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+
+    assert result.success and result.converged
+    assert result.final_version == "ccaa-1E1515"
