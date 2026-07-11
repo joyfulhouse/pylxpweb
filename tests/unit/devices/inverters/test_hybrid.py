@@ -50,9 +50,12 @@ class TestACChargeOperations:
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        # Mock function enable register read
+        # Mock function enable register read — the REAL cloud shape is a named
+        # boolean (FUNC_AC_CHARGE), not a raw "reg_21" mask. The old fabricated
+        # local-shaped value masked a bug where cloud reads always returned
+        # enabled=False (post-beta.1 scan).
         mock_func_response = Mock()
-        mock_func_response.parameters = {"reg_21": 128}  # Bit 7 set (AC charge enabled)
+        mock_func_response.parameters = {"FUNC_AC_CHARGE": True}
 
         # Mock AC charge parameters read
         mock_ac_response = Mock()
@@ -2343,3 +2346,44 @@ class TestStopDischargeVoltageOperations:
         # And the transport map agrees with the canonical holding table.
         canonical = BY_ADDRESS[202]
         assert canonical[0].api_param_key == "_12K_HOLD_STOP_DISCHG_VOLT"
+
+
+class TestACChargeSettingsCloudShape:
+    """Regression pins for the cloud named-boolean enable read (post-beta.1 scan P2)."""
+
+    @pytest.mark.asyncio
+    async def test_cloud_disabled_reads_false(self, mock_client: LuxpowerClient) -> None:
+        """Cloud FUNC_AC_CHARGE=False reads enabled=False (and not via raw mask)."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        func_resp = Mock()
+        func_resp.parameters = {"FUNC_AC_CHARGE": False}
+        ac_resp = Mock()
+        ac_resp.parameters = {
+            "HOLD_AC_CHARGE_POWER_CMD": 50,
+            "HOLD_AC_CHARGE_SOC_LIMIT": 100,
+            "HOLD_AC_CHARGE_ENABLE_1": 0,
+            "HOLD_AC_CHARGE_ENABLE_2": 0,
+        }
+        mock_client.api.control.read_parameters = AsyncMock(side_effect=[func_resp, ac_resp])
+
+        settings = await inverter.get_ac_charge_settings()
+
+        assert settings["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_cloud_missing_key_defaults_false(self, mock_client: LuxpowerClient) -> None:
+        """An absent FUNC_AC_CHARGE key fails safe to enabled=False."""
+        inverter = HybridInverter(
+            client=mock_client, serial_number="1234567890", model="FlexBOSS21"
+        )
+        func_resp = Mock()
+        func_resp.parameters = {}
+        ac_resp = Mock()
+        ac_resp.parameters = {"HOLD_AC_CHARGE_POWER_CMD": 0}
+        mock_client.api.control.read_parameters = AsyncMock(side_effect=[func_resp, ac_resp])
+
+        settings = await inverter.get_ac_charge_settings()
+
+        assert settings["enabled"] is False
