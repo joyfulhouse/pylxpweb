@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
-    from pylxpweb.models import FirmwareUpdateInfo
+    from pylxpweb.models import FirmwareUpdateInfo, FirmwareUpdateRunResult
 
     class _FirmwareMixinBase:
         """Typed stubs so mypy sees attributes provided by the host class."""
@@ -394,6 +394,7 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             app_version_latest=self._firmware_update_info.app_version_latest,
             param_version_current=self._firmware_update_info.param_version_current,
             param_version_latest=self._firmware_update_info.param_version_latest,
+            needs_run_steps=self._firmware_update_info.needs_run_steps,
         )
 
         # Update cache with progress data
@@ -482,6 +483,7 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                     app_version_latest=self._firmware_update_info.app_version_latest,
                     param_version_current=self._firmware_update_info.param_version_current,
                     param_version_latest=self._firmware_update_info.param_version_latest,
+                    needs_run_steps=self._firmware_update_info.needs_run_steps,
                 )
                 # Update timestamp so next progress call uses 10-second cache
                 self._firmware_update_cache_time = datetime.now()
@@ -513,3 +515,227 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
 
         eligibility = await client.api.firmware.check_update_eligibility(serial)
         return eligibility.is_allowed
+
+    async def _update_step_reported_failed(self) -> bool:
+        """Whether ``remoteUpdate/info`` reports this device's update as FAILED.
+
+        Consulted by the run-to-completion orchestrator after each step ends:
+        the aggregated progress conversion collapses every non-installing
+        state to ``in_progress=False``, so the terminal FAILED status must be
+        read from the raw status row.
+        """
+        client: LuxpowerClient = self._client
+        serial: str = self.serial_number
+        status = await client.api.firmware.get_firmware_update_status()
+        row = next(
+            (item for item in status.deviceInfos if item.inverterSn == serial),
+            None,
+        )
+        return row is not None and row.is_failed
+
+    async def run_firmware_update_to_completion(
+        self,
+        *,
+        try_fast_mode: bool = False,
+        poll_interval: float = 30.0,
+        max_steps: int = 5,
+        step_timeout: float = 3600.0,
+        start_grace: float = 300.0,
+        settle_checks: int = 3,
+        settle_interval: float = 30.0,
+    ) -> FirmwareUpdateRunResult:
+        """Run firmware updates until the device converges on the latest version.
+
+        ⚠️ CRITICAL WARNING - WRITE OPERATION (potentially long-running)
+
+        Some devices require ``standardUpdate/run`` once per firmware
+        component: the portal and mobile app chain these calls automatically,
+        but a single :meth:`start_firmware_update` call leaves such a device
+        on a partial version — e.g. a 6000XP asked to go to ``ccaa-1E1515``
+        lands on ``ccaa-1E1415`` (eg4_web_monitor#353). The check response
+        advertises the chain via ``needRunStep2``..``needRunStep5``.
+
+        This orchestrator loops: check → start → poll to completion →
+        re-check, until no update remains, a step makes no version progress
+        (fail-safe against server-side loops), the step budget is exhausted,
+        or a step times out. Each iteration re-verifies eligibility before
+        issuing the next run.
+
+        Args:
+            try_fast_mode: Attempt fast update mode on each run.
+            poll_interval: Seconds between progress polls while a step is
+                installing.
+            max_steps: Upper bound on ``standardUpdate/run`` invocations
+                (the API defines steps 2-5, so 5 covers every known chain).
+            step_timeout: Seconds to wait for a single step to finish
+                installing before aborting.
+            start_grace: Seconds to keep polling for the update to become
+                visible (``in_progress=True``) after an accepted start. The
+                server registers an accepted run in ``remoteUpdate/info``
+                asynchronously — without this grace, an early poll seeing
+                idle status would be mistaken for instant completion.
+            settle_checks: Extra post-step version re-checks before an
+                unchanged version is declared "no progress" (the check
+                endpoint can lag the status endpoint's terminal state).
+            settle_interval: Seconds between those settle re-checks.
+
+        Returns:
+            FirmwareUpdateRunResult describing convergence, steps run, and a
+            human-readable outcome message.
+
+        Raises:
+            LuxpowerAuthError: If authentication fails.
+            LuxpowerAPIError: If an API call fails outright.
+            LuxpowerConnectionError: If connection fails.
+        """
+        # Import here to avoid circular imports
+        from pylxpweb.models import FirmwareUpdateRunResult
+
+        def _progress_key(
+            info: FirmwareUpdateInfo,
+        ) -> tuple[str | None, int | None, int | None]:
+            # The full installed code is the primary progress signal: it
+            # also captures prefix-byte movement (ccaa-1D.. -> ccaa-1E..)
+            # that the trailing v1/v2 pair cannot see (lastV3 does not
+            # exist in the API). The pair rides along for layouts where
+            # the code string is empty.
+            return (
+                info.installed_version or None,
+                info.app_version_current,
+                info.param_version_current,
+            )
+
+        info = await self.check_firmware_updates(force=True)
+        if not info.update_available:
+            return FirmwareUpdateRunResult(
+                success=True,
+                converged=True,
+                steps_run=0,
+                message="Firmware already up to date",
+                final_version=info.installed_version,
+            )
+
+        steps_run = 0
+        # The converged version to report: once the device is up to date the
+        # check endpoint answers with the bare "already latest" sentinel
+        # (empty fwCodeBeforeUpload), so remember the target we converged to.
+        last_target = info.latest_version or None
+        loop = asyncio.get_running_loop()
+        for _ in range(max_steps):
+            before = _progress_key(info)
+
+            if not await self.check_update_eligibility():
+                return FirmwareUpdateRunResult(
+                    success=False,
+                    converged=False,
+                    steps_run=steps_run,
+                    message=("Device not eligible for update (another update may be in progress)"),
+                    final_version=info.installed_version,
+                )
+
+            started = await self.start_firmware_update(try_fast_mode=try_fast_mode)
+            steps_run += 1
+            if not started:
+                return FirmwareUpdateRunResult(
+                    success=False,
+                    converged=False,
+                    steps_run=steps_run,
+                    message="API refused to start the firmware update",
+                    final_version=info.installed_version,
+                )
+
+            # Poll the step to completion in two phases. The server registers
+            # an accepted run in remoteUpdate/info asynchronously, so an idle
+            # status straight after start does NOT mean the step finished —
+            # keep polling within start_grace until the update becomes
+            # visible (or grace expires: fast steps can genuinely complete
+            # between polls, which the post-step version re-check resolves).
+            # The first poll is forced so a stale not-in-progress cache entry
+            # cannot end the wait early.
+            deadline = loop.time() + step_timeout
+            grace_deadline = loop.time() + start_grace
+            saw_in_progress = False
+            force_poll = True
+            while True:
+                progress = await self.get_firmware_update_progress(force=force_poll)
+                force_poll = False
+                if progress.in_progress:
+                    saw_in_progress = True
+                elif saw_in_progress or loop.time() >= grace_deadline:
+                    break
+                if loop.time() >= deadline:
+                    return FirmwareUpdateRunResult(
+                        success=False,
+                        converged=False,
+                        steps_run=steps_run,
+                        message=(
+                            f"Firmware update step {steps_run} did not finish "
+                            f"within {int(step_timeout)}s"
+                        ),
+                        final_version=info.installed_version,
+                    )
+                await asyncio.sleep(poll_interval)
+
+            # A step that ended in FAILED must stop the chain: firing another
+            # run against a device whose previous step failed is exactly the
+            # class of blind write this orchestrator exists to prevent.
+            if await self._update_step_reported_failed():
+                # Re-check so the reported version reflects any partial
+                # advance the failed step made before stopping.
+                info = await self.check_firmware_updates(force=True)
+                if info.latest_version:
+                    last_target = info.latest_version
+                return FirmwareUpdateRunResult(
+                    success=False,
+                    converged=False,
+                    steps_run=steps_run,
+                    message=(
+                        f"Firmware update step {steps_run} reported FAILED by "
+                        "the server; not issuing further update commands"
+                    ),
+                    final_version=info.installed_version,
+                )
+
+            # Post-step re-check with a bounded settle window: the check
+            # endpoint's version data can lag the status endpoint's terminal
+            # state (cloud eventual consistency), and a single immediate
+            # re-check could mistake that lag for a dead chain.
+            for settle in range(settle_checks + 1):
+                if settle:
+                    await asyncio.sleep(settle_interval)
+                info = await self.check_firmware_updates(force=True)
+                if info.latest_version:
+                    last_target = info.latest_version
+                if not info.update_available:
+                    return FirmwareUpdateRunResult(
+                        success=True,
+                        converged=True,
+                        steps_run=steps_run,
+                        message=(f"Firmware update complete after {steps_run} step(s)"),
+                        final_version=info.installed_version or last_target,
+                    )
+                if _progress_key(info) != before:
+                    break  # component advanced — continue the chain
+            else:
+                # No version movement across the settle window — do not
+                # keep issuing writes against an unresponsive chain.
+                return FirmwareUpdateRunResult(
+                    success=False,
+                    converged=False,
+                    steps_run=steps_run,
+                    message=(
+                        f"No firmware version progress after step {steps_run}; "
+                        "stopping to avoid repeated update commands (if the "
+                        "device is still installing, wait for it to finish "
+                        "before retrying)"
+                    ),
+                    final_version=info.installed_version,
+                )
+
+        return FirmwareUpdateRunResult(
+            success=False,
+            converged=False,
+            steps_run=steps_run,
+            message=(f"Update still available after {steps_run} steps; stopping at step budget"),
+            final_version=info.installed_version,
+        )

@@ -1420,6 +1420,11 @@ class FirmwareUpdateInfo(BaseModel):
     param_version_latest: int | None = None  # lastV2 from API
     app_filename: str | None = None  # lastV1FileName from API
     param_filename: str | None = None  # lastV2FileName from API
+    # Multi-step chain advertisement (needRunStep2..5 from API). Diagnostic:
+    # the orchestrator's re-run decision is driven by the post-step re-check
+    # (an update remaining available), not these flags — their exact firmware
+    # semantics are unverified, so they must not gate writes either way.
+    needs_run_steps: list[int] = []
 
     @property
     def update_available(self) -> bool:
@@ -1487,20 +1492,28 @@ class FirmwareUpdateInfo(BaseModel):
         details = check.details
 
         # Construct latest version from lastV1/lastV2 (or use current if no updates)
-        # Format: {fwCode}-{v1_hex}{v2_hex} (e.g., "IAAB-1600" for v1=22, v2=0)
+        # Format: {prefix}{v1_hex}{v2_hex} where v1/v2 are always the LAST two
+        # bytes of the displayed code and the prefix is everything before them.
+        # The prefix is NOT always "{code}-": 6000XP-class devices carry a third
+        # leading version byte inside it (e.g. "ccaa-1E1415" -> prefix "ccaa-1E",
+        # v1=0x14, v2=0x15), while 18KPV-class codes are plain "fAAB-2122"
+        # (prefix "fAAB-"). Splitting on "-" dropped the extra byte and showed
+        # "ccaa-1515" as the update target (eg4_web_monitor#353).
         # Note: API returns decimal values, but firmware versions use hexadecimal
         if details.has_app_update or details.has_parameter_update:
             # Use lastV1/lastV2 if there's an actual update, otherwise use current
             latest_v1 = details.lastV1 if details.has_app_update else details.v1
             latest_v2 = details.lastV2 if details.has_parameter_update else details.v2
-            # Extract firmware code (e.g., "IAAB" from "IAAB-1300")
-            fw_code = (
-                details.fwCodeBeforeUpload.split("-")[0]
-                if "-" in details.fwCodeBeforeUpload
-                else details.fwCodeBeforeUpload[:4]
-            )
-            # Convert to 2-digit hex (uppercase to match API format)
-            latest_version = f"{fw_code}-{latest_v1:02X}{latest_v2:02X}"
+            code = details.fwCodeBeforeUpload
+            current_suffix = f"{details.v1:02X}{details.v2:02X}"
+            if len(code) > 4 and code[-4:].upper() == current_suffix:
+                # Verified layout: current v1/v2 occupy the trailing 4 hex
+                # chars, so replacing exactly those preserves any prefix bytes.
+                latest_version = f"{code[:-4]}{latest_v1:02X}{latest_v2:02X}"
+            else:
+                # Unverified layout — legacy fallback (2-byte suffix assumed).
+                fw_code = code.split("-")[0] if "-" in code else code[:4]
+                latest_version = f"{fw_code}-{latest_v1:02X}{latest_v2:02X}"
         else:
             # No updates available
             latest_version = details.fwCodeBeforeUpload
@@ -1541,7 +1554,45 @@ class FirmwareUpdateInfo(BaseModel):
             param_version_latest=details.lastV2,
             app_filename=details.lastV1FileName,
             param_filename=details.lastV2FileName,
+            needs_run_steps=[
+                step
+                for step, needed in (
+                    (2, details.needRunStep2),
+                    (3, details.needRunStep3),
+                    (4, details.needRunStep4),
+                    (5, details.needRunStep5),
+                )
+                if needed
+            ],
         )
+
+
+class FirmwareUpdateRunResult(BaseModel):
+    """Outcome of a run-to-completion firmware update orchestration.
+
+    Some devices (e.g. 6000XP) require the ``standardUpdate/run`` call to be
+    issued once per firmware component — the portal/mobile app chains these
+    automatically, but a single call leaves the device on a partial version
+    (eg4_web_monitor#353). ``run_firmware_update_to_completion()`` re-checks
+    and re-runs until the device converges on the latest version, and reports
+    the outcome here.
+
+    Attributes:
+        success: True only if the device converged on the latest firmware
+            (no update remains available after the final step).
+        converged: Same signal as success for completed runs; False when the
+            run stopped early (start refused, timeout, no progress, or step
+            budget exhausted).
+        steps_run: Number of ``standardUpdate/run`` invocations issued.
+        message: Human-readable outcome summary (safe to surface in UI/logs).
+        final_version: The device's firmware code after the run, when known.
+    """
+
+    success: bool
+    converged: bool
+    steps_run: int
+    message: str
+    final_version: str | None = None
 
 
 # Dongle Connection Status Models
