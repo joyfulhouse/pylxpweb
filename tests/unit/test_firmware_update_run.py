@@ -85,7 +85,7 @@ STEP2_PENDING = _info("ccaa-1E1415", "ccaa-1E1515", app_current=0x14, param_curr
 async def test_already_up_to_date_runs_nothing() -> None:
     device = ScriptedDevice(checks=[UP_TO_DATE])
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0)
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert result.success and result.converged
     assert result.steps_run == 0
@@ -97,7 +97,7 @@ async def test_already_up_to_date_runs_nothing() -> None:
 async def test_single_step_convergence() -> None:
     device = ScriptedDevice(checks=[STEP2_PENDING, UP_TO_DATE])
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0)
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert result.success and result.converged
     assert result.steps_run == 1
@@ -109,7 +109,7 @@ async def test_multi_step_chain_converges() -> None:
     """The #353 scenario: step 1 advances param only; step 2 finishes app."""
     device = ScriptedDevice(checks=[STEP1_PENDING, STEP2_PENDING, UP_TO_DATE])
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0)
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert result.success and result.converged
     assert result.steps_run == 2
@@ -121,7 +121,7 @@ async def test_multi_step_chain_converges() -> None:
 async def test_start_refused_reports_failure() -> None:
     device = ScriptedDevice(checks=[STEP1_PENDING], start_results=[False])
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0)
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert not result.success and not result.converged
     assert result.steps_run == 1
@@ -132,7 +132,7 @@ async def test_start_refused_reports_failure() -> None:
 async def test_not_eligible_reports_failure_without_write() -> None:
     device = ScriptedDevice(checks=[STEP1_PENDING], eligibility=[False])
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0)
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert not result.success
     assert device.start_calls == 0
@@ -144,7 +144,7 @@ async def test_no_progress_after_step_aborts() -> None:
     """A completed run with no version delta must stop, not loop writes."""
     device = ScriptedDevice(checks=[STEP1_PENDING, STEP1_PENDING])
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0)
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert not result.success
     assert result.steps_run == 1
@@ -161,7 +161,9 @@ async def test_step_budget_exhaustion() -> None:
     ]
     device = ScriptedDevice(checks=checks)
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0, max_steps=2)
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, max_steps=2, start_grace=0
+    )
 
     assert not result.success
     assert result.steps_run == 2
@@ -179,7 +181,7 @@ async def test_polls_installing_step_until_done() -> None:
         progresses=[installing, installing, idle],
     )
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0)
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert result.success
     assert not device._progresses  # all scripted progress states consumed
@@ -193,10 +195,43 @@ async def test_step_timeout_aborts() -> None:
         progresses=[installing] * 50,
     )
 
-    result = await device.run_firmware_update_to_completion(poll_interval=0, step_timeout=0.0)
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, step_timeout=0.0, start_grace=0
+    )
 
     assert not result.success
     assert "did not finish" in result.message
+
+
+@pytest.mark.asyncio
+async def test_idle_polls_within_grace_do_not_end_the_wait() -> None:
+    """The server registers an accepted run asynchronously: idle progress
+    polls straight after start must NOT be read as instant completion while
+    the visibility grace is open (the mid-flash false-abort race)."""
+    idle = _info("ccaa-1E1414", "ccaa-1E1515", in_progress=False)
+    installing = _info("ccaa-1E1414", "ccaa-1E1515", in_progress=True)
+    done = _info("ccaa-1E1415", "ccaa-1E1515", in_progress=False)
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, UP_TO_DATE],
+        progresses=[idle, idle, installing, done],
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=60)
+
+    assert result.success and result.converged
+    assert not device._progresses  # idle polls were tolerated, wait continued
+
+
+@pytest.mark.asyncio
+async def test_grace_expiry_with_completed_fast_step_still_converges() -> None:
+    """A step that genuinely finishes between polls (update never became
+    visible before grace expiry) is resolved by the post-step re-check."""
+    device = ScriptedDevice(checks=[STEP2_PENDING, UP_TO_DATE])
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+
+    assert result.success and result.converged
+    assert result.steps_run == 1
 
 
 def test_scripted_device_is_mixin() -> None:

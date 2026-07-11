@@ -521,6 +521,7 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         poll_interval: float = 30.0,
         max_steps: int = 5,
         step_timeout: float = 3600.0,
+        start_grace: float = 300.0,
     ) -> FirmwareUpdateRunResult:
         """Run firmware updates until the device converges on the latest version.
 
@@ -547,6 +548,11 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                 (the API defines steps 2-5, so 5 covers every known chain).
             step_timeout: Seconds to wait for a single step to finish
                 installing before aborting.
+            start_grace: Seconds to keep polling for the update to become
+                visible (``in_progress=True``) after an accepted start. The
+                server registers an accepted run in ``remoteUpdate/info``
+                asynchronously — without this grace, an early poll seeing
+                idle status would be mistaken for instant completion.
 
         Returns:
             FirmwareUpdateRunResult describing convergence, steps run, and a
@@ -598,14 +604,24 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                     final_version=info.installed_version,
                 )
 
-            # Poll the step to completion. The first poll is forced so a
-            # stale not-in-progress cache entry cannot end the wait early.
+            # Poll the step to completion in two phases. The server registers
+            # an accepted run in remoteUpdate/info asynchronously, so an idle
+            # status straight after start does NOT mean the step finished —
+            # keep polling within start_grace until the update becomes
+            # visible (or grace expires: fast steps can genuinely complete
+            # between polls, which the post-step version re-check resolves).
+            # The first poll is forced so a stale not-in-progress cache entry
+            # cannot end the wait early.
             deadline = loop.time() + step_timeout
+            grace_deadline = loop.time() + start_grace
+            saw_in_progress = False
             force_poll = True
             while True:
                 progress = await self.get_firmware_update_progress(force=force_poll)
                 force_poll = False
-                if not progress.in_progress:
+                if progress.in_progress:
+                    saw_in_progress = True
+                elif saw_in_progress or loop.time() >= grace_deadline:
                     break
                 if loop.time() >= deadline:
                     return FirmwareUpdateRunResult(
@@ -639,7 +655,9 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                     steps_run=steps_run,
                     message=(
                         f"No firmware version progress after step {steps_run}; "
-                        "stopping (update may need to be run from the portal)"
+                        "stopping to avoid repeated update commands (if the "
+                        "device is still installing, wait for it to finish "
+                        "before retrying)"
                     ),
                     final_version=info.installed_version,
                 )
