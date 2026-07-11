@@ -80,10 +80,11 @@ class HybridInverter(GenericInverter):
             HOLD_AC_CHARGE_POWER_CMD,
         )
 
-        # Read function enable register for AC charge bit
-        func_params = await self.read_parameters(FUNC_EN_REGISTER, 1)
-        func_value = func_params.get(f"reg_{FUNC_EN_REGISTER}", 0)
-        ac_charge_enabled = bool(func_value & (1 << FUNC_EN_BIT_AC_CHARGE_EN))
+        # Read the AC charge enable bit via the transport/cloud-aware helper:
+        # the raw "reg_21" key shape exists only on the local transport path —
+        # cloud reads return named booleans (FUNC_AC_CHARGE), so the old raw
+        # lookup read enabled=False on every cloud call (post-beta.1 scan).
+        ac_charge_enabled = await self._get_register_bit(FUNC_EN_REGISTER, FUNC_EN_BIT_AC_CHARGE_EN)
 
         # Read AC charge parameters
         ac_params = await self.read_parameters(HOLD_AC_CHARGE_POWER_CMD, 8)
