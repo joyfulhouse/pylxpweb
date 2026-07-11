@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
-    from pylxpweb.models import FirmwareUpdateInfo
+    from pylxpweb.models import FirmwareUpdateInfo, FirmwareUpdateRunResult
 
     class _FirmwareMixinBase:
         """Typed stubs so mypy sees attributes provided by the host class."""
@@ -513,3 +513,141 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
 
         eligibility = await client.api.firmware.check_update_eligibility(serial)
         return eligibility.is_allowed
+
+    async def run_firmware_update_to_completion(
+        self,
+        *,
+        try_fast_mode: bool = False,
+        poll_interval: float = 30.0,
+        max_steps: int = 5,
+        step_timeout: float = 3600.0,
+    ) -> FirmwareUpdateRunResult:
+        """Run firmware updates until the device converges on the latest version.
+
+        ⚠️ CRITICAL WARNING - WRITE OPERATION (potentially long-running)
+
+        Some devices require ``standardUpdate/run`` once per firmware
+        component: the portal and mobile app chain these calls automatically,
+        but a single :meth:`start_firmware_update` call leaves such a device
+        on a partial version — e.g. a 6000XP asked to go to ``ccaa-1E1515``
+        lands on ``ccaa-1E1415`` (eg4_web_monitor#353). The check response
+        advertises the chain via ``needRunStep2``..``needRunStep5``.
+
+        This orchestrator loops: check → start → poll to completion →
+        re-check, until no update remains, a step makes no version progress
+        (fail-safe against server-side loops), the step budget is exhausted,
+        or a step times out. Each iteration re-verifies eligibility before
+        issuing the next run.
+
+        Args:
+            try_fast_mode: Attempt fast update mode on each run.
+            poll_interval: Seconds between progress polls while a step is
+                installing.
+            max_steps: Upper bound on ``standardUpdate/run`` invocations
+                (the API defines steps 2-5, so 5 covers every known chain).
+            step_timeout: Seconds to wait for a single step to finish
+                installing before aborting.
+
+        Returns:
+            FirmwareUpdateRunResult describing convergence, steps run, and a
+            human-readable outcome message.
+
+        Raises:
+            LuxpowerAuthError: If authentication fails.
+            LuxpowerAPIError: If an API call fails outright.
+            LuxpowerConnectionError: If connection fails.
+        """
+        # Import here to avoid circular imports
+        from pylxpweb.models import FirmwareUpdateRunResult
+
+        def _versions(info: FirmwareUpdateInfo) -> tuple[int | None, int | None]:
+            return (info.app_version_current, info.param_version_current)
+
+        info = await self.check_firmware_updates(force=True)
+        if not info.update_available:
+            return FirmwareUpdateRunResult(
+                success=True,
+                converged=True,
+                steps_run=0,
+                message="Firmware already up to date",
+                final_version=info.installed_version,
+            )
+
+        steps_run = 0
+        loop = asyncio.get_running_loop()
+        for _ in range(max_steps):
+            before = _versions(info)
+
+            if not await self.check_update_eligibility():
+                return FirmwareUpdateRunResult(
+                    success=False,
+                    converged=False,
+                    steps_run=steps_run,
+                    message=("Device not eligible for update (another update may be in progress)"),
+                    final_version=info.installed_version,
+                )
+
+            started = await self.start_firmware_update(try_fast_mode=try_fast_mode)
+            steps_run += 1
+            if not started:
+                return FirmwareUpdateRunResult(
+                    success=False,
+                    converged=False,
+                    steps_run=steps_run,
+                    message="API refused to start the firmware update",
+                    final_version=info.installed_version,
+                )
+
+            # Poll the step to completion. The first poll is forced so a
+            # stale not-in-progress cache entry cannot end the wait early.
+            deadline = loop.time() + step_timeout
+            force_poll = True
+            while True:
+                progress = await self.get_firmware_update_progress(force=force_poll)
+                force_poll = False
+                if not progress.in_progress:
+                    break
+                if loop.time() >= deadline:
+                    return FirmwareUpdateRunResult(
+                        success=False,
+                        converged=False,
+                        steps_run=steps_run,
+                        message=(
+                            f"Firmware update step {steps_run} did not finish "
+                            f"within {int(step_timeout)}s"
+                        ),
+                        final_version=info.installed_version,
+                    )
+                await asyncio.sleep(poll_interval)
+
+            info = await self.check_firmware_updates(force=True)
+            if not info.update_available:
+                return FirmwareUpdateRunResult(
+                    success=True,
+                    converged=True,
+                    steps_run=steps_run,
+                    message=(f"Firmware update complete after {steps_run} step(s)"),
+                    final_version=info.installed_version,
+                )
+
+            if _versions(info) == before:
+                # A run completed but neither component advanced — do not
+                # keep issuing writes against an unresponsive chain.
+                return FirmwareUpdateRunResult(
+                    success=False,
+                    converged=False,
+                    steps_run=steps_run,
+                    message=(
+                        f"No firmware version progress after step {steps_run}; "
+                        "stopping (update may need to be run from the portal)"
+                    ),
+                    final_version=info.installed_version,
+                )
+
+        return FirmwareUpdateRunResult(
+            success=False,
+            converged=False,
+            steps_run=steps_run,
+            message=(f"Update still available after {steps_run} steps; stopping at step budget"),
+            final_version=info.installed_version,
+        )

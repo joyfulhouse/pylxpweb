@@ -82,6 +82,7 @@ from .models import (
     DatalogListResponse,
     DongleStatus,
     FirmwareUpdateInfo,
+    FirmwareUpdateRunResult,
     MonthlyEnergyHistory,
     OperatingMode,
 )
@@ -121,6 +122,7 @@ __all__ = [
     "DatalogListResponse",
     "DongleStatus",
     "FirmwareUpdateInfo",
+    "FirmwareUpdateRunResult",
     "MonthlyEnergyHistory",
     # Enums
     "OperatingMode",

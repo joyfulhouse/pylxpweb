@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`run_firmware_update_to_completion()` multi-step firmware orchestrator**
+  ([eg4_web_monitor#353](https://github.com/joyfulhouse/eg4_web_monitor/issues/353)):
+  some devices (6000XP) require `standardUpdate/run` once per firmware
+  component — the portal/mobile app chain the calls, but a single
+  `start_firmware_update()` left the device on a partial version
+  (`ccaa-1E1415` instead of `ccaa-1E1515`). The new
+  `FirmwareUpdateMixin.run_firmware_update_to_completion()` loops
+  check → eligibility → start → poll → re-check until the device converges,
+  bounded by a step budget (5, the API's `needRunStep5` maximum), a per-step
+  timeout, and a no-version-progress abort so a stuck chain never loops
+  writes. Returns the new `FirmwareUpdateRunResult` model (success,
+  converged, steps_run, message, final_version).
+
 ### Fixed
+
+- **Firmware "latest version" dropped leading prefix bytes on 3-component
+  versions** ([eg4_web_monitor#353](https://github.com/joyfulhouse/eg4_web_monitor/issues/353)):
+  `FirmwareUpdateInfo.from_api_response` built the update target as
+  `{code.split('-')[0]}-{lastV1}{lastV2}`, which truncated 6000XP-class codes
+  carrying a third leading version byte (`ccaa-1E1415` showed the target as
+  `ccaa-1515` instead of `ccaa-1E1515`). The current `v1`/`v2` hex pair is
+  now verified to occupy the trailing 4 characters and exactly those are
+  replaced, preserving any prefix; unverified layouts keep the legacy
+  construction.
 
 - **Legacy cloud bitfield writes silently no-opped** ([#223](https://github.com/joyfulhouse/pylxpweb/issues/223)):
   `set_standby_mode` (reg 21), `set_ac_charge` (reg 21) and

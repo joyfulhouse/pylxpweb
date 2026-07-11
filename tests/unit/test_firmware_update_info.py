@@ -292,3 +292,65 @@ class TestFirmwareUpdateInfoFromAPIResponse:
 
         # Should show hex values, not decimal
         assert info_both.release_summary == "App firmware: v13 → v16; Parameter firmware: v00 → v01"
+
+
+class TestLatestVersionPrefixPreservation:
+    """Regression tests for eg4_web_monitor#353 version-prefix truncation."""
+
+    def test_three_byte_version_keeps_extra_prefix_byte(self) -> None:
+        """6000XP-class codes carry a third leading byte (ccaa-1E1415):
+        the constructed latest must keep 'ccaa-1E', not truncate to 'ccaa'."""
+        details = FirmwareUpdateDetails.model_construct(
+            serialNum="1234567890",
+            deviceType=6,
+            standard="ccaa",
+            firmwareType="",
+            fwCodeBeforeUpload="ccaa-1E1415",
+            v1=0x14,
+            v2=0x15,
+            v3Value=0x1E,
+            lastV1=0x15,
+            lastV2=0x15,
+            lastV1FileName=None,
+            lastV2FileName=None,
+            m3Version=0,
+            pcs1UpdateMatch=True,
+            pcs2UpdateMatch=False,
+            pcs3UpdateMatch=False,
+            needRunStep2=True,
+            needRunStep3=False,
+            needRunStep4=False,
+            needRunStep5=False,
+            midbox=False,
+            lowVoltBattery=True,
+            type6=True,
+        )
+        check = FirmwareUpdateCheck(success=True, details=details, infoForwardUrl=None)
+
+        info = FirmwareUpdateInfo.from_api_response(check, title="6000XP Firmware")
+
+        # app update only: lastV1 (0x15) + current v2 (0x15)
+        assert info.latest_version == "ccaa-1E1515"
+        assert info.installed_version == "ccaa-1E1415"
+        assert info.update_available is True
+
+    def test_two_byte_version_unchanged(self) -> None:
+        """Standard 2-byte codes (fAAB-2122) produce the same string as the
+        legacy construction — prefix 'fAAB-' is preserved via suffix strip."""
+        check = _create_firmware_check("fAAB", v1=0x21, v2=0x22, last_v1=0x25, last_v2=0x25)
+
+        info = FirmwareUpdateInfo.from_api_response(check, title="18kPV Firmware")
+
+        assert info.latest_version == "fAAB-2525"
+
+    def test_unverified_suffix_falls_back_to_legacy_split(self) -> None:
+        """If the code's trailing 4 chars don't match current v1/v2 hex, the
+        legacy dash-split construction is used (unknown layout safety net)."""
+        details = _create_firmware_details("IAAB", v1=13, v2=0, last_v1=14, last_v2=None)
+        # Corrupt the code so the suffix (0D00) is absent
+        details = details.model_copy(update={"fwCodeBeforeUpload": "IAAB-XYZ"})
+        check = FirmwareUpdateCheck(success=True, details=details, infoForwardUrl=None)
+
+        info = FirmwareUpdateInfo.from_api_response(check, title="T")
+
+        assert info.latest_version == "IAAB-0E00"
