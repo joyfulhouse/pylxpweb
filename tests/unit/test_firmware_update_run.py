@@ -318,3 +318,30 @@ async def test_converged_final_version_survives_up_to_date_sentinel() -> None:
 
     assert result.success and result.converged
     assert result.final_version == "ccaa-1E1515"
+
+
+@pytest.mark.asyncio
+async def test_every_progress_poll_is_forced() -> None:
+    """Regression pin (post-beta.1 scan P1): get_firmware_update_progress
+    caches a not-in-progress snapshot for 5 MINUTES, so any unforced poll
+    inside the orchestrator would replay the pre-registration idle snapshot
+    for the whole start-grace window and abandon a genuinely running step
+    as "no progress". Every poll must bypass the cache."""
+    forced_flags: list[bool] = []
+
+    class ForceRecordingDevice(ScriptedDevice):
+        async def get_firmware_update_progress(self, force: bool = False) -> FirmwareUpdateInfo:
+            forced_flags.append(force)
+            return await super().get_firmware_update_progress(force)
+
+    installing = _info("ccaa-1E1414", "ccaa-1E1515", in_progress=True)
+    done = _info("ccaa-1E1415", "ccaa-1E1515", in_progress=False)
+    device = ForceRecordingDevice(
+        checks=[STEP2_PENDING, UP_TO_DATE],
+        progresses=[installing, installing, done],
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0)
+
+    assert result.success
+    assert forced_flags and all(forced_flags)

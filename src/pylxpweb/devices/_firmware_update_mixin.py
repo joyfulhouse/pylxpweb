@@ -650,15 +650,17 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             # keep polling within start_grace until the update becomes
             # visible (or grace expires: fast steps can genuinely complete
             # between polls, which the post-step version re-check resolves).
-            # The first poll is forced so a stale not-in-progress cache entry
-            # cannot end the wait early.
+            # EVERY poll is forced: get_firmware_update_progress caches a
+            # not-in-progress snapshot for 5 MINUTES, so unforced polls
+            # would replay the pre-registration idle snapshot for the whole
+            # grace window and the loop would abandon a genuinely running
+            # step as "no progress" (~2 API calls/min while installing —
+            # comparable to the portal's own polling).
             deadline = loop.time() + step_timeout
             grace_deadline = loop.time() + start_grace
             saw_in_progress = False
-            force_poll = True
             while True:
-                progress = await self.get_firmware_update_progress(force=force_poll)
-                force_poll = False
+                progress = await self.get_firmware_update_progress(force=True)
                 if progress.in_progress:
                     saw_in_progress = True
                 elif saw_in_progress or loop.time() >= grace_deadline:
