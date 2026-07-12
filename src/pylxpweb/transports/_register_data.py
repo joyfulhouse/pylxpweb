@@ -1081,7 +1081,12 @@ class RegisterDataMixin(_DataMixinBase):
             except _CoalescedReadFallback:
                 raise
             except Exception as e:
-                _LOGGER.error(
+                # DEBUG, not ERROR: the raised TransportReadError carries the
+                # same message and the device layer owns user-visible logging
+                # (per-poll DEBUG + one WARNING on the link-down transition).
+                # On a flaky dongle link the retries-exhausted case is routine
+                # and the next cycle self-heals off cached data.
+                _LOGGER.debug(
                     "Failed to read register group '%s': %s",
                     block.label,
                     e,
@@ -1506,7 +1511,11 @@ class RegisterDataMixin(_DataMixinBase):
                     await asyncio.sleep(self._inter_register_delay)
 
         except Exception as e:
-            _LOGGER.error("Failed to read MID input registers: %s", e)
+            # DEBUG, not ERROR: double-reporting — the raise carries the same
+            # message and mid_device.refresh() logs the failure at DEBUG with
+            # a single WARNING on the link-down transition. This fires ~15x/h
+            # on a GridBOSS dongle sharing its link with cloud traffic.
+            _LOGGER.debug("Failed to read MID input registers: %s", e)
             raise TransportReadError(f"Failed to read MID registers: {e}") from e
 
         # Smart port mode is stored as a bit-packed value in holding register 20
