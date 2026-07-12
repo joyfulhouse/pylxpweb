@@ -1419,20 +1419,28 @@ class BatteryBankData:
             _LOGGER.warning("Bank canary: battery_count=%d > 20", self.battery_count)
             return True
         # Battery current: corrupt reads produce values like 2996A from
-        # register desync.  The bound scales with the reported battery
-        # count at 150A per battery (~1.5x a 100A-class battery's max) with
-        # a 500A floor — a flat 500A cap falsely rejected a 9-battery
+        # register desync.  A flat 500A cap falsely rejected a 9-battery
         # bank's genuine ~750A solar-noon charging current, staling the
-        # bank sensors exactly at peak (eg4_web_monitor#367).  A garbage
-        # count > 20 is already rejected above, bounding the scaled cap.
+        # bank sensors exactly at peak (eg4_web_monitor#367).  The bound
+        # scales at 150A per battery (~1.5x a 100A-class battery's max,
+        # 500A floor) using the larger of reg 96 and the batteries actually
+        # present in this read — reg 96 shares the BMS block with the
+        # current register, so a correlated desync can garble both, and it
+        # under-reports on some rotating firmware (#258).  A hard 2000A
+        # ceiling (20-battery count canary x 100A physical max) keeps the
+        # canonical 2996A desync value rejected even when a garbled-but-
+        # plausible count inflates the scaled cap.
         if self.current is not None:
-            max_amps = max(500.0, (self.battery_count or 0) * 150.0)
+            present = sum(1 for b in self.batteries if not (b.voltage == 0 and b.soc == 0))
+            count = max(self.battery_count or 0, present)
+            max_amps = min(max(500.0, count * 150.0), 2000.0)
             if abs(self.current) > max_amps:
                 _LOGGER.warning(
-                    "Bank canary: current=%.1f exceeds %.0fA (battery_count=%s)",
+                    "Bank canary: current=%.1f exceeds %.0fA (battery_count=%s, present=%d)",
                     self.current,
                     max_amps,
                     self.battery_count,
+                    present,
                 )
                 return True
         # Only cascade to batteries that actually have CAN bus data.
