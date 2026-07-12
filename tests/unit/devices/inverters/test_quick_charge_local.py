@@ -15,6 +15,7 @@ import pytest
 from pylxpweb import LuxpowerClient
 from pylxpweb.devices.inverters.base import BaseInverter
 from pylxpweb.models import QuickChargeStatus, SuccessResponse
+from pylxpweb.transports.exceptions import TransportReadError, TransportWriteError
 
 
 class _Inverter(BaseInverter):
@@ -82,17 +83,24 @@ async def test_enable_local_paired_frame_preserves_sticky_upper_bits(mock_client
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "final_reg234_effect",
+    [
+        pytest.param(True, id="duration-applied-live"),
+        # A failed live reg-234 write means the firmware default length
+        # runs — the start itself still reports True.
+        pytest.param(TransportWriteError("NAK"), id="duration-write-fails"),
+    ],
+)
 async def test_enable_local_paired_frame_rejected_falls_back_bit_only_plus_live(
-    mock_client,
+    mock_client, final_reg234_effect
 ):
     """A rejected paired frame (unproven on non-PV families) falls back to the
     proven bit-only start, then applies the duration live (reg 234 accepts
     writes while a charge runs)."""
-    from pylxpweb.transports.exceptions import TransportWriteError
-
     inv = _inverter(mock_client, with_transport=True)
     inv._transport.write_parameters = AsyncMock(
-        side_effect=[TransportWriteError("NAK"), True, True]
+        side_effect=[TransportWriteError("NAK"), True, final_reg234_effect]
     )
 
     ok = await inv.enable_quick_charge(minute=30)
@@ -109,8 +117,6 @@ async def test_enable_local_reg233_read_failure_falls_back_bit_only_plus_live(
 ):
     """If reg 233 cannot be read for the RMW, the paired frame is skipped
     (never blind-write 0x0001) and the bit-only start path runs instead."""
-    from pylxpweb.transports.exceptions import TransportReadError
-
     inv = _inverter(mock_client, with_transport=True)
     inv._transport.read_parameters = AsyncMock(side_effect=[TransportReadError("boom"), {233: 0}])
 
@@ -122,19 +128,34 @@ async def test_enable_local_reg233_read_failure_falls_back_bit_only_plus_live(
 
 
 @pytest.mark.asyncio
-async def test_enable_local_fallback_duration_write_failure_still_starts(mock_client):
-    """Bit-only fallback started the charge; a failed live reg-234 write means
-    the firmware default length runs — the start itself still reports True."""
-    from pylxpweb.transports.exceptions import TransportWriteError
-
+async def test_enable_hybrid_all_local_writes_raise_falls_back_to_cloud(mock_client):
+    """Concrete Modbus/Dongle transports raise TransportWriteError rather than
+    returning False — when the paired frame AND the bit-only start both raise,
+    HYBRID must still reach the cloud start endpoint."""
     inv = _inverter(mock_client, with_transport=True)
-    inv._transport.write_parameters = AsyncMock(
-        side_effect=[TransportWriteError("NAK"), True, TransportWriteError("NAK")]
-    )
+    inv._transport.write_parameters = AsyncMock(side_effect=TransportWriteError("NAK"))
 
-    ok = await inv.enable_quick_charge(minute=30)
+    ok = await inv.enable_quick_charge(minute=20)
 
     assert ok is True
+    # Paired frame attempted, then the bit-only start (write_transport_bit
+    # swallows the raise into False) — no live reg-234 attempt after a
+    # failed start.
+    writes = [c.args[0] for c in inv._transport.write_parameters.call_args_list]
+    assert writes == [{233: 1, 234: 20}, {233: 1}]
+    mock_client.api.control.start_quick_charge.assert_awaited_once_with("1234567890", minute=20)
+
+
+@pytest.mark.asyncio
+async def test_enable_local_only_all_writes_raise_returns_false(mock_client):
+    """LOCAL-only (no cloud client): raising transport writes fail honestly."""
+    inv = _inverter(mock_client, with_transport=True)
+    inv._client = None
+    inv._transport.write_parameters = AsyncMock(side_effect=TransportWriteError("NAK"))
+
+    ok = await inv.enable_quick_charge(minute=20)
+
+    assert ok is False
     mock_client.api.control.start_quick_charge.assert_not_called()
 
 
