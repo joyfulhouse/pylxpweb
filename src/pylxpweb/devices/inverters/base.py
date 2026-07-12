@@ -3465,22 +3465,25 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         can be active alongside Normal or Standby operating modes.
 
         With a local transport (Modbus/Dongle, including HYBRID — which
-        prefers local) this sets the quick-charge enable bit (register 233
-        bit 0) only. The firmware starts the timed charge at its default
-        length and rejects writes to register 234 while quick charge is off,
-        so the duration is NOT pre-written here — adjust it live afterwards
-        with :meth:`set_quick_charge_minute` (register 234 doubles as the
-        live remaining-minutes countdown). Without a transport it uses the
+        prefers local) this writes the quick-charge activation to holding
+        register 233 bit 0. When ``minute`` is given, the duration (register
+        234) is written together with the activation in one contiguous
+        Modbus frame — the portal-equivalent start sequence (a live
+        active-vs-idle register capture on FlexBOSS21 + 18kPV showed a
+        portal-started session as reg 233 bit 0 + reg 234 = duration). The
+        firmware rejects a reg-234 write that arrives ALONE while quick
+        charge is off (eg4_web_monitor#251), so if the paired frame is
+        rejected the start falls back to the proven bit-only write (firmware
+        default length) followed by a best-effort live reg-234 write, which
+        IS accepted while a charge runs. Without a transport it uses the
         cloud Quick Charge start endpoint.
 
         Args:
-            minute: Optional charge duration in minutes for the cloud start
-                endpoint. Newer EG4 firmware supports a fixed-duration quick
-                charge; omitting it preserves the legacy behaviour (charge
-                until manually stopped). Ignored on the local transport path
-                (the firmware starts at its default length and the duration is
-                set live via register 234). Must be a positive integer when
-                provided.
+            minute: Optional charge duration in minutes. Newer EG4 firmware
+                supports a fixed-duration quick charge; omitting it preserves
+                the legacy behaviour (charge until manually stopped, or the
+                firmware default length on the local path). Must be a
+                positive integer when provided.
 
         Returns:
             True if successful
@@ -3500,12 +3503,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             raise ValueError(f"minute must be a positive integer, got {minute!r}")
 
         if self._transport is not None:
-            # LOCAL/HYBRID: set only the enable bit (reg 233 bit 0). The
-            # firmware starts the timed charge at its default length and
-            # rejects reg 234 writes while quick charge is off, so the duration
-            # is adjusted live afterwards via set_quick_charge_minute(); the
-            # `minute` argument is honoured only on the cloud fallback below.
-            if await self.write_transport_bit(233, 0, True):
+            if await self._enable_quick_charge_local(minute):
                 return True
             # Local write failed. HYBRID (real cloud client) falls back to the
             # cloud endpoint; local-only (client is None) fails honestly.
@@ -3520,6 +3518,59 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             self.serial_number, minute=minute
         )
         return result.success
+
+    async def _enable_quick_charge_local(self, minute: int | None) -> bool:
+        """Start quick charge over the local transport.
+
+        With a requested duration the activation bit (reg 233 bit 0, upper
+        bits preserved via read-modify-write — the 0x1000 flag observed live
+        is sticky config of unconfirmed meaning) and the duration (reg 234)
+        are written as ONE contiguous frame; the firmware rejects reg 234
+        alone while idle (eg4_web_monitor#251). If the paired frame fails,
+        fall back to the bit-only start and then apply the duration live.
+        """
+        transport = self._transport
+        if transport is None:
+            return False
+        if minute is None:
+            return await self.write_transport_bit(233, 0, True)
+
+        reg: int | None = None
+        try:
+            current = await transport.read_parameters(233, 1)
+            reg = current.get(233)
+        except Exception as err:
+            _LOGGER.debug(
+                "Quick charge start: could not read register 233 for %s (%s); "
+                "trying the bit-only start",
+                self.serial_number,
+                err,
+            )
+        if reg is not None:
+            try:
+                if await transport.write_parameters({233: reg | 0x1, 234: minute}):
+                    self._parameters_cache_time = None
+                    return True
+            except Exception as err:
+                _LOGGER.debug(
+                    "Paired quick-charge start frame (regs 233+234) rejected "
+                    "for %s (%s); falling back to the bit-only start",
+                    self.serial_number,
+                    err,
+                )
+
+        # Bit-only start (proven path), then apply the requested duration
+        # live — reg 234 accepts writes while a charge is running.
+        if not await self.write_transport_bit(233, 0, True):
+            return False
+        if not await self.write_transport_register(234, minute):
+            _LOGGER.warning(
+                "Quick charge started for %s but the %d-minute duration could "
+                "not be applied; the firmware default length is running",
+                self.serial_number,
+                minute,
+            )
+        return True
 
     async def disable_quick_charge(self) -> bool:
         """Disable quick charge function.
