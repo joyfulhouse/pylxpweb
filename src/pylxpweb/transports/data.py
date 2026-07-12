@@ -1418,12 +1418,23 @@ class BatteryBankData:
         if self.battery_count is not None and self.battery_count > 20:
             _LOGGER.warning("Bank canary: battery_count=%d > 20", self.battery_count)
             return True
-        # Battery current: 500A is well beyond any residential battery
-        # system (5 batteries * 100A max each).  Corrupt reads produce
-        # values like 2996A from register desync.
-        if self.current is not None and abs(self.current) > 500:
-            _LOGGER.warning("Bank canary: current=%.1f exceeds 500A", self.current)
-            return True
+        # Battery current: corrupt reads produce values like 2996A from
+        # register desync.  The bound scales with the reported battery
+        # count at 150A per battery (~1.5x a 100A-class battery's max) with
+        # a 500A floor — a flat 500A cap falsely rejected a 9-battery
+        # bank's genuine ~750A solar-noon charging current, staling the
+        # bank sensors exactly at peak (eg4_web_monitor#367).  A garbage
+        # count > 20 is already rejected above, bounding the scaled cap.
+        if self.current is not None:
+            max_amps = max(500.0, (self.battery_count or 0) * 150.0)
+            if abs(self.current) > max_amps:
+                _LOGGER.warning(
+                    "Bank canary: current=%.1f exceeds %.0fA (battery_count=%s)",
+                    self.current,
+                    max_amps,
+                    self.battery_count,
+                )
+                return True
         # Only cascade to batteries that actually have CAN bus data.
         # Ghost batteries (voltage=0, soc=0) from 5002+ register failures
         # are not corrupt — just absent.

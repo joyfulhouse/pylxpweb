@@ -350,6 +350,39 @@ class TestBatteryBankDataCorruption:
         data = BatteryBankData(soc=85, soh=95, current=None)
         assert data.is_corrupt() is False
 
+    def test_large_bank_genuine_high_current_not_corrupt(self) -> None:
+        """The bound scales with battery_count (150A each, 500A floor): a
+        9-battery bank's genuine ~750A solar-noon charging current must pass
+        (eg4_web_monitor#367 — the flat 500A cap staled sensors at peak)."""
+        data = BatteryBankData(soc=85, soh=95, current=750.0, battery_count=9)
+        assert data.is_corrupt() is False
+        # Reporter's observed values on the 9-battery bank.
+        for amps in (508.4, 514.2, -750.0, 1350.0):
+            assert (
+                BatteryBankData(soc=85, soh=95, current=amps, battery_count=9).is_corrupt() is False
+            )
+
+    def test_large_bank_still_rejects_desync_garbage(self) -> None:
+        """Register-desync garbage beyond the scaled cap is still rejected —
+        the classic 2996A desync value fails a 9-battery bank's 1350A cap."""
+        data = BatteryBankData(soc=85, soh=95, current=2996.0, battery_count=9)
+        assert data.is_corrupt() is True  # 9 * 150 = 1350A cap
+        data = BatteryBankData(soc=85, soh=95, current=1351.0, battery_count=9)
+        assert data.is_corrupt() is True
+
+    def test_small_or_unknown_count_keeps_500_floor(self) -> None:
+        """battery_count None/0/small keeps the original 500A behavior — the
+        scaled bound only ever raises the cap, never lowers it."""
+        for count in (None, 0, 1, 3):
+            assert (
+                BatteryBankData(soc=85, soh=95, current=501.0, battery_count=count).is_corrupt()
+                is True
+            )
+            assert (
+                BatteryBankData(soc=85, soh=95, current=500.0, battery_count=count).is_corrupt()
+                is False
+            )
+
 
 class TestMidboxRuntimeDataCorruption:
     """Corruption detection for MidboxRuntimeData."""
