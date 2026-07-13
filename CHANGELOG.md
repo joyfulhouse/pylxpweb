@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.38] - 2026-07-13
+
+Stable release consolidating the 0.9.38 beta line (b1–b4) plus a dongle
+log-noise fix.
+
+### Added
+
+- **Multi-step firmware update orchestrator** `run_firmware_update_to_completion()`
+  (b1, [eg4_web_monitor#353](https://github.com/joyfulhouse/eg4_web_monitor/issues/353)):
+  chains check → eligibility → start → poll → re-check for devices whose firmware
+  advances one component per run (6000XP), with a step budget, per-step timeout,
+  FAILED-step abort, and a no-progress guard.
+- **Quick Charge local paired-frame start** (b3, [#229](https://github.com/joyfulhouse/pylxpweb/pull/229)):
+  `enable_quick_charge` over a local transport writes the register-233 activation
+  and register-234 duration as one contiguous Modbus frame (portal-equivalent),
+  with fallback to the activation-bit-then-duration path.
+
+### Fixed
+
+- **Firmware progress polling replayed a stale idle status** (b2): every progress
+  poll now bypasses the throttled status cache.
+- **Battery-temperature 0x7F sentinel rejected whole payloads**
+  (b1, [eg4_web_monitor#348](https://github.com/joyfulhouse/eg4_web_monitor/issues/348)):
+  the 127 sentinel from a no-BMS secondary is normalized to unknown for that
+  field only, leaving the corruption canary intact.
+- **Smallest valid daily-energy increments rejected**
+  (b1, [eg4_web_monitor#346](https://github.com/joyfulhouse/eg4_web_monitor/issues/346)):
+  the spike filter compares quantized floats with tolerance.
+- **Large battery-bank current canary**
+  (b4, [#230](https://github.com/joyfulhouse/pylxpweb/pull/230), [eg4_web_monitor#367](https://github.com/joyfulhouse/eg4_web_monitor/issues/367)):
+  the flat 500 A cap is replaced by a count-scaled bound (150 A/battery, 500 A
+  floor, 2000 A ceiling, using the larger of the reported and present counts) so
+  a 9-battery bank's genuine ~750 A no longer reads as corruption.
+- **Dongle read-failure log noise** ([#231](https://github.com/joyfulhouse/pylxpweb/pull/231)):
+  transport read-failure double-reports demoted from ERROR to DEBUG (the device
+  layer owns user-visible logging).
+
+### Changed
+
+- **AC-charge enabled bit read via the transport/cloud-aware helper** (b2) so
+  cloud mode reads it correctly.
+- **PV Start Voltage cloud read**
+  (b1, [eg4_web_monitor#359](https://github.com/joyfulhouse/eg4_web_monitor/pull/359)):
+  reads correctly in cloud mode without double-scaling.
+
 ## [0.9.38b2] - 2026-07-11
 
 ## [0.9.38b1] - 2026-07-11
