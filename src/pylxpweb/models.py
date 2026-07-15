@@ -1164,9 +1164,15 @@ class UpdateStatus(StrEnum):
 
     READY = "READY"
     UPLOADING = "UPLOADING"
+    WAITING = "WAITING"
     COMPLETE = "COMPLETE"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+
+    @classmethod
+    def _missing_(cls, _value: object) -> UpdateStatus:
+        return cls.UNKNOWN
 
 
 class UpdateEligibilityMessage(StrEnum):
@@ -1177,6 +1183,17 @@ class UpdateEligibilityMessage(StrEnum):
     PARALLEL_GROUP_UPDATING = "parallelGroupUpdating"
     NOT_ALLOWED_IN_PARALLEL = "notAllowedInParallel"
     WARN_PARALLEL = "warnParallel"
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def _missing_(cls, _value: object) -> UpdateEligibilityMessage:
+        # The firmware API emits undocumented eligibility strings on some
+        # devices (e.g. a literal ``deviceBusy`` observed on the 6000XP during
+        # a multi-step update, eg4_web_monitor#353). Fall back to UNKNOWN so an
+        # unrecognized value never crashes a live update via ValidationError;
+        # UNKNOWN is not ALLOW_TO_UPDATE, so ``is_allowed`` stays False (the
+        # device is treated as not-yet-eligible, the safe default).
+        return cls.UNKNOWN
 
 
 class FirmwareUpdateDetails(BaseModel):
@@ -1308,9 +1325,10 @@ class FirmwareDeviceInfo(BaseModel):
         """Check if update is currently in progress.
 
         Uses multiple indicators for reliable detection:
-        - updateStatus must be UPLOADING or READY
+        - updateStatus must be UPLOADING, READY, or WAITING
         - isSendEndUpdate must be False (not completed yet)
-        - isSendStartUpdate should be True (update has started)
+        - isSendStartUpdate must be True for UPLOADING/READY
+        - WAITING is busy even before the start flag is visible
 
         This ensures we accurately detect active updates and avoid
         false positives from completed or failed updates.
@@ -1318,10 +1336,12 @@ class FirmwareDeviceInfo(BaseModel):
         Returns:
             True if update is actively in progress, False otherwise
         """
-        return (
-            (self.updateStatus == UpdateStatus.UPLOADING or self.updateStatus == UpdateStatus.READY)
-            and not self.isSendEndUpdate
-            and self.isSendStartUpdate
+        return not self.isSendEndUpdate and (
+            (
+                self.updateStatus in (UpdateStatus.UPLOADING, UpdateStatus.READY)
+                and self.isSendStartUpdate
+            )
+            or self.updateStatus == UpdateStatus.WAITING
         )
 
     @property

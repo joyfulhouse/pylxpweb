@@ -8,9 +8,12 @@ path.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from pylxpweb.devices._firmware_update_mixin import FirmwareUpdateMixin
+from pylxpweb.exceptions import LuxpowerAPIError
 from pylxpweb.models import FirmwareUpdateInfo
 
 
@@ -43,8 +46,8 @@ class ScriptedDevice(FirmwareUpdateMixin):
         *,
         checks: list[FirmwareUpdateInfo],
         progresses: list[FirmwareUpdateInfo] | None = None,
-        start_results: list[bool] | None = None,
-        eligibility: list[bool] | None = None,
+        start_results: list[bool | LuxpowerAPIError] | None = None,
+        eligibility: list[bool | LuxpowerAPIError] | None = None,
         failed_statuses: list[bool] | None = None,
     ) -> None:
         self._init_firmware_update_cache()
@@ -69,12 +72,18 @@ class ScriptedDevice(FirmwareUpdateMixin):
     async def start_firmware_update(self, try_fast_mode: bool = False) -> bool:
         self.start_calls += 1
         if self._start_results:
-            return self._start_results.pop(0)
+            result = self._start_results.pop(0)
+            if isinstance(result, LuxpowerAPIError):
+                raise result
+            return result
         return True
 
     async def check_update_eligibility(self) -> bool:
         if self._eligibility:
-            return self._eligibility.pop(0)
+            result = self._eligibility.pop(0)
+            if isinstance(result, LuxpowerAPIError):
+                raise result
+            return result
         return True
 
     async def _update_step_reported_failed(self) -> bool:
@@ -144,6 +153,169 @@ async def test_not_eligible_reports_failure_without_write() -> None:
     assert not result.success
     assert device.start_calls == 0
     assert "not eligible" in result.message
+
+
+@pytest.mark.asyncio
+async def test_transient_device_busy_rechecks_eligibility_and_retries() -> None:
+    """A start race with the previous component must not abort the chain."""
+    installing = _info("ccaa-1E1415", "ccaa-1E1515", in_progress=True)
+    done = _info("ccaa-1E1515", "ccaa-1E1515", in_progress=False)
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, UP_TO_DATE],
+        progresses=[installing, done],
+        start_results=[LuxpowerAPIError("deviceBusy"), True],
+        eligibility=[True, False, True],
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=60)
+
+    assert result.success and result.converged
+    assert result.steps_run == 1
+    assert device.start_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_inter_step_eligibility_busy_does_not_abort_chain() -> None:
+    """A device still settling between components reports not-eligible at the
+    inter-step gate; the chain must wait and retry, not abort (issue #353)."""
+    installing = _info("ccaa-1E1415", "ccaa-1E1515", in_progress=True)
+    done = _info("ccaa-1E1515", "ccaa-1E1515", in_progress=False)
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP2_PENDING, UP_TO_DATE],
+        progresses=[installing, done, installing, done],
+        # step 1 gate eligible; step 2 gate busy once, then eligible.
+        eligibility=[True, False, True],
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=60)
+
+    assert result.success and result.converged
+    assert result.steps_run == 2
+    assert device.start_calls == 2
+    assert not device._eligibility  # the busy inter-step gate was re-polled
+
+
+@pytest.mark.asyncio
+async def test_first_step_not_eligible_still_fails_fast_without_write() -> None:
+    """Pre-flight (first step) non-eligibility must still fail fast, no write,
+    no waiting out the busy budget."""
+    device = ScriptedDevice(checks=[STEP1_PENDING], eligibility=[False])
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=60)
+
+    assert not result.success
+    assert device.start_calls == 0
+    assert "not eligible" in result.message
+    assert not device._eligibility
+
+
+@pytest.mark.asyncio
+async def test_busy_error_from_eligibility_is_retried_not_raised() -> None:
+    """A busy LuxpowerAPIError raised by the eligibility probe itself must be
+    tolerated (retried within budget), not escape raw and abort the chain."""
+    installing = _info("ccaa-1E1415", "ccaa-1E1515", in_progress=True)
+    done = _info("ccaa-1E1515", "ccaa-1E1515", in_progress=False)
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, UP_TO_DATE],
+        progresses=[installing, done],
+        eligibility=[LuxpowerAPIError("deviceBusy"), True],
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=60)
+
+    assert result.success and result.converged
+    assert result.steps_run == 1
+    assert device.start_calls == 1
+    assert not device._eligibility  # the busy eligibility probe was re-polled
+
+
+@pytest.mark.asyncio
+async def test_non_busy_error_from_eligibility_propagates() -> None:
+    """A non-busy API error from the eligibility probe must propagate."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING],
+        eligibility=[LuxpowerAPIError("some other failure")],
+    )
+
+    with pytest.raises(LuxpowerAPIError, match="some other failure"):
+        await device.run_firmware_update_to_completion(poll_interval=0, start_grace=60)
+
+
+@pytest.mark.asyncio
+async def test_non_busy_error_from_start_propagates() -> None:
+    """A non-busy start error (e.g. 'no update available') must NOT be swallowed
+    by the busy-retry — it propagates so a genuine failure surfaces."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING],
+        start_results=[LuxpowerAPIError("no update available")],
+    )
+
+    with pytest.raises(LuxpowerAPIError, match="no update available"):
+        await device.run_firmware_update_to_completion(poll_interval=0, start_grace=60)
+
+
+@pytest.mark.asyncio
+async def test_no_start_write_fires_after_deadline_on_retry() -> None:
+    """If the eligibility probe on a retry straddles the deadline, no start
+    write may fire past it — the budget is a hard bound on retry writes."""
+
+    class SlowRetryEligibilityDevice(ScriptedDevice):
+        elig_calls = 0
+
+        async def check_update_eligibility(self) -> bool:
+            self.elig_calls += 1
+            if self.elig_calls >= 2:
+                # second probe (the retry) runs long, past the tiny budget
+                await asyncio.sleep(0.2)
+            return True
+
+    device = SlowRetryEligibilityDevice(
+        checks=[STEP1_PENDING],
+        start_results=[LuxpowerAPIError("deviceBusy")],  # first start races busy
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0.1)
+
+    assert not result.success
+    # Only the first (in-budget) start fired; the retry bailed before writing.
+    assert device.start_calls == 1
+    assert "busy" in result.message.casefold()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "deviceBusy",
+        "device busy",
+        "DEVICE_BUSY",
+        # A start-call TOCTOU race can report the device/parallel-group as
+        # already updating; these busy-family codes AND their standardUpdate/run
+        # prose variants must also be tolerated, not escape raw (issue #353).
+        "deviceUpdating",
+        "parallelGroupUpdating",
+        "Device is already updating",
+        "Another device in the parallel group is updating",
+    ],
+)
+@pytest.mark.asyncio
+async def test_device_busy_past_start_budget_returns_clean_failure(message: str) -> None:
+    """A persistent busy response exhausts its budget without escaping raw."""
+
+    class PersistentlyBusyDevice(ScriptedDevice):
+        async def start_firmware_update(self, try_fast_mode: bool = False) -> bool:
+            self.start_calls += 1
+            raise LuxpowerAPIError(message)
+
+    device = PersistentlyBusyDevice(checks=[STEP1_PENDING])
+
+    # A budget wide enough for several retries within it, so we verify the loop
+    # retries multiple times AND stops cleanly at the deadline (no write past it).
+    result = await device.run_firmware_update_to_completion(poll_interval=0.02, start_grace=0.2)
+
+    assert not result.success and not result.converged
+    assert result.steps_run == 0
+    assert device.start_calls > 1
+    assert "busy" in result.message.casefold()
 
 
 @pytest.mark.asyncio
