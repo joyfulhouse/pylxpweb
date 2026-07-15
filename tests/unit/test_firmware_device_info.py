@@ -2,7 +2,37 @@
 
 from __future__ import annotations
 
-from pylxpweb.models import FirmwareDeviceInfo, UpdateStatus
+from pylxpweb.models import (
+    FirmwareDeviceInfo,
+    FirmwareUpdateStatus,
+    UpdateEligibilityMessage,
+    UpdateEligibilityStatus,
+    UpdateStatus,
+)
+
+
+def _firmware_status_payload(update_status: str) -> dict[str, object]:
+    """Build a validated firmware status response with one device row."""
+    return {
+        "receiving": False,
+        "progressing": True,
+        "fileReady": True,
+        "deviceInfos": [
+            {
+                "inverterSn": "1234567890",
+                "startTime": "",
+                "stopTime": "",
+                "standardUpdate": True,
+                "firmware": "IAAB-0E00",
+                "firmwareType": "PCS",
+                "updateStatus": update_status,
+                "isSendStartUpdate": False,
+                "isSendEndUpdate": False,
+                "packageIndex": 0,
+                "updateRate": "0% - 0 / 561",
+            }
+        ],
+    }
 
 
 class TestFirmwareDeviceInfoIsInProgress:
@@ -43,6 +73,26 @@ class TestFirmwareDeviceInfoIsInProgress:
         )
 
         assert device_info.is_in_progress is True
+
+    def test_waiting_validates_as_in_progress_before_start_flag(self) -> None:
+        """WAITING is a queued busy state even before start is acknowledged."""
+        status = FirmwareUpdateStatus.model_validate(_firmware_status_payload("WAITING"))
+
+        device_info = status.deviceInfos[0]
+        assert device_info.updateStatus is UpdateStatus.WAITING
+        assert device_info.is_in_progress is True
+        assert device_info.is_complete is False
+        assert device_info.is_failed is False
+
+    def test_unknown_status_validates_as_neutral(self) -> None:
+        """Future status strings must not crash firmware status validation."""
+        status = FirmwareUpdateStatus.model_validate(_firmware_status_payload("SOMETHING_NEW"))
+
+        device_info = status.deviceInfos[0]
+        assert device_info.updateStatus is UpdateStatus.UNKNOWN
+        assert device_info.is_in_progress is False
+        assert device_info.is_complete is False
+        assert device_info.is_failed is False
 
     def test_is_in_progress_false_when_update_ended(self) -> None:
         """Test is_in_progress returns False when isSendEndUpdate is True."""
@@ -363,3 +413,23 @@ class TestFirmwareDeviceInfoEdgeCases:
         assert failed.is_in_progress is False
         assert failed.is_complete is False
         assert failed.is_failed is True
+
+
+class TestUpdateEligibilityMessageTolerance:
+    """The eligibility ``msg`` enum must tolerate undocumented values.
+
+    ``check_update_eligibility`` runs inside the firmware orchestrator, so an
+    unknown ``msg`` (e.g. a ``deviceBusy`` observed on the 6000XP) must NOT raise
+    a ValidationError mid-update — it must coerce to UNKNOWN and read as
+    not-eligible (the safe default). eg4_web_monitor#353.
+    """
+
+    def test_known_allow_value_is_allowed(self) -> None:
+        status = UpdateEligibilityStatus.model_validate({"success": True, "msg": "allowToUpdate"})
+        assert status.msg is UpdateEligibilityMessage.ALLOW_TO_UPDATE
+        assert status.is_allowed is True
+
+    def test_unknown_message_coerces_to_unknown_and_not_allowed(self) -> None:
+        status = UpdateEligibilityStatus.model_validate({"success": True, "msg": "deviceBusy"})
+        assert status.msg is UpdateEligibilityMessage.UNKNOWN
+        assert status.is_allowed is False

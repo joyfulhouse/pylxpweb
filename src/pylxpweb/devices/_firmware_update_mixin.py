@@ -589,6 +589,7 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             LuxpowerConnectionError: If connection fails.
         """
         # Import here to avoid circular imports
+        from pylxpweb.exceptions import LuxpowerAPIError
         from pylxpweb.models import FirmwareUpdateRunResult
 
         def _progress_key(
@@ -604,6 +605,23 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                 info.app_version_current,
                 info.param_version_current,
             )
+
+        def _is_device_busy_error(err: LuxpowerAPIError) -> bool:
+            # A start/eligibility call can lose a TOCTOU race and come back busy
+            # under any of the API's busy-ish codes, not just the observed
+            # ``deviceBusy``. Match on two stems that cover the whole family:
+            #   - ``busy``: ``deviceBusy`` / ``device_busy`` / ``DEVICE_BUSY`` /
+            #     bare ``BUSY`` (the transport transient code).
+            #   - ``updating``: the eligibility enum codes ``deviceUpdating`` /
+            #     ``parallelGroupUpdating`` AND the ``standardUpdate/run`` prose
+            #     variants ("Device is already updating", "Another device in the
+            #     parallel group is updating"). A non-busy start error ("no
+            #     update available", bad serial, etc.) does not contain either
+            #     stem, so it still propagates.
+            # Treat all busy-ish responses as transient so the bounded
+            # busy-retry tolerates the race instead of escaping raw.
+            message = str(err).casefold()
+            return "busy" in message or "updating" in message
 
         info = await self.check_firmware_updates(force=True)
         if not info.update_available:
@@ -621,19 +639,92 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         # (empty fwCodeBeforeUpload), so remember the target we converged to.
         last_target = info.latest_version or None
         loop = asyncio.get_running_loop()
+        # Smallest wait between busy/eligibility re-polls. Floors poll_interval
+        # so a degenerate poll_interval=0 cannot hot-loop eligibility/start
+        # calls at the API; never exceeds the time left in the budget.
+        retry_backoff = poll_interval if poll_interval > 0 else 0.05
+
+        def _budget_spent(
+            step_index: int, installed_version: str | None
+        ) -> FirmwareUpdateRunResult:
+            return FirmwareUpdateRunResult(
+                success=False,
+                converged=False,
+                steps_run=step_index,
+                message=(
+                    "Device remained busy; firmware update step "
+                    f"{step_index + 1} could not start within the retry budget"
+                ),
+                final_version=installed_version,
+            )
+
         for _ in range(max_steps):
             before = _progress_key(info)
 
-            if not await self.check_update_eligibility():
-                return FirmwareUpdateRunResult(
-                    success=False,
-                    converged=False,
-                    steps_run=steps_run,
-                    message=("Device not eligible for update (another update may be in progress)"),
-                    final_version=info.installed_version,
-                )
+            # Become eligible and start the next component, tolerating a
+            # transient busy race. After a component finishes uploading, the
+            # device can still be settling/rebooting, so both the eligibility
+            # gate AND the start call may briefly report the device busy — the
+            # multi-step chain (issue #353) must not abort in that window.
+            # First step: a not-eligible result is a genuine pre-flight
+            # rejection (fail fast, no write). Later steps, or once a start has
+            # already raced busy: treat not-eligible/deviceBusy as "still
+            # working" and re-poll within a bounded budget. A non-busy API
+            # error still propagates. Bounded by min(start_grace, step_timeout).
+            busy_deadline = loop.time() + min(start_grace, step_timeout)
 
-            started = await self.start_firmware_update(try_fast_mode=try_fast_mode)
+            started = False
+            saw_busy = False
+            attempted = False
+            while True:
+                # Never issue a RETRY start write once the budget is spent
+                # (checked before the attempt; the first genuine try is exempt
+                # so a zero/expired start_grace still gets one shot).
+                if attempted and loop.time() >= busy_deadline:
+                    return _budget_spent(steps_run, info.installed_version)
+                first_attempt = not attempted
+                attempted = True
+
+                # The eligibility probe is itself a network call that can come
+                # back busy (transport BUSY / deviceUpdating / parallelGroup);
+                # treat that as "still working" and retry within budget rather
+                # than letting it escape raw and abort the chain. A non-busy
+                # API error still propagates.
+                try:
+                    eligible = await self.check_update_eligibility()
+                    busy = False
+                except LuxpowerAPIError as err:
+                    if not _is_device_busy_error(err):
+                        raise
+                    eligible = False
+                    busy = True
+                    saw_busy = True
+
+                if eligible:
+                    # The eligibility call can straddle the deadline; never fire
+                    # a RETRY write past it (the first genuine try is exempt).
+                    if not first_attempt and loop.time() >= busy_deadline:
+                        return _budget_spent(steps_run, info.installed_version)
+                    try:
+                        started = await self.start_firmware_update(try_fast_mode=try_fast_mode)
+                        break
+                    except LuxpowerAPIError as err:
+                        if not _is_device_busy_error(err):
+                            raise
+                        saw_busy = True
+                elif not busy and steps_run == 0 and not saw_busy:
+                    # Genuine pre-flight rejection on the very first step.
+                    return FirmwareUpdateRunResult(
+                        success=False,
+                        converged=False,
+                        steps_run=steps_run,
+                        message=(
+                            "Device not eligible for update (another update may be in progress)"
+                        ),
+                        final_version=info.installed_version,
+                    )
+                await asyncio.sleep(min(retry_backoff, max(0.0, busy_deadline - loop.time())))
+
             steps_run += 1
             if not started:
                 return FirmwareUpdateRunResult(
