@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Inverter AC couple start/stop SOC (cloud)**
+  ([eg4_web_monitor#352](https://github.com/joyfulhouse/eg4_web_monitor/issues/352)):
+  `ControlEndpoints.set_inverter_ac_couple_start_soc` /
+  `set_inverter_ac_couple_end_soc` write the inverter's own
+  `_12K_HOLD_AC_COUPLE_{START,END}_SOC` holdParams, and
+  `get_inverter_ac_couple_soc_limits` reads both back — enabling the reporter's
+  grid↔AC-couple transition script on the EG4_OFFGRID family. Distinct from the
+  GridBOSS/MID per-port `set_ac_couple_start_soc`. START accepts 0-100 %; END
+  accepts 0-100 % **or exactly 255**, the observed disabled / "never stop"
+  sentinel (four factory-state register probes read END=255 paired with
+  START=100). The getter returns `dict[str, int | None]` — `None` for an absent
+  or non-numeric param, since 0 is itself a legal SOC. Cloud-only: the LOCAL
+  Modbus register is not pinned (the SNA12K-US probe cannot separate the SOC
+  params from the `FUNC_LSP_BYPASS` bitfield block; addresses await a live LOCAL
+  probe).
+
 ## [0.9.38] - 2026-07-13
 
 Stable release consolidating the 0.9.38 beta line (b1–b4) plus a dongle

@@ -758,6 +758,184 @@ class TestACChargeSocLimitsCloud:
         assert limits == {"start_soc": 20, "end_soc": 100}
 
 
+class TestInverterACCoupleSocLimitsCloud:
+    """Inverter-level AC couple SOC cloud API methods (eg4_web_monitor#352).
+
+    Distinct from the GridBOSS/MID per-port ``set_ac_couple_start_soc`` methods:
+    these write the inverter's own ``_12K_HOLD_AC_COUPLE_{START,END}_SOC``
+    holdParams (wire evidence: the reporter's 12000XP v2 portal capture and the
+    SNA12K-US EG4_OFFGRID register probe).
+    """
+
+    @pytest.mark.asyncio
+    async def test_set_inverter_ac_couple_start_soc(self, control: ControlEndpoints) -> None:
+        """Start SOC writes the _12K_HOLD_AC_COUPLE_START_SOC holdParam."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await control.set_inverter_ac_couple_start_soc(SERIAL, 85)
+
+        assert result.success is True
+        control.write_parameter.assert_called_once_with(
+            SERIAL, "_12K_HOLD_AC_COUPLE_START_SOC", "85", client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_inverter_ac_couple_end_soc(self, control: ControlEndpoints) -> None:
+        """End SOC writes the _12K_HOLD_AC_COUPLE_END_SOC holdParam (the wire
+        name for the reporter's "STOP" SOC)."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await control.set_inverter_ac_couple_end_soc(SERIAL, 95)
+
+        assert result.success is True
+        control.write_parameter.assert_called_once_with(
+            SERIAL, "_12K_HOLD_AC_COUPLE_END_SOC", "95", client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_inverter_ac_couple_start_soc_bounds(self, control: ControlEndpoints) -> None:
+        """0, 1 (the reporter's step-wise low) and 100 are all accepted."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        assert (await control.set_inverter_ac_couple_start_soc(SERIAL, 0)).success is True
+        assert (await control.set_inverter_ac_couple_start_soc(SERIAL, 1)).success is True
+        assert (await control.set_inverter_ac_couple_end_soc(SERIAL, 100)).success is True
+
+    @pytest.mark.asyncio
+    async def test_set_inverter_ac_couple_start_soc_invalid(
+        self, control: ControlEndpoints
+    ) -> None:
+        """Out-of-range start SOC raises ValueError before any write."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+        with pytest.raises(ValueError, match="percent must be 0-100"):
+            await control.set_inverter_ac_couple_start_soc(SERIAL, 101)
+        control.write_parameter.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_inverter_ac_couple_start_soc_rejects_255(
+        self, control: ControlEndpoints
+    ) -> None:
+        """The 255 disabled sentinel is END-only; START rejects it with its
+        plain 0-100 message (no probe dump shows start=255 — the observed
+        disabled pair is start=100)."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+        with pytest.raises(ValueError, match=r"percent must be 0-100, got 255"):
+            await control.set_inverter_ac_couple_start_soc(SERIAL, 255)
+        control.write_parameter.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_inverter_ac_couple_end_soc_255_accepted(
+        self, control: ControlEndpoints
+    ) -> None:
+        """END accepts the 255 disabled/never-stop sentinel (4 factory-state
+        probe dumps read END=255 paired with START=100)."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await control.set_inverter_ac_couple_end_soc(SERIAL, 255)
+
+        assert result.success is True
+        control.write_parameter.assert_called_once_with(
+            SERIAL, "_12K_HOLD_AC_COUPLE_END_SOC", "255", client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad", [-1, 101, 254, 256])
+    async def test_set_inverter_ac_couple_end_soc_invalid(
+        self, control: ControlEndpoints, bad: int
+    ) -> None:
+        """Values outside 0-100 that are not exactly 255 raise before any write
+        (101 and 254 prove 255 is a single sentinel, not an open upper range)."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+        with pytest.raises(ValueError, match="percent must be 0-100 or 255"):
+            await control.set_inverter_ac_couple_end_soc(SERIAL, bad)
+        control.write_parameter.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_inverter_ac_couple_soc_client_type_propagates(
+        self, control: ControlEndpoints
+    ) -> None:
+        """client_type flows through to write_parameter on both setters."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        await control.set_inverter_ac_couple_start_soc(SERIAL, 85, client_type="APP")
+        await control.set_inverter_ac_couple_end_soc(SERIAL, 95, client_type="APP")
+
+        control.write_parameter.assert_any_call(
+            SERIAL, "_12K_HOLD_AC_COUPLE_START_SOC", "85", client_type="APP"
+        )
+        control.write_parameter.assert_any_call(
+            SERIAL, "_12K_HOLD_AC_COUPLE_END_SOC", "95", client_type="APP"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_ac_couple_soc_limits(self, control: ControlEndpoints) -> None:
+        """Getter surfaces both params from the cloud parameter read (portal
+        returns them as strings, e.g. the SNA12K-US probe's "50"/"90")."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "_12K_HOLD_AC_COUPLE_START_SOC": "50",
+                "_12K_HOLD_AC_COUPLE_END_SOC": "90",
+            }
+        )
+
+        limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
+        assert limits == {"start_soc": 50, "end_soc": 90}
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_ac_couple_soc_limits_passes_255_through(
+        self, control: ControlEndpoints
+    ) -> None:
+        """The 255 disabled sentinel is surfaced unmodified (factory state:
+        START=100, END=255)."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "_12K_HOLD_AC_COUPLE_START_SOC": "100",
+                "_12K_HOLD_AC_COUPLE_END_SOC": "255",
+            }
+        )
+
+        limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
+        assert limits == {"start_soc": 100, "end_soc": 255}
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_ac_couple_soc_limits_absent(
+        self, control: ControlEndpoints
+    ) -> None:
+        """A family without these params (grid-tied) reads back None/None — not
+        0/0, since 0 is a legal writable SOC and would be ambiguous."""
+        control.read_device_parameters_ranges = AsyncMock(return_value={})
+
+        limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
+        assert limits == {"start_soc": None, "end_soc": None}
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_ac_couple_soc_limits_partial(
+        self, control: ControlEndpoints
+    ) -> None:
+        """A present param is parsed; a missing sibling is None (not 0)."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={"_12K_HOLD_AC_COUPLE_START_SOC": "85"}
+        )
+
+        limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
+        assert limits == {"start_soc": 85, "end_soc": None}
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_ac_couple_soc_limits_non_numeric(
+        self, control: ControlEndpoints
+    ) -> None:
+        """Non-numeric garbage parses to None rather than raising."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "_12K_HOLD_AC_COUPLE_START_SOC": "n/a",
+                "_12K_HOLD_AC_COUPLE_END_SOC": None,
+            }
+        )
+
+        limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
+        assert limits == {"start_soc": None, "end_soc": None}
+
+
 class TestACChargeVoltageLimitsCloud:
     """Test AC charge voltage limit cloud API methods."""
 
