@@ -2439,23 +2439,33 @@ class ControlEndpoints(BaseEndpoint):
 
         Args:
             inverter_sn: Inverter serial number
-            percent: Battery SOC (%) to stop the AC-coupled source (0-100)
+            percent: Battery SOC (%) to stop the AC-coupled source (0-100), OR
+                exactly 255 — the observed disabled / "never stop" sentinel.
+                Four factory-state register probes (12KPV, FlexBOSS18/21) read
+                END=255 paired with START=100, so 255 must remain writable to
+                restore that state (same spirit as the SOC-101 "never stop"
+                carve-out on ``set_ac_charge_soc_limits``). START has no such
+                sentinel — its disabled pair reads 100, not 255.
             client_type: Client type (WEB/APP)
 
         Returns:
             SuccessResponse: Operation result
 
         Raises:
-            ValueError: If percent is out of range
+            ValueError: If percent is outside 0-100 and not the 255 sentinel
 
         Example:
             >>> # Stop the AC-coupled source when SOC reaches 95%
             >>> await client.control.set_inverter_ac_couple_end_soc(
             ...     "1234567890", 95
             ... )
+            >>> # Disable the stop threshold ("never stop") sentinel
+            >>> await client.control.set_inverter_ac_couple_end_soc(
+            ...     "1234567890", 255
+            ... )
         """
-        if not 0 <= percent <= 100:
-            raise ValueError(f"percent must be 0-100, got {percent}")
+        if not (0 <= percent <= 100 or percent == 255):
+            raise ValueError(f"percent must be 0-100 or 255 (disabled), got {percent}")
 
         return await self.write_parameter(
             inverter_sn,
@@ -2464,24 +2474,41 @@ class ControlEndpoints(BaseEndpoint):
             client_type=client_type,
         )
 
-    async def get_inverter_ac_couple_soc_limits(self, inverter_sn: str) -> dict[str, int]:
+    async def get_inverter_ac_couple_soc_limits(self, inverter_sn: str) -> dict[str, int | None]:
         """Get the inverter AC couple start/stop SOC thresholds via cloud API.
 
         Returns:
-            Dictionary with start_soc and end_soc (whole percent). Missing
-            params default to 0 (the family that lacks these reports neither).
+            Dictionary with ``start_soc`` and ``end_soc``. Each is the whole
+            percent (or the ``end_soc`` 255 "disabled/never-stop" sentinel), or
+            ``None`` when the param is absent (the grid-tied family that lacks
+            these reports neither) or non-numeric. ``None`` is used instead of 0
+            because 0 is itself a legal writable SOC.
 
         Example:
+            >>> # Illustrative only — shape of the return value. The exact
+            >>> # numbers depend on the device; a set→get round-trip through
+            >>> # this cloud getter is unverified pending a live call on
+            >>> # AC-couple-capable hardware.
             >>> limits = await client.control.get_inverter_ac_couple_soc_limits(
             ...     "1234567890"
             ... )
-            >>> limits
-            {'start_soc': 50, 'end_soc': 90}
+            >>> limits  # doctest: +SKIP
+            {'start_soc': 85, 'end_soc': 255}
         """
         params = await self.read_device_parameters_ranges(inverter_sn)
+
+        def _parse(key: str) -> int | None:
+            raw = params.get(key)
+            if raw is None:
+                return None
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return None
+
         return {
-            "start_soc": int(params.get("_12K_HOLD_AC_COUPLE_START_SOC", 0) or 0),
-            "end_soc": int(params.get("_12K_HOLD_AC_COUPLE_END_SOC", 0) or 0),
+            "start_soc": _parse("_12K_HOLD_AC_COUPLE_START_SOC"),
+            "end_soc": _parse("_12K_HOLD_AC_COUPLE_END_SOC"),
         }
 
     # ============================================================================
