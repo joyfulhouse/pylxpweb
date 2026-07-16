@@ -744,6 +744,14 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # accident). Canonical row is SCALE_NONE % like reg 160, so the local named
     # read/write pass through raw 1:1 (eg4_web_monitor#331/#332).
     161: ["HOLD_AC_CHARGE_END_BATTERY_SOC"],
+    # Inverter AC-couple START/END SOC (_12K_HOLD_AC_COUPLE_{START,END}_SOC,
+    # eg4_web_monitor#352) are DELIBERATELY not mapped here: they are CLOUD-ONLY
+    # named params (ControlEndpoints.set_inverter_ac_couple_{start,end}_soc). The
+    # SNA12K-US probe co-locates both onto the FUNC_LSP_BYPASS bitfield block
+    # (regs 219-221 = the 48-bit LSP-bypass bitmap), a block-detection artifact
+    # that cannot pin their true register; the clean sibling *_VOLT params sit at
+    # regs 222/223. Add a row here only with a live LOCAL Modbus probe of the
+    # SOC addresses (SCALE_NONE %, raw 1:1) — hardware-evidence follow-up.
     169: ["HOLD_ON_GRID_EOD_VOLTAGE"],  # On-grid EOD voltage (V, ×10; cloud-confirmed name)
     # Peak Shaving time schedule (209-212, packed hour|minute per register;
     # 2 windows). Same canonical packed-time naming as AC First above.

@@ -2361,6 +2361,130 @@ class ControlEndpoints(BaseEndpoint):
         }
 
     # ============================================================================
+    # Inverter AC Couple SOC Threshold Controls (Cloud API)
+    # ============================================================================
+    #
+    # INVERTER-LEVEL AC couple start/stop SOC, distinct from the GridBOSS/MID
+    # smart-port methods (``set_ac_couple_start_soc`` / ``set_ac_couple_end_soc``
+    # above), which write per-port ``MIDBOX_HOLD_AC_START_SOC_{port}``. These
+    # write the inverter's own ``_12K_HOLD_AC_COUPLE_{START,END}_SOC`` holdParams
+    # instead — the AC-coupled source (e.g. a grid-tied inverter on the smart
+    # port) is enabled when SOC drops below START and disabled above END.
+    #
+    # WIRE EVIDENCE (eg4_web_monitor#352): the EG4 portal sets these via a
+    # POST of ``_12K_HOLD_AC_COUPLE_START_SOC`` / ``_12K_HOLD_AC_COUPLE_END_SOC``
+    # (reporter mjstrand's 12000XP v2 capture, independently confirmed by
+    # ivanfmartinez and by the SNA12K-US register probe — same EG4_OFFGRID
+    # family — which read back START="50", END="90"). The reporter's "STOP"
+    # wording is the same END param; the wire name is ``_END_SOC``.
+    #
+    # CLOUD-ONLY: the LOCAL Modbus register is NOT pinned. The SNA12K-US probe
+    # co-locates both SOC params onto the ``FUNC_LSP_BYPASS`` bitfield block
+    # (regs 219-221 hold the 48-bit LSP-bypass bitmap in full), a known
+    # block-detection artifact — a 16-bit register cannot hold 16 bit-flags AND
+    # a percent. The clean sibling START/END *VOLT* params land at regs 222/223,
+    # but the SOC register addresses are unverifiable from portal evidence and a
+    # register claim here requires a live LOCAL probe (hardware-evidence
+    # follow-up). Named cloud reads/writes are the proven path — and the path
+    # the reporter actually uses.
+
+    async def set_inverter_ac_couple_start_soc(
+        self,
+        inverter_sn: str,
+        percent: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set the inverter AC couple START SOC threshold via cloud API.
+
+        When battery SOC drops below this threshold, the AC-coupled source on
+        the inverter's smart port is activated.
+
+        Args:
+            inverter_sn: Inverter serial number
+            percent: Battery SOC (%) to start the AC-coupled source (0-100)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If percent is out of range
+
+        Example:
+            >>> # Start the AC-coupled source when SOC drops below 85%
+            >>> await client.control.set_inverter_ac_couple_start_soc(
+            ...     "1234567890", 85
+            ... )
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError(f"percent must be 0-100, got {percent}")
+
+        return await self.write_parameter(
+            inverter_sn,
+            "_12K_HOLD_AC_COUPLE_START_SOC",
+            str(percent),
+            client_type=client_type,
+        )
+
+    async def set_inverter_ac_couple_end_soc(
+        self,
+        inverter_sn: str,
+        percent: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set the inverter AC couple END SOC threshold via cloud API.
+
+        When battery SOC rises above this threshold, the AC-coupled source on
+        the inverter's smart port is deactivated.
+
+        Args:
+            inverter_sn: Inverter serial number
+            percent: Battery SOC (%) to stop the AC-coupled source (0-100)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If percent is out of range
+
+        Example:
+            >>> # Stop the AC-coupled source when SOC reaches 95%
+            >>> await client.control.set_inverter_ac_couple_end_soc(
+            ...     "1234567890", 95
+            ... )
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError(f"percent must be 0-100, got {percent}")
+
+        return await self.write_parameter(
+            inverter_sn,
+            "_12K_HOLD_AC_COUPLE_END_SOC",
+            str(percent),
+            client_type=client_type,
+        )
+
+    async def get_inverter_ac_couple_soc_limits(self, inverter_sn: str) -> dict[str, int]:
+        """Get the inverter AC couple start/stop SOC thresholds via cloud API.
+
+        Returns:
+            Dictionary with start_soc and end_soc (whole percent). Missing
+            params default to 0 (the family that lacks these reports neither).
+
+        Example:
+            >>> limits = await client.control.get_inverter_ac_couple_soc_limits(
+            ...     "1234567890"
+            ... )
+            >>> limits
+            {'start_soc': 50, 'end_soc': 90}
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
+        return {
+            "start_soc": int(params.get("_12K_HOLD_AC_COUPLE_START_SOC", 0) or 0),
+            "end_soc": int(params.get("_12K_HOLD_AC_COUPLE_END_SOC", 0) or 0),
+        }
+
+    # ============================================================================
     # Sporadic Charge Controls (Cloud API)
     # ============================================================================
 
