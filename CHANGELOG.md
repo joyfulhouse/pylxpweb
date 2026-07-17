@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Modbus register is not pinned (the SNA12K-US probe cannot separate the SOC
   params from the `FUNC_LSP_BYPASS` bitfield block; addresses await a live LOCAL
   probe).
+- **Inverter AC couple enable/disable (cloud)**
+  ([eg4_web_monitor#471](https://github.com/joyfulhouse/eg4_web_monitor/issues/471)):
+  `ControlEndpoints.set_inverter_ac_couple_enabled` toggles the inverter's own
+  `FUNC_AC_COUPLING_FUNCTION` via the functionControl endpoint — de-energizing
+  the AC-coupled smart-port source at any battery level, independent of the
+  start/stop SOC window above. Distinct from the GridBOSS/MID per-port
+  `FUNC_AC_COUPLE_EN_{n}` (`enable_ac_couple` / `disable_ac_couple`).
+  `get_inverter_ac_couple_soc_limits` now also returns `"enabled": bool | None`
+  (widening its return type to `dict[str, int | bool | None]`) — `None` for an
+  absent or unparseable param, never a fabricated `False`. Cloud-routed: the
+  Luxpower doc places the param at holding register 179 bit 11 (candidate, not
+  yet pinned by the raw↔named lockstep standard — a LOCAL path is a follow-up).
 
 ## [0.9.38] - 2026-07-13
 

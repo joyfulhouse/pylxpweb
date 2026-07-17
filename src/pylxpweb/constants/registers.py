@@ -783,6 +783,16 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # Bits 9,10 (FUNC_BAT_CHARGE/DISCHARGE_CONTROL) confirmed 2026-02-18 (SOC↔Voltage).
     # Other known params: FUNC_ACTIVE_POWER_LIMIT_MODE, FUNC_AC_COUPLING_FUNCTION,
     # FUNC_CT_DIRECTION_REVERSED,
+    #
+    # FUNC_AC_COUPLING_FUNCTION: BIT 11 CANDIDATE (eg4_web_monitor#471,
+    # ivanfmartinez 2026-07-17): the Luxpower Modbus doc places it at reg 179
+    # bit 11, another integration uses that mapping, and the reporter has
+    # driven the control through it before on his LXP (his LXPUS810K dump —
+    # AC couple enabled — reads the named param True; the SNA12K-US probe —
+    # disabled — reads False). NOT yet pinned by this project's raw↔named
+    # lockstep standard (the bit-3 procedure below); until a live toggle
+    # verifies the bit, reads/writes stay on the named cloud path
+    # (set_inverter_ac_couple_enabled / get_inverter_ac_couple_soc_limits).
     # FUNC_GEN_PEAK_SHAVING, FUNC_ON_GRID_ALWAYS_ON, FUNC_PV_ARC, FUNC_PV_ARC_FAULT_CLEAR,
     # FUNC_PV_SELL_TO_GRID_EN, FUNC_RSD_DISABLE, FUNC_SMART_LOAD_ENABLE,
     # FUNC_TOTAL_LOAD_COMPENSATION_EN, FUNC_TRIP_TIME_UNIT, FUNC_WATT_VOLT_EN
