@@ -868,18 +868,48 @@ class TestInverterACCoupleSocLimitsCloud:
         )
 
     @pytest.mark.asyncio
+    async def test_set_inverter_ac_couple_enabled(self, control: ControlEndpoints) -> None:
+        """Enable/disable routes through the functionControl endpoint with the
+        inverter-level FUNC_AC_COUPLING_FUNCTION param (eg4_web_monitor#471)."""
+        control.control_function = AsyncMock(return_value=SuccessResponse(success=True))
+
+        assert (await control.set_inverter_ac_couple_enabled(SERIAL, True)).success is True
+        control.control_function.assert_called_with(
+            SERIAL, "FUNC_AC_COUPLING_FUNCTION", True, client_type="WEB"
+        )
+
+        assert (await control.set_inverter_ac_couple_enabled(SERIAL, False)).success is True
+        control.control_function.assert_called_with(
+            SERIAL, "FUNC_AC_COUPLING_FUNCTION", False, client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_inverter_ac_couple_enabled_client_type_propagates(
+        self, control: ControlEndpoints
+    ) -> None:
+        """client_type is forwarded to control_function."""
+        control.control_function = AsyncMock(return_value=SuccessResponse(success=True))
+
+        await control.set_inverter_ac_couple_enabled(SERIAL, True, client_type="APP")
+        control.control_function.assert_called_once_with(
+            SERIAL, "FUNC_AC_COUPLING_FUNCTION", True, client_type="APP"
+        )
+
+    @pytest.mark.asyncio
     async def test_get_inverter_ac_couple_soc_limits(self, control: ControlEndpoints) -> None:
-        """Getter surfaces both params from the cloud parameter read (portal
-        returns them as strings, e.g. the SNA12K-US probe's "50"/"90")."""
+        """Getter surfaces all three params from the cloud parameter read (the
+        portal returns HOLD params as strings, e.g. the SNA12K-US probe's
+        "50"/"90", and FUNC params as JSON booleans)."""
         control.read_device_parameters_ranges = AsyncMock(
             return_value={
                 "_12K_HOLD_AC_COUPLE_START_SOC": "50",
                 "_12K_HOLD_AC_COUPLE_END_SOC": "90",
+                "FUNC_AC_COUPLING_FUNCTION": True,
             }
         )
 
         limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
-        assert limits == {"start_soc": 50, "end_soc": 90}
+        assert limits == {"start_soc": 50, "end_soc": 90, "enabled": True}
 
     @pytest.mark.asyncio
     async def test_get_inverter_ac_couple_soc_limits_passes_255_through(
@@ -895,18 +925,19 @@ class TestInverterACCoupleSocLimitsCloud:
         )
 
         limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
-        assert limits == {"start_soc": 100, "end_soc": 255}
+        assert limits == {"start_soc": 100, "end_soc": 255, "enabled": None}
 
     @pytest.mark.asyncio
     async def test_get_inverter_ac_couple_soc_limits_absent(
         self, control: ControlEndpoints
     ) -> None:
-        """A family without these params (grid-tied) reads back None/None — not
-        0/0, since 0 is a legal writable SOC and would be ambiguous."""
+        """A family without these params (grid-tied) reads back all-None — not
+        0/0/False, since 0 is a legal writable SOC and a fake False would
+        misreport the function as disabled."""
         control.read_device_parameters_ranges = AsyncMock(return_value={})
 
         limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
-        assert limits == {"start_soc": None, "end_soc": None}
+        assert limits == {"start_soc": None, "end_soc": None, "enabled": None}
 
     @pytest.mark.asyncio
     async def test_get_inverter_ac_couple_soc_limits_partial(
@@ -918,22 +949,52 @@ class TestInverterACCoupleSocLimitsCloud:
         )
 
         limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
-        assert limits == {"start_soc": 85, "end_soc": None}
+        assert limits == {"start_soc": 85, "end_soc": None, "enabled": None}
 
     @pytest.mark.asyncio
     async def test_get_inverter_ac_couple_soc_limits_non_numeric(
         self, control: ControlEndpoints
     ) -> None:
-        """Non-numeric garbage parses to None rather than raising."""
+        """Non-numeric/unparseable garbage parses to None rather than raising."""
         control.read_device_parameters_ranges = AsyncMock(
             return_value={
                 "_12K_HOLD_AC_COUPLE_START_SOC": "n/a",
                 "_12K_HOLD_AC_COUPLE_END_SOC": None,
+                "FUNC_AC_COUPLING_FUNCTION": "garbage",
             }
         )
 
         limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
-        assert limits == {"start_soc": None, "end_soc": None}
+        assert limits == {"start_soc": None, "end_soc": None, "enabled": None}
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_ac_couple_soc_limits_enabled_false(
+        self, control: ControlEndpoints
+    ) -> None:
+        """A real False passes through — distinct from the absent-param None."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={"FUNC_AC_COUPLING_FUNCTION": False}
+        )
+
+        limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
+        assert limits == {"start_soc": None, "end_soc": None, "enabled": False}
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_ac_couple_soc_limits_enabled_string(
+        self, control: ControlEndpoints
+    ) -> None:
+        """Defensive parse: "true"/"false" strings (any case) are accepted."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={"FUNC_AC_COUPLING_FUNCTION": "TRUE"}
+        )
+        limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
+        assert limits["enabled"] is True
+
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={"FUNC_AC_COUPLING_FUNCTION": "false"}
+        )
+        limits = await control.get_inverter_ac_couple_soc_limits(SERIAL)
+        assert limits["enabled"] is False
 
 
 class TestACChargeVoltageLimitsCloud:

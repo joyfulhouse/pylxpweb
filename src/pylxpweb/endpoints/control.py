@@ -2474,15 +2474,65 @@ class ControlEndpoints(BaseEndpoint):
             client_type=client_type,
         )
 
-    async def get_inverter_ac_couple_soc_limits(self, inverter_sn: str) -> dict[str, int | None]:
-        """Get the inverter AC couple start/stop SOC thresholds via cloud API.
+    async def set_inverter_ac_couple_enabled(
+        self,
+        inverter_sn: str,
+        enabled: bool,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Enable or disable the inverter's AC couple function via cloud API.
+
+        Toggles ``FUNC_AC_COUPLING_FUNCTION`` — the inverter-level smart-port
+        AC couple function, distinct from the GridBOSS/MID per-port
+        ``FUNC_AC_COUPLE_EN_{n}`` functions (``enable_ac_couple`` /
+        ``disable_ac_couple``). Disabling de-energizes the AC-coupled source
+        regardless of the START/END SOC window (eg4_web_monitor#471; portal
+        wire name confirmed by two independent reporters in
+        eg4_web_monitor#352).
+
+        Cloud-routed: the Luxpower doc places the param at holding register
+        179 bit 11 (candidate, see the reg-179 note in
+        ``constants/registers.py``), but the bit is not yet pinned by this
+        project's raw↔named lockstep standard — a local register path is a
+        follow-up once a live toggle verifies it.
+
+        Args:
+            inverter_sn: Inverter serial number
+            enabled: Enable or disable the AC couple function
+            client_type: Client type (WEB/APP)
 
         Returns:
-            Dictionary with ``start_soc`` and ``end_soc``. Each is the whole
-            percent (or the ``end_soc`` 255 "disabled/never-stop" sentinel), or
-            ``None`` when the param is absent (the grid-tied family that lacks
-            these reports neither) or non-numeric. ``None`` is used instead of 0
-            because 0 is itself a legal writable SOC.
+            SuccessResponse: Operation result
+
+        Example:
+            >>> # De-energize the smart port before a transfer-switch flip
+            >>> await client.control.set_inverter_ac_couple_enabled(
+            ...     "1234567890", False
+            ... )
+        """
+        return await self.control_function(
+            inverter_sn,
+            "FUNC_AC_COUPLING_FUNCTION",
+            enabled,
+            client_type=client_type,
+        )
+
+    async def get_inverter_ac_couple_soc_limits(
+        self, inverter_sn: str
+    ) -> dict[str, int | bool | None]:
+        """Get the inverter AC couple SOC thresholds and enable state via cloud API.
+
+        Returns:
+            Dictionary with ``start_soc``, ``end_soc`` and ``enabled``.
+            ``start_soc``/``end_soc`` are the whole percent (or the ``end_soc``
+            255 "disabled/never-stop" sentinel), or ``None`` when the param is
+            absent (the grid-tied family that lacks these reports neither) or
+            non-numeric. ``None`` is used instead of 0 because 0 is itself a
+            legal writable SOC. ``enabled`` is the
+            ``FUNC_AC_COUPLING_FUNCTION`` state — the cloud returns function
+            params as JSON booleans (string ``"true"``/``"false"`` also
+            accepted defensively); absent or unparseable reads ``None``, never
+            a fake ``False``.
 
         Example:
             >>> # Illustrative only — shape of the return value. The exact
@@ -2493,7 +2543,7 @@ class ControlEndpoints(BaseEndpoint):
             ...     "1234567890"
             ... )
             >>> limits  # doctest: +SKIP
-            {'start_soc': 85, 'end_soc': 255}
+            {'start_soc': 85, 'end_soc': 255, 'enabled': True}
         """
         params = await self.read_device_parameters_ranges(inverter_sn)
 
@@ -2506,9 +2556,21 @@ class ControlEndpoints(BaseEndpoint):
             except (TypeError, ValueError):
                 return None
 
+        def _parse_enabled(raw: object) -> bool | None:
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, str):
+                lowered = raw.strip().lower()
+                if lowered == "true":
+                    return True
+                if lowered == "false":
+                    return False
+            return None
+
         return {
             "start_soc": _parse("_12K_HOLD_AC_COUPLE_START_SOC"),
             "end_soc": _parse("_12K_HOLD_AC_COUPLE_END_SOC"),
+            "enabled": _parse_enabled(params.get("FUNC_AC_COUPLING_FUNCTION")),
         }
 
     # ============================================================================
