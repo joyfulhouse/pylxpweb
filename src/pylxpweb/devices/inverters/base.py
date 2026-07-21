@@ -2542,10 +2542,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Returns:
             True if green mode is enabled, False if disabled, or None when
             the status is UNKNOWN: parameters not loaded, or the loaded
-            parameters do not carry ``FUNC_GREEN_EN`` at all. The latter is
-            the EG4_OFFGRID local-read case — the SNA register-110 bit for
-            green is unverified, so local reads deliberately omit the key
-            and absence must not masquerade as "disabled".
+            parameters do not carry ``FUNC_GREEN_EN`` at all (e.g. a
+            partial read that missed register 110) — absence must not
+            masquerade as "disabled". Local reads decode bit 14 of register
+            110 on every family (hardware-verified 2026-07-21,
+            eg4_web_monitor #476).
 
         Example:
             >>> enabled = inverter.green_mode_enabled

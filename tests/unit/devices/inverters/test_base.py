@@ -1228,11 +1228,12 @@ class TestWorkingModeControls:
 class TestGreenModeEnabledProperty:
     """green_mode_enabled distinguishes absent (unknown) from disabled.
 
-    EG4_OFFGRID local parameter reads deliberately omit FUNC_GREEN_EN
-    (the SNA register-110 bit is unverified), so an absent key means the
-    status is UNKNOWN — returning False for it would report a
-    cloud-enabled inverter as "disabled" after any successful local
-    parameter refresh (eg4_web_monitor #310 review round 2).
+    An absent FUNC_GREEN_EN key (e.g. a partial local read that missed
+    register 110) means the status is UNKNOWN — returning False for it
+    would report a cloud-enabled inverter as "disabled" after any
+    successful partial parameter refresh (eg4_web_monitor #310 review
+    round 2). Local reads decode the hardware-verified register 110
+    bit 14 on every family (eg4_web_monitor #476).
     """
 
     def test_none_when_parameters_not_loaded(self, mock_client: LuxpowerClient) -> None:
@@ -1243,7 +1244,7 @@ class TestGreenModeEnabledProperty:
         assert inverter.green_mode_enabled is None
 
     def test_none_when_key_absent_from_loaded_parameters(self, mock_client: LuxpowerClient) -> None:
-        """Offgrid local read: params loaded, FUNC_GREEN_EN not served."""
+        """Params loaded but FUNC_GREEN_EN absent (partial read) -> None."""
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )

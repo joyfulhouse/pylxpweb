@@ -1250,7 +1250,7 @@ def _make_write_test_transport(**kwargs: object) -> DongleTransport:
     """Build a dongle transport suitable for write-sequence tests.
 
     Uses EG4_HYBRID family (FUNC_EPS_EN -> reg 21 bit 0,
-    FUNC_GREEN_EN -> reg 110 bit 8, HOLD_AC_CHARGE_SOC_LIMIT -> reg 67)
+    FUNC_GREEN_EN -> reg 110 bit 14, HOLD_AC_CHARGE_SOC_LIMIT -> reg 67)
     and disables the inter-step delay so tests run fast.
     """
     from pylxpweb.devices.inverters._features import InverterFamily

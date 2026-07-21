@@ -579,6 +579,60 @@ WEB_PARAM_TO_HOLD_REGISTER = {
 #   BIT_*    - Bit field values
 #   MIDBOX_* - GridBOSS-specific parameters
 
+# Register 110 system-function bit layout — SHARED by every inverter family
+# (eg4_web_monitor #476). Both families ever hardware-toggle-tested (18kPV
+# 2026-07-21, 12000XP/SNA PR #220) match the ant0nkr/lxp_modbus
+# H_FUNCTION_ENABLE_3 lineage layout in every tested position, while the
+# historic 18kPV-specific upper-bit table matched none of them — so the
+# hybrid and EG4_OFFGRID tables no longer diverge. Displaced/unproven slots
+# are FUNC_110_BITn placeholders (same convention as reg 179/233 unknowns):
+# an honest gap beats an unverified decode served as truth — a local write
+# through a wrong slot flips an unrelated config bit while reporting
+# success (#476: every HYBRID/LOCAL "Off-Grid Mode" toggle wrote the
+# PVCT-sample region instead of green mode).
+#
+# Evidence per bit:
+#   0-4:   all sources agree (18kPV cloud decode, SNA cloud decode,
+#          lxp_modbus).
+#   5:     FUNC_TAKE_LOAD_TOGETHER — live 18kPV read 2026-07-21: raw bit 5
+#          set while the EG4 cloud decode reports TAKE_LOAD_TOGETHER as the
+#          only set FUNC_ (lxp_modbus puts a CT-ratio bit here; the EG4
+#          firmware's own decode wins).
+#   6:     unknown (old table's buzzer slot; buzzer is pinned at 7).
+#   7:     FUNC_BUZZER_EN — SNA cloud decode + constant raw 0x0080
+#          (PR #220); lxp_modbus agrees lineage-wide.
+#   8-9:   unknown (lxp_modbus: PVCT sample type field). Bit 8 was the old
+#          FUNC_GREEN_EN slot — DISPROVEN by the 2026-07-21 18kPV toggle
+#          test (eg4_web_monitor #476/#194).
+#   10-13: unknown (old working-mode/PVCT/CT slots; live 18kPV read
+#          2026-07-21 shows raw bit 10 set while the cloud decodes
+#          BIT_WORKING_MODE=0 and BIT_CT_SAMPLE_RATIO=1 — those names were
+#          misplaced).
+#   14:    FUNC_GREEN_EN — hardware toggle-verified 2026-07-21 on an 18kPV
+#          (45XXXXXX18): cloud green-mode enable flips raw 1056 <-> 17440, a
+#          single bit-14 delta, with the EG4 cloud decode changing in
+#          lockstep; lxp_modbus GreenModeEn agrees.
+#   15:    FUNC_BATTERY_ECO_EN — 12000XP live toggle (raw 0x0080 <->
+#          0x8080, PR #220); lxp_modbus EcoModeEn agrees.
+REGISTER_110_PARAM_KEYS: list[str] = [
+    "FUNC_PV_GRID_OFF_EN",  # Bit 0
+    "FUNC_RUN_WITHOUT_GRID",  # Bit 1 (portal "Fast Zero Export", #274)
+    "FUNC_MICRO_GRID_EN",  # Bit 2
+    "FUNC_BAT_SHARED",  # Bit 3
+    "FUNC_CHARGE_LAST",  # Bit 4
+    "FUNC_TAKE_LOAD_TOGETHER",  # Bit 5
+    "FUNC_110_BIT6",  # Bit 6: unknown
+    "FUNC_BUZZER_EN",  # Bit 7 (hardware-verified, PR #220)
+    "FUNC_110_BIT8",  # Bit 8: unknown (old green slot — disproven, #476)
+    "FUNC_110_BIT9",  # Bit 9: unknown (old ECO slot)
+    "FUNC_110_BIT10",  # Bit 10: unknown (old working-mode slot — contradicted)
+    "FUNC_110_BIT11",  # Bit 11: unknown
+    "FUNC_110_BIT12",  # Bit 12: unknown
+    "FUNC_110_BIT13",  # Bit 13: unknown
+    "FUNC_GREEN_EN",  # Bit 14 (hardware-verified 2026-07-21, #476)
+    "FUNC_BATTERY_ECO_EN",  # Bit 15 (hardware-verified, PR #220)
+]
+
 # Register → API Parameter Key Mappings (18KPV, Verified via live testing)
 # IMPORTANT: Each register is 16 bits. Bit field registers can have max 16 params.
 REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
@@ -695,26 +749,12 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # SOC limits
     105: ["HOLD_DISCHG_CUT_OFF_SOC_EOD"],  # On-grid discharge cutoff SOC (10-90%)
     116: ["HOLD_PTOUSER_START_DISCHARGE"],  # Power-to-user start-discharge threshold (W)
-    # System functions (Register 110: 14 bit fields, verified on 18kPV).
-    # WARNING: this layout is 18kPV/EG4_HYBRID-derived.  EG4_OFFGRID (SNA)
-    # hardware evidence contradicts the upper bits (buzzer at 7, ECO at 15) —
-    # see OFFGRID_REGISTER_110_PARAM_KEYS for the family-specific override.
-    110: [
-        "FUNC_PV_GRID_OFF_EN",  # Bit 0
-        "FUNC_RUN_WITHOUT_GRID",  # Bit 1
-        "FUNC_MICRO_GRID_EN",  # Bit 2
-        "FUNC_BAT_SHARED",  # Bit 3
-        "FUNC_CHARGE_LAST",  # Bit 4
-        "FUNC_TAKE_LOAD_TOGETHER",  # Bit 5 (swapped with bit 6)
-        "FUNC_BUZZER_EN",  # Bit 6 (swapped with bit 5)
-        "FUNC_GO_TO_OFFGRID",  # Bit 7
-        "FUNC_GREEN_EN",  # Bit 8
-        "FUNC_BATTERY_ECO_EN",  # Bit 9
-        "BIT_WORKING_MODE",  # Bit 10 (multi-bit field?)
-        "BIT_PVCT_SAMPLE_TYPE",  # Bit 11
-        "BIT_PVCT_SAMPLE_RATIO",  # Bit 12
-        "BIT_CT_SAMPLE_RATIO",  # Bit 13 (multi-bit field?)
-    ],
+    # System functions (Register 110: 16 bit fields, lineage-wide layout).
+    # See REGISTER_110_PARAM_KEYS above for the per-bit evidence trail; the
+    # historic 18kPV-specific upper-bit layout (green at 8, ECO at 9, buzzer
+    # at 6, working-mode at 10) was disproven by live hardware toggles
+    # (eg4_web_monitor #476 + PR #220) and is gone.
+    110: REGISTER_110_PARAM_KEYS,
     120: [
         "FUNC_HALF_HOUR_AC_CHG_START_EN",
         "FUNC_SNA_BAT_DISCHARGE_CONTROL",
@@ -907,67 +947,30 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
 # ============================================================================
 # EG4_OFFGRID (SNA PLATFORM) FAMILY OVERRIDES
 # ============================================================================
-# Register 110 bit layout for the EG4 Off-Grid series (12000XP/6000XP).
-#
-# The base REGISTER_TO_PARAM_KEYS table above was verified on 18kPV
-# (EG4_HYBRID) hardware only.  Three independent sources show the SNA
-# platform packs register 110 differently in the upper bits:
-#
-#   1. 12000XP live evidence (eg4_web_monitor PR #220, jesserobbins):
-#      raw reg 110 = 0x8080 with Battery ECO enabled, 0x0080 with it
-#      disabled — only bit 15 toggles.  Raw bit-15 writes enable/disable
-#      ECO in both directions (verified on hardware); writing the base
-#      table's bit 9 returns success but changes nothing on the inverter.
-#   2. EG4 cloud decode of a stock SNA12K-US (docs/inverters/
-#      SNA12KUS_52XXXXXX68.md, reg 110): FUNC_BUZZER_EN=True is the ONLY
-#      set function.  Combined with the constant raw 0x0080 (bit 7) from
-#      the same model line, the buzzer lives at bit 7 on this family —
-#      not bit 6 as on 18kPV.
-#   3. ant0nkr/luxpower-ha-integration (LXP firmware lineage shared by the
-#      SNA platform) documents H_FUNCTION_ENABLE_3 (110) with BuzzerEn at
-#      bit 7, GreenModeEn at bit 14 and EcoModeEn at bit 15, with 2-bit
-#      CT/PVCT sample fields at 5-6/8-9/12-13.
-#
-# Only the relocations that are directly evidenced are applied here
-# (buzzer -> bit 7, Battery ECO -> bit 15).  Displaced or unverifiable
-# slots become FUNC_110_BITn placeholders (same convention as register
-# 179/233 unknowns) rather than inheriting unproven 18kPV names.
-# FUNC_GREEN_EN is deliberately ABSENT: no SNA hardware toggle test
-# exists, and lxp_modbus puts green at bit 14, not the 18kPV bit 8.  An
-# earlier revision kept the 18kPV position "for continuity", but an
-# unverified decode served as truth is worse than an honest gap — a
-# local read of bit 8 silently clobbered cloud-confirmed green-mode
-# state in hybrid setups (eg4_web_monitor #310 review), and a local
-# write would likely flip a CT-sampling config bit while reporting
-# success.  Green mode on EG4_OFFGRID is therefore cloud-only (the
-# server applies the bit correctly) until a community toggle test
-# (read 110, toggle Green in the EG4 cloud UI, read 110 again) pins the
-# bit; see eg4_web_monitor issue #197 follow-ups.
-OFFGRID_REGISTER_110_PARAM_KEYS: list[str] = [
-    "FUNC_PV_GRID_OFF_EN",  # Bit 0 (all sources agree on bits 0-4)
-    "FUNC_RUN_WITHOUT_GRID",  # Bit 1
-    "FUNC_MICRO_GRID_EN",  # Bit 2
-    "FUNC_BAT_SHARED",  # Bit 3
-    "FUNC_CHARGE_LAST",  # Bit 4
-    "FUNC_TAKE_LOAD_TOGETHER",  # Bit 5 (UNVERIFIED on SNA; lxp_modbus: CT ratio low bit)
-    "FUNC_110_BIT6",  # Bit 6: unknown (18kPV buzzer slot; lxp_modbus: CT ratio high bit)
-    "FUNC_BUZZER_EN",  # Bit 7 (SNA cloud decode + raw 0x0080; lxp_modbus agrees)
-    "FUNC_110_BIT8",  # Bit 8: unknown (18kPV green slot; lxp_modbus: PVCT sample type low bit)
-    "FUNC_110_BIT9",  # Bit 9: unknown (18kPV ECO slot; lxp_modbus: PVCT sample type high bit)
-    "BIT_WORKING_MODE",  # Bit 10 (UNVERIFIED on SNA)
-    "BIT_PVCT_SAMPLE_TYPE",  # Bit 11 (UNVERIFIED on SNA)
-    "BIT_PVCT_SAMPLE_RATIO",  # Bit 12 (UNVERIFIED on SNA)
-    "BIT_CT_SAMPLE_RATIO",  # Bit 13 (UNVERIFIED on SNA)
-    "FUNC_110_BIT14",  # Bit 14: unknown (lxp_modbus green candidate — needs SNA toggle test)
-    "FUNC_BATTERY_ECO_EN",  # Bit 15 (12000XP live toggle, PR #220; lxp_modbus agrees)
-]
+# HISTORICAL: register 110 once had an SNA-specific override because the
+# 12000XP hardware evidence (PR #220: buzzer at bit 7, Battery ECO at bit
+# 15) contradicted the then-current 18kPV-derived layout (buzzer 6, ECO 9,
+# green 8).  The 2026-07-21 18kPV green-mode toggle test (eg4_web_monitor
+# #476: green at bit 14, not 8) proved the OLD BASE TABLE was the wrong
+# one — both hardware-tested families match the lxp_modbus
+# H_FUNCTION_ENABLE_3 lineage layout, so REGISTER_110_PARAM_KEYS is now
+# shared and this alias exists only for backwards compatibility.  With
+# green pinned, the "green mode is cloud-only on EG4_OFFGRID" restriction
+# (eg4_web_monitor #197 follow-ups) is lifted: local reads and writes use
+# bit 14 on every family.
+OFFGRID_REGISTER_110_PARAM_KEYS: list[str] = REGISTER_110_PARAM_KEYS
 
 
 def _offgrid_register_to_param_keys() -> dict[int, list[str]]:
-    """Return the EG4_OFFGRID register→param mapping (base + overrides)."""
-    mapping = dict(REGISTER_TO_PARAM_KEYS)
-    mapping[110] = OFFGRID_REGISTER_110_PARAM_KEYS
-    return mapping
+    """Return the EG4_OFFGRID register→param mapping.
+
+    Historical seam: register 110 diverged per family until the 2026-07-21
+    18kPV toggle test (eg4_web_monitor #476) unified the layouts; the
+    base mapping is now correct for every family. Still returns a copy,
+    like the pre-unification override did, so callers cannot mutate the
+    shared module-level table.
+    """
+    return dict(REGISTER_TO_PARAM_KEYS)
 
 
 # ============================================================================
@@ -1810,18 +1813,20 @@ def get_register_to_param_mapping(
 ) -> dict[int, list[str]]:
     """Get the register-to-parameter mapping for an inverter family.
 
-    Most families share the 18KPV-based mapping.  ``EG4_OFFGRID`` (SNA
-    platform — 12000XP/6000XP) overrides register 110, whose bit layout is
-    hardware-verified to differ from 18kPV (Battery ECO at bit 15, buzzer
-    at bit 7).  See ``OFFGRID_REGISTER_110_PARAM_KEYS``.
+    All families share one mapping.  ``EG4_OFFGRID`` (SNA platform —
+    12000XP/6000XP) once overrode register 110, but the 2026-07-21 18kPV
+    green-mode toggle test (eg4_web_monitor #476) unified the bit layout
+    across families; the ``EG4_OFFGRID`` branch is now a back-compat seam
+    that returns the shared mapping.  See ``REGISTER_110_PARAM_KEYS``.
 
     For GridBOSS/MID devices, pass ``device_type="MIDBOX"`` to get the
     MIDBOX-specific register mapping (e.g., register 20 smart port modes).
 
     Args:
         family: Inverter family string (from InverterFamily enum value).
-            ``"EG4_OFFGRID"`` selects the SNA register-110 override; all
-            other values (or None) return the 18KPV-based mapping.
+            All values (including ``"EG4_OFFGRID"`` and None) return the
+            same lineage-wide mapping; the ``EG4_OFFGRID`` branch is kept
+            as a back-compat seam.
         device_type: Device type string. Pass ``"MIDBOX"`` for GridBOSS
             devices to include GridBOSS-specific register mappings.
 
@@ -1864,8 +1869,9 @@ def get_param_to_register_mapping(
 
     Args:
         family: Inverter family string (from InverterFamily enum value).
-            ``"EG4_OFFGRID"`` selects the SNA register-110 override; all
-            other values (or None) use the 18KPV-based mapping.
+            All values (including ``"EG4_OFFGRID"`` and None) resolve to
+            the same lineage-wide mapping — register 110 no longer
+            diverges per family (eg4_web_monitor #476).
         device_type: Device type string. Pass ``"MIDBOX"`` for GridBOSS
             devices to include GridBOSS-specific register mappings.
 
