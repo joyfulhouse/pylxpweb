@@ -906,16 +906,14 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         description="Off-grid/EPS discharge SOC low limit.",
     ),
     # =========================================================================
-    # SYSTEM FUNCTION BITFIELD — Register 110 (14 bits, verified on 18kPV)
+    # SYSTEM FUNCTION BITFIELD — Register 110 (lineage-wide layout)
     # =========================================================================
-    # FAMILY CAVEAT: these bit positions are 18kPV/EG4_HYBRID-derived.  On
-    # EG4_OFFGRID (SNA platform) hardware the upper bits differ — the buzzer
-    # is bit 7 and Battery ECO is bit 15 (12000XP live evidence,
-    # eg4_web_monitor PR #220; corroborated by the SNA12K-US cloud decode in
-    # docs/inverters/ and the ant0nkr lxp_modbus reference).  Local
-    # transports apply the family override via
-    # constants.registers.OFFGRID_REGISTER_110_PARAM_KEYS; the definitions
-    # below intentionally stay 18kPV-canonical.
+    # One layout for every family (eg4_web_monitor #476): both families ever
+    # hardware-toggle-tested (12000XP PR #220: buzzer 7 / ECO 15; 18kPV
+    # 2026-07-21: green 14) match the ant0nkr lxp_modbus H_FUNCTION_ENABLE_3
+    # reference, and the historic 18kPV-specific upper-bit decode matched
+    # neither.  See constants.registers.REGISTER_110_PARAM_KEYS for the
+    # per-bit evidence trail; unproven slots carry no definition here.
     HoldingRegisterDefinition(
         address=110,
         bit_position=0,
@@ -974,73 +972,41 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         category=HoldingCategory.FUNCTION,
         description="Take load together mode (parallel load sharing).",
     ),
+    # Register 110 upper-bit layout rewritten 2026-07-21 (eg4_web_monitor
+    # #476): the historic 18kPV-derived positions (buzzer 6, go-to-offgrid
+    # 7, green 8, ECO 9, working-mode 10, PVCT/CT sample 11-13) were an
+    # unverified decode contradicted by every hardware toggle test.  Only
+    # hardware-pinned bits keep definitions; unknown slots have none (they
+    # decode as FUNC_110_BITn placeholders via REGISTER_110_PARAM_KEYS).
     HoldingRegisterDefinition(
         address=110,
-        bit_position=6,
+        bit_position=7,
         canonical_name="buzzer_enable",
-        api_param_key="FUNC_BUZZER_EN",  # verified
+        api_param_key="FUNC_BUZZER_EN",  # hardware-verified (PR #220 + lxp_modbus)
         category=HoldingCategory.FUNCTION,
         description="Audible buzzer enable for alarms.",
     ),
     HoldingRegisterDefinition(
         address=110,
-        bit_position=7,
-        canonical_name="go_to_offgrid",
-        api_param_key="FUNC_GO_TO_OFFGRID",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="Force transition to off-grid mode.",
-    ),
-    HoldingRegisterDefinition(
-        address=110,
-        bit_position=8,
+        bit_position=14,
         canonical_name="green_mode_enable",
-        api_param_key="FUNC_GREEN_EN",  # verified
+        api_param_key="FUNC_GREEN_EN",  # hardware-verified 2026-07-21 (#476)
         ha_entity_key="green_mode",
         category=HoldingCategory.FUNCTION,
-        description="Green/off-grid mode enable (independent from EPS in reg 21).",
+        description="Green/off-grid mode enable (independent from EPS in reg "
+        "21). Bit 14, toggle-verified on 18kPV (raw 1056 <-> 17440, "
+        "eg4_web_monitor #476); the pre-2026-07-21 bit-8 mapping was wrong "
+        "and wrote into the PVCT-sample region.",
     ),
     HoldingRegisterDefinition(
         address=110,
-        bit_position=9,
+        bit_position=15,
         canonical_name="battery_eco_enable",
-        api_param_key="FUNC_BATTERY_ECO_EN",  # verified on 18kPV
+        api_param_key="FUNC_BATTERY_ECO_EN",  # hardware-verified (PR #220)
         category=HoldingCategory.FUNCTION,
         description="Battery eco mode — reduce battery cycling for longevity. "
-        "Bit 9 is the 18kPV/EG4_HYBRID position; EG4_OFFGRID (12000XP/6000XP) "
-        "uses bit 15 (hardware-verified, eg4_web_monitor PR #220) — local "
-        "transports apply OFFGRID_REGISTER_110_PARAM_KEYS for that family.",
-    ),
-    HoldingRegisterDefinition(
-        address=110,
-        bit_position=10,
-        canonical_name="working_mode",
-        api_param_key="BIT_WORKING_MODE",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="Working mode bit (multi-bit field).",
-    ),
-    HoldingRegisterDefinition(
-        address=110,
-        bit_position=11,
-        canonical_name="pvct_sample_type",
-        api_param_key="BIT_PVCT_SAMPLE_TYPE",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="PV CT sample type selection.",
-    ),
-    HoldingRegisterDefinition(
-        address=110,
-        bit_position=12,
-        canonical_name="pvct_sample_ratio",
-        api_param_key="BIT_PVCT_SAMPLE_RATIO",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="PV CT sample ratio setting.",
-    ),
-    HoldingRegisterDefinition(
-        address=110,
-        bit_position=13,
-        canonical_name="ct_sample_ratio",
-        api_param_key="BIT_CT_SAMPLE_RATIO",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="Grid CT sample ratio setting (multi-bit field).",
+        "Bit 15, toggle-verified on 12000XP (raw 0x0080 <-> 0x8080, "
+        "eg4_web_monitor PR #220); lxp_modbus EcoModeEn agrees lineage-wide.",
     ),
     # =========================================================================
     # SYSTEM TYPE / PARALLEL CONFIGURATION (reg 112)

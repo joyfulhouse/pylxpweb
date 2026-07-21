@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Green/off-grid mode moved to its real register bit — register 110 bit
+  layout unified lineage-wide**
+  ([eg4_web_monitor#476](https://github.com/joyfulhouse/eg4_web_monitor/issues/476),
+  also the unexplained tail of
+  [eg4_web_monitor#194](https://github.com/joyfulhouse/eg4_web_monitor/issues/194)):
+  a live 18kPV toggle test (2026-07-21) proved `FUNC_GREEN_EN` lives at
+  register 110 **bit 14** (raw 1056 ↔ 17440, single-bit delta, EG4 cloud
+  decode in lockstep), not the bit 8 the local table claimed — so every
+  LOCAL/HYBRID green-mode write flipped a PVCT-sampling config bit while
+  reporting success, and local reads never reflected the real state. Both
+  hardware-toggle-tested families (18kPV #476, 12000XP PR #220) match the
+  lxp_modbus `H_FUNCTION_ENABLE_3` lineage layout, so the base and
+  `EG4_OFFGRID` register-110 tables are now one shared
+  `REGISTER_110_PARAM_KEYS` (green 14, Battery ECO 15, buzzer 7; disproven
+  or unverified slots demoted to `FUNC_110_BITn` placeholders — the removed
+  local decode keys `FUNC_GO_TO_OFFGRID`, `BIT_WORKING_MODE`,
+  `BIT_PVCT_SAMPLE_TYPE`, `BIT_PVCT_SAMPLE_RATIO` and `BIT_CT_SAMPLE_RATIO`
+  were never hardware-verified positions). The EG4_OFFGRID "green is
+  cloud-only" restriction is lifted: with the bit pinned, local reads and
+  writes work on every family. `OFFGRID_REGISTER_110_PARAM_KEYS` remains as
+  a back-compat alias of the unified list.
+
 ### Added
 
 - **Inverter AC couple start/stop SOC (cloud)**
