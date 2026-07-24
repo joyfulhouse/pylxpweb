@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar
 
 from pylxpweb.validation import (
+    MAX_ELAPSED_HOURS,
     MAX_ENERGY_DELTA,
     validate_daily_energy_bounds,
     validate_energy_monotonicity,
@@ -150,6 +151,21 @@ class BaseDevice(ABC):
         # Monotonic clock — wall-clock (DST/NTP) steps must not move the window.
         self._daily_energy_change_monotonic: float | None = None
 
+        # Tracks when a lifetime energy counter last *increased* on a
+        # COMMITTED read (_note_energy_accepted).  Used by _is_energy_valid
+        # to widen the per-cycle monotonicity spike cap after an outage:
+        # while a device is offline the cloud serves its counters frozen,
+        # so on reconnect the true value arrives as one large — but
+        # legitimate — catch-up delta (eg4_web_monitor#479).  Monotonic
+        # clock; None until the first validated read seeds it.
+        self._lifetime_energy_change_monotonic: float | None = None
+        # Outage evidence gate for that widening: armed by a cloud payload
+        # flagged lost or a transport link-down transition, disarmed when a
+        # committed read shows a counter increase.  Without this gate a
+        # merely-idle device (every counter flat overnight) would widen its
+        # own spike cap and weaken the always-on corruption canary.
+        self._energy_source_stale: bool = False
+
         # ===== Transport link health (eg4-57g / integration #226) =====
         # Consecutive transport-read failures and last-success timestamp.
         # When the counter crosses TRANSPORT_LINK_DOWN_THRESHOLD, the link
@@ -285,6 +301,9 @@ class BaseDevice(ABC):
                 self.serial_number,
                 self._transport_consecutive_failures,
             )
+            # Sustained outage evidence: the recovery read may carry a large
+            # legitimate catch-up energy delta (eg4_web_monitor#479).
+            self._note_energy_source_stale()
             self._on_transport_link_down()
 
     def _on_transport_link_down(self) -> None:
@@ -335,6 +354,19 @@ class BaseDevice(ABC):
         (the warm-up counter consumed by ``_is_daily_energy_valid``) as
         side-effects.
 
+        When outage evidence is armed (``_energy_source_stale``), the spike
+        cap is widened by the time since a lifetime counter last increased
+        on a committed read (``_lifetime_energy_change_monotonic``, capped
+        at ``MAX_ELAPSED_HOURS``).  ``_max_energy_delta`` is
+        ``rated_power_kw * 1.5`` — an hour of full rated output with the
+        50% safety margin — so ``max_delta * elapsed_hours`` preserves that
+        margin across the whole catch-up window, and the legitimate
+        reconnect delta is accepted on the first read instead of stalling
+        on the 5-strike self-heal (eg4_web_monitor#479).  Without armed
+        evidence the cap never widens: a merely-idle device keeps the tight
+        per-cycle canary, and gross corruption (0xFFFF-scale jumps) exceeds
+        even the widened cap.
+
         Args:
             prev_values: Previous cycle's lifetime energy dict.
             curr_values: Current cycle's lifetime energy dict.
@@ -343,14 +375,77 @@ class BaseDevice(ABC):
             True if the data should be accepted, False if it should be rejected.
         """
         self._energy_validation_calls += 1
+
+        max_delta = self._max_energy_delta
+        if self._lifetime_energy_change_monotonic is None:
+            # Seed on the first validated read so restarts never grant a
+            # spuriously wide window (first reads pass trivially anyway —
+            # there is no previous value to compare against).
+            self._lifetime_energy_change_monotonic = time.monotonic()
+        elif self._energy_source_stale:
+            elapsed_hours = min(
+                (time.monotonic() - self._lifetime_energy_change_monotonic) / 3600.0,
+                MAX_ELAPSED_HOURS,
+            )
+            max_delta = max(max_delta, self._max_energy_delta * elapsed_hours)
+
         result, self._energy_reject_count = validate_energy_monotonicity(
             prev_values,
             curr_values,
             self._energy_reject_count,
             self.serial_number,
-            max_delta=self._max_energy_delta,
+            max_delta=max_delta,
         )
         return result != "reject"
+
+    def _note_energy_source_stale(self) -> None:
+        """Arm the catch-up widening: served energy data is known stale.
+
+        Called on outage evidence only — a cloud runtime payload flagged
+        ``lost`` or a transport link-down transition.  A plain failed fetch
+        deliberately does NOT arm it: transient blips fall back to the
+        pre-existing 5-strike self-heal, keeping the always-on corruption
+        canary tight (an armed gate plus an idle window would let moderate
+        corruption through immediately).
+
+        Disarmed only by ``_note_energy_accepted`` observing a committed
+        counter increase — a recovery cannot disarm it earlier, because the
+        catch-up delta arrives before any increase can commit.
+        """
+        self._energy_source_stale = True
+
+    def _note_energy_accepted(
+        self,
+        prev_values: dict[str, float | None] | None,
+        curr_values: dict[str, float | None],
+    ) -> None:
+        """Re-arm the widening window after a snapshot is COMMITTED.
+
+        Called by the fetch paths after BOTH lifetime and daily validation
+        pass and the new snapshot replaces the cache — never from
+        ``_is_energy_valid`` itself, so a snapshot that later fails daily
+        bounds does not consume the widening window (the identical catch-up
+        delta must still be accepted on the next read).  Frozen outage
+        reads (``curr == prev``) never re-arm, so the window keeps growing
+        until real accumulation lands.
+
+        Also seeds the window on the very first committed snapshot: the
+        production fetch paths skip lifetime validation entirely when no
+        previous snapshot exists, so without this seed a restart during an
+        outage would leave the clock None until the second read.
+        """
+        if self._lifetime_energy_change_monotonic is None:
+            self._lifetime_energy_change_monotonic = time.monotonic()
+        if prev_values is None:
+            return
+        for key, curr in curr_values.items():
+            if curr is None:
+                continue
+            prev = prev_values.get(key)
+            if prev is not None and curr > prev:
+                self._lifetime_energy_change_monotonic = time.monotonic()
+                self._energy_source_stale = False
+                return
 
     def _is_daily_energy_valid(
         self,

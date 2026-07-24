@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Post-outage lifetime-energy catch-up deltas no longer rejected as spikes**
+  ([eg4_web_monitor#479](https://github.com/joyfulhouse/eg4_web_monitor/issues/479)):
+  while a device is offline the portal serves its lifetime counters frozen, so
+  on reconnect the true value arrives as one large but legitimate catch-up
+  delta — previously rejected by the monotonicity cap (`rated_kw * 1.5` per
+  cycle) five times before the upward self-heal accepted it. The cap now widens
+  with the time since a counter last increased on a committed read, but only
+  when outage evidence is armed: a cloud runtime payload flagged `lost`
+  (inverters, and GridBOSS via the newly modeled `MidboxRuntime.lost` field —
+  previously dropped by pydantic) or a transport link-down transition. Idle
+  devices keep the tight always-on corruption canary, and 0xFFFF-scale jumps
+  exceed even the widened cap.
+
 ### Added
 
 - **Inverter AC couple start/stop SOC (cloud)**

@@ -1026,6 +1026,11 @@ class MidboxRuntime(BaseModel):
     success: bool
     serialNum: str
     fwCode: str
+    # True when the dongle is offline from the portal and the cloud is
+    # serving its last register mirror frozen — same semantics as
+    # InverterRuntime.lost (present in live captures; previously dropped by
+    # pydantic, which hid the outage signal from consumers — #479).
+    lost: bool | None = None
     midboxData: MidboxData
     deviceData: MidboxDeviceData | None = None
 
