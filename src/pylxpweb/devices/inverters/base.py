@@ -901,6 +901,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 )
                 self._runtime = runtime_data
                 self._runtime_cache_time = datetime.now()
+                if runtime_data.lost:
+                    # The portal says the dongle is offline and is serving a
+                    # frozen register mirror — arm the energy catch-up
+                    # widening for the eventual reconnect delta (#479).
+                    self._note_energy_source_stale()
             except Exception as err:
                 # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch runtime data for %s: %s", self.serial_number, err)
@@ -924,8 +929,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                         self.serial_number,
                     )
                     return
-                if self._transport_energy is not None and not self._is_energy_valid(
-                    self._transport_energy.lifetime_energy_values(),
+                prev_lifetime = (
+                    self._transport_energy.lifetime_energy_values()
+                    if self._transport_energy is not None
+                    else None
+                )
+                if prev_lifetime is not None and not self._is_energy_valid(
+                    prev_lifetime,
                     transport_data.lifetime_energy_values(),
                 ):
                     return  # keep cached energy data
@@ -941,6 +951,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     return  # keep cached energy data
                 self._transport_energy = transport_data
                 self._energy_cache_time = datetime.now()
+                self._note_energy_accepted(prev_lifetime, transport_data.lifetime_energy_values())
             except Exception as err:
                 # Keep existing cached data on transport errors
                 _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
@@ -969,6 +980,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     return  # keep cached energy data
                 self._energy = energy_data
                 self._energy_cache_time = datetime.now()
+                self._note_energy_accepted(
+                    prev.lifetime_energy_values() if prev is not None else None,
+                    curr.lifetime_energy_values(),
+                )
             except Exception as err:
                 # Keep existing cached data on API/connection errors
                 _LOGGER.debug("Failed to fetch energy data for %s: %s", self.serial_number, err)
@@ -1092,11 +1107,16 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             # (e.g. a manual refresh button overlapping a poll), so the
             # prev-baseline comparison and reject counters cannot interleave.
             async with self._energy_cache_lock:
-                if self._transport_energy is None:
+                prev_lifetime = (
+                    self._transport_energy.lifetime_energy_values()
+                    if self._transport_energy is not None
+                    else None
+                )
+                if prev_lifetime is None:
                     energy_valid = True
                 else:
                     energy_valid = self._is_energy_valid(
-                        self._transport_energy.lifetime_energy_values(),
+                        prev_lifetime,
                         energy.lifetime_energy_values(),
                     )
                 if energy_valid:
@@ -1112,6 +1132,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 if energy_valid:
                     self._transport_energy = energy
                     self._energy_cache_time = datetime.now()
+                    self._note_energy_accepted(prev_lifetime, energy.lifetime_energy_values())
             if battery is not None:
                 # Accept battery data only if it passes canary checks.
                 # Corrupt battery data is silently skipped, preserving the

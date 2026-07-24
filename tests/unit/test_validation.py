@@ -706,3 +706,134 @@ class TestUpwardSelfHealCeiling:
             results.append(result)
         assert results[:4] == ["reject"] * 4
         assert results[4] == "self_healed"
+
+
+class TestLifetimeCatchupWidening:
+    """Elapsed-time widening of the lifetime spike cap (eg4_web_monitor#479).
+
+    While a device is offline the cloud keeps serving its lifetime counters
+    frozen at the pre-outage value; on reconnect the true value arrives as a
+    single large catch-up delta.  When outage evidence is armed
+    (``_note_energy_source_stale``), the cap widens with the time since a
+    counter last increased on a COMMITTED read so legitimate catch-up is
+    accepted on the first read.  Without armed evidence — a merely-idle
+    device — the tight per-cycle canary is unchanged.
+    """
+
+    def _make(self, *, stale: bool = True, window_hours: float = 5.0) -> _StubDevice:
+        dev = _make_device()
+        # 10 kW inverter → per-cycle cap 15 kWh (rated_kw * 1.5), matching
+        # the exact #479 report ("delta 27.7 > 15 max").
+        dev._max_energy_delta = 15.0
+        dev._lifetime_energy_change_monotonic = time.monotonic() - window_hours * 3600
+        dev._energy_source_stale = stale
+        return dev
+
+    def test_first_call_seeds_change_clock(self) -> None:
+        """The first validated read seeds the window at 'now'."""
+        dev = _make_device()
+        assert dev._lifetime_energy_change_monotonic is None
+        assert dev._is_energy_valid({}, {"pv_energy_total": 4188.0})
+        assert dev._lifetime_energy_change_monotonic is not None
+
+    def test_normal_cadence_keeps_tight_cap(self) -> None:
+        """With a fresh change clock the per-cycle cap still rejects 27.7."""
+        dev = self._make(stale=True, window_hours=0.0)
+        prev = {"pv_energy_total": 4188.0}
+        curr = {"pv_energy_total": 4215.7}  # +27.7 > 15
+        assert not dev._is_energy_valid(prev, curr)
+        assert dev._energy_reject_count == 1
+
+    def test_catchup_delta_accepted_after_outage_gap(self) -> None:
+        """The #479 scenario: 5h lost-flagged outage, +27.7 kWh accepted.
+
+        Widened cap = 15 * 5h = 75 kWh > 27.7 — accepted on the first read
+        instead of stalling on the 5-strike self-heal.
+        """
+        dev = self._make(stale=True, window_hours=5.0)
+        prev = {"pv_energy_total": 4188.0}
+        curr = {"pv_energy_total": 4215.7}
+        assert dev._is_energy_valid(prev, curr)
+        assert dev._energy_reject_count == 0
+
+    def test_idle_window_without_outage_evidence_keeps_tight_cap(self) -> None:
+        """No armed evidence → no widening, even after a 12h idle window.
+
+        A merely-idle device (every counter flat overnight) must keep the
+        always-on corruption canary tight: a moderate corrupt jump
+        (+102.4 kWh, a low-word bit flip) stays rejected.
+        """
+        dev = self._make(stale=False, window_hours=12.0)
+        prev = {"pv_energy_total": 4188.0}
+        curr = {"pv_energy_total": 4188.0 + 102.4}
+        assert not dev._is_energy_valid(prev, curr)
+        assert dev._energy_reject_count == 1
+
+    def test_widened_cap_still_rejects_gross_corruption(self) -> None:
+        """A 0xFFFF-scale jump exceeds even the widened cap."""
+        dev = self._make(stale=True, window_hours=5.0)
+        prev = {"pv_energy_total": 4188.0}
+        curr = {"pv_energy_total": 4188.0 + 6553.5}  # 0xFFFF / 10
+        assert not dev._is_energy_valid(prev, curr)
+
+    def test_widening_bounded_by_max_elapsed_hours(self) -> None:
+        """A week-long gap caps at MAX_ELAPSED_HOURS (24h → 360 kWh)."""
+        dev = self._make(stale=True, window_hours=7 * 24)
+        prev = {"pv_energy_total": 4188.0}
+        bound = 15.0 * MAX_ELAPSED_HOURS
+        assert not dev._is_energy_valid(prev, {"pv_energy_total": 4188.0 + bound + 1.0})
+        assert dev._is_energy_valid(prev, {"pv_energy_total": 4188.0 + bound - 1.0})
+
+    def test_sub_hour_window_keeps_base_cap_floor(self) -> None:
+        """elapsed < 1h never narrows the cap below the per-cycle base."""
+        dev = self._make(stale=True, window_hours=0.25)
+        prev = {"pv_energy_total": 4188.0}
+        curr = {"pv_energy_total": 4188.0 + 14.0}  # under the 15 base cap
+        assert dev._is_energy_valid(prev, curr)
+
+    def test_validation_alone_never_rearms_the_window(self) -> None:
+        """_is_energy_valid must not consume the window on acceptance.
+
+        Re-arming happens only when the snapshot is COMMITTED
+        (_note_energy_accepted) — an accepted lifetime check whose snapshot
+        is later rejected by daily bounds must leave the widening window
+        (and the armed evidence) intact for the next read.
+        """
+        dev = self._make(stale=True, window_hours=5.0)
+        seeded = dev._lifetime_energy_change_monotonic
+        prev = {"pv_energy_total": 4188.0}
+        curr = {"pv_energy_total": 4215.7}
+        assert dev._is_energy_valid(prev, curr)
+        assert dev._lifetime_energy_change_monotonic == seeded
+        assert dev._energy_source_stale is True
+
+    def test_note_energy_accepted_rearms_and_disarms(self) -> None:
+        """A committed increase re-arms the window and clears the evidence."""
+        dev = self._make(stale=True, window_hours=5.0)
+        seeded = dev._lifetime_energy_change_monotonic
+        dev._note_energy_accepted({"pv_energy_total": 4188.0}, {"pv_energy_total": 4215.7})
+        assert dev._lifetime_energy_change_monotonic > seeded
+        assert dev._energy_source_stale is False
+
+    def test_frozen_commit_keeps_window_and_evidence(self) -> None:
+        """curr == prev (outage freeze) must NOT re-arm or disarm."""
+        dev = self._make(stale=True, window_hours=1.0)
+        seeded = dev._lifetime_energy_change_monotonic
+        frozen = {"pv_energy_total": 4188.0}
+        dev._note_energy_accepted(dict(frozen), dict(frozen))
+        assert dev._lifetime_energy_change_monotonic == seeded
+        assert dev._energy_source_stale is True
+
+    def test_first_commit_with_no_prev_is_a_noop(self) -> None:
+        """prev None (first read) cannot re-arm — nothing to compare."""
+        dev = self._make(stale=True, window_hours=1.0)
+        seeded = dev._lifetime_energy_change_monotonic
+        dev._note_energy_accepted(None, {"pv_energy_total": 4188.0})
+        assert dev._lifetime_energy_change_monotonic == seeded
+        assert dev._energy_source_stale is True
+
+    def test_note_energy_source_stale_arms(self) -> None:
+        dev = _make_device()
+        assert dev._energy_source_stale is False
+        dev._note_energy_source_stale()
+        assert dev._energy_source_stale is True

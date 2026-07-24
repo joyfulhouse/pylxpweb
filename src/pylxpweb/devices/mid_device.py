@@ -258,12 +258,18 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
                         self.serial_number,
                     )
                     return
+                prev_lifetime = (
+                    self._transport_runtime.lifetime_energy_values()
+                    if self._transport_runtime is not None
+                    else None
+                )
                 if not self._validate_runtime_energy(runtime_data):
                     return  # keep cached runtime
                 now = datetime.now()
                 self._transport_runtime = runtime_data
                 self._runtime_cache_time = now
                 self._last_refresh = now
+                self._note_energy_accepted(prev_lifetime, runtime_data.lifetime_energy_values())
                 _LOGGER.debug(
                     "Refreshed MID device %s via transport",
                     self.serial_number,
@@ -301,16 +307,28 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
             from pylxpweb.transports.data import MidboxRuntimeData
 
             self._runtime = await self._client.api.devices.get_midbox_runtime(self.serial_number)
+            if self._runtime.lost:
+                # The portal says the dongle is offline and is serving a
+                # frozen register mirror — arm the energy catch-up widening
+                # for the eventual reconnect delta (#479), mirroring the
+                # inverter _fetch_runtime_http path.
+                self._note_energy_source_stale()
             new_runtime = MidboxRuntimeData.from_http_response(self._runtime.midboxData)
             # Extract isOffGrid from deviceData (primary inverter's data)
             if self._runtime.deviceData is not None:
                 new_runtime.off_grid = self._runtime.deviceData.isOffGrid
+            prev_lifetime = (
+                self._transport_runtime.lifetime_energy_values()
+                if self._transport_runtime is not None
+                else None
+            )
             if not self._validate_runtime_energy(new_runtime):
                 return  # keep cached runtime
             now = datetime.now()
             self._transport_runtime = new_runtime
             self._runtime_cache_time = now
             self._last_refresh = now
+            self._note_energy_accepted(prev_lifetime, new_runtime.lifetime_energy_values())
         except Exception as err:
             _LOGGER.warning(
                 "Failed to fetch MID device runtime for %s: %s",
