@@ -3447,39 +3447,54 @@ components:
           type: array
           items:
             type: object
+            description: One event-log record (live-validated 2026-07-16)
             properties:
-              eventId:
+              recordId:
                 type: integer
+                description: Event record identifier
                 example: 12345
               serialNum:
                 type: string
                 example: "1234567890"
-              eventCode:
+              datalogSn:
                 type: string
-                description: Fault/warning code
-                example: "F01"
+                description: Dongle serial number
+                example: "1234567890"
+              event:
+                type: string
+                description: Event code (E###=fault, W###=warning)
+                example: "E019"
               eventType:
                 type: string
-                enum: [FAULT, WARNING, INFO]
+                description: >-
+                  Category. GridBOSS/MID devices also report MIDBOX_WARNING;
+                  treat unknown values as passthrough.
+                enum: [FAULT, WARNING, INFO, MIDBOX_WARNING]
                 example: "FAULT"
               eventText:
                 type: string
                 description: Human-readable event description
                 example: "Grid voltage high"
+              faultDuration:
+                type: string
+                description: Duration in hours (string)
+                example: "0.25"
               startTime:
                 type: string
                 format: date-time
                 description: Event start timestamp
                 example: "2025-11-19 10:30:00"
-              endTime:
+              renormalTime:
                 type: string
                 format: date-time
-                description: Event end timestamp (empty if ongoing)
+                nullable: true
+                description: Return-to-normal timestamp (null while ongoing)
                 example: "2025-11-19 10:45:00"
-              statusText:
+              status:
                 type: string
-                enum: [ACTIVE, RESOLVED]
-                example: "RESOLVED"
+                description: Event state (OPEN=active, CLOSE=resolved)
+                enum: [OPEN, CLOSE]
+                example: "CLOSE"
 
     BatteryInfoForSet:
       type: object

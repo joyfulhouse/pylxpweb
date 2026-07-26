@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`get_event_list` docs corrected to the live response shape**
+  ([#236](https://github.com/joyfulhouse/pylxpweb/issues/236)): the
+  docstring (and the matching `EventListResponse` row schema in
+  `docs/luxpower-api.yaml`) described fields the
+  `/WManage/api/analyze/event/list` endpoint never returns. Live validation
+  (2026-07-16, inverter and GridBOSS serials) shows rows carry `recordId`
+  (not `eventId`), `event` (not `eventCode`), `status` = `OPEN`/`CLOSE`
+  (not `statusText` = `ACTIVE`/`RESOLVED`), `renormalTime` (not `endTime`,
+  null while ongoing), plus previously undocumented `datalogSn` and
+  `faultDuration`; `eventType` can also be `MIDBOX_WARNING` on
+  GridBOSS/MID serials. Doc-only — the method returns the raw dict, so no
+  behavior change.
 - **Green/off-grid mode moved to its real register bit — register 110 bit
   layout unified lineage-wide**
   ([eg4_web_monitor#476](https://github.com/joyfulhouse/eg4_web_monitor/issues/476),

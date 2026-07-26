@@ -408,23 +408,28 @@ class AnalyticsEndpoints(BaseEndpoint):
             event_filter: Event type filter ("_all", or specific fault/warning code)
 
         Returns:
-            Dict containing:
+            Dict containing (live-validated response shape, 2026-07-16):
                 - success: Boolean
                 - total: Total number of events
                 - rows: List of event objects with:
-                    - eventId: Event identifier
-                    - eventCode: Fault/warning code
-                    - eventType: FAULT/WARNING/INFO
+                    - recordId: Event record identifier
+                    - serialNum: Device serial number
+                    - datalogSn: Dongle serial number
+                    - event: Event code (E###=fault, W###=warning)
+                    - eventType: FAULT/WARNING/INFO (GridBOSS/MID devices
+                      also report MIDBOX_WARNING)
                     - eventText: Human-readable description
                     - startTime: Event start timestamp
-                    - endTime: Event end timestamp (empty if ongoing)
-                    - statusText: ACTIVE/RESOLVED
+                    - renormalTime: Return-to-normal timestamp (null while
+                      ongoing)
+                    - faultDuration: Duration in hours (string)
+                    - status: OPEN (active) / CLOSE (resolved)
 
         Example:
             # Get all events
             events = await client.analytics.get_event_list("1234567890")
             for event in events["rows"]:
-                if event["statusText"] == "ACTIVE":
+                if event["status"] == "OPEN":
                     print(f"Active {event['eventType']}: {event['eventText']}")
 
             # Get only faults
