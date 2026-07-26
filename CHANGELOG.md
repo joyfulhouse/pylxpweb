@@ -15,16 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_green_mode_status` dereferenced `self._client.api` unconditionally,
   so transport-created LOCAL instances (`client=None`) crashed with
   `AttributeError` even after #476 pinned `FUNC_GREEN_EN` to register 110
-  bit 14 and made local reads/writes of that bit work. The three helpers
-  now route through the shared register-bit dual path (the
-  `set_standby_mode` model): transport mode performs an atomic
-  read-modify-write of register 110 bit 14, cloud mode drives the named
-  `FUNC_GREEN_EN` bit server-side via `control_function` (the same request
-  the old cloud-only helpers issued), and a successful write invalidates
-  the cached parameters. With neither a transport nor a client attached the
-  helpers raise a clear `LuxpowerDeviceError` instead of `AttributeError`.
-  New constant `FUNC_SYS_BIT_GREEN_EN = 14` alongside the existing
-  `FUNC_SYS_REGISTER`. The related transport-level gap —
+  bit 14 and made local reads/writes of that bit work. The helpers now
+  preserve their historical, client-first route contract: a bare call on a
+  cloud-created or HYBRID inverter uses the dedicated cloud endpoint even
+  when a local transport is attached, while a clientless LOCAL inverter
+  reads register 110 bit 14 and writes `FUNC_GREEN_EN` through the
+  transport's named-parameter API. That named write holds the transport
+  operation lock across the complete read-modify-write, preserving
+  concurrent changes to other register-110 bits. The public method
+  signatures are unchanged, so the Home Assistant HYBRID cloud fallback
+  needs no integration change. A caller that must force LOCAL can use
+  `inverter.transport.write_named_parameters`; a caller that must force
+  cloud can use the `LuxpowerClient.api.control` green-mode endpoints.
+  Successful writes invalidate the cached parameters, and with neither a
+  transport nor a client attached the helpers raise a clear
+  `LuxpowerDeviceError` instead of `AttributeError`. New constant
+  `FUNC_SYS_BIT_GREEN_EN = 14` alongside the existing `FUNC_SYS_REGISTER`.
+  The related transport-level gap —
   `HTTPTransport.write_named_parameters` turning a named bitfield update
   into a raw register-110 write that `ControlEndpoints` rejects — is noted
   on #243 and not changed here.
