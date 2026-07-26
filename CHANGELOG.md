@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Green mode device helpers work without a cloud client**
+  ([#243](https://github.com/joyfulhouse/pylxpweb/issues/243)):
+  `BaseInverter.enable_green_mode`, `disable_green_mode` and
+  `get_green_mode_status` dereferenced `self._client.api` unconditionally,
+  so transport-created LOCAL instances (`client=None`) crashed with
+  `AttributeError` even after #476 pinned `FUNC_GREEN_EN` to register 110
+  bit 14 and made local reads/writes of that bit work. The three helpers
+  now route through the shared register-bit dual path (the
+  `set_standby_mode` model): transport mode performs an atomic
+  read-modify-write of register 110 bit 14, cloud mode drives the named
+  `FUNC_GREEN_EN` bit server-side via `control_function` (the same request
+  the old cloud-only helpers issued), and a successful write invalidates
+  the cached parameters. With neither a transport nor a client attached the
+  helpers raise a clear `LuxpowerDeviceError` instead of `AttributeError`.
+  New constant `FUNC_SYS_BIT_GREEN_EN = 14` alongside the existing
+  `FUNC_SYS_REGISTER`. The related transport-level gap —
+  `HTTPTransport.write_named_parameters` turning a named bitfield update
+  into a raw register-110 write that `ControlEndpoints` rejects — is noted
+  on #243 and not changed here.
+
 - **`get_event_list` docs corrected to the live response shape**
   ([#236](https://github.com/joyfulhouse/pylxpweb/issues/236)): the
   docstring (and the matching `EventListResponse` row schema in

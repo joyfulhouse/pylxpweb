@@ -151,6 +151,7 @@ FUNC_EN_BIT_FORCED_CHG_EN = 11  # Force charge enable
 # System Function Register (Address 110) - Bit Field
 FUNC_SYS_REGISTER = 110
 FUNC_SYS_BIT_CHARGE_LAST = 4  # Charge last: charge battery after loads satisfied
+FUNC_SYS_BIT_GREEN_EN = 14  # Green/off-grid mode (hardware toggle-verified 2026-07-21, #476)
 
 # Extended Function Enable Register (Address 179) - Bit Field
 FUNC_EXT_REGISTER = 179

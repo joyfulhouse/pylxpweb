@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -1267,3 +1268,171 @@ class TestGreenModeEnabledProperty:
         assert inverter.green_mode_enabled is False
         inverter.parameters = {"FUNC_GREEN_EN": 0}
         assert inverter.green_mode_enabled is False
+
+
+class TestGreenModeControls:
+    """Green mode helpers are dual-path: transport RMW or cloud named bit.
+
+    Regression tests for #243: the helpers used to dereference
+    ``self._client.api`` unconditionally, so transport-created LOCAL
+    instances (``client=None``) crashed with AttributeError even though
+    register 110 bit 14 (FUNC_GREEN_EN) reads/writes work locally
+    (hardware-verified 2026-07-21, eg4_web_monitor #476).
+
+    Raw values mirror the #476 hardware capture: 1056 (0x0420) with green
+    off, 17440 (0x4420) with only bit 14 added.
+    """
+
+    GREEN_OFF_RAW = 1056  # 0x0420 — bits 5+10 set, bit 14 clear
+    GREEN_ON_RAW = 17440  # 0x4420 — same plus bit 14
+
+    def _local_inverter(self) -> ConcreteInverter:
+        """Transport-created instance: no cloud client at all (#243)."""
+        return ConcreteInverter(
+            client=None,
+            serial_number="1234567890",
+            model="TestModel",
+            transport=Mock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_enable_green_mode_transport_without_client(self) -> None:
+        """LOCAL enable sets bit 14 of register 110 via read-modify-write."""
+        inverter = self._local_inverter()
+        inverter.read_transport_register = AsyncMock(return_value=self.GREEN_OFF_RAW)
+        inverter.write_transport_register = AsyncMock(return_value=True)
+        inverter._parameters_cache_time = datetime.now()
+
+        result = await inverter.enable_green_mode()
+
+        assert result is True
+        inverter.read_transport_register.assert_awaited_once_with(110)
+        inverter.write_transport_register.assert_awaited_once_with(110, self.GREEN_ON_RAW)
+        # Successful write invalidates the parameter cache
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_disable_green_mode_transport_without_client(self) -> None:
+        """LOCAL disable clears bit 14 while preserving the other bits."""
+        inverter = self._local_inverter()
+        inverter.read_transport_register = AsyncMock(return_value=self.GREEN_ON_RAW)
+        inverter.write_transport_register = AsyncMock(return_value=True)
+        inverter._parameters_cache_time = datetime.now()
+
+        result = await inverter.disable_green_mode()
+
+        assert result is True
+        inverter.write_transport_register.assert_awaited_once_with(110, self.GREEN_OFF_RAW)
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_get_green_mode_status_transport_without_client(self) -> None:
+        """LOCAL status reads register 110 and extracts bit 14."""
+        inverter = self._local_inverter()
+        inverter.read_transport_register = AsyncMock(return_value=self.GREEN_ON_RAW)
+
+        assert await inverter.get_green_mode_status() is True
+
+        inverter.read_transport_register = AsyncMock(return_value=self.GREEN_OFF_RAW)
+
+        assert await inverter.get_green_mode_status() is False
+
+    @pytest.mark.asyncio
+    async def test_transport_write_failure_leaves_cache_intact(self) -> None:
+        """A failed Modbus write raises and must NOT invalidate the cache."""
+        inverter = self._local_inverter()
+        inverter.read_transport_register = AsyncMock(return_value=self.GREEN_OFF_RAW)
+        inverter.write_transport_register = AsyncMock(return_value=False)
+        cache_time = datetime.now()
+        inverter._parameters_cache_time = cache_time
+
+        with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
+            await inverter.enable_green_mode()
+
+        assert inverter._parameters_cache_time is cache_time
+
+    @pytest.mark.asyncio
+    async def test_enable_green_mode_cloud(self, mock_client: LuxpowerClient) -> None:
+        """Cloud enable drives the named FUNC_GREEN_EN function-control bit."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.control_function = AsyncMock(return_value=mock_response)
+        inverter._parameters_cache_time = datetime.now()
+
+        result = await inverter.enable_green_mode()
+
+        assert result is True
+        mock_client.api.control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_GREEN_EN", True
+        )
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_disable_green_mode_cloud(self, mock_client: LuxpowerClient) -> None:
+        """Cloud disable drives the named FUNC_GREEN_EN function-control bit."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.control_function = AsyncMock(return_value=mock_response)
+
+        result = await inverter.disable_green_mode()
+
+        assert result is True
+        mock_client.api.control.control_function.assert_called_once_with(
+            "1234567890", "FUNC_GREEN_EN", False
+        )
+
+    @pytest.mark.asyncio
+    async def test_enable_green_mode_cloud_rejection_keeps_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A cloud-rejected write returns False and keeps the cache."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = False
+        mock_client.api.control.control_function = AsyncMock(return_value=mock_response)
+        cache_time = datetime.now()
+        inverter._parameters_cache_time = cache_time
+
+        result = await inverter.enable_green_mode()
+
+        assert result is False
+        assert inverter._parameters_cache_time is cache_time
+
+    @pytest.mark.asyncio
+    async def test_get_green_mode_status_cloud(self, mock_client: LuxpowerClient) -> None:
+        """Cloud status reads register 110 and extracts the named parameter."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.parameters = {"FUNC_GREEN_EN": True}
+        mock_client.api.control.read_parameters = AsyncMock(return_value=mock_response)
+
+        assert await inverter.get_green_mode_status() is True
+        mock_client.api.control.read_parameters.assert_called_once_with("1234567890", 110, 1)
+
+    @pytest.mark.asyncio
+    async def test_green_mode_no_transport_no_client_raises_device_error(self) -> None:
+        """Neither transport nor client -> clear LuxpowerDeviceError, not AttributeError."""
+        inverter = ConcreteInverter(
+            client=None,
+            serial_number="1234567890",
+            model="TestModel",
+        )
+
+        with pytest.raises(LuxpowerDeviceError, match="transport or a cloud client"):
+            await inverter.enable_green_mode()
+        with pytest.raises(LuxpowerDeviceError, match="transport or a cloud client"):
+            await inverter.get_green_mode_status()

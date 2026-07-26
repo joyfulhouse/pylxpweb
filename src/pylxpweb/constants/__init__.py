@@ -126,6 +126,7 @@ from .registers import (
     FUNC_EXT_REGISTER,
     # System function register (110)
     FUNC_SYS_BIT_CHARGE_LAST,
+    FUNC_SYS_BIT_GREEN_EN,
     FUNC_SYS_REGISTER,
     # GridBOSS parameters
     GRIDBOSS_PARAMETERS,
@@ -421,6 +422,7 @@ __all__ = [
     "FUNC_EXT_BIT_PV_SELL_TO_GRID",
     "FUNC_SYS_REGISTER",
     "FUNC_SYS_BIT_CHARGE_LAST",
+    "FUNC_SYS_BIT_GREEN_EN",
     "HOLD_AC_CHARGE_POWER_CMD",
     "HOLD_AC_CHARGE_SOC_LIMIT",
     "HOLD_AC_CHARGE_TIME_0_START",
