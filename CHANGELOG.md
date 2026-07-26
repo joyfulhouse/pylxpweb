@@ -19,8 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (not `statusText` = `ACTIVE`/`RESOLVED`), `renormalTime` (not `endTime`,
   null while ongoing), plus previously undocumented `datalogSn` and
   `faultDuration`; `eventType` can also be `MIDBOX_WARNING` on
-  GridBOSS/MID serials. Doc-only — the method returns the raw dict, so no
-  behavior change.
+  GridBOSS/MID serials. Rows also carry `plantName`, `eventTypeText`, and
+  the slash-formatted `startSlashTime`/`renormalSlashTime` twins, all now
+  documented. Timestamps are naive portal-local `YYYY-MM-DD HH:MM:SS` with
+  no UTC offset, so the schema deliberately drops `format: date-time` (RFC
+  3339 validation rejects the real values), and `eventType` is no longer
+  modelled as a closed enum — the row schema documents the observed values
+  and passes unknown ones through, matching what the description already
+  promised. Rows are `additionalProperties: true`; the shape is open.
+  Doc-only — the method returns the raw dict, so no behavior change.
 - **Green/off-grid mode moved to its real register bit — register 110 bit
   layout unified lineage-wide**
   ([eg4_web_monitor#476](https://github.com/joyfulhouse/eg4_web_monitor/issues/476),

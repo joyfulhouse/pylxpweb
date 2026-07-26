@@ -3448,6 +3448,7 @@ components:
           items:
             type: object
             description: One event-log record (live-validated 2026-07-16)
+            additionalProperties: true
             properties:
               recordId:
                 type: integer
@@ -3460,6 +3461,10 @@ components:
                 type: string
                 description: Dongle serial number
                 example: "1234567890"
+              plantName:
+                type: string
+                description: Station name
+                example: "Test Plant"
               event:
                 type: string
                 description: Event code (E###=fault, W###=warning)
@@ -3467,10 +3472,15 @@ components:
               eventType:
                 type: string
                 description: >-
-                  Category. GridBOSS/MID devices also report MIDBOX_WARNING;
-                  treat unknown values as passthrough.
-                enum: [FAULT, WARNING, INFO, MIDBOX_WARNING]
+                  Category. Observed values are FAULT, WARNING, INFO and
+                  MIDBOX_WARNING (the last from GridBOSS/MID devices). Not
+                  modelled as an enum: the set is not known to be closed, and
+                  unknown values are passed through rather than rejected.
                 example: "FAULT"
+              eventTypeText:
+                type: string
+                description: Localized category label
+                example: "Fault"
               eventText:
                 type: string
                 description: Human-readable event description
@@ -3481,15 +3491,27 @@ components:
                 example: "0.25"
               startTime:
                 type: string
-                format: date-time
-                description: Event start timestamp
+                description: >-
+                  Event start, portal-local "YYYY-MM-DD HH:MM:SS". Naive — no
+                  timezone or UTC offset, so deliberately not format:date-time
+                  (RFC 3339 validation rejects these values).
                 example: "2025-11-19 10:30:00"
+              startSlashTime:
+                type: string
+                description: Event start in "YYYY/MM/DD HH:MM:SS" form
+                example: "2025/11/19 10:30:00"
               renormalTime:
                 type: string
-                format: date-time
                 nullable: true
-                description: Return-to-normal timestamp (null while ongoing)
+                description: >-
+                  Return-to-normal in the same naive portal-local dash format
+                  (null while ongoing)
                 example: "2025-11-19 10:45:00"
+              renormalSlashTime:
+                type: string
+                nullable: true
+                description: Return-to-normal in slash form (null while ongoing)
+                example: "2025/11/19 10:45:00"
               status:
                 type: string
                 description: Event state (OPEN=active, CLOSE=resolved)

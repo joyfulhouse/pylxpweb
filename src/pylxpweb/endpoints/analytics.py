@@ -415,15 +415,26 @@ class AnalyticsEndpoints(BaseEndpoint):
                     - recordId: Event record identifier
                     - serialNum: Device serial number
                     - datalogSn: Dongle serial number
+                    - plantName: Station name
                     - event: Event code (E###=fault, W###=warning)
-                    - eventType: FAULT/WARNING/INFO (GridBOSS/MID devices
-                      also report MIDBOX_WARNING)
+                    - eventType: observed values FAULT/WARNING/INFO, plus
+                      MIDBOX_WARNING from GridBOSS/MID devices.  Not a closed
+                      set — treat unrecognized values as passthrough.
+                    - eventTypeText: Localized category ("Fault", "Notice")
                     - eventText: Human-readable description
-                    - startTime: Event start timestamp
-                    - renormalTime: Return-to-normal timestamp (null while
-                      ongoing)
+                    - startTime: Event start, portal-local "YYYY-MM-DD
+                      HH:MM:SS" (naive — no timezone or UTC offset)
+                    - startSlashTime: Same instant, "YYYY/MM/DD HH:MM:SS"
+                    - renormalTime: Return-to-normal in the same dash format
+                      (null while ongoing)
+                    - renormalSlashTime: Same instant in slash format (null
+                      while ongoing)
                     - faultDuration: Duration in hours (string)
                     - status: OPEN (active) / CLOSE (resolved)
+
+                Rows carry additional undocumented keys; treat the shape as
+                open.  ``docs/luxpower-api.yaml`` (EventListResponse) is the
+                fuller contract.
 
         Example:
             # Get all events
