@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a firmware-capability signature).
 
   Dropping a block whole is not the same as reporting no data. `BatteryData`
-  has no nullable numerics and consumers publish them directly (the Home
+  has no nullable cell fields and consumers publish them directly (the Home
   Assistant integration maps them straight onto sensors), so a dropped master
   cell block (regs 113-128) reaches users as readings, not as unavailable.
   It yields `cell_voltages` of sixteen 0.000 V entries; a 0 V min/max
@@ -45,7 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `_get_protocol` caches that verdict for the life of the transport. A
   runtime read truncated inside that range made a slave look like a master
   permanently, so every later read of that unit decoded against the wrong
-  register map. Truncated reads now return before detection is reached.
+  register map. A read truncated inside registers 0-18 now returns before
+  detection is reached.
 
 - **Battery RS485 runtime read no longer discards slaves that clamp the
   read**: the 42-register initial runtime read is a speculative union of both
@@ -57,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   permanently missing one. The initial read now requires only what the
   detected protocol actually decodes (39 for slave, 42 for master, derived
   from the protocol register maps); extra blocks keep the strict
+  requested-count check, since those sizes are protocol-fixed. The floor is
+  itself clamped to at least the 0-18 detection range, so protocol detection
+  only ever runs on data complete through register 18 — a master clamped to
+  39-41 registers is still detected, then rejected against its own
+  requirement.
   requested-count check, since those sizes are protocol-fixed. The floor
   stays above the 0-18 detection range, so protocol detection still only ever
   runs on complete data.

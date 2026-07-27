@@ -6,9 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pylxpweb.battery_protocols.detection import _DETECTION_RANGE_END
 from pylxpweb.battery_protocols.eg4_master import EG4MasterProtocol
 from pylxpweb.battery_protocols.eg4_slave import EG4SlaveProtocol
 from pylxpweb.transports.battery_modbus import (
+    _DETECTION_REGISTER_COUNT,
     _INITIAL_BLOCK_COUNT,
     _MIN_INITIAL_REGISTERS,
     _PROTOCOL_MAP,
@@ -708,6 +710,33 @@ class TestBatteryModbusTransportShortRead:
         assert data.cell_count == 16
 
     @pytest.mark.asyncio
+    async def test_slave_rejects_read_one_short_of_its_map(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """38 registers is one short of the slave map and must be rejected.
+
+        39 is accepted as a legitimately clamped read; 38 has genuinely lost
+        data (balance_bitmap, reg 38).  Only the accept side of that boundary
+        was covered.
+
+        This pins the end-to-end outcome, not the mechanism: rejection is
+        defence in depth.  Lowering _MIN_INITIAL_REGISTERS to 38 does NOT
+        make this test pass -- the per-protocol recheck against the slave's
+        own requirement of 39 still rejects it (only the drift test in
+        TestInitialBlockRequirement catches the lowered floor itself).  That
+        redundancy is the point: neither guard alone is load-bearing here.
+        """
+        truncated = MagicMock()
+        truncated.isError.return_value = False
+        truncated.registers = _make_slave_regs()[:38]  # slave map needs 39
+
+        connected_transport._client.read_holding_registers = AsyncMock(  # type: ignore[union-attr]
+            return_value=truncated,
+        )
+
+        assert await connected_transport.read_unit(2) is None
+
+    @pytest.mark.asyncio
     async def test_master_rejects_runtime_read_short_of_its_map(
         self, connected_transport: BatteryModbusTransport
     ) -> None:
@@ -784,7 +813,22 @@ class TestInitialBlockRequirement:
         assert max(requirements) == _INITIAL_BLOCK_COUNT
         assert min(requirements) == _MIN_INITIAL_REGISTERS
         # Detection reads registers 0-18; the floor must never dip below it.
-        assert _MIN_INITIAL_REGISTERS >= 19
+        # This is the load-bearing guarantee: it is the outer max() in
+        # _MIN_INITIAL_REGISTERS that enforces it, not the happenstance that
+        # today's smallest map (39) already exceeds 19.  A protocol with a
+        # short map added later would drag min() down, and detection would
+        # still be safe.
+        assert _MIN_INITIAL_REGISTERS >= _DETECTION_REGISTER_COUNT
+
+    def test_detection_floor_tracks_the_detection_range(self) -> None:
+        """The transport's copy of the detection range must not drift.
+
+        battery_modbus mirrors detection's range as its own constant.  If
+        detection widens its range and this copy is not updated, the floor
+        silently stops guaranteeing detection sees complete data -- the exact
+        safety property the relaxed floor rests on.
+        """
+        assert _DETECTION_REGISTER_COUNT == _DETECTION_RANGE_END
 
 
 def _make_slave_regs(soc: int = 80, remaining: int = 224) -> list[int]:

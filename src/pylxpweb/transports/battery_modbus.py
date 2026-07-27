@@ -206,7 +206,7 @@ class BatteryModbusTransport:
             # holding-register paths on the inverter transports, #203).
             #
             # Rejecting a block does not make its fields absent: BatteryData
-            # has no nullable numerics, so a dropped block reads out as
+            # has no nullable cell fields, so a dropped block reads out as
             # zeroes or as whatever fallback the protocol has. See the note
             # on _read_unit_raw. Callers get no signal beyond this DEBUG
             # line; per-unit health reporting is pylxpweb#248.
@@ -377,7 +377,7 @@ class BatteryModbusTransport:
         Note:
             An extra block that fails is dropped whole rather than partially
             decoded, but "dropped" is not "absent" — ``BatteryData`` has no
-            nullable numerics, and consumers publish these fields directly.
+            nullable cell fields, and consumers publish these fields directly.
             For the master cell block (113-128) that means sixteen 0.000 V
             cells, a 0 V min/max wherever regs 37/38 also read zero, and --
             via ``decode_with_slaves`` -- a master voltage that quietly
