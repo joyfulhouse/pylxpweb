@@ -22,11 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a firmware-capability signature).
 
   Dropping a block whole is not the same as reporting no data. `BatteryData`
-  has no nullable cell fields, so a dropped master cell block (regs 113-128)
-  still yields `cell_voltages` of sixteen 0.000 V entries — and, where the
-  dedicated max/min cell registers 37/38 read zero, a 0 V min/max. That is
-  the intended trade: a plausible wrong min/max computed over the surviving
-  fragment is replaced by an implausible 0.0, which is far easier to spot.
+  has no nullable numerics and consumers publish them directly (the Home
+  Assistant integration maps them straight onto sensors), so a dropped master
+  cell block (regs 113-128) reaches users as readings, not as unavailable.
+  It yields `cell_voltages` of sixteen 0.000 V entries; a 0 V min/max
+  wherever the dedicated max/min cell registers 37/38 also read zero; and,
+  through `decode_with_slaves`, a master voltage that reverts to register 22
+  — the bank MINIMUM, not the master's own sum-of-cells.
+
+  The first two are implausible enough to notice, which is the intended
+  trade: a plausible wrong min/max computed over the surviving fragment is
+  replaced by an obvious 0.0. The voltage fallback goes the other way — it
+  swaps an obviously wrong fragment sum for a plausible number that is
+  silently the wrong quantity. Dropping the block is still the right call,
+  but it buys detectability, not correctness. Beyond a DEBUG log line the
+  library gives callers no signal that a block was dropped; bounded per-unit
+  health reporting is tracked in
+  [#248](https://github.com/joyfulhouse/pylxpweb/issues/248).
 
   The guard also closes a latent cache-poisoning path. `detect_protocol`
   classifies a unit as master when at most 2 of registers 0-18 are non-zero,

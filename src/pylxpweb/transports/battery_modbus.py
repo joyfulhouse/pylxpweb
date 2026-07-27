@@ -204,6 +204,12 @@ class BatteryModbusTransport:
             # decoded as if complete, producing wrong battery values.
             # Reject it like any other failed read (same guard as the
             # holding-register paths on the inverter transports, #203).
+            #
+            # Rejecting a block does not make its fields absent: BatteryData
+            # has no nullable numerics, so a dropped block reads out as
+            # zeroes or as whatever fallback the protocol has. See the note
+            # on _read_unit_raw. Callers get no signal beyond this DEBUG
+            # line; per-unit health reporting is pylxpweb#248.
             if len(registers) < required:
                 _LOGGER.debug(
                     "Short read: unit=%d start=%d expected %d registers, got %d",
@@ -367,6 +373,19 @@ class BatteryModbusTransport:
         Returns:
             Tuple of (raw_registers, decoded_data). Raw registers are always
             returned (may be empty). Decoded data is None on read failure.
+
+        Note:
+            An extra block that fails is dropped whole rather than partially
+            decoded, but "dropped" is not "absent" — ``BatteryData`` has no
+            nullable numerics, and consumers publish these fields directly.
+            For the master cell block (113-128) that means sixteen 0.000 V
+            cells, a 0 V min/max wherever regs 37/38 also read zero, and --
+            via ``decode_with_slaves`` -- a master voltage that quietly
+            reverts to reg 22, the bank MINIMUM rather than the master's own
+            sum-of-cells. The first two are implausible enough to notice; the
+            last is not. Dropping the block is still right (a min/max computed
+            over half a cell block is plausible AND wrong), but it buys
+            detectability, not correctness.
         """
         runtime_regs = await self._read_registers(
             0, _INITIAL_BLOCK_COUNT, unit_id, minimum=_MIN_INITIAL_REGISTERS

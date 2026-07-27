@@ -598,6 +598,10 @@ class TestBatteryModbusTransportShortRead:
         min/max fallback.  That is the point of the guard — it trades a
         plausible wrong min/max computed over the surviving fragment for
         an implausible 0.0, and implausible-wrong is far easier to spot.
+
+        That trade does not hold for every field:
+        ``test_dropped_cell_block_falls_back_to_bank_minimum_voltage``
+        pins one that moves the other way.
         """
         master_regs = _make_master_regs()
         short_cell_regs = [3310] * 8  # 8 of 16 requested
@@ -724,6 +728,46 @@ class TestBatteryModbusTransportShortRead:
 
         assert await connected_transport.read_unit(1) is None
         assert connected_transport._detected_protocols[1].name == "eg4_master"
+
+    @pytest.mark.asyncio
+    async def test_dropped_cell_block_falls_back_to_bank_minimum_voltage(self) -> None:
+        """A dropped cell block silently reverts master voltage to reg 22.
+
+        ``decode_with_slaves`` normally overrides reg 22 (the MINIMUM
+        across all batteries) with the sum of the master's own cells,
+        because reg 22 is not the master's individual voltage.  A
+        dropped cell block leaves ``cell_voltages`` as sixteen zeros —
+        which is a *truthy* list, so the override branch is entered and
+        then abandoned on ``cell_sum > 0``.  Voltage falls back to the
+        bank minimum.
+
+        Unlike the zeroed cells, this one is a plausible-looking number:
+        the guard makes this field *less* detectable, not more, and it
+        is pinned here so that trade is visible rather than assumed.
+        """
+
+        async def read(cell_regs: list[int]) -> BatteryData:
+            transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2])
+            transport._client = AsyncMock()
+            transport._client.close = MagicMock()
+            transport._connected = True
+            transport._client.read_holding_registers = AsyncMock(
+                side_effect=[
+                    _mock_result(_make_master_regs()),  # unit 1 runtime
+                    _mock_result(cell_regs),  # unit 1 cells (113-128)
+                    _mock_result(_make_slave_regs()),  # unit 2 runtime
+                    _mock_result([0] * 23),  # unit 2 info block
+                ],
+            )
+            return (await transport.read_all())[0]
+
+        # Full block: master voltage is the sum of its own 16 cells.
+        assert (await read([3310] * 16)).voltage == pytest.approx(52.96)
+
+        # Short block: falls back to reg 22 = 5294, the bank minimum.
+        # Without the guard this would be the 8-cell fragment sum, 26.48 —
+        # wrong, but obviously so.
+        assert (await read([3310] * 8)).voltage == pytest.approx(52.94)
 
 
 class TestInitialBlockRequirement:
