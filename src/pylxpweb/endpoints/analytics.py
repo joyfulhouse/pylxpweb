@@ -427,8 +427,9 @@ class AnalyticsEndpoints(BaseEndpoint):
                     - startSlashTime: Same instant, "YYYY/MM/DD HH:MM:SS"
                     - renormalTime: Return-to-normal in the same dash format
                       (null while ongoing)
-                    - renormalSlashTime: Same instant in slash format (null
-                      while ongoing)
+                    - renormalSlashTime: Same instant in slash format.  Its
+                      value on an ongoing event is unattested — observed rows
+                      omit the key entirely rather than sending null.
                     - faultDuration: Duration in hours (string)
                     - status: OPEN (active) / CLOSE (resolved)
 

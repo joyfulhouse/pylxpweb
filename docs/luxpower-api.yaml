@@ -3510,7 +3510,11 @@ components:
               renormalSlashTime:
                 type: string
                 nullable: true
-                description: Return-to-normal in slash form (null while ongoing)
+                description: >-
+                  Return-to-normal in slash form. nullable matches the
+                  canonical schema; the observed ongoing-event row omits the
+                  key rather than sending null, so its ongoing value is
+                  unattested.
                 example: "2025/11/19 10:45:00"
               status:
                 type: string
