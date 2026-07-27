@@ -6,7 +6,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pylxpweb.transports.battery_modbus import BatteryModbusTransport
+from pylxpweb.battery_protocols.eg4_master import EG4MasterProtocol
+from pylxpweb.battery_protocols.eg4_slave import EG4SlaveProtocol
+from pylxpweb.transports.battery_modbus import (
+    _INITIAL_BLOCK_COUNT,
+    _MIN_INITIAL_REGISTERS,
+    _PROTOCOL_MAP,
+    BatteryModbusTransport,
+    _initial_block_requirement,
+)
 from pylxpweb.transports.data import BatteryData, InverterRuntimeData
 
 
@@ -576,13 +584,20 @@ class TestBatteryModbusTransportShortRead:
     async def test_read_unit_short_extra_block_skips_block(
         self, connected_transport: BatteryModbusTransport
     ) -> None:
-        """A truncated extra block is skipped, never partially decoded.
+        """A truncated extra block is dropped whole, never partially decoded.
 
         Without the guard, a short master cell-voltage read (8 of 16
         registers) would populate half the cells with real-looking
         values and leave the rest at zero — min/max cell voltage would
-        then be computed over the fragment.  With the guard the block
-        is dropped entirely: absent data, not wrong data.
+        then be computed over the fragment.
+
+        The block being dropped does not make the cells absent:
+        ``BatteryData`` has no nullable cell fields, so cell_count (reg
+        41, from the runtime block) still yields sixteen 0.000 V cells
+        and, with the dedicated max/min registers 37/38 unset, a 0 V
+        min/max fallback.  That is the point of the guard — it trades a
+        plausible wrong min/max computed over the surviving fragment for
+        an implausible 0.0, and implausible-wrong is far easier to spot.
         """
         master_regs = _make_master_regs()
         short_cell_regs = [3310] * 8  # 8 of 16 requested
@@ -599,6 +614,8 @@ class TestBatteryModbusTransportShortRead:
         # Cell block dropped: no partial cell voltages leak into min/max
         assert data.max_cell_voltage == 0.0
         assert data.min_cell_voltage == 0.0
+        # ...and the dropped block reads out as zeroed cells, not as absence.
+        assert data.cell_voltages == [0.0] * 16
 
     @pytest.mark.asyncio
     async def test_read_unit_recovers_after_short_read(
@@ -622,6 +639,108 @@ class TestBatteryModbusTransportShortRead:
         data = await connected_transport.read_unit(2)
         assert data is not None
         assert data.voltage == pytest.approx(52.94)
+
+    @pytest.mark.asyncio
+    async def test_short_read_does_not_poison_protocol_cache(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """A truncated read never reaches protocol detection.
+
+        ``detect_protocol`` calls a unit a master when at most 2 of
+        registers 0-18 are non-zero, and ``_get_protocol`` caches the
+        verdict permanently.  A slave truncated to its first 2 registers
+        therefore looks exactly like a master, and every later read of
+        that unit would decode against the wrong register map for the
+        life of the transport.  The guard returns before detection runs.
+        """
+        full_regs = _make_slave_regs()
+        truncated = MagicMock()
+        truncated.isError.return_value = False
+        truncated.registers = full_regs[:2]  # 2 of 42 -> would detect as master
+
+        connected_transport._client.read_holding_registers = AsyncMock(  # type: ignore[union-attr]
+            side_effect=[
+                truncated,
+                _mock_result(full_regs),
+                _mock_result([0] * 23),  # slave info block 105-127
+            ],
+        )
+
+        assert await connected_transport.read_unit(2) is None
+        assert connected_transport._detected_protocols == {}
+
+        # The next clean read detects the unit correctly.
+        data = await connected_transport.read_unit(2)
+        assert data is not None
+        assert connected_transport._detected_protocols[2].name == "eg4_slave"
+
+    @pytest.mark.asyncio
+    async def test_slave_accepts_clamped_runtime_read(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """A BMS that clamps the read to its own map still decodes.
+
+        The 42-register runtime read is sized for the master map; the
+        slave map ends at reg 38.  A BMS that range-clamps a read past
+        its last implemented register instead of raising ILLEGAL DATA
+        ADDRESS returns 39 registers — everything the slave decodes.
+        Rejecting that would delete a working battery every cycle.
+        """
+        clamped = MagicMock()
+        clamped.isError.return_value = False
+        clamped.registers = _make_slave_regs()[:39]  # 39 of 42, slave map complete
+
+        connected_transport._client.read_holding_registers = AsyncMock(  # type: ignore[union-attr]
+            side_effect=[
+                clamped,
+                _mock_result([0] * 23),  # slave info block 105-127
+            ],
+        )
+
+        data = await connected_transport.read_unit(2)
+        assert data is not None
+        assert data.voltage == pytest.approx(52.94)
+        assert data.soc == 80
+        assert data.cell_count == 16
+
+    @pytest.mark.asyncio
+    async def test_master_rejects_runtime_read_short_of_its_map(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """The relaxed floor does not let a truncated master through.
+
+        39 registers satisfy the slave map but cut the master's map off
+        at reg 38, dropping num_cells (41) and the min/max cell indices
+        (39/40).  Detection still runs on complete data, so the unit is
+        correctly identified and then rejected for the cycle.
+        """
+        truncated = MagicMock()
+        truncated.isError.return_value = False
+        truncated.registers = _make_master_regs()[:39]  # master needs all 42
+
+        connected_transport._client.read_holding_registers = AsyncMock(  # type: ignore[union-attr]
+            return_value=truncated,
+        )
+
+        assert await connected_transport.read_unit(1) is None
+        assert connected_transport._detected_protocols[1].name == "eg4_master"
+
+
+class TestInitialBlockRequirement:
+    """The initial runtime read must cover every protocol's runtime block."""
+
+    def test_requirement_matches_each_protocol_map(self) -> None:
+        """Requirements are derived from the maps, not hardcoded guesses."""
+        assert _initial_block_requirement(EG4SlaveProtocol()) == 39  # regs 0-38
+        assert _initial_block_requirement(EG4MasterProtocol()) == 42  # regs 0-41
+
+    def test_union_read_covers_all_protocols(self) -> None:
+        """_INITIAL_BLOCK_COUNT is the union; the floor is the smallest map."""
+        requirements = [_initial_block_requirement(cls()) for cls in _PROTOCOL_MAP.values()]
+        assert max(requirements) == _INITIAL_BLOCK_COUNT
+        assert min(requirements) == _MIN_INITIAL_REGISTERS
+        # Detection reads registers 0-18; the floor must never dip below it.
+        assert _MIN_INITIAL_REGISTERS >= 19
 
 
 def _make_slave_regs(soc: int = 80, remaining: int = 224) -> list[int]:

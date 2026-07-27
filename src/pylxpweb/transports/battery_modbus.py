@@ -30,8 +30,18 @@ from pylxpweb.transports.data import BatteryData, InverterRuntimeData
 
 _LOGGER = logging.getLogger(__name__)
 
-# Number of registers to read for initial runtime block (covers both protocols)
+# Number of registers to read for initial runtime block (covers both protocols).
+# This is a speculative union read issued before the protocol is known: the
+# master map runs to reg 41, the slave map only to reg 38, so on every slave
+# 3 of these registers are requested but never decoded.
 _INITIAL_BLOCK_COUNT = 42
+
+# Registers 0-18 decide master vs slave in ``detect_protocol``. A runtime read
+# shorter than this must never reach detection: a truncated slave looks like a
+# master (all-zero early registers) and the result is cached for the life of
+# the transport. Both protocols need well past this, so it is a floor, not the
+# acceptance threshold.
+_DETECTION_REGISTER_COUNT = 19
 
 # Small delay between sequential register reads to avoid bus congestion (seconds)
 _INTER_READ_DELAY = 0.1
@@ -44,6 +54,36 @@ _PROTOCOL_MAP: dict[str, type[BatteryProtocol]] = {
     "eg4_master": EG4MasterProtocol,
     "eg4_slave": EG4SlaveProtocol,
 }
+
+
+def _initial_block_requirement(protocol: BatteryProtocol) -> int:
+    """Registers a protocol actually decodes out of the initial runtime read.
+
+    Derived from the protocol's own blocks so it tracks map changes: the
+    master runtime block ends at reg 41 (42 registers), the slave's at reg 38
+    (39). Blocks that start past the initial read (master cells 113-128,
+    slave info 105-127) are fetched separately and excluded here.
+
+    Args:
+        protocol: Protocol whose register map defines the requirement.
+
+    Returns:
+        Minimum number of registers the initial read must return for this
+        protocol to decode without holes.
+    """
+    return max(
+        (b.start + b.count for b in protocol.register_blocks if b.start < _INITIAL_BLOCK_COUNT),
+        default=_DETECTION_REGISTER_COUNT,
+    )
+
+
+# Least any candidate protocol needs from the initial read. Accepting down to
+# this instead of the full union avoids discarding a decodable slave, and the
+# detected protocol's own requirement is re-checked afterwards.
+_MIN_INITIAL_REGISTERS = max(
+    _DETECTION_REGISTER_COUNT,
+    min(_initial_block_requirement(cls()) for cls in _PROTOCOL_MAP.values()),
+)
 
 
 class BatteryModbusTransport:
@@ -128,19 +168,29 @@ class BatteryModbusTransport:
             self._client.close()
         self._connected = False
 
-    async def _read_registers(self, start: int, count: int, unit_id: int) -> list[int] | None:
+    async def _read_registers(
+        self,
+        start: int,
+        count: int,
+        unit_id: int,
+        minimum: int | None = None,
+    ) -> list[int] | None:
         """Read holding registers from a battery unit.
 
         Args:
             start: First register address to read.
             count: Number of contiguous registers to read.
             unit_id: Modbus unit/slave ID.
+            minimum: Registers that must come back for the response to be
+                usable. Defaults to ``count``; pass a lower value only when
+                the request deliberately over-reads what will be decoded.
 
         Returns:
-            List of register values, or None on error/timeout.
+            List of register values, or None on error/timeout/short read.
         """
         if not self._client:
             return None
+        required = count if minimum is None else minimum
         try:
             result = await self._client.read_holding_registers(
                 start, count=count, device_id=unit_id
@@ -154,12 +204,12 @@ class BatteryModbusTransport:
             # decoded as if complete, producing wrong battery values.
             # Reject it like any other failed read (same guard as the
             # holding-register paths on the inverter transports, #203).
-            if len(registers) < count:
+            if len(registers) < required:
                 _LOGGER.debug(
                     "Short read: unit=%d start=%d expected %d registers, got %d",
                     unit_id,
                     start,
-                    count,
+                    required,
                     len(registers),
                 )
                 return None
@@ -318,12 +368,32 @@ class BatteryModbusTransport:
             Tuple of (raw_registers, decoded_data). Raw registers are always
             returned (may be empty). Decoded data is None on read failure.
         """
-        runtime_regs = await self._read_registers(0, _INITIAL_BLOCK_COUNT, unit_id)
+        runtime_regs = await self._read_registers(
+            0, _INITIAL_BLOCK_COUNT, unit_id, minimum=_MIN_INITIAL_REGISTERS
+        )
         if runtime_regs is None:
             return {}, None
 
         raw: dict[int, int] = dict(enumerate(runtime_regs))
+        # Safe to detect: the guard above guarantees registers 0-18 are all
+        # present, so a truncated response can no longer be cached as the
+        # wrong protocol for the life of the transport.
         protocol = self._get_protocol(unit_id, raw)
+
+        # A BMS that range-clamps a read past its last implemented register
+        # (rather than answering ILLEGAL DATA ADDRESS) returns a slave's full
+        # 39 registers for the 42 requested. That is complete data, so it is
+        # only rejected when the detected protocol needs the missing tail.
+        required = _initial_block_requirement(protocol)
+        if len(runtime_regs) < required:
+            _LOGGER.debug(
+                "Short runtime read: unit=%d protocol=%s needs %d registers, got %d",
+                unit_id,
+                protocol.name,
+                required,
+                len(runtime_regs),
+            )
+            return {}, None
 
         for block in protocol.register_blocks:
             if block.start >= _INITIAL_BLOCK_COUNT:

@@ -14,6 +14,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pymodbus decoded from the response's own byte count, with no check against
   the requested count — the same hole closed on the inverter transports in
   [#203](https://github.com/joyfulhouse/pylxpweb/pull/203). A short read was
+  decoded as if complete, silently producing wrong battery values. A short
+  response is now treated like any other failed read: the runtime block fails
+  the unit for that cycle, and an extra block is dropped whole rather than
+  partially decoded. The next full read recovers normally (no latching —
+  battery block sizes are protocol-fixed, so a short read is truncation, not
+  a firmware-capability signature).
+
+  Dropping a block whole is not the same as reporting no data. `BatteryData`
+  has no nullable cell fields, so a dropped master cell block (regs 113-128)
+  still yields `cell_voltages` of sixteen 0.000 V entries — and, where the
+  dedicated max/min cell registers 37/38 read zero, a 0 V min/max. That is
+  the intended trade: a plausible wrong min/max computed over the surviving
+  fragment is replaced by an implausible 0.0, which is far easier to spot.
+
+  The guard also closes a latent cache-poisoning path. `detect_protocol`
+  classifies a unit as master when at most 2 of registers 0-18 are non-zero,
+  and `_get_protocol` caches that verdict for the life of the transport. A
+  runtime read truncated inside that range made a slave look like a master
+  permanently, so every later read of that unit decoded against the wrong
+  register map. Truncated reads now return before detection is reached.
+
+- **Battery RS485 runtime read no longer discards slaves that clamp the
+  read**: the 42-register initial runtime read is a speculative union of both
+  maps — the master map runs to reg 41, the slave map only to reg 38 — so on
+  every slave 3 registers are requested that are never decoded. A BMS that
+  range-clamps a read past its last implemented register instead of answering
+  ILLEGAL DATA ADDRESS would have had a fully decodable 39-register response
+  rejected wholesale, every cycle, turning a working battery into a
+  permanently missing one. The initial read now requires only what the
+  detected protocol actually decodes (39 for slave, 42 for master, derived
+  from the protocol register maps); extra blocks keep the strict
+  requested-count check, since those sizes are protocol-fixed. The floor
+  stays above the 0-18 detection range, so protocol detection still only ever
+  runs on complete data.
   decoded as if complete, silently producing wrong battery values (e.g. half
   a cell-voltage block feeding min/max cell voltage). A short response is now
   treated like any other failed read for that unit/block: the runtime block
