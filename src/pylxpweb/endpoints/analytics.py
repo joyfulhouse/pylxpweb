@@ -433,9 +433,9 @@ class AnalyticsEndpoints(BaseEndpoint):
                     - faultDuration: Duration in hours (string)
                     - status: OPEN (active) / CLOSE (resolved)
 
-                Rows carry additional undocumented keys; treat the shape as
-                open.  ``docs/luxpower-api.yaml`` (EventListResponse) is the
-                fuller contract.
+                Rows may carry keys beyond these; treat the shape as open.
+                ``docs/luxpower-api.yaml`` (EventListResponse) is the typed
+                contract for the same fields.
 
         Example:
             # Get all events
@@ -444,10 +444,15 @@ class AnalyticsEndpoints(BaseEndpoint):
                 if event["status"] == "OPEN":
                     print(f"Active {event['eventType']}: {event['eventText']}")
 
-            # Get only faults
-            faults = await client.analytics.get_event_list(
+            # Filter server-side by a specific event code, not by category:
+            # event_filter is sent as the request's eventText field, so it
+            # takes "_all" or a code like "E019" — NOT an eventType value
+            # such as "FAULT".  No caller in this project uses anything but
+            # the "_all" default, so the code form is unverified; filtering
+            # the returned rows on eventType is the attested approach.
+            bus_faults = await client.analytics.get_event_list(
                 "1234567890",
-                event_filter="FAULT"
+                event_filter="E019",
             )
         """
         await self.client._ensure_authenticated()

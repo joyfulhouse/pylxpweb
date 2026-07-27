@@ -3459,8 +3459,10 @@ components:
                 example: "1234567890"
               datalogSn:
                 type: string
-                description: Dongle serial number
-                example: "1234567890"
+                description: >-
+                  Dongle serial number. A different serial space from
+                  serialNum — observed values are alphanumeric.
+                example: "BC33600194"
               plantName:
                 type: string
                 description: Station name
@@ -3518,8 +3520,12 @@ components:
                 example: "2025/11/19 10:45:00"
               status:
                 type: string
-                description: Event state (OPEN=active, CLOSE=resolved)
-                enum: [OPEN, CLOSE]
+                description: >-
+                  Event state; observed values OPEN (active) and CLOSE
+                  (resolved). Not modelled as an enum, for the same reason as
+                  eventType: consumers pass unrecognized values through rather
+                  than rejecting them, so a closed enum would contradict the
+                  documented behaviour.
                 example: "CLOSE"
 
     BatteryInfoForSet:

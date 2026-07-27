@@ -83,14 +83,20 @@ def test_row_shape_stays_open() -> None:
     assert row.get("additionalProperties") is True
 
 
-def test_event_type_is_not_a_closed_enum() -> None:
-    """eventType passes unknown values through, so it cannot be an enum.
+def test_passthrough_fields_are_not_closed_enums() -> None:
+    """Fields whose unknown values pass through cannot be modelled as enums.
 
-    The docstring promises unrecognized values are passed through rather than
-    rejected.  A closed enum would contradict that promise.
+    Consumers relay unrecognized ``eventType`` and ``status`` values verbatim
+    rather than rejecting them, so a closed enum would contradict the
+    documented behaviour.  Both are documented by observed value instead.
     """
     _, row = _spec_row_fields()
-    assert "enum" not in row["properties"]["eventType"]
+    for field in ("eventType", "status"):
+        assert "enum" not in row["properties"][field], (
+            f"{field} is declared a closed enum, but unknown values are "
+            "passed through — the enum would reject what the description "
+            "promises to accept"
+        )
 
 
 def test_timestamps_are_not_declared_rfc3339() -> None:

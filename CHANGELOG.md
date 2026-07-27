@@ -26,8 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3339 validation rejects the real values), and `eventType` is no longer
   modelled as a closed enum — the row schema documents the observed values
   and passes unknown ones through, matching what the description already
-  promised. Rows are `additionalProperties: true`; the shape is open.
+  promised. `status` (OPEN/CLOSE) loses its enum for the same reason — its
+  unknown values are relayed verbatim too. Rows are
+  `additionalProperties: true`; the shape is open. A unit test pins the
+  docstring's field list to the YAML schema's, so the two hand-maintained
+  copies cannot drift apart again — that drift is what produced this bug.
   Doc-only — the method returns the raw dict, so no behavior change.
+
+  The EG4 integration's `docs/api/openapi.yaml` carried the same contradictory
+  `eventType` enum and is being corrected to match; these two copies of the
+  schema are meant to agree, and the intended direction of convergence is
+  "observed values, not a closed enum".
 - **Green/off-grid mode moved to its real register bit — register 110 bit
   layout unified lineage-wide**
   ([eg4_web_monitor#476](https://github.com/joyfulhouse/eg4_web_monitor/issues/476),
