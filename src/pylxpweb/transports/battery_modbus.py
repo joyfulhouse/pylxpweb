@@ -147,7 +147,23 @@ class BatteryModbusTransport:
             )
             if result.isError():
                 return None
-            return list(result.registers)
+            registers = list(result.registers)
+            # pymodbus decodes registers from the response's own byte_count
+            # and never checks it against the requested count, so a truncated
+            # response returns a short list without error and would be
+            # decoded as if complete, producing wrong battery values.
+            # Reject it like any other failed read (same guard as the
+            # holding-register paths on the inverter transports, #203).
+            if len(registers) < count:
+                _LOGGER.debug(
+                    "Short read: unit=%d start=%d expected %d registers, got %d",
+                    unit_id,
+                    start,
+                    count,
+                    len(registers),
+                )
+                return None
+            return registers
         except Exception:
             _LOGGER.debug("Read failed: unit=%d start=%d count=%d", unit_id, start, count)
             return None

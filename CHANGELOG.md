@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Battery RS485 transport now rejects truncated register responses**:
+  `BatteryModbusTransport._read_registers` returned however many registers
+  pymodbus decoded from the response's own byte count, with no check against
+  the requested count — the same hole closed on the inverter transports in
+  [#203](https://github.com/joyfulhouse/pylxpweb/pull/203). A short read was
+  decoded as if complete, silently producing wrong battery values (e.g. half
+  a cell-voltage block feeding min/max cell voltage). A short response is now
+  treated like any other failed read for that unit/block: the runtime block
+  fails the unit for that cycle and an extra block is skipped whole, so data
+  is absent rather than wrong, and the next full read recovers normally (no
+  latching — battery block sizes are protocol-fixed, so a short read is
+  truncation, not a firmware-capability signature).
 - **Green mode device helpers work without a cloud client**
   ([#243](https://github.com/joyfulhouse/pylxpweb/issues/243)):
   `BaseInverter.enable_green_mode`, `disable_green_mode` and

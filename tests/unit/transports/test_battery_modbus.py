@@ -524,6 +524,105 @@ class TestBatteryModbusTransportReadRegisters:
         result = await connected_transport._read_registers(0, 3, 1)
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_read_registers_short_read_returns_none(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """A response with fewer registers than requested is rejected (#203).
+
+        pymodbus decodes from the response's own byte_count without
+        checking it against the requested count, so a truncated frame
+        returns a short list without error.  The transport must treat
+        that as a failed read, never as data.
+        """
+        mock_result = MagicMock()
+        mock_result.isError.return_value = False
+        mock_result.registers = [100] * 20  # 20 of 42 requested
+
+        connected_transport._client.read_holding_registers = AsyncMock(  # type: ignore[union-attr]
+            return_value=mock_result,
+        )
+
+        result = await connected_transport._read_registers(0, 42, 2)
+        assert result is None
+
+
+class TestBatteryModbusTransportShortRead:
+    """End-to-end tests for short-read rejection on unit reads."""
+
+    @pytest.mark.asyncio
+    async def test_read_unit_short_runtime_block_returns_none(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """A truncated runtime block fails the whole unit read.
+
+        Without the short-read guard the 20-register fragment would be
+        decoded as a complete 42-register block, producing a BatteryData
+        with silently wrong values.
+        """
+        short_regs = _make_slave_regs()[:20]  # truncated mid-block
+        mock_result = MagicMock()
+        mock_result.isError.return_value = False
+        mock_result.registers = short_regs
+
+        connected_transport._client.read_holding_registers = AsyncMock(  # type: ignore[union-attr]
+            return_value=mock_result,
+        )
+
+        data = await connected_transport.read_unit(2)
+        assert data is None
+
+    @pytest.mark.asyncio
+    async def test_read_unit_short_extra_block_skips_block(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """A truncated extra block is skipped, never partially decoded.
+
+        Without the guard, a short master cell-voltage read (8 of 16
+        registers) would populate half the cells with real-looking
+        values and leave the rest at zero — min/max cell voltage would
+        then be computed over the fragment.  With the guard the block
+        is dropped entirely: absent data, not wrong data.
+        """
+        master_regs = _make_master_regs()
+        short_cell_regs = [3310] * 8  # 8 of 16 requested
+
+        connected_transport._client.read_holding_registers = AsyncMock(  # type: ignore[union-attr]
+            side_effect=[
+                _mock_result(master_regs),  # runtime block, full
+                _mock_result(short_cell_regs),  # cell block 113-128, short
+            ],
+        )
+
+        data = await connected_transport.read_unit(1)
+        assert data is not None
+        # Cell block dropped: no partial cell voltages leak into min/max
+        assert data.max_cell_voltage == 0.0
+        assert data.min_cell_voltage == 0.0
+
+    @pytest.mark.asyncio
+    async def test_read_unit_recovers_after_short_read(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """A short read is transient: the next full read succeeds normally."""
+        full_regs = _make_slave_regs()
+        short_result = MagicMock()
+        short_result.isError.return_value = False
+        short_result.registers = full_regs[:20]
+
+        connected_transport._client.read_holding_registers = AsyncMock(  # type: ignore[union-attr]
+            side_effect=[
+                short_result,  # first runtime read: truncated
+                _mock_result(full_regs),  # second runtime read: full
+                _mock_result([0] * 23),  # slave info block 105-127
+            ],
+        )
+
+        assert await connected_transport.read_unit(2) is None
+        data = await connected_transport.read_unit(2)
+        assert data is not None
+        assert data.voltage == pytest.approx(52.94)
+
 
 def _make_slave_regs(soc: int = 80, remaining: int = 224) -> list[int]:
     """Build a minimal slave register set (42 regs).
