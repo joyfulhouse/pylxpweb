@@ -1555,4 +1555,6 @@ class TestGreenModeControls:
         with pytest.raises(LuxpowerDeviceError, match="transport or a cloud client"):
             await inverter.enable_green_mode()
         with pytest.raises(LuxpowerDeviceError, match="transport or a cloud client"):
+            await inverter.disable_green_mode()
+        with pytest.raises(LuxpowerDeviceError, match="transport or a cloud client"):
             await inverter.get_green_mode_status()

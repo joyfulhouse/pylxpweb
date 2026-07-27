@@ -2557,8 +2557,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             write
 
         Raises:
-            LuxpowerDeviceError: In transport mode, if the Modbus write fails;
-                in cloud mode, if neither a transport nor a client is attached.
+            LuxpowerDeviceError: On the transport route, if the Modbus write
+                fails; or, on any route, if the instance has neither a
+                transport nor a cloud client attached.
 
         Example:
             >>> await inverter.enable_green_mode()
@@ -2588,8 +2589,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             write
 
         Raises:
-            LuxpowerDeviceError: In transport mode, if the Modbus write fails;
-                in cloud mode, if neither a transport nor a client is attached.
+            LuxpowerDeviceError: On the transport route, if the Modbus write
+                fails; or, on any route, if the instance has neither a
+                transport nor a cloud client attached.
 
         Example:
             >>> await inverter.disable_green_mode()
@@ -2611,8 +2613,9 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             True if green mode is enabled, False otherwise
 
         Raises:
-            LuxpowerDeviceError: In transport mode, if the Modbus read fails;
-                in cloud mode, if neither a transport nor a client is attached.
+            LuxpowerDeviceError: On the transport route, if the Modbus read
+                fails; or, on any route, if the instance has neither a
+                transport nor a cloud client attached.
 
         Example:
             >>> is_enabled = await inverter.get_green_mode_status()
