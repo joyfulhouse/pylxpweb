@@ -49,17 +49,19 @@ def _documented_row_fields() -> set[str]:
     return fields
 
 
-def _spec_row_fields() -> tuple[set[str], dict[str, Any]]:
-    """Field names and the raw row schema from docs/luxpower-api.yaml."""
+def _spec_event_row() -> dict[str, Any]:
+    """The event-row schema from docs/luxpower-api.yaml."""
     spec = yaml.safe_load(_SPEC.read_text())
-    row = spec["components"]["schemas"]["EventListResponse"]["properties"]["rows"]["items"]
-    return set(row["properties"]), row
+    row: dict[str, Any] = spec["components"]["schemas"]["EventListResponse"]["properties"]["rows"][
+        "items"
+    ]
+    return row
 
 
 def test_docstring_and_spec_document_the_same_row_fields() -> None:
     """The two hand-maintained field lists must not drift apart."""
     documented = _documented_row_fields()
-    spec_fields, _ = _spec_row_fields()
+    spec_fields = set(_spec_event_row()["properties"])
 
     assert documented == spec_fields, (
         "get_event_list's docstring and docs/luxpower-api.yaml disagree on the "
@@ -79,7 +81,7 @@ def test_the_field_extractor_actually_finds_fields() -> None:
 
 def test_row_shape_stays_open() -> None:
     """Rows carry undocumented keys; the spec must not forbid them."""
-    _, row = _spec_row_fields()
+    row = _spec_event_row()
     assert row.get("additionalProperties") is True
 
 
@@ -90,7 +92,7 @@ def test_passthrough_fields_are_not_closed_enums() -> None:
     rather than rejecting them, so a closed enum would contradict the
     documented behaviour.  Both are documented by observed value instead.
     """
-    _, row = _spec_row_fields()
+    row = _spec_event_row()
     for field in ("eventType", "status"):
         assert "enum" not in row["properties"][field], (
             f"{field} is declared a closed enum, but unknown values are "
@@ -101,7 +103,7 @@ def test_passthrough_fields_are_not_closed_enums() -> None:
 
 def test_timestamps_are_not_declared_rfc3339() -> None:
     """Portal timestamps are naive local time, which format:date-time rejects."""
-    _, row = _spec_row_fields()
+    row = _spec_event_row()
     for field in ("startTime", "renormalTime", "startSlashTime", "renormalSlashTime"):
         assert "format" not in row["properties"][field], (
             f"{field} carries an OpenAPI format; the portal sends naive "
