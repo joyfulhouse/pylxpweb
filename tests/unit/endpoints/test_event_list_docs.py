@@ -23,7 +23,15 @@ _SPEC = Path(__file__).resolve().parents[3] / "docs" / "luxpower-api.yaml"
 # Rows are documented as "- fieldName: description", indented under
 # "rows: List of event objects with:", with continuation lines indented
 # further.  Only the "- name:" openers are field declarations.
-_FIELD_LINE = re.compile(r"^\s*- (?P<name>[A-Za-z][A-Za-z0-9]*): ")
+#
+# The name class and the trailing separator are deliberately permissive.  A
+# field this regex fails to recognise is silently dropped from the extracted
+# set, and if that field was added to the docstring ONLY, both the drift test
+# and the guard-the-guard test still pass -- the guard would quietly stop
+# guarding the one thing it exists to catch.  So underscores and digits are
+# accepted anywhere after the first character, and the description may start
+# on the next line (no space required after the colon).
+_FIELD_LINE = re.compile(r"^\s*- (?P<name>[A-Za-z_][A-Za-z0-9_]*):(?: |$)")
 
 
 def _documented_row_fields() -> set[str]:
