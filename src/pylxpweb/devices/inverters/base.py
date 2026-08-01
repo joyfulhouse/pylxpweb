@@ -2182,6 +2182,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Cloud mode writes the raw register value directly (``write_parameters``
         keys by register address), so no name mapping or scaling translation is
         needed — the same raw value used by the transport path is written.
+
+        Both routes invalidate the parameter cache on success (the transport
+        route inside :meth:`write_transport_register`); see
+        :meth:`_invalidate_parameters_cache` for what that does and does not
+        guarantee.
         """
         if self._transport is not None:
             success = await self.write_transport_register(register, value)
@@ -2192,6 +2197,8 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             return True
         client = self._require_client(register, "write")
         response = await client.api.control.write_parameters(self.serial_number, {register: value})
+        if response.success:
+            self._invalidate_parameters_cache()
         return bool(response.success)
 
     async def _get_register_bit(self, register: int, bit: int) -> bool:

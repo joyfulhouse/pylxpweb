@@ -2158,6 +2158,48 @@ class TestPVSellToGridDualPath:
         )
 
     @pytest.mark.asyncio
+    async def test_cloud_value_write_invalidates_parameter_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A pure-CLOUD VALUE-register write must invalidate too, not just bits.
+
+        The bit and value branches invalidate through different helpers
+        (``_set_modbus_register_bit`` vs ``_write_modbus_register``), so the
+        value path needs its own pin — nine Hybrid setters route through it.
+        """
+        inverter = HybridInverter(
+            client=mock_client,
+            serial_number="52842P0581",
+            model="FlexBOSS21",
+        )
+        mock_client.api.control.write_parameters = AsyncMock(return_value=_cloud_success())
+        inverter._parameters_cache_time = datetime.now()
+
+        assert await inverter.set_system_charge_soc_limit(80) is True
+
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_cloud_value_write_rejection_keeps_parameter_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A rejected cloud value write changed nothing, so the cache stands."""
+        inverter = HybridInverter(
+            client=mock_client,
+            serial_number="52842P0581",
+            model="FlexBOSS21",
+        )
+        mock_client.api.control.write_parameters = AsyncMock(
+            return_value=SuccessResponse(success=False)
+        )
+        cache_time = datetime.now()
+        inverter._parameters_cache_time = cache_time
+
+        assert await inverter.set_system_charge_soc_limit(80) is False
+
+        assert inverter._parameters_cache_time is cache_time
+
+    @pytest.mark.asyncio
     async def test_cloud_write_invalidates_parameter_cache(
         self, mock_client: LuxpowerClient
     ) -> None:
