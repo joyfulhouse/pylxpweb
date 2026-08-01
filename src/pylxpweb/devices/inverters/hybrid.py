@@ -143,15 +143,20 @@ class HybridInverter(GenericInverter):
         # transport does an atomic reg-21 read-modify-write, the cloud applies
         # the bit server-side via control_function. The old raw reg-21 write was
         # rejected by the cloud (reg 21 is a bitfield), silently no-opping.
+        # The falsy guard is live only on the cloud route, which returns
+        # False when the API rejects the write; the transport route now
+        # returns True or raises. Kept so a cloud rejection still short-
+        # circuits before the value writes below.
         if not await self._set_modbus_register_bit(
             FUNC_EN_REGISTER, FUNC_EN_BIT_AC_CHARGE_EN, enabled
         ):
             return False
 
-        # The enable bit has changed device state; invalidate the parameter
-        # cache now so that a later value-write failure below cannot leave
-        # refresh(include_parameters=True) serving a stale reg-21 for up to the
-        # parameter TTL (cloud endpoint invalidation does not clear this cache).
+        # _set_modbus_register_bit already invalidated on both routes; this
+        # re-invalidation is redundant but harmless (the generation counter is
+        # an ordering token, not a write count) and is kept as a local
+        # guarantee that a value-write failure below cannot leave
+        # refresh(include_parameters=True) serving a stale reg-21.
         self._invalidate_parameters_cache()
 
         # Power and SOC limit are value registers; write them by address so the

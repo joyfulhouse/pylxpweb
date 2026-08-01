@@ -429,6 +429,12 @@ class HTTPTransport(BaseTransport):
         This HTTP implementation sends each name directly to the cloud's
         function or value endpoint, avoiding a raw-register read-modify-write.
 
+        Multi-key writes are NOT atomic here: each name is a separate cloud
+        call, applied in iteration order, so a failure part-way leaves the
+        earlier keys already applied on the device. This differs from the local
+        transports, which batch the keys sharing a register into one frame.
+        Every current caller passes a single key.
+
         Args:
             parameters: Dict mapping parameter name to value. Boolean values
                 use the function-control API; all other values use the named

@@ -208,7 +208,21 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         return (datetime.now() - cache_time) > ttl
 
     def _invalidate_parameters_cache(self) -> None:
-        """Mark cached parameters stale after a successful device write."""
+        """Mark cached parameters stale after a successful device write.
+
+        This guarantees the next refresh RE-READS the device — it does not
+        guarantee that the pre-write value is never served again. ``parameters``
+        still holds the old snapshot, so :meth:`_get_parameter` and the cached
+        properties built on it keep returning the pre-write value until that
+        refresh lands. That is intentional (dropping the snapshot outright would
+        blank every parameter on every control write) and is pinned by tests.
+
+        The generation counter exists so a write that lands mid-refresh cannot
+        be masked: the refresh compares generations and declines to stamp a
+        snapshot that predates the write. Treat the counter as an ordering
+        token only — it is not a write count and nothing should read it as one
+        (some paths bump it more than once for a single logical write).
+        """
         self._parameters_write_seq += 1
         self._parameters_cache_time = None
 
@@ -2210,6 +2224,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         read-modify-write, preserving concurrent changes to other bits. Cloud
         mode uses the function-control API, which applies the named bit update
         server-side without a raw-register round trip.
+
+        Both routes invalidate the parameter cache on success, so callers do
+        not have to; see :meth:`_invalidate_parameters_cache` for what that
+        invalidation does and does not guarantee.
         """
         if self._transport is not None:
             from pylxpweb.transports.exceptions import TransportError
@@ -2232,6 +2250,8 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         client = self._require_client(register, "write")
         param_key = self._cloud_param_key(register, bit)
         response = await client.api.control.control_function(self.serial_number, param_key, enabled)
+        if response.success:
+            self._invalidate_parameters_cache()
         return bool(response.success)
 
     async def _set_client_first_function_bit(

@@ -2158,6 +2158,44 @@ class TestPVSellToGridDualPath:
         )
 
     @pytest.mark.asyncio
+    async def test_cloud_write_invalidates_parameter_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A pure-CLOUD bit write must not leave the old bit cached as fresh."""
+        inverter = HybridInverter(
+            client=mock_client,
+            serial_number="52842P0581",
+            model="FlexBOSS21",
+        )
+        mock_client.api.control.control_function = AsyncMock(return_value=_cloud_success())
+        inverter._parameters_cache_time = datetime.now()
+
+        assert await inverter.enable_pv_sell_to_grid() is True
+
+        mock_client.api.control.control_function.assert_awaited_once_with(
+            "52842P0581", "FUNC_PV_SELL_TO_GRID_EN", True
+        )
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_cloud_rejection_keeps_parameter_cache(self, mock_client: LuxpowerClient) -> None:
+        """A rejected cloud write leaves the cache stamped — nothing changed."""
+        inverter = HybridInverter(
+            client=mock_client,
+            serial_number="52842P0581",
+            model="FlexBOSS21",
+        )
+        mock_client.api.control.control_function = AsyncMock(
+            return_value=SuccessResponse(success=False)
+        )
+        cache_time = datetime.now()
+        inverter._parameters_cache_time = cache_time
+
+        assert await inverter.enable_pv_sell_to_grid() is False
+
+        assert inverter._parameters_cache_time is cache_time
+
+    @pytest.mark.asyncio
     async def test_transport_enable_uses_named_write(self, mock_client: LuxpowerClient) -> None:
         """Enable stays transport-first and uses the named atomic RMW."""
         inverter = self._transport_inverter(mock_client)
