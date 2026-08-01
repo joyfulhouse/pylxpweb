@@ -38,6 +38,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without bound inside the busy budget. The `needRunStep2..5` flags are logged
   (not used as a gate — their firmware semantics remain unverified) so the next
   field report captures them.
+- **Convergence is corroborated against the device, not inferred from the
+  check endpoint alone**: `checkUpdates` answers an up-to-date device with
+  success:false "already the latest version", which the client synthesizes
+  into a record whose installed version is EMPTY — so neither trusting that
+  answer (a partially upgraded device reads as success) nor rejecting it (a
+  genuinely converged device reads as FAILURE, at the exact moment it
+  succeeded) is correct on its own. The orchestrator now reads the device's
+  actual `fwCode` from the runtime endpoint to decide: on the target →
+  converged; still on the version the run started from → the answer was
+  transient, keep going rather than abandoning the chain; unreadable →
+  reported as indeterminate with a message that says to verify the version on
+  the device, not one that implies failure. Version comparison is
+  case-insensitive, and a device that demonstrably moved is accepted even if
+  it does not string-match the target, because the target can be a
+  reconstruction the server never echoes.
+- **Mid-chain activity attribution no longer demands a new status row**: the
+  stale-row guard added for the previous release compared each step's status
+  row against a pre-POST snapshot. That is right for the FIRST step, where the
+  threat — a leftover row from an earlier run — actually lives, but on a
+  portal that keeps one row per update session and updates it in place, step 2
+  would find an unchanged in-progress row, be refused the grace, and fail with
+  the original reported symptom. From step 2 onward an in-progress row is this
+  run's own activity and counts; the grace and step budget bound it regardless.
 - **Convergence now requires evidence, not just the absence of an update**:
   "no update available" was treated as success, and an empty installed version
   in the up-to-date sentinel was backfilled with the target — so a device still
@@ -62,8 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "updating": a permanent failure like "Failed updating firmware: invalid
   checksum" was being retried for the whole budget and then reported as "device
   remained busy", burying the real cause — which mattered more once that budget
-  tripled. A structurally permanent eligibility refusal (`notAllowedInParallel`)
-  is likewise surfaced at once instead of polled, since waiting cannot clear it.
+  tripled. Classification is two-stage: failure prose (failed/error/invalid/
+  checksum/corrupt/timeout) is permanent even when the message also says
+  "updating"; otherwise any busy/updating wording counts as busy, so portal
+  phrasings nobody has catalogued (`systemBusy`, "Device is updating, please
+  try again") are still waited out rather than aborting a chain that would
+  have succeeded moments later. A `notAllowedInParallel` eligibility refusal is
+  surfaced at once instead of polled for the full budget, worded as a likely
+  parallel-group conflict to retry after — our own run can induce it, so it is
+  not claimed to be permanent.
 - **An "already the latest version" refusal mid-chain no longer surfaces as a
   raw error**: if the check endpoint lags a successful final step past the
   settle window, the no-progress grace can ask for one step too many. The

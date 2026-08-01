@@ -9,29 +9,40 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 _LOGGER = logging.getLogger(__name__)
 
-# Busy-family API responses that the update orchestrator waits out mid-chain.
-# Deliberately an explicit list: matching a bare "updating" substring also
-# caught permanent failures ("Failed updating firmware: invalid checksum"),
-# which were then retried for the whole busy budget instead of surfacing.
-_BUSY_ERROR_STEMS: tuple[str, ...] = (
-    "devicebusy",
-    "device_busy",
-    "deviceupdating",
-    "device_updating",
-    "parallelgroupupdating",
-    "parallel_group_updating",
-    "already updating",
-    "parallel group is updating",
+# Classifying an update-API error as "busy" decides whether the orchestrator
+# waits (up to busy_grace) or surfaces it. Both directions have a real cost, so
+# the test runs in two stages rather than matching one substring:
+#
+#   1. Failure prose wins outright. "Failed updating firmware: invalid
+#      checksum" contains "updating", and a one-substring test waited out the
+#      whole budget on it and then reported "device remained busy", burying
+#      the real cause.
+#   2. Otherwise any busy/updating wording counts as busy. An enumerated list
+#      of known codes is too narrow the other way: the portal also emits
+#      phrasings we have never seen (systemBusy, "Device is updating, please
+#      try again"), and treating an unrecognised busy response as permanent
+#      aborts a chain that would have succeeded moments later.
+#
+# Anything matching neither is treated as permanent and surfaced with its own
+# message, which is the safe default for an unknown write failure.
+_PERMANENT_FAILURE_PROSE: tuple[str, ...] = (
+    "failed",
+    "failure",
+    "error",
+    "invalid",
+    "checksum",
+    "corrupt",
+    "not support",
+    "unsupported",
+    "timeout",
+    "timed out",
 )
-# The transport also emits a bare ``BUSY`` / ``DEVICE BUSY`` code. Whole-word
-# so it cannot match inside unrelated prose.
-_BARE_BUSY_RE = re.compile(r"\bbusy\b")
+_BUSY_PROSE: tuple[str, ...] = ("busy", "updating")
 
 # Hard cap on ``standardUpdate/run`` POSTs issued for a single step. The busy
 # budget bounds elapsed time, not request count: at a 0.05s floor a 15-minute
@@ -64,8 +75,11 @@ def _is_fresh_step_evidence(
     * ``startTime`` changed → the server opened a new update record.
 
     An unchanged, already-installing row is the stale case and is refused.
-    Being wrong in the conservative direction only forfeits the grace, which
-    costs a retry; being wrong the other way authorises a real firmware write.
+    The asymmetry is deliberate but NOT free: being wrong the permissive way
+    authorises a real firmware write, while being wrong the conservative way
+    forfeits the grace and ENDS the run (the user sees the no-progress error
+    and has to press Install again). That is why this strict form is applied
+    only to the first step, where the stale-leftover threat actually lives.
     """
     if row is None or not row.is_in_progress:
         return False
@@ -142,6 +156,9 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         self._firmware_update_cache_time: datetime | None = None
         self._firmware_update_cache_ttl = timedelta(hours=24)  # 24-hour TTL
         self._firmware_update_cache_lock = asyncio.Lock()
+        # Raw status row from the most recent progress poll, kept so the
+        # update orchestrator can attribute activity without a second call.
+        self._last_status_row: FirmwareDeviceInfo | None = None
 
     @property
     def firmware_update_available(self) -> bool | None:
@@ -428,6 +445,10 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             (info for info in status.deviceInfos if info.inverterSn == serial),
             None,
         )
+        # Keep the raw row: the orchestrator needs its timing fields to
+        # attribute activity, and re-fetching it would both double the call
+        # rate and risk the two reads disagreeing about the same instant.
+        self._last_status_row = device_info
 
         # Determine progress state
         in_progress = False
@@ -603,6 +624,12 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         state to ``in_progress=False`` and drops the timing fields, so callers
         that need the terminal status or need to tell one update run from the
         next have to read the raw row.
+
+        Returns the FIRST row matching this serial. The API has never been
+        observed returning more than one per device, but ``packageIndex``
+        hints that per-component rows may exist; if a device ever reports
+        several, this picks whichever the server listed first rather than the
+        most recent, and the caller's attribution would need revisiting.
         """
         client: LuxpowerClient = self._client
         serial: str = self.serial_number
@@ -611,6 +638,33 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             (item for item in status.deviceInfos if item.inverterSn == serial),
             None,
         )
+
+    async def _read_device_firmware_code(self) -> str | None:
+        """Live firmware code from a source OTHER than ``checkUpdates``.
+
+        ``checkUpdates`` answers an up-to-date device with a synthesized
+        sentinel whose installed version is EMPTY (see
+        :meth:`FirmwareUpdateCheck.create_up_to_date`), so it cannot by itself
+        say which version a converged device is actually running. The runtime
+        endpoint reports ``fwCode`` unconditionally, which is what lets the
+        orchestrator tell "converged on the target" from "the check endpoint
+        blinked" without trusting either source alone.
+
+        Best-effort: any API/connection failure returns None, and the caller
+        reports an indeterminate result rather than guessing. Inverter-shaped
+        by default; MID devices may need their own override.
+        """
+        from pylxpweb.exceptions import LuxpowerError
+
+        client: LuxpowerClient = self._client
+        serial: str = self.serial_number
+        try:
+            runtime = await client.api.devices.get_inverter_runtime(serial)
+        except LuxpowerError:
+            _LOGGER.debug("Firmware corroboration read failed for %s", serial, exc_info=True)
+            return None
+        code: str | None = getattr(runtime, "fwCode", None)
+        return code or None
 
     async def _update_step_reported_failed(self) -> bool:
         """Whether ``remoteUpdate/info`` reports this device's update as FAILED.
@@ -754,26 +808,14 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             )
 
         def _is_device_busy_error(err: LuxpowerAPIError) -> bool:
-            # Matched against the KNOWN busy codes only, never a bare
-            # "updating" substring. The loose version classified anything
-            # containing "updating" as transient, so a permanent failure like
-            # "Failed updating firmware: invalid checksum" was retried for the
-            # whole busy budget and then reported as "device remained busy" —
-            # burying the real cause. That mattered more once this budget grew
-            # to busy_grace (15 min), so the matcher is now explicit:
-            #   - ``deviceBusy`` / ``device_busy`` / ``DEVICE_BUSY`` and the
-            #     bare ``BUSY`` transport transient code, as a whole word so
-            #     "invalid checksum" prose cannot match;
-            #   - the eligibility enum codes ``deviceUpdating`` /
-            #     ``parallelGroupUpdating``;
-            #   - the ``standardUpdate/run`` prose variants "Device is already
-            #     updating" / "Another device in the parallel group is
-            #     updating".
-            # Anything else propagates or is surfaced with its real message.
+            # Two stages, in order: failure prose wins outright, then any
+            # busy/updating wording counts as busy. See the module constants
+            # for why neither a bare substring nor an enumerated code list is
+            # right on its own.
             message = str(err).casefold()
-            if any(stem in message for stem in _BUSY_ERROR_STEMS):
-                return True
-            return _BARE_BUSY_RE.search(message) is not None
+            if any(prose in message for prose in _PERMANENT_FAILURE_PROSE):
+                return False
+            return any(prose in message for prose in _BUSY_PROSE)
 
         def _is_already_latest_error(err: LuxpowerAPIError) -> bool:
             # ``standardUpdate/run`` refuses a device it considers converged
@@ -809,6 +851,10 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         # the server contradicting itself, and re-deriving the target from
         # that same answer would turn the contradiction into a success.
         driving_target = info.latest_version or None
+        # The version the device was on when this run began. Corroborating a
+        # sentinel against this distinguishes "moved, and the server says
+        # nothing is left" from "never moved, the server just blinked".
+        started_from = info.installed_version or None
         loop = asyncio.get_running_loop()
         # Smallest wait between busy/eligibility re-polls. Floors poll_interval
         # so neither a degenerate 0 nor a small positive value (0.001) can
@@ -822,43 +868,103 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         # 0x14<->0x13 alternation spent five accepted flashes that way.
         seen_progress_keys: set[tuple[str | None, int | None, int | None]] = {_progress_key(info)}
 
-        def _converged_or_indeterminate(
+        def _same_version(left: str | None, right: str | None) -> bool:
+            # Firmware codes are hex-ish strings whose case the API is not
+            # consistent about ("ccaa-1E1515" vs "CCAA-1E1515"); a case
+            # difference is not a version difference.
+            return (
+                left is not None
+                and right is not None
+                and left.strip().casefold() == right.strip().casefold()
+            )
+
+        async def _convergence_verdict(
             step_index: int,
             check: FirmwareUpdateInfo,
             target: str | None,
-        ) -> FirmwareUpdateRunResult:
-            # "No update available" is necessary but NOT sufficient evidence of
-            # convergence. The check endpoint answers a converged device with a
-            # bare sentinel whose installed_version is EMPTY, and it can also
-            # answer that way transiently. Substituting the remembered target
-            # for an empty installed version — which this code used to do —
-            # lets a device still sitting on the old firmware be reported as
-            # success with the target as its version: the partial-upgrade
-            # failure this whole change exists to prevent, now silent.
+        ) -> tuple[FirmwareUpdateRunResult | None, str | None]:
+            # Called when the check endpoint says no update remains. That is
+            # necessary but NOT sufficient: a converged device is answered with
+            # a synthesized sentinel whose installed version is EMPTY (see
+            # FirmwareUpdateCheck.create_up_to_date), and the same shape can
+            # appear transiently mid-chain. Neither trusting it (reports a
+            # partially upgraded device as success) nor rejecting it (reports
+            # a genuinely converged device as failure, at the exact moment of
+            # success) is right on its own.
             #
-            # Convergence therefore requires a concrete installed version that
-            # equals the target we were driving toward. Anything else is
-            # reported as indeterminate, with only what is actually known.
+            # So corroborate from a source that always carries a version: the
+            # runtime endpoint's fwCode.
+            #
+            # Returns (verdict, corroborated_version). A verdict of None means
+            # "not converged, keep going" — the sentinel was transient.
             installed = check.installed_version or None
-            if installed is not None and (target is None or installed == target):
-                return FirmwareUpdateRunResult(
-                    success=True,
-                    converged=True,
-                    steps_run=step_index,
-                    message=f"Firmware update complete after {step_index} step(s)",
-                    final_version=installed,
+            if _same_version(installed, target) or (installed is not None and target is None):
+                return (
+                    FirmwareUpdateRunResult(
+                        success=True,
+                        converged=True,
+                        steps_run=step_index,
+                        message=f"Firmware update complete after {step_index} step(s)",
+                        final_version=installed,
+                    ),
+                    installed,
                 )
-            return FirmwareUpdateRunResult(
-                success=False,
-                converged=False,
-                steps_run=step_index,
-                message=(
-                    "Server reports no update available, but it did not confirm "
-                    f"the device reached {target or 'the target version'} "
-                    f"(it reports {installed or 'no version'}) — the device may be "
-                    "partially upgraded; re-check in a few minutes before retrying"
+
+            corroborated = await self._read_device_firmware_code()
+            if corroborated is not None:
+                if _same_version(corroborated, target) or target is None:
+                    return (
+                        FirmwareUpdateRunResult(
+                            success=True,
+                            converged=True,
+                            steps_run=step_index,
+                            message=f"Firmware update complete after {step_index} step(s)",
+                            final_version=corroborated,
+                        ),
+                        corroborated,
+                    )
+                if not _same_version(corroborated, started_from):
+                    # The device moved and the server says nothing further is
+                    # available. The target string can be a reconstruction
+                    # (from_api_response splices version bytes onto the code,
+                    # and for unverified layouts that splice is a guess the
+                    # server never echoes), so demanding an exact match here
+                    # would fail a real convergence. Accept the device's own
+                    # reported version as the outcome.
+                    return (
+                        FirmwareUpdateRunResult(
+                            success=True,
+                            converged=True,
+                            steps_run=step_index,
+                            message=(
+                                f"Firmware update complete after {step_index} step(s); "
+                                f"device reports {corroborated}"
+                            ),
+                            final_version=corroborated,
+                        ),
+                        corroborated,
+                    )
+                # Corroborated as still on the version we started from: the
+                # "no update available" answer was transient. Keep going.
+                return (None, corroborated)
+
+            # No corroboration available. Do not claim success, but do not
+            # imply the update failed either — say what is and is not known.
+            return (
+                FirmwareUpdateRunResult(
+                    success=False,
+                    converged=False,
+                    steps_run=step_index,
+                    message=(
+                        "Server reports no update remaining, but the device's "
+                        f"version could not be read back to confirm it reached "
+                        f"{target or 'the target'} — the update may well have "
+                        "completed; verify the firmware version on the device "
+                        "before running this again"
+                    ),
+                    final_version=installed,
                 ),
-                final_version=installed,
+                None,
             )
 
         def _budget_spent(
@@ -961,8 +1067,9 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                         converged=False,
                         steps_run=steps_run,
                         message=(
-                            f"Device refused the firmware update ({denial.value}); "
-                            "this will not clear on its own"
+                            f"Device refused the firmware update ({denial.value}) — "
+                            "this may indicate another update is running in its "
+                            "parallel group; retry once that completes"
                         ),
                         final_version=info.installed_version,
                     )
@@ -1012,7 +1119,11 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                             # (Pre-flight, this still propagates untouched.)
                             info = await self.check_firmware_updates(force=True)
                             if not info.update_available:
-                                return _converged_or_indeterminate(steps_run, info, driving_target)
+                                verdict, _ = await _convergence_verdict(
+                                    steps_run, info, driving_target
+                                )
+                                if verdict is not None:
+                                    return verdict
                             return FirmwareUpdateRunResult(
                                 success=False,
                                 converged=False,
@@ -1043,6 +1154,9 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                     )
                 await asyncio.sleep(min(retry_backoff, max(0.0, busy_deadline - loop.time())))
 
+            # Captured BEFORE the increment: strict evidence attribution
+            # applies only to the first step of this invocation.
+            is_first_step = steps_run == 0
             if not started:
                 # steps_run counts steps the SERVER ACCEPTED, per this
                 # method's contract and FirmwareUpdateRunResult's — a refused
@@ -1075,21 +1189,32 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             saw_in_progress = False
             # Governs whether this step may spend the no-progress grace. The
             # aggregated in_progress flag matches ANY in-progress row for the
-            # serial, including one left over from an earlier run — which
-            # would forge the grace's evidence for a step the server never
-            # ran. Only evidence that appeared or transitioned AFTER our start
-            # POST counts, established from the raw row's identity against the
-            # pre-POST baseline. Latched, so it costs one extra status read
-            # per step in the normal case.
+            # serial, including one left over from an earlier run.
+            #
+            # The threat is PRE-RUN leftovers, so strict attribution is only
+            # needed for the FIRST step: before we have written anything, an
+            # in-progress row is someone else's by definition. From step 2 on,
+            # this run has already had a start accepted, so an in-progress row
+            # is our own session's activity — and demanding a fresh startTime
+            # there would break on a portal that keeps ONE row per update
+            # session and updates it in place (plausible; packageIndex hints
+            # at per-component rows but that is unverified). Getting that
+            # wrong reintroduces the exact reported failure, so steps 2+ accept
+            # the in-progress reading; the grace and max_steps bound it either
+            # way. Latched, so attribution costs one extra status read per
+            # step at most.
             attributed_in_progress = False
             while True:
                 progress = await self.get_firmware_update_progress(force=True)
                 if progress.in_progress:
                     saw_in_progress = True
                     if not attributed_in_progress:
-                        attributed_in_progress = _is_fresh_step_evidence(
-                            await self._current_status_row(), step_baseline
-                        )
+                        if is_first_step:
+                            attributed_in_progress = _is_fresh_step_evidence(
+                                self._last_status_row, step_baseline
+                            )
+                        else:
+                            attributed_in_progress = True
                 elif saw_in_progress or loop.time() >= grace_deadline:
                     break
                 if loop.time() >= deadline:
@@ -1132,9 +1257,34 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                     await asyncio.sleep(settle_interval)
                 info = await self.check_firmware_updates(force=True)
                 if not info.update_available:
-                    return _converged_or_indeterminate(steps_run, info, driving_target)
+                    verdict, corroborated = await _convergence_verdict(
+                        steps_run, info, driving_target
+                    )
+                    if verdict is not None:
+                        return verdict
+                    # Transient sentinel: the server said "nothing available"
+                    # but the device is corroborated as still on the version
+                    # this run started from. Do NOT abandon the chain on a
+                    # blink — fall through to the rest of the settle window
+                    # (which may yet return real data) and, failing that, to
+                    # the no-progress path, where the grace decides whether to
+                    # run another component. Identical handling to "the
+                    # version did not move", because that is what it is.
+                    _LOGGER.info(
+                        "Firmware step %d for %s: check reported no update while the "
+                        "device still reads %s — treating as a transient answer, not "
+                        "as convergence",
+                        steps_run,
+                        self.serial_number,
+                        corroborated,
+                    )
+                    continue
                 key = _progress_key(info)
-                if key != before and key not in seen_progress_keys:
+                # A blank installed version is the sentinel shape, not a
+                # distinct firmware state; counting it as novel would let an
+                # endpoint alternating between real data and the sentinel
+                # reset the grace forever.
+                if key[0] is not None and key != before and key not in seen_progress_keys:
                     # Movement to a state never seen in this run. Requiring
                     # novelty, not mere difference, is what stops a check
                     # endpoint flapping between two stale snapshots from

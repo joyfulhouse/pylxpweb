@@ -33,10 +33,11 @@ def _info(
     in_progress: bool = False,
     app_current: int | None = None,
     param_current: int | None = None,
+    latest_override: str | None = None,
 ) -> FirmwareUpdateInfo:
     return FirmwareUpdateInfo(
         installed_version=installed,
-        latest_version=latest,
+        latest_version=latest_override if latest_override is not None else latest,
         title="Test Firmware",
         release_summary=None,
         release_url=None,
@@ -86,6 +87,7 @@ class ScriptedDevice(FirmwareUpdateMixin):
         eligibility: list[bool | LuxpowerAPIError | UpdateEligibilityMessage] | None = None,
         failed_statuses: list[bool] | None = None,
         status_rows: list[FirmwareDeviceInfo | None] | None = None,
+        firmware_codes: list[str | None] | None = None,
     ) -> None:
         self._init_firmware_update_cache()
         # The orchestrator logs against the host's serial (issue #353 chain
@@ -102,6 +104,8 @@ class ScriptedDevice(FirmwareUpdateMixin):
         # Tests that need a misbehaving server (a stale row that never
         # changes) script the rows explicitly.
         self._status_rows = status_rows
+        self._firmware_codes = firmware_codes
+        self._device_code: str | None = None
         self._run_seq = 0
         self._last_progress_in_progress = False
         self.start_calls = 0
@@ -113,11 +117,19 @@ class ScriptedDevice(FirmwareUpdateMixin):
     async def check_firmware_updates(self, force: bool = False) -> FirmwareUpdateInfo:
         self.check_calls += 1
         self.check_force_flags.append(force)
-        return self._checks.pop(0)
+        info = self._checks.pop(0)
+        if info.installed_version:
+            # A device whose runtime endpoint agrees with the check endpoint.
+            self._device_code = info.installed_version
+        return info
 
     async def get_firmware_update_progress(self, force: bool = False) -> FirmwareUpdateInfo:
         info = self._progresses.pop(0) if self._progresses else _info("X-0000", "X-0000")
         self._last_progress_in_progress = info.in_progress
+        # Production caches the raw row it just fetched so the orchestrator can
+        # attribute activity without a second call; the harness must too, or it
+        # tests a seam the real code does not have.
+        self._last_status_row = await self._next_status_row()
         return info
 
     async def start_firmware_update(self, try_fast_mode: bool = False) -> bool:
@@ -152,13 +164,27 @@ class ScriptedDevice(FirmwareUpdateMixin):
             ),
         )
 
-    async def _current_status_row(self) -> FirmwareDeviceInfo | None:
+    async def _next_status_row(self) -> FirmwareDeviceInfo | None:
         if self._status_rows is not None:
             return self._status_rows.pop(0) if self._status_rows else None
         return _row(
             start_time=f"run-{self._run_seq}",
             in_progress=self._last_progress_in_progress,
         )
+
+    async def _current_status_row(self) -> FirmwareDeviceInfo | None:
+        return await self._next_status_row()
+
+    async def _read_device_firmware_code(self) -> str | None:
+        """The version the DEVICE reports, independent of checkUpdates.
+
+        Scripted when a test needs the two sources to disagree; otherwise it
+        models a device that agrees with the last concrete version the check
+        endpoint reported (the sentinel's empty string is not a version).
+        """
+        if self._firmware_codes is not None:
+            return self._firmware_codes.pop(0) if self._firmware_codes else None
+        return self._device_code
 
     async def _update_step_reported_failed(self) -> bool:
         if self._failed_statuses:
@@ -567,39 +593,97 @@ def test_scripted_device_is_mixin() -> None:
 
 
 @pytest.mark.asyncio
-async def test_up_to_date_sentinel_alone_is_not_convergence() -> None:
-    """An empty 'already latest' sentinel must NOT be reported as success.
+async def test_up_to_date_sentinel_with_corroboration_is_convergence() -> None:
+    """The sentinel IS the documented answer for a converged device.
 
-    This test previously asserted the opposite: that the remembered target be
-    substituted for the sentinel's empty installed_version. That is precisely
-    how a partially upgraded device could be reported as converged on a
-    version it never reached — the failure this whole change exists to
-    prevent, with the evidence blanked out. "No update available" is
-    necessary but not sufficient; convergence needs a concrete installed
-    version matching the target.
+    ``checkUpdates`` answers an up-to-date device with success:false "already
+    the latest version", which the client synthesizes into a record whose
+    installed_version is EMPTY. Demanding a concrete version from that answer
+    alone reported a device as FAILED at the exact moment it succeeded. The
+    sentinel is corroborated against the runtime endpoint's fwCode instead: if
+    the device really is on the target, that is convergence.
     """
     sentinel = _info("", "")  # create_up_to_date shape: both fields empty
-    device = ScriptedDevice(checks=[STEP2_PENDING, sentinel])
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, sentinel],
+        firmware_codes=["ccaa-1E1515"],  # the device really did converge
+    )
 
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
-    assert not result.success and not result.converged
-    assert result.final_version is None
-    assert "partially upgraded" in result.message
+    assert result.success and result.converged
+    assert result.final_version == "ccaa-1E1515"
 
 
 @pytest.mark.asyncio
-async def test_convergence_requires_the_target_version() -> None:
-    """A check that reports no update while still on the OLD version is not
-    convergence either — it is the indeterminate case, reported honestly."""
-    stale = _info("ccaa-1E1415", "ccaa-1E1415")  # no update "available", old version
-    device = ScriptedDevice(checks=[STEP2_PENDING, stale])
+async def test_sentinel_is_not_trusted_when_the_device_says_otherwise() -> None:
+    """The complement, and the round-2 finding this must not undo: a sentinel
+    while the device is still on the version we started from is a transient
+    answer, not convergence — so it must not be reported as success."""
+    sentinel = _info("", "")
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, sentinel, sentinel, sentinel],
+        # Device still reads the pre-run version every time it is asked.
+        firmware_codes=["ccaa-1E1415"] * 6,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, settle_checks=0
+    )
+
+    assert not result.success and not result.converged
+
+
+@pytest.mark.asyncio
+async def test_corroborated_move_counts_even_if_it_misses_the_target_string() -> None:
+    """The target can be a reconstruction the server never echoes.
+
+    ``from_api_response`` splices version bytes onto the firmware code, and for
+    unverified layouts that splice is a guess. If the device moved and the
+    server says nothing further is available, accept the device's own reported
+    version rather than failing on a string mismatch with our own guess.
+    """
+    sentinel = _info("", "")
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, sentinel],
+        firmware_codes=["ccaa-1E15FF"],  # moved, but not the spliced target
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+
+    assert result.success and result.converged
+    assert result.final_version == "ccaa-1E15FF"
+
+
+@pytest.mark.asyncio
+async def test_convergence_is_indeterminate_without_corroboration() -> None:
+    """If the device's version cannot be read back, say so — without implying
+    the update failed, because it most likely did not."""
+    sentinel = _info("", "")
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, sentinel],
+        firmware_codes=[None],  # runtime read unavailable
+    )
 
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert not result.success and not result.converged
-    assert result.final_version == "ccaa-1E1415"  # what it actually reports
-    assert "ccaa-1E1515" in result.message  # the target it could not confirm
+    assert "verify the firmware version on the device" in result.message
+    assert "may well have completed" in result.message
+
+
+@pytest.mark.asyncio
+async def test_version_match_is_case_insensitive() -> None:
+    """The API is not consistent about case; that is not a version difference."""
+    sentinel = _info("", "")
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, sentinel],
+        firmware_codes=["CCAA-1E1515"],
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+
+    assert result.success and result.converged
 
 
 @pytest.mark.asyncio
@@ -1045,7 +1129,7 @@ async def test_permanent_eligibility_denial_surfaces_immediately() -> None:
     assert device.start_calls == 1  # step 1 only; step 2 never attempted
     assert device.eligibility_calls == 2  # probed once, not re-polled
     assert "notAllowedInParallel" in result.message
-    assert "will not clear" in result.message
+    assert "retry once that completes" in result.message
 
 
 @pytest.mark.asyncio
@@ -1147,3 +1231,157 @@ async def test_small_positive_poll_interval_does_not_hot_loop() -> None:
     # At a 0.05s floor, a 0.3s budget allows a handful of attempts — not the
     # hundreds an unfloored 0.001s interval would have issued.
     assert device.start_calls <= 1 + _MAX_START_ATTEMPTS_PER_STEP
+
+
+# --- Round 3: false-negative closures -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mid_chain_attribution_tolerates_a_single_session_row() -> None:
+    """Steps 2+ must not demand a NEW status row.
+
+    The portal may keep ONE row per update session and update it in place, in
+    which case step 2's baseline is already an in-progress row with an
+    unchanged startTime — all three freshness clauses fail, the grace is
+    refused, and the reporter's verbatim error comes back. The stale-row
+    threat is PRE-run leftovers, so strict attribution applies only to step 1;
+    from step 2 on, an in-progress row is this run's own activity.
+    """
+    one_session_row = _row(start_time="session-1", in_progress=True)
+    device = ScriptedDevice(
+        # Step 1 advances; step 2 is a no-op component; step 3 finishes.
+        checks=[STEP1_PENDING, STEP2_PENDING, STEP2_PENDING, UP_TO_DATE],
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 3,
+        # The same row throughout, exactly as an in-place portal would report.
+        status_rows=[one_session_row] * 12,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=60, settle_checks=0
+    )
+
+    assert result.success and result.converged
+    assert device.start_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_first_step_attribution_is_still_strict() -> None:
+    """The complement: a pre-run leftover row still buys nothing on step 1."""
+    leftover = _row(start_time="yesterday", in_progress=True)
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING] * 4,
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 4,
+        status_rows=[leftover] * 8,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=60, settle_checks=0
+    )
+
+    assert not result.success
+    assert device.start_calls == 1  # no second blind write
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "systemBusy",
+        "Device is updating, please try again",
+        "SYSTEM_BUSY",
+        "The inverter is busy",
+    ],
+)
+@pytest.mark.asyncio
+async def test_unrecognised_busy_phrasings_are_still_tolerated(message: str) -> None:
+    """Breadth restored: an enumerated code list was too narrow.
+
+    The portal emits phrasings we have never catalogued. Treating an
+    unrecognised busy response as permanent aborts a chain that would have
+    succeeded moments later, so any busy/updating wording without failure
+    prose counts as busy.
+    """
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP2_PENDING, UP_TO_DATE],
+        start_results=[True, LuxpowerAPIError(message), True],
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, busy_grace=60, settle_checks=0
+    )
+
+    assert result.success and result.converged
+    assert device.start_calls == 3
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Failed updating firmware: invalid checksum",
+        "Error updating firmware image",
+        "Firmware image corrupt",
+        "Update timed out while updating",
+    ],
+)
+@pytest.mark.asyncio
+async def test_failure_prose_beats_busy_wording(message: str) -> None:
+    """Stage 1 wins: failure prose is permanent even when it says "updating"."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP2_PENDING],
+        start_results=[True, LuxpowerAPIError(message)],
+    )
+
+    with pytest.raises(LuxpowerAPIError):
+        await device.run_firmware_update_to_completion(
+            poll_interval=0, start_grace=0, busy_grace=60, settle_checks=0
+        )
+
+
+@pytest.mark.asyncio
+async def test_attribution_reuses_the_polled_row() -> None:
+    """Attribution must not issue its own remoteUpdate/info call.
+
+    A second read doubles the call rate and can disagree with the progress
+    call about the same instant. The row cached by the progress poll is the
+    one used.
+    """
+    extra_reads = 0
+
+    class RowCallCounting(ScriptedDevice):
+        async def _current_status_row(self) -> FirmwareDeviceInfo | None:
+            nonlocal extra_reads
+            extra_reads += 1
+            return await super()._current_status_row()
+
+    device = RowCallCounting(
+        checks=[STEP2_PENDING, STEP2_PENDING, UP_TO_DATE],
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 2,
+    )
+
+    await device.run_firmware_update_to_completion(poll_interval=0, start_grace=60, settle_checks=0)
+
+    # One pre-POST baseline read per accepted step, and nothing more: the
+    # polling path reads the cached row instead of calling again.
+    assert extra_reads == device.start_calls
+
+
+@pytest.mark.asyncio
+async def test_blank_installed_version_is_not_novel_progress() -> None:
+    """A sentinel is not a distinct firmware state.
+
+    An endpoint alternating between real data and the sentinel would otherwise
+    look like movement on every other check and reset the grace forever.
+    """
+    sentinel = _info("", "", latest_override="ccaa-1E1515")
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, sentinel, STEP2_PENDING, sentinel, STEP2_PENDING, sentinel],
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 6,
+        firmware_codes=["ccaa-1E1415"] * 12,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=60, settle_checks=0
+    )
+
+    assert not result.success
+    # grace(2) + 1 — the alternating sentinel never bought an extra step.
+    assert device.start_calls == 3
