@@ -199,19 +199,31 @@ class TestBulkDeviceData:
 
         mock_overview.rows = [mock_device1, mock_device2]
 
-        # Track call times to verify concurrency
-        call_times: list[float] = []
+        # Track how many calls are in flight at once. Wall-clock timing cannot
+        # tell concurrency from a slow runner: the concurrent floor here is
+        # 0.02s, so any absolute budget tight enough to catch sequential
+        # execution is also tight enough for CI load to trip. Peak in-flight
+        # count answers the actual question and is independent of machine speed.
+        calls: list[str] = []
+        in_flight = 0
+        peak_in_flight = 0
+
+        async def record_concurrent_call(serial: str) -> None:
+            nonlocal in_flight, peak_in_flight
+            calls.append(serial)
+            in_flight += 1
+            peak_in_flight = max(peak_in_flight, in_flight)
+            await asyncio.sleep(0.01)  # Simulate API delay
+            in_flight -= 1
 
         async def mock_runtime_call(serial: str) -> Mock:
-            call_times.append(asyncio.get_event_loop().time())
-            await asyncio.sleep(0.01)  # Simulate API delay
+            await record_concurrent_call(serial)
             mock = Mock(spec=InverterRuntime)
             mock.serialNum = serial
             return mock
 
         async def mock_battery_call(serial: str) -> Mock:
-            call_times.append(asyncio.get_event_loop().time())
-            await asyncio.sleep(0.01)  # Simulate API delay
+            await record_concurrent_call(serial)
             mock = Mock(spec=BatteryInfo)
             mock.serialNum = serial
             return mock
@@ -222,15 +234,12 @@ class TestBulkDeviceData:
         devices_endpoint.get_battery_info = AsyncMock(side_effect=mock_battery_call)
 
         # Call get_all_device_data
-        start_time = asyncio.get_event_loop().time()
         await devices_endpoint.get_all_device_data(12345)
-        end_time = asyncio.get_event_loop().time()
 
-        # Verify calls were made concurrently (not sequentially)
-        # If sequential: 4 calls * 0.01s = 0.04s minimum
-        # If concurrent: 2 parallel groups * 0.01s = 0.02s minimum
-        total_time = end_time - start_time
-        assert total_time < 0.03, f"Calls appear to be sequential: {total_time}s"
+        # Verify calls were made concurrently (not sequentially): the two
+        # devices are fetched in parallel, so at least two calls must overlap.
+        # Sequential execution would never exceed one call in flight.
+        assert peak_in_flight >= 2, f"Calls appear to be sequential: {peak_in_flight} in flight"
 
         # Verify all 4 calls were made (2 runtime + 2 battery)
-        assert len(call_times) == 4
+        assert len(calls) == 4
