@@ -67,6 +67,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would find an unchanged in-progress row, be refused the grace, and fail with
   the original reported symptom. From step 2 onward an in-progress row is this
   run's own activity and counts; the grace and step budget bound it regardless.
+- **An opening "already up to date" answer in the sentinel shape is confirmed
+  before it is believed**: the pre-flight check returned success on "no update
+  available" with no corroboration, so a partially updated device whose first
+  check blinked was told it needed no update at all. An empty-version answer
+  now gets one confirming re-check after a short delay; both agreeing reports
+  up-to-date, disagreement proceeds into the chain. A concrete version with
+  nothing newer is still trusted on one read. Residual: two consecutive blinks
+  would still slip through — this is a confirmation, not a proof.
+- **A transient failure to read back the device's version no longer reports a
+  successful update as failed**: the corroboration read is retried a bounded
+  number of times before settling on indeterminate, because the most likely
+  moment for it to fail is while the device reboots after its final component
+  — exactly when the update has in fact succeeded. `ValidationError` is caught
+  alongside API errors, since `fwCode` is a required field and a device
+  omitting it mid-reboot would otherwise raise straight out of the install
+  action.
 - **Convergence now requires evidence, not just the absence of an update**:
   "no update available" was treated as success, and an empty installed version
   in the up-to-date sentinel was backfilled with the target — so a device still
@@ -96,7 +112,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "updating"; otherwise any busy/updating wording counts as busy, so portal
   phrasings nobody has catalogued (`systemBusy`, "Device is updating, please
   try again") are still waited out rather than aborting a chain that would
-  have succeeded moments later. A `notAllowedInParallel` eligibility refusal is
+  have succeeded moments later. Classification runs on the SERVER's message,
+  with the client's wrapper stripped first: `LuxpowerClient` raises
+  "API error (HTTP {status}): {msg}" and "Unexpected error: {msg}", both of
+  which contain the word "error" — so classifying the wrapped string matched
+  the wrapper, ruled every busy response permanent, and left the busy path
+  dead in production while unit tests injecting a bare "deviceBusy" passed. A `notAllowedInParallel` eligibility refusal is
   surfaced at once instead of polled for the full budget, worded as a likely
   parallel-group conflict to retry after — our own run can induce it, so it is
   not claimed to be permanent.

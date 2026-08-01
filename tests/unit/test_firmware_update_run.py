@@ -606,7 +606,10 @@ async def test_up_to_date_sentinel_with_corroboration_is_convergence() -> None:
     sentinel = _info("", "")  # create_up_to_date shape: both fields empty
     device = ScriptedDevice(
         checks=[STEP2_PENDING, sentinel],
-        firmware_codes=["ccaa-1E1515"],  # the device really did converge
+        # First read is the pre-run baseline (same source as the
+        # corroboration, so the movement test is fwCode-to-fwCode); then the
+        # device really did converge.
+        firmware_codes=["ccaa-1E1415", "ccaa-1E1515"],
     )
 
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
@@ -646,13 +649,19 @@ async def test_corroborated_move_counts_even_if_it_misses_the_target_string() ->
     sentinel = _info("", "")
     device = ScriptedDevice(
         checks=[STEP2_PENDING, sentinel],
-        firmware_codes=["ccaa-1E15FF"],  # moved, but not the spliced target
+        # Baseline, then moved — but not to the spliced target string.
+        firmware_codes=["ccaa-1E1415", "ccaa-1E15FF"],
     )
 
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert result.success and result.converged
     assert result.final_version == "ccaa-1E15FF"
+    # The message must report what was actually observed and must NOT claim
+    # the device reached the target, which this path never verified.
+    assert "no further updates" in result.message
+    assert "now at ccaa-1E15FF" in result.message
+    assert "did not echo back" in result.message
 
 
 @pytest.mark.asyncio
@@ -662,7 +671,7 @@ async def test_convergence_is_indeterminate_without_corroboration() -> None:
     sentinel = _info("", "")
     device = ScriptedDevice(
         checks=[STEP2_PENDING, sentinel],
-        firmware_codes=[None],  # runtime read unavailable
+        firmware_codes=[None, None],  # runtime read unavailable throughout
     )
 
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
@@ -678,7 +687,7 @@ async def test_version_match_is_case_insensitive() -> None:
     sentinel = _info("", "")
     device = ScriptedDevice(
         checks=[STEP2_PENDING, sentinel],
-        firmware_codes=["CCAA-1E1515"],
+        firmware_codes=["ccaa-1E1415", "CCAA-1E1515"],
     )
 
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
@@ -1385,3 +1394,227 @@ async def test_blank_installed_version_is_not_novel_progress() -> None:
     assert not result.success
     # grace(2) + 1 — the alternating sentinel never bought an extra step.
     assert device.start_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_sentinel_does_not_converge_on_a_cross_source_shape_difference() -> None:
+    """The movement test must compare like with like.
+
+    The runtime endpoint's fwCode and the check endpoint's fwCodeBeforeUpload
+    are different sources, and this repo documents check-side strings as
+    synthesized reconstructions. If their shapes differ by more than case, a
+    check-vs-runtime movement test is PERMANENTLY unequal, so every sentinel
+    would report converged on its first occurrence — silent, and always toward
+    false success. Baselining from the same source removes the mismatch.
+    """
+    sentinel = _info("", "")
+    device = ScriptedDevice(
+        # Check-side strings carry a prefix the runtime endpoint omits.
+        checks=[
+            _info("PFX/ccaa-1E1415", "PFX/ccaa-1E1515", app_current=0x14, param_current=0x15),
+            sentinel,
+            sentinel,
+            sentinel,
+        ],
+        # Runtime consistently reports the short form, and never moves.
+        firmware_codes=["ccaa-1E1415"] * 8,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, settle_checks=0
+    )
+
+    assert not result.success and not result.converged
+    assert "complete" not in result.message
+
+
+@pytest.mark.asyncio
+async def test_no_same_source_baseline_is_indeterminate_not_movement() -> None:
+    """If the pre-run baseline read failed, "did it move?" is unanswerable.
+
+    Counting inequality as movement there would be guessing in the direction
+    of success, so the run reports indeterminate instead.
+    """
+    sentinel = _info("", "")
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, sentinel],
+        # Baseline read fails; later reads succeed with some other value.
+        firmware_codes=[None, "ccaa-1E9999", "ccaa-1E9999", "ccaa-1E9999", "ccaa-1E9999"],
+    )
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+
+    assert not result.success and not result.converged
+    assert "verify the firmware version on the device" in result.message
+
+
+# --- Round 4 ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("wrapped", "is_busy"),
+    [
+        # The EXACT shapes LuxpowerClient emits — bare codes never reach here.
+        ("API error (HTTP 200): deviceBusy", True),
+        ("API error (HTTP 200): systemBusy", True),
+        ("API error (HTTP 200): Device is updating, please try again", True),
+        ("HTTP 500: deviceBusy", True),
+        ("API error (HTTP 200): Failed updating firmware: invalid checksum", False),
+        ("API error (HTTP 200): Firmware image corrupt", False),
+        ("Unexpected error: boom", False),
+    ],
+)
+def test_busy_classification_uses_the_real_client_error_shape(wrapped: str, is_busy: bool) -> None:
+    """Regression: the classifier ran against the client's WRAPPER.
+
+    LuxpowerClient raises "API error (HTTP {status}): {msg}" and "Unexpected
+    error: {err}" — both contain the word "error", which the permanent-failure
+    stage matched, so EVERY busy response was ruled permanent and the busy
+    path was dead in production. Unit tests passed only because they injected
+    a bare "deviceBusy", a shape the client never emits.
+    """
+    from pylxpweb.devices._firmware_update_mixin import (
+        _BUSY_PROSE,
+        _PERMANENT_FAILURE_PROSE,
+        _server_message,
+    )
+
+    message = _server_message(LuxpowerAPIError(wrapped)).casefold()
+    permanent = any(p in message for p in _PERMANENT_FAILURE_PROSE)
+    classified_busy = (not permanent) and any(p in message for p in _BUSY_PROSE)
+
+    assert classified_busy is is_busy
+
+
+@pytest.mark.asyncio
+async def test_wrapped_busy_error_is_tolerated_end_to_end() -> None:
+    """The production error shape must actually drive the busy path."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP2_PENDING, UP_TO_DATE],
+        start_results=[
+            True,
+            LuxpowerAPIError("API error (HTTP 200): deviceBusy"),
+            True,
+        ],
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, busy_grace=60, settle_checks=0
+    )
+
+    assert result.success and result.converged
+    assert device.start_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_wrapped_permanent_failure_still_propagates() -> None:
+    """...without letting the wrapper make everything permanent again."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP2_PENDING],
+        start_results=[
+            True,
+            LuxpowerAPIError("API error (HTTP 200): Failed updating firmware: invalid checksum"),
+        ],
+    )
+
+    with pytest.raises(LuxpowerAPIError, match="invalid checksum"):
+        await device.run_firmware_update_to_completion(
+            poll_interval=0, start_grace=0, busy_grace=60, settle_checks=0
+        )
+
+
+@pytest.mark.asyncio
+async def test_preflight_sentinel_is_confirmed_before_being_believed() -> None:
+    """A blinking sentinel on the FIRST check must not report up-to-date.
+
+    The pre-flight path returned success on `not update_available` with no
+    corroboration, so round 2's headline false positive survived at the front
+    door: a partially updated device whose first check blinked would be told
+    it needs no update at all.
+    """
+    sentinel = _info("", "")
+    device = ScriptedDevice(
+        # First check blinks; the confirming re-check reports the real work.
+        checks=[sentinel, STEP2_PENDING, UP_TO_DATE],
+        firmware_codes=["ccaa-1E1415"] * 4,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, settle_checks=0, preflight_confirm_delay=0
+    )
+
+    assert result.success and result.converged
+    assert device.start_calls == 1  # it really did run the update
+    assert device.check_calls >= 3  # blink + confirmation + post-step
+
+
+@pytest.mark.asyncio
+async def test_preflight_sentinel_confirmed_twice_is_up_to_date() -> None:
+    """Two agreeing reads are believed — no update is attempted."""
+    sentinel = _info("", "")
+    device = ScriptedDevice(checks=[sentinel, sentinel])
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, preflight_confirm_delay=0
+    )
+
+    assert result.success and result.converged
+    assert result.steps_run == 0
+    assert device.start_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_preflight_concrete_up_to_date_needs_no_confirmation() -> None:
+    """A concrete version with nothing newer is trusted on one read."""
+    device = ScriptedDevice(checks=[UP_TO_DATE])
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, preflight_confirm_delay=0
+    )
+
+    assert result.success and result.converged
+    assert device.check_calls == 1  # no second call
+
+
+@pytest.mark.asyncio
+async def test_corroboration_read_is_retried_before_giving_up() -> None:
+    """A transient read failure must not turn success into a red error.
+
+    The device reboots after its final component; a single failed runtime read
+    in that window would report a COMPLETED update as unconfirmable.
+    """
+    sentinel = _info("", "")
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, sentinel],
+        # baseline ok, then two failures, then the truth.
+        firmware_codes=["ccaa-1E1415", None, None, "ccaa-1E1515"],
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, settle_checks=0
+    )
+
+    assert result.success and result.converged
+    assert result.final_version == "ccaa-1E1515"
+
+
+@pytest.mark.asyncio
+async def test_corroboration_validation_error_is_not_raised_at_the_caller() -> None:
+    """fwCode is a required str; a device omitting it mid-reboot raises
+    ValidationError, which would escape into the HA install action."""
+    from pydantic import ValidationError
+
+    class ValidationFailingDevice(ScriptedDevice):
+        async def _read_device_firmware_code(self) -> str | None:
+            # Exercise the production body's except clause.
+            try:
+                raise ValidationError.from_exception_data("InverterRuntime", [])
+            except (LuxpowerAPIError, ValidationError):
+                return None
+
+    device = ValidationFailingDevice(checks=[STEP2_PENDING, _info("", "")])
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+
+    assert not result.success  # indeterminate, but no exception escaped
+    assert "verify the firmware version on the device" in result.message

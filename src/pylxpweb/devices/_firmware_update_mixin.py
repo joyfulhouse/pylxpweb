@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -43,6 +44,31 @@ _PERMANENT_FAILURE_PROSE: tuple[str, ...] = (
     "timed out",
 )
 _BUSY_PROSE: tuple[str, ...] = ("busy", "updating")
+
+# LuxpowerClient wraps every failure before it reaches here, and two of the
+# three wrappers contain the word "error" ("API error (HTTP 200): deviceBusy",
+# "Unexpected error: ..."). Classifying the wrapped string directly made stage
+# 1 match on the WRAPPER, so every busy response was ruled permanent and the
+# busy path was dead in production — while unit tests that inject a bare
+# "deviceBusy" passed, because that shape is one the client never emits.
+# Strip the known wrappers precisely (anchored, not by substring search) and
+# classify the server's own message.
+_ERROR_WRAPPERS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^API error \(HTTP \d+\):\s*", re.IGNORECASE),
+    re.compile(r"^HTTP \d+:\s*", re.IGNORECASE),
+    re.compile(r"^Unexpected error:\s*", re.IGNORECASE),
+)
+
+
+def _server_message(err: Exception) -> str:
+    """The server's own message, with the client's wrapper removed."""
+    message = str(err)
+    for wrapper in _ERROR_WRAPPERS:
+        stripped = wrapper.sub("", message, count=1)
+        if stripped != message:
+            return stripped.strip()
+    return message.strip()
+
 
 # Hard cap on ``standardUpdate/run`` POSTs issued for a single step. The busy
 # budget bounds elapsed time, not request count: at a 0.05s floor a 15-minute
@@ -651,16 +677,21 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         blinked" without trusting either source alone.
 
         Best-effort: any API/connection failure returns None, and the caller
-        reports an indeterminate result rather than guessing. Inverter-shaped
-        by default; MID devices may need their own override.
+        reports an indeterminate result rather than guessing. ValidationError
+        is caught too — ``fwCode`` is a required str, so a device answering
+        with it absent (plausible mid-reboot) would otherwise raise straight
+        out of a Home Assistant install action. Inverter-shaped by default;
+        MID devices may need their own override.
         """
+        from pydantic import ValidationError
+
         from pylxpweb.exceptions import LuxpowerError
 
         client: LuxpowerClient = self._client
         serial: str = self.serial_number
         try:
             runtime = await client.api.devices.get_inverter_runtime(serial)
-        except LuxpowerError:
+        except (LuxpowerError, ValidationError):
             _LOGGER.debug("Firmware corroboration read failed for %s", serial, exc_info=True)
             return None
         code: str | None = getattr(runtime, "fwCode", None)
@@ -689,6 +720,8 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         settle_interval: float = 30.0,
         no_progress_grace: int = 2,
         busy_grace: float = 900.0,
+        corroboration_retries: int = 3,
+        preflight_confirm_delay: float = 10.0,
     ) -> FirmwareUpdateRunResult:
         """Run firmware updates until the device converges on the latest version.
 
@@ -760,6 +793,17 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                 components in a row. It also sets the blind-reflash exposure
                 on a genuinely stuck device: ``no_progress_grace + 1``
                 accepted writes.
+            corroboration_retries: Extra attempts to read the device's own
+                firmware version before reporting an unconfirmable result. The
+                read can fail transiently at exactly the wrong moment — while
+                the device reboots after its final component — and a single
+                failure there turns a successful update into a red error in
+                Home Assistant.
+            preflight_confirm_delay: Seconds to wait before re-checking an
+                opening "already up to date" answer that arrives in the
+                empty-version sentinel shape. One confirmation is cheap;
+                trusting a single blink reports a partially updated device as
+                needing no update at all.
             busy_grace: Seconds to keep re-polling a busy device BETWEEN
                 components before giving up on the chain (bounded by
                 ``step_timeout``). Only applies once a step has been started:
@@ -812,7 +856,8 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             # busy/updating wording counts as busy. See the module constants
             # for why neither a bare substring nor an enumerated code list is
             # right on its own.
-            message = str(err).casefold()
+            # Classify the SERVER's message, never the client's wrapper.
+            message = _server_message(err).casefold()
             if any(prose in message for prose in _PERMANENT_FAILURE_PROSE):
                 return False
             return any(prose in message for prose in _BUSY_PROSE)
@@ -825,18 +870,50 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             # no-progress grace lets the loop ask for one step too many.
             # The refusal alone does NOT establish convergence — the caller
             # confirms with a forced re-check before reporting success.
-            message = str(err).casefold()
+            message = _server_message(err).casefold()
             return any(stem in message for stem in FIRMWARE_UP_TO_DATE_MESSAGES)
 
         info = await self.check_firmware_updates(force=True)
         if not info.update_available:
-            return FirmwareUpdateRunResult(
-                success=True,
-                converged=True,
-                steps_run=0,
-                message="Firmware already up to date",
-                final_version=info.installed_version,
+            # A CONCRETE version with nothing newer is a plain up-to-date
+            # answer and is trusted as-is. The empty-version sentinel is not:
+            # it is the same shape a blinking endpoint returns, and trusting a
+            # single one here reports a partially updated device as needing no
+            # update at all — the round-2 false-positive, surviving at the
+            # front door because this path never went through the corroborated
+            # verdict. Confirm it once before believing it.
+            if info.installed_version:
+                return FirmwareUpdateRunResult(
+                    success=True,
+                    converged=True,
+                    steps_run=0,
+                    message="Firmware already up to date",
+                    final_version=info.installed_version,
+                )
+            await asyncio.sleep(preflight_confirm_delay)
+            confirmation = await self.check_firmware_updates(force=True)
+            if not confirmation.update_available:
+                # Two independent reads agree. Residual: two consecutive
+                # blinks would still slip through, which is why this is a
+                # confirmation and not a proof.
+                return FirmwareUpdateRunResult(
+                    success=True,
+                    converged=True,
+                    steps_run=0,
+                    message="Firmware already up to date",
+                    final_version=(
+                        confirmation.installed_version or info.installed_version or None
+                    ),
+                )
+            # The two disagree: the first answer was a blink. Continue into
+            # the chain using the answer that reports work to do.
+            _LOGGER.info(
+                "Firmware pre-flight for %s: first check reported no update in the "
+                "empty-version sentinel shape, re-check reports one available — "
+                "proceeding with the update",
+                self.serial_number,
             )
+            info = confirmation
 
         steps_run = 0
         # Consecutive steps that completed without moving the version. Reset
@@ -851,10 +928,15 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         # the server contradicting itself, and re-deriving the target from
         # that same answer would turn the contradiction into a success.
         driving_target = info.latest_version or None
-        # The version the device was on when this run began. Corroborating a
-        # sentinel against this distinguishes "moved, and the server says
-        # nothing is left" from "never moved, the server just blinked".
-        started_from = info.installed_version or None
+        # The version the device was on when this run began, read from the
+        # SAME source the corroboration uses. Comparing a runtime fwCode
+        # against the check endpoint's fwCodeBeforeUpload would be a
+        # cross-endpoint comparison, and this file already documents check-side
+        # strings as synthesized reconstructions: if the two shapes ever differ
+        # by more than case, "not equal" would be permanently true and every
+        # sentinel would report converged on its first occurrence — silent, and
+        # one-directional toward false success.
+        started_from_code = await self._read_device_firmware_code()
         loop = asyncio.get_running_loop()
         # Smallest wait between busy/eligibility re-polls. Floors poll_interval
         # so neither a degenerate 0 nor a small positive value (0.001) can
@@ -910,7 +992,16 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                     installed,
                 )
 
+            # A single failed read at exactly the wrong moment — the device
+            # rebooting after its final component — would report a SUCCESSFUL
+            # update as indeterminate, which Home Assistant surfaces as a red
+            # error. Retry a bounded number of times before settling for that.
             corroborated = await self._read_device_firmware_code()
+            for _attempt in range(corroboration_retries):
+                if corroborated is not None:
+                    break
+                await asyncio.sleep(retry_backoff)
+                corroborated = await self._read_device_firmware_code()
             if corroborated is not None:
                 if _same_version(corroborated, target) or target is None:
                     return (
@@ -923,7 +1014,13 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                         ),
                         corroborated,
                     )
-                if not _same_version(corroborated, started_from):
+                if started_from_code is None:
+                    # No same-source baseline, so "did it move?" is not a
+                    # question this run can answer. Treating inequality as
+                    # movement here would be guessing in the direction of
+                    # success; fall through to the indeterminate verdict.
+                    pass
+                elif not _same_version(corroborated, started_from_code):
                     # The device moved and the server says nothing further is
                     # available. The target string can be a reconstruction
                     # (from_api_response splices version bytes onto the code,
@@ -938,15 +1035,19 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                             steps_run=step_index,
                             message=(
                                 f"Firmware update complete after {step_index} step(s); "
-                                f"device reports {corroborated}"
+                                "server reports no further updates and the device is "
+                                f"now at {corroborated} (this run targeted "
+                                f"{target or 'the latest version'}, which the server "
+                                "did not echo back for comparison)"
                             ),
                             final_version=corroborated,
                         ),
                         corroborated,
                     )
-                # Corroborated as still on the version we started from: the
-                # "no update available" answer was transient. Keep going.
-                return (None, corroborated)
+                elif _same_version(corroborated, started_from_code):
+                    # Corroborated as still on the version we started from: the
+                    # "no update available" answer was transient. Keep going.
+                    return (None, corroborated)
 
             # No corroboration available. Do not claim success, but do not
             # imply the update failed either — say what is and is not known.
