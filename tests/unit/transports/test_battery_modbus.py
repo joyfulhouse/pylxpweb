@@ -409,10 +409,10 @@ class TestBatteryModbusTransportScanUnits:
         assert result == [1, 3]
 
     @pytest.mark.asyncio
-    async def test_scan_nonresponding_units_does_not_degrade_or_reconnect(
+    async def test_individual_scan_misses_on_responding_bus_do_not_escalate(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Expected scan misses stay outside health warnings and the reconnect gate."""
+        """Expected per-ID misses stay silent when at least one unit proves the bus is live."""
         transport = BatteryModbusTransport(
             host="10.100.3.27",
             max_units=4,
@@ -423,8 +423,13 @@ class TestBatteryModbusTransportScanUnits:
 
         err_result = MagicMock()
         err_result.isError.return_value = True
+        ok_result = MagicMock()
+        ok_result.isError.return_value = False
+        ok_result.registers = [100]
 
-        transport._client.read_holding_registers = AsyncMock(return_value=err_result)
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[err_result, ok_result, err_result, err_result]
+        )
 
         with (
             caplog.at_level(logging.WARNING),
@@ -432,11 +437,81 @@ class TestBatteryModbusTransportScanUnits:
         ):
             result = await transport.scan_units()
 
-        assert result == []
+        assert result == [2]
         assert transport._consecutive_errors == 0
         assert transport._degraded_units == set()
         reconnect.assert_not_awaited()
-        assert not [record for record in caplog.records if "read degraded" in record.getMessage()]
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+    @pytest.mark.asyncio
+    async def test_empty_scan_warns_once_and_reaches_reconnect_gate(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A wholly silent scan is one bus failure and eventually reconnects (#248)."""
+        transport = BatteryModbusTransport(host="10.100.3.27", max_units=2)
+        transport._client = AsyncMock()
+        transport._client.connected = False
+        transport._connected = False
+        transport._client.read_holding_registers = AsyncMock(return_value=_mock_error())
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+            patch.object(transport, "_reconnect", new_callable=AsyncMock) as reconnect,
+        ):
+            for _ in range(transport._max_consecutive_errors):
+                assert await transport.scan_units() == []
+
+        assert transport._consecutive_errors == transport._max_consecutive_errors
+        reconnect.assert_awaited_once()
+        warnings = [
+            record
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "no units responded" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "10.100.3.27:502" in warnings[0].getMessage()
+        assert "1-2" in warnings[0].getMessage()
+        assert transport._degraded_units == set()
+
+    @pytest.mark.asyncio
+    async def test_nonempty_scan_logs_recovery_and_resets_bus_fault(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The first responding unit clears the empty-scan episode and counter."""
+        transport = BatteryModbusTransport(host="10.100.3.27", max_units=1)
+        transport._client = AsyncMock()
+        transport._client.connected = True
+        transport._connected = True
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[_mock_error(), _mock_result([100])]
+        )
+
+        with (
+            caplog.at_level(logging.INFO),
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            assert await transport.scan_units() == []
+            assert await transport.scan_units() == [1]
+
+        assert transport._consecutive_errors == 0
+        assert sum("no units responded" in r.getMessage() for r in caplog.records) == 1
+        assert sum("responding again" in r.getMessage() for r in caplog.records) == 1
+
+    @pytest.mark.asyncio
+    async def test_scan_holds_operation_lock_across_all_probes(self) -> None:
+        """A public unit read cannot race the shared client during a scan loop."""
+        transport = BatteryModbusTransport(host="10.100.3.27", max_units=2)
+
+        async def probe(*_args: object, **_kwargs: object) -> list[int]:
+            assert transport._operation_lock.locked()
+            return [100]
+
+        with (
+            patch.object(transport, "_read_registers", side_effect=probe),
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            assert await transport.scan_units() == [1, 2]
 
 
 class TestBatteryModbusTransportReadAll:
@@ -887,10 +962,10 @@ class TestBatteryModbusTransportHealth:
         assert connected_transport._degraded_units == {2}
 
     @pytest.mark.asyncio
-    async def test_max_consecutive_errors_trigger_reconnect_and_reset(
+    async def test_successful_reconnect_resets_counter(
         self, connected_transport: BatteryModbusTransport
     ) -> None:
-        """The request after three failed unit reads reconnects before a clean read."""
+        """Only a genuinely connected replacement client resets the error gate."""
         connected_transport._client.read_holding_registers = AsyncMock(
             side_effect=[
                 _mock_error(),
@@ -908,9 +983,25 @@ class TestBatteryModbusTransportHealth:
             connected_transport._consecutive_errors == connected_transport._max_consecutive_errors
         )
 
+        async def disconnect_side_effect() -> None:
+            connected_transport._connected = False
+
+        async def connect_side_effect() -> None:
+            connected_transport._connected = True
+            assert connected_transport._client is not None
+            connected_transport._client.connected = True
+
         with (
-            patch.object(connected_transport, "disconnect", new_callable=AsyncMock) as disconnect,
-            patch.object(connected_transport, "connect", new_callable=AsyncMock) as connect,
+            patch.object(
+                connected_transport,
+                "disconnect",
+                new=AsyncMock(side_effect=disconnect_side_effect),
+            ) as disconnect,
+            patch.object(
+                connected_transport,
+                "connect",
+                new=AsyncMock(side_effect=connect_side_effect),
+            ) as connect,
         ):
             data = await connected_transport.read_unit(2)
 
@@ -918,6 +1009,142 @@ class TestBatteryModbusTransportHealth:
         disconnect.assert_awaited_once()
         connect.assert_awaited_once()
         assert connected_transport._consecutive_errors == 0
+
+    @pytest.mark.asyncio
+    async def test_reconnect_returning_false_does_not_reset_counter(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """pymodbus returns False on normal network failure, which is not recovery."""
+        connected_transport._consecutive_errors = connected_transport._max_consecutive_errors
+        connected_transport._connected = False
+
+        with (
+            patch.object(connected_transport, "disconnect", new_callable=AsyncMock),
+            patch.object(
+                connected_transport,
+                "connect",
+                new=AsyncMock(return_value=False),
+            ) as connect,
+            patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0),
+        ):
+            await connected_transport._reconnect()
+
+        connect.assert_awaited_once()
+        assert (
+            connected_transport._consecutive_errors == connected_transport._max_consecutive_errors
+        )
+
+    @pytest.mark.asyncio
+    async def test_reconnect_exception_does_not_escape_read_all(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """A raising connect cannot crash a poll or reset the failed gate."""
+        connected_transport.unit_ids = [2]
+        connected_transport._consecutive_errors = connected_transport._max_consecutive_errors
+        connected_transport._client.read_holding_registers = AsyncMock(return_value=_mock_error())
+
+        with (
+            patch.object(connected_transport, "disconnect", new_callable=AsyncMock),
+            patch.object(
+                connected_transport,
+                "connect",
+                new=AsyncMock(side_effect=OSError("bridge down")),
+            ),
+            patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0),
+        ):
+            results = await connected_transport.read_all()
+
+        assert results == []
+        assert (
+            connected_transport._consecutive_errors >= connected_transport._max_consecutive_errors
+        )
+
+    @pytest.mark.asyncio
+    async def test_reconnect_cooldown_and_warning_dedup_start_at_small_monotonic(
+        self,
+        connected_transport: BatteryModbusTransport,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A small monotonic value permits attempt one, then cooldown/dedup apply."""
+        connected_transport._consecutive_errors = connected_transport._max_consecutive_errors
+        connected_transport._connected = False
+
+        with (
+            caplog.at_level(logging.DEBUG),
+            patch.object(connected_transport, "disconnect", new_callable=AsyncMock) as disconnect,
+            patch.object(
+                connected_transport,
+                "connect",
+                new=AsyncMock(return_value=False),
+            ) as connect,
+            patch(
+                "pylxpweb.transports.battery_modbus.time.monotonic",
+                side_effect=[1.0, 2.0, 32.0],
+            ),
+        ):
+            await connected_transport._reconnect()
+            await connected_transport._reconnect()
+            await connected_transport._reconnect()
+
+        assert disconnect.await_count == 2
+        assert connect.await_count == 2
+        warnings = [
+            record
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "Reconnecting battery" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert any(
+            record.levelno == logging.DEBUG and "Reconnecting battery" in record.getMessage()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_successful_read_recovers_reconnect_warning_episode(
+        self,
+        connected_transport: BatteryModbusTransport,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A real response clears warning dedup/cooldown and logs one recovery."""
+        connected_transport._reconnect_warned = True
+        connected_transport._reconnect_retry_after = 60.0
+        connected_transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(_make_slave_regs()),
+                _mock_result([0] * 23),
+            ]
+        )
+
+        with caplog.at_level(logging.INFO):
+            assert await connected_transport.read_unit(2) is not None
+
+        assert connected_transport._reconnect_warned is False
+        assert connected_transport._reconnect_retry_after is None
+        recoveries = [
+            r for r in caplog.records if "recovered after a successful read" in r.getMessage()
+        ]
+        assert len(recoveries) == 1
+
+    @pytest.mark.asyncio
+    async def test_unit_read_holds_operation_lock_across_gate_and_reads(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """The reconnect gate and register reads share one client-operation lock."""
+        connected_transport._consecutive_errors = connected_transport._max_consecutive_errors
+
+        async def reconnect() -> None:
+            assert connected_transport._operation_lock.locked()
+            connected_transport._consecutive_errors = 0
+
+        async def read_registers(*_args: object, **_kwargs: object) -> None:
+            assert connected_transport._operation_lock.locked()
+            return None
+
+        with (
+            patch.object(connected_transport, "_reconnect", side_effect=reconnect),
+            patch.object(connected_transport, "_read_registers", side_effect=read_registers),
+        ):
+            assert await connected_transport.read_unit(2) is None
 
 
 class TestInitialBlockRequirement:
@@ -1006,8 +1233,8 @@ class TestReadAllWithSlaves:
     """Tests for read_all() master SOC back-calculation using slave context."""
 
     @pytest.mark.asyncio
-    async def test_master_redecoded_with_slave_context(self) -> None:
-        """Master SOC is back-calculated from slave remaining capacities."""
+    async def test_full_slave_context_redecodes_master(self) -> None:
+        """A complete slave set back-calculates master remaining capacity."""
         transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
@@ -1043,8 +1270,8 @@ class TestReadAllWithSlaves:
         assert results[2].soc == 80
 
     @pytest.mark.asyncio
-    async def test_master_without_slaves_is_redecoded(self) -> None:
-        """A master-only bank still derives voltage and individual capacity."""
+    async def test_single_battery_keeps_aggregate_soc_and_derives_voltage(self) -> None:
+        """A genuine one-battery bank needs no capacity back-calculation."""
         transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1])
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
@@ -1064,8 +1291,57 @@ class TestReadAllWithSlaves:
         results = await transport.read_all()
         assert len(results) == 1
         assert results[0].voltage == pytest.approx(52.96)
-        assert results[0].soc == 80
-        assert results[0].current_capacity == pytest.approx(224.0)
+        assert results[0].soc == 79
+        assert results[0].current_capacity is None
+
+    @pytest.mark.asyncio
+    async def test_failed_only_slave_keeps_master_aggregate_soc(self) -> None:
+        """An empty slave result is failed topology, not proof of one battery (#249)."""
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2])
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(_make_master_regs(soc=79, reg26=22400, reg27=28000)),
+                _mock_result([3310] * 16),
+                _mock_error(),
+            ]
+        )
+
+        results = await transport.read_all()
+
+        assert len(results) == 1
+        assert results[0].voltage == pytest.approx(52.96)
+        assert results[0].soc == 79
+        assert results[0].current_capacity is None
+
+    @pytest.mark.asyncio
+    async def test_partial_slave_context_keeps_master_aggregate_soc(self) -> None:
+        """One missing battery from a three-unit bank makes subtraction unsafe (#249)."""
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(_make_master_regs(soc=79, reg26=464, reg27=18464)),
+                _mock_result([3310] * 16),
+                _mock_result(_make_slave_regs(soc=80, remaining=224)),
+                _mock_result([0] * 23),
+                _mock_error(),
+            ]
+        )
+
+        results = await transport.read_all()
+
+        assert len(results) == 2
+        assert results[0].soc == 79
+        assert results[0].current_capacity is None
 
 
 class TestOverlayInverterBMS:

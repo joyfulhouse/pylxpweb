@@ -409,6 +409,22 @@ class TestBatteryData:
         assert data.soc == 85
         assert data.cycle_count == 150
 
+    def test_power_none_when_voltage_absent_with_live_current(self) -> None:
+        """Zero-voltage sentinel times live current is unknown power, not zero watts."""
+        data = BatteryData(voltage=0.0, current=-20.0)
+
+        assert data.power is None
+
+    def test_all_zero_register_slot_is_absent(self) -> None:
+        """An empty 5002+ slot remains absent under the named predicate."""
+        assert BatteryData().is_absent() is True
+
+    def test_dropped_cell_master_with_live_current_is_not_absent(self) -> None:
+        """A master with absent voltage but a live current is degraded, not a ghost."""
+        data = BatteryData(voltage=0.0, soc=0, current=-20.0, temperature=19.0)
+
+        assert data.is_absent() is False
+
     def test_from_modbus_registers_cell_numbers_not_crossed(self) -> None:
         """Cell-number registers: offset 14 = temp numbers, offset 15 = voltage numbers.
 
@@ -500,6 +516,23 @@ class TestBatteryBankData:
         assert len(bank.batteries) == 2
         assert bank.batteries[0].serial_number == "BAT001"
         assert bank.batteries[1].serial_number == "BAT002"
+
+    def test_voltage_delta_ignores_absent_voltage(self) -> None:
+        """One absent and one usable pack cannot manufacture a 52.94 V spread."""
+        bank = BatteryBankData(
+            batteries=[
+                BatteryData(voltage=0.0, current=-20.0),
+                BatteryData(voltage=52.94),
+            ]
+        )
+
+        assert bank.voltage_delta is None
+
+    def test_battery_power_none_when_bank_voltage_absent(self) -> None:
+        """A live bank current cannot turn the zero-voltage sentinel into zero watts."""
+        bank = BatteryBankData(voltage=0.0, current=-20.0)
+
+        assert bank.battery_power is None
 
 
 class TestBatteryBankDataBMSFallback:

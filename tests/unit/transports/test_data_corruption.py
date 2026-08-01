@@ -409,6 +409,21 @@ class TestBatteryBankDataCorruption:
         data = BatteryBankData(soc=85, soh=95, current=750.0, battery_count=3, batteries=ghosts)
         assert data.is_corrupt() is True  # count stays 3 -> 500A floor
 
+    def test_degraded_zero_voltage_batteries_count_as_present(self) -> None:
+        """Live signals keep dropped-cell masters present and widen only the current cap."""
+        degraded = [
+            BatteryData(voltage=0.0, soc=0, current=-20.0, temperature=19.0) for _ in range(4)
+        ]
+        data = BatteryBankData(
+            soc=0,
+            soh=95,
+            current=600.0,
+            battery_count=0,
+            batteries=degraded,
+        )
+
+        assert data.is_corrupt() is False
+
 
 class TestMidboxRuntimeDataCorruption:
     """Corruption detection for MidboxRuntimeData."""

@@ -831,6 +831,19 @@ class TestBatteryBankCrossBatteryDiagnostics:
         )
         assert bank.voltage_delta == 0.50
 
+    def test_voltage_delta_ignores_absent_voltage(self, mock_client, sample_battery_info):
+        """One absent and one usable pack provide fewer than two voltage samples."""
+        bank = _make_bank(
+            mock_client,
+            sample_battery_info,
+            [
+                _make_battery(mock_client, 0, total_voltage=0),
+                _make_battery(mock_client, 80, total_voltage=5294),
+            ],
+        )
+
+        assert bank.voltage_delta is None
+
     def test_cell_voltage_delta_max_no_batteries(self, mock_client, sample_battery_info):
         """Test cell_voltage_delta_max returns None with no batteries."""
         bank = _make_bank(mock_client, sample_battery_info, [])

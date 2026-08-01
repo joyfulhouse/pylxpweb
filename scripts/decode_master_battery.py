@@ -26,6 +26,8 @@ import sys
 
 from pymodbus.client import AsyncModbusTcpClient
 
+from pylxpweb.battery_protocols.eg4_master import _derive_master_voltage
+
 
 def make_signed16(value: int) -> int:
     """Reinterpret unsigned 16-bit as signed."""
@@ -135,11 +137,10 @@ def decode_master_battery(regs: dict[int, int]) -> dict[str, object]:
     raw_21 = regs.get(21, 0)
     data["error_raw"] = raw_21
 
-    # Reg 22 (offset 0x2c): Pack voltage (÷100 for V)
-    # Firmware: minimum of all slaves' voltage + local BMS voltage
+    # Reg 22 (offset 0x2c): minimum pack voltage across the bank (÷100 for V)
     raw_22 = regs.get(22, 0)
-    data["voltage_raw"] = raw_22
-    data["voltage"] = raw_22 / 100.0
+    data["bank_min_voltage_raw"] = raw_22
+    data["bank_min_voltage"] = raw_22 / 100.0
 
     # Reg 23 (offset 0x2e): Current
     # Firmware: FUN_0001933c() × 10, capped at ±30000
@@ -242,12 +243,21 @@ def decode_master_battery(regs: dict[int, int]) -> dict[str, object]:
 
     # --- Cell voltages at register 113+ (offset 0xe2) ---
     num_cells = data["num_cells"]
+    cells: list[float] = []
     if isinstance(num_cells, int) and num_cells > 0:
-        cells = []
         for i in range(num_cells):
             cell_mv = regs.get(113 + i, 0)
             cells.append(cell_mv / 1000.0)
-        data["cell_voltages"] = cells
+    data["cell_voltages"] = cells
+    following_cell_voltage = 0.0
+    if isinstance(num_cells, int) and 0 <= num_cells < 16:
+        following_cell_voltage = regs.get(113 + num_cells, 0) / 1000.0
+    data["voltage"] = _derive_master_voltage(
+        cells,
+        num_cells if isinstance(num_cells, int) else 0,
+        bank_min_voltage=raw_22 / 100.0,
+        following_cell_voltage=following_cell_voltage,
+    )
 
     return data
 
@@ -292,7 +302,11 @@ def print_master_battery(data: dict[str, object]) -> None:
     print(f"{'=' * 72}")
 
     print("\n  --- Core Data ---")
-    print(f"  Pack Voltage:     {data['voltage']:.2f} V  (reg 22 = {data['voltage_raw']})")
+    print(f"  Pack Voltage:     {data['voltage']:.2f} V  (derived from cells)")
+    print(
+        f"  Bank Min Voltage: {data['bank_min_voltage']:.2f} V  "
+        f"(reg 22 = {data['bank_min_voltage_raw']})"
+    )
     print(f"  Current:          {data['current_cA']:.2f} A  (reg 23 = {data['current_raw']}, ÷100)")
     print(f"  Temperature:      {data['temperature']}°C  (reg 24 = {data['temperature_raw']})")
 
@@ -449,6 +463,7 @@ async def main() -> None:
             f"  T={master_data['temperature']}°C  Cycles={master_data['cycle_count']}"
             f"  Cells={master_data['num_cells']}"
         )
+        print(f"                  BankMin={master_data['bank_min_voltage']:.2f}V (reg 22)")
         print(
             f"                  MaxCell={master_data['max_cell_voltage']:.3f}V"
             f"  MinCell={master_data['min_cell_voltage']:.3f}V"

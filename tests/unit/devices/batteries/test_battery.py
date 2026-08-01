@@ -12,6 +12,7 @@ from pylxpweb import LuxpowerClient
 from pylxpweb.devices.battery import Battery
 from pylxpweb.devices.models import Entity
 from pylxpweb.models import BatteryModule
+from pylxpweb.transports.data import BatteryData
 
 
 @pytest.fixture
@@ -76,6 +77,27 @@ class TestBatteryProperties:
 
         # Power = 53.81V * 14.7A = ~791.0W (corrected with ÷10 scaling)
         assert battery.power == pytest.approx(791.0, abs=1.0)
+
+    def test_absent_transport_voltage_falls_back_to_cloud(
+        self, mock_client: LuxpowerClient, sample_battery_module: BatteryModule
+    ) -> None:
+        """The transport's zero sentinel cannot suppress a usable cloud voltage."""
+        battery = Battery(client=mock_client, battery_data=sample_battery_module)
+        battery._transport_data = BatteryData(voltage=0.0, current=-20.0)
+
+        assert battery.voltage == pytest.approx(53.81, rel=0.01)
+
+    def test_absent_transport_voltage_with_live_current_has_no_power(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A transport-only battery with no voltage reports unavailable power."""
+        battery = Battery.from_transport_data(
+            mock_client,
+            BatteryData(voltage=0.0, current=-20.0),
+            "1234567890",
+        )
+
+        assert battery.power is None
 
     def test_soc_property(
         self, mock_client: LuxpowerClient, sample_battery_module: BatteryModule

@@ -117,6 +117,9 @@ class Battery(BaseDevice):
             batterySn=battery_data.serial_number or battery_key,
             batIndex=battery_data.battery_index,
             lost=False,
+            # BatteryModule's schema is non-nullable, so transport absence stays
+            # encoded as zero. Derived properties below treat it as unavailable
+            # rather than turning it into a measurement (#249).
             totalVoltage=int(battery_data.voltage * 100),  # Convert back to raw
             current=int(battery_data.current * 10),  # Convert back to raw
             soc=battery_data.soc,
@@ -237,7 +240,7 @@ class Battery(BaseDevice):
             Battery voltage (scaled from totalVoltage ÷100).
         """
         val = self._get_transport_attr("voltage")
-        if val is not None:
+        if val is not None and float(val) > 0:
             return float(val)
         return scale_battery_value("totalVoltage", self._data.totalVoltage)
 
@@ -254,18 +257,22 @@ class Battery(BaseDevice):
         return scale_battery_value("current", self._data.current)
 
     @property
-    def power(self) -> float:
+    def power(self) -> float | None:
         """Get battery power in watts (calculated from V * I).
 
         Returns:
-            Battery power in watts, rounded to voltage precision.
+            Battery power in watts rounded to voltage precision, or None when
+            neither transport nor cloud provides a usable voltage.
         """
         val = self._get_transport_attr("power")
         if val is not None:
             return float(val)
+        voltage = self.voltage
+        if voltage <= 0:
+            return None
         # Use voltage precision (2 decimals) as it's higher than current (1 decimal)
         precision = get_battery_field_precision("totalVoltage")
-        return round(self.voltage * self.current, precision)
+        return round(voltage * self.current, precision)
 
     # ========== State of Charge/Health ==========
 

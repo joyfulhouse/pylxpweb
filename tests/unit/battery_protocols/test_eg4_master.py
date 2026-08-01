@@ -7,7 +7,6 @@ function FUN_0001cf78.
 from __future__ import annotations
 
 import struct
-from unittest.mock import patch
 
 import pytest
 
@@ -74,14 +73,14 @@ class TestEG4MasterProtocol:
         data = self.protocol.decode(raw)
         assert data.voltage == 0.0
 
-    def test_decode_voltage_rejects_partial_cell_block(self) -> None:
-        """One missing cell invalidates the whole derived master voltage."""
+    def test_decode_voltage_rejects_implausibly_low_cell(self) -> None:
+        """A cell below the 1.0 V plausibility bound invalidates the pack sum."""
         raw = self._base_regs()
         raw[22] = 5294
         raw[41] = 16
         for i in range(16):
             raw[113 + i] = 3310
-        raw[120] = 0
+        raw[120] = 999
 
         data = self.protocol.decode(raw)
         assert data.voltage == 0.0
@@ -108,20 +107,51 @@ class TestEG4MasterProtocol:
         data = self.protocol.decode(raw)
         assert data.voltage == 0.0
 
-    def test_decode_voltage_rejects_cell_count_length_mismatch(self) -> None:
-        """A cell list shorter than reg 41 cannot be treated as a complete pack."""
+    def test_decode_voltage_rejects_sum_below_bank_minimum(self) -> None:
+        """Reg 22 rejects a truncated sum that cannot be any bank member's voltage."""
         raw = self._base_regs()
         raw[22] = 5294
-        raw[41] = 16
+        raw[41] = 15
+        for i in range(15):
+            raw[113 + i] = 3310
 
-        with patch.object(
-            self.protocol,
-            "decode_cell_voltages",
-            return_value=([3.31] * 15, 3.31, 3.31),
-        ):
-            data = self.protocol.decode(raw)
+        data = self.protocol.decode(raw)
 
         assert data.voltage == 0.0
+
+    def test_decode_voltage_rejects_implausible_cell_count(self) -> None:
+        """A transient one-cell count cannot turn one healthy cell into a pack."""
+        raw = self._base_regs()
+        raw[41] = 1
+        raw[113] = 3310
+
+        data = self.protocol.decode(raw)
+
+        assert data.voltage == 0.0
+
+    def test_decode_voltage_rejects_underreported_count_without_bank_minimum(self) -> None:
+        """A live register after cell_count catches truncation even when reg 22 is absent."""
+        raw = self._base_regs()
+        raw[22] = 0
+        raw[41] = 15
+        for i in range(16):
+            raw[113 + i] = 3310
+
+        data = self.protocol.decode(raw)
+
+        assert data.voltage == 0.0
+
+    def test_decode_voltage_accepts_consistent_fifteen_cell_pack(self) -> None:
+        """A genuine 15-cell pack with a matching bank minimum remains usable."""
+        raw = self._base_regs()
+        raw[22] = 4960
+        raw[41] = 15
+        for i in range(15):
+            raw[113 + i] = 3310
+
+        data = self.protocol.decode(raw)
+
+        assert data.voltage == pytest.approx(49.65)
 
     def test_decode_aggregate_current(self) -> None:
         """Aggregate current: reg 23 /100, signed."""

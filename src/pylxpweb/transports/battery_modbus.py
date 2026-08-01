@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Self
 
 from pymodbus.client import AsyncModbusTcpClient
@@ -48,6 +49,11 @@ _INTER_READ_DELAY = 0.1
 
 # Delay between sequential unit reads during scan or read_all (seconds)
 _INTER_UNIT_DELAY = 0.2
+
+# Minimum interval between reconnect attempts. The first attempt uses a None
+# sentinel rather than 0.0 because monotonic time can be below this interval on
+# a freshly booted host (the failure mode fixed in EG4 PRs #378/#380).
+_RECONNECT_COOLDOWN = 30.0
 
 # Protocol name -> class mapping
 _PROTOCOL_MAP: dict[str, type[BatteryProtocol]] = {
@@ -126,9 +132,16 @@ class BatteryModbusTransport:
         self.timeout = timeout
         self._client: AsyncModbusTcpClient | None = None
         self._connected = False
+        # Serializes every operation that uses the shared client across its
+        # reconnect gate and reads. It is intentionally distinct from the
+        # narrower reconnect state lock below (#248).
+        self._operation_lock = asyncio.Lock()
         self._reconnect_lock = asyncio.Lock()
+        self._reconnect_retry_after: float | None = None
+        self._reconnect_warned = False
         self._consecutive_errors = 0
         self._max_consecutive_errors = 3
+        self._empty_scan_warned = False
         # Unit degradation is transition-based so persistent faults warn once (#248).
         self._degraded_units: set[int] = set()
         # Cache detected protocols per unit ID
@@ -176,22 +189,75 @@ class BatteryModbusTransport:
     async def _reconnect(self) -> None:
         """Reconnect after the consecutive-error gate trips.
 
-        The double-check under the lock prevents concurrent unit reads from
-        rebuilding the shared client more than once.
+        ``_read_unit_raw()`` and ``scan_units()`` call this while holding the
+        operation lock, so no public read can queue work on a client being
+        closed. The distinct reconnect lock protects the threshold/cooldown
+        transition itself. Locks are always acquired operation-first and never
+        in reverse, so reconnect and read serialization cannot deadlock.
         """
         async with self._reconnect_lock:
             if self._consecutive_errors < self._max_consecutive_errors:
                 return
 
-            _LOGGER.warning(
-                "Reconnecting battery RS485 bridge at %s:%d after %d consecutive errors",
-                self.host,
-                self.port,
-                self._consecutive_errors,
-            )
+            now = time.monotonic()
+            if self._reconnect_retry_after is not None and now < self._reconnect_retry_after:
+                return
+            self._reconnect_retry_after = now + _RECONNECT_COOLDOWN
+
+            if not self._reconnect_warned:
+                self._reconnect_warned = True
+                _LOGGER.warning(
+                    "Reconnecting battery RS485 bridge at %s:%d after %d consecutive errors",
+                    self.host,
+                    self.port,
+                    self._consecutive_errors,
+                )
+            else:
+                _LOGGER.debug(
+                    "Reconnecting battery RS485 bridge at %s:%d after %d consecutive errors",
+                    self.host,
+                    self.port,
+                    self._consecutive_errors,
+                )
+
             await self.disconnect()
-            await self.connect()
-            self._consecutive_errors = 0
+            try:
+                await self.connect()
+            except Exception as exc:
+                # Reads are non-raising by contract. A connector implementation
+                # that raises must not crash the whole battery poll (#248).
+                _LOGGER.debug(
+                    "Battery RS485 bridge reconnect at %s:%d raised: %s",
+                    self.host,
+                    self.port,
+                    exc,
+                )
+                return
+
+            if self.is_connected:
+                self._consecutive_errors = 0
+            else:
+                # pymodbus normally returns False instead of raising when the
+                # network is still down. Keep the gate tripped; cooldown, not a
+                # fabricated reset, controls the next attempt (#248).
+                _LOGGER.debug(
+                    "Battery RS485 bridge reconnect at %s:%d did not connect",
+                    self.host,
+                    self.port,
+                )
+
+    def _recover_reconnect_episode(self) -> None:
+        """Clear reconnect warning/cooldown after a real Modbus response."""
+        if not self._reconnect_warned:
+            return
+
+        self._reconnect_warned = False
+        self._reconnect_retry_after = None
+        _LOGGER.info(
+            "Battery RS485 bridge at %s:%d recovered after a successful read",
+            self.host,
+            self.port,
+        )
 
     def _degrade_unit(
         self,
@@ -306,6 +372,7 @@ class BatteryModbusTransport:
                 return None
             if not probe:
                 self._consecutive_errors = 0
+                self._recover_reconnect_episode()
             return registers
         except Exception:
             _LOGGER.debug("Read failed: unit=%d start=%d count=%d", unit_id, start, count)
@@ -368,13 +435,43 @@ class BatteryModbusTransport:
         if self.unit_ids is not None:
             return self.unit_ids
 
-        responding: list[int] = []
-        for uid in range(1, self.max_units + 1):
-            # Non-responding IDs are expected discovery misses, not bus faults (#248).
-            regs = await self._read_registers(0, 1, uid, probe=True)
-            if regs is not None:
-                responding.append(uid)
-            await asyncio.sleep(_INTER_UNIT_DELAY)
+        async with self._operation_lock:
+            responding: list[int] = []
+            for uid in range(1, self.max_units + 1):
+                # Individual non-responding IDs are expected discovery misses,
+                # not unit degradation or separate bus faults (#248).
+                regs = await self._read_registers(0, 1, uid, probe=True)
+                if regs is not None:
+                    responding.append(uid)
+                await asyncio.sleep(_INTER_UNIT_DELAY)
+
+            if responding:
+                self._consecutive_errors = 0
+                if self._empty_scan_warned:
+                    self._empty_scan_warned = False
+                    _LOGGER.info(
+                        "Battery bus scan at %s:%d has units responding again",
+                        self.host,
+                        self.port,
+                    )
+                self._recover_reconnect_episode()
+            else:
+                # Previously seeing units and now seeing none is the strongest
+                # form of this signal, but a first-ever empty scan also deserves
+                # reporting as likely bridge/bus failure or misconfiguration.
+                # Count once per scan, never once per expected probe miss.
+                self._consecutive_errors += 1
+                if not self._empty_scan_warned:
+                    self._empty_scan_warned = True
+                    _LOGGER.warning(
+                        "Battery bus scan at %s:%d: no units responded while probing 1-%d; "
+                        "a bus/bridge fault or configuration error is likely (#248)",
+                        self.host,
+                        self.port,
+                        self.max_units,
+                    )
+                if self._consecutive_errors >= self._max_consecutive_errors:
+                    await self._reconnect()
 
         _LOGGER.info(
             "Battery bus scan: %d/%d units responding",
@@ -427,12 +524,21 @@ class BatteryModbusTransport:
 
             await asyncio.sleep(_INTER_UNIT_DELAY)
 
-        # Re-decode master with slave context for individual SOC
-        if master_uid is not None and master_data is not None:
+        # Re-decode master only with the complete slave topology. A partial set
+        # is as unsafe as an empty one: in a three-battery bank, subtracting one
+        # of two slaves over-reports the master by the missing pack's capacity.
+        # With incomplete context, reg 21 remains a real aggregate bank SOC
+        # rather than a fabricated individual number (#249). A genuine one-unit
+        # bank needs no re-decode because its aggregate is already individual.
+        expected_slaves = len(units) - 1
+        if (
+            master_uid is not None
+            and master_data is not None
+            and slave_results
+            and len(slave_results) == expected_slaves
+        ):
             master_proto = self._get_protocol(master_uid, raw_by_unit[master_uid])
             if isinstance(master_proto, EG4MasterProtocol):
-                # An empty slave list is the correct single-bank context: the
-                # full unwrapped total is the master's own remaining capacity (#249).
                 master_data = master_proto.decode_with_slaves(
                     raw_by_unit[master_uid],
                     slave_results,
@@ -474,6 +580,13 @@ class BatteryModbusTransport:
             absent pack-voltage sentinel. The unit remains degraded until a
             later read completes its runtime block and every extra block.
         """
+        async with self._operation_lock:
+            return await self._read_unit_raw_locked(unit_id)
+
+    async def _read_unit_raw_locked(
+        self, unit_id: int
+    ) -> tuple[dict[int, int], BatteryData | None]:
+        """Read one unit while the caller holds the shared-client operation lock."""
         if self._consecutive_errors >= self._max_consecutive_errors:
             await self._reconnect()
 

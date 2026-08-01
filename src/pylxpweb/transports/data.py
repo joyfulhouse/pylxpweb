@@ -1115,6 +1115,29 @@ class BatteryData:
             return True
         return False
 
+    def is_absent(self) -> bool:
+        """Return whether this row is an empty battery register slot.
+
+        A zero voltage and zero SOC alone are insufficient: the EG4 master can
+        lose its cell block while still carrying live current, temperature, or
+        topology data. Such a row is present-but-degraded and must remain in the
+        bank. Empty 5002+ slots carry none of these signals (#249/#248).
+
+        Returns:
+            True only when voltage, SOC, and every independent live signal are
+            zero or empty.
+        """
+        return (
+            self.voltage <= 0
+            and self.soc == 0
+            and self.current == 0
+            and self.temperature == 0
+            and self.cycle_count == 0
+            and self.cell_count == 0
+            and not self.cell_voltages
+            and not self.cell_temperatures
+        )
+
     @property
     def remaining_capacity(self) -> float | None:
         """Calculate remaining capacity in Ah from max_capacity and SOC.
@@ -1127,14 +1150,20 @@ class BatteryData:
         return None
 
     @property
-    def power(self) -> float:
+    def power(self) -> float | None:
         """Calculate battery power in watts (V * I).
 
         Positive = charging, Negative = discharging.
+        The protocol uses zero volts as its honest absent encoding. Multiplying
+        that sentinel by a live current would report plausible zero watts, so
+        power is unavailable until voltage is usable (#249).
 
         Returns:
-            Battery power in watts, rounded to 2 decimal places.
+            Battery power in watts rounded to 2 decimal places, or None when
+            voltage is absent.
         """
+        if self.voltage <= 0:
+            return None
         return round(self.voltage * self.current, 2)
 
     @property
@@ -1431,7 +1460,9 @@ class BatteryBankData:
         # canonical 2996A desync value rejected even when a garbled-but-
         # plausible count inflates the scaled cap.
         if self.current is not None:
-            present = sum(1 for b in self.batteries if not (b.voltage == 0 and b.soc == 0))
+            # A degraded zero-voltage master can now count as present. That only
+            # widens this current bound; it cannot make a reading corrupt.
+            present = sum(1 for b in self.batteries if not b.is_absent())
             count = max(self.battery_count or 0, present)
             max_amps = min(max(500.0, count * 150.0), 2000.0)
             if abs(self.current) > max_amps:
@@ -1443,11 +1474,11 @@ class BatteryBankData:
                     present,
                 )
                 return True
-        # Only cascade to batteries that actually have CAN bus data.
-        # Ghost batteries (voltage=0, soc=0) from 5002+ register failures
-        # are not corrupt — just absent.
+        # Skip only truly empty 5002+ slots. A degraded master now reaches the
+        # cascade, which is safe because BatteryData.is_corrupt() deliberately
+        # treats zero voltage as absent rather than corrupt (#249).
         for b in self.batteries:
-            if b.voltage == 0 and b.soc == 0:
+            if b.is_absent():
                 continue
             if b.is_corrupt():
                 return True
@@ -1462,7 +1493,7 @@ class BatteryBankData:
         Returns:
             Battery power in watts, or None if voltage/current unavailable.
         """
-        if self.voltage is not None and self.current is not None:
+        if self.voltage is not None and self.voltage > 0 and self.current is not None:
             return round(self.voltage * self.current, 1)
         return None
 
@@ -1517,7 +1548,7 @@ class BatteryBankData:
     @property
     def voltage_delta(self) -> float | None:
         """Voltage spread across batteries (max - min)."""
-        vals = [b.voltage for b in self.batteries if b.voltage is not None]
+        vals = [b.voltage for b in self.batteries if b.voltage > 0]
         return round(max(vals) - min(vals), 2) if len(vals) >= 2 else None
 
     @property

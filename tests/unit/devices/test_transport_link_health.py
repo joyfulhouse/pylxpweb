@@ -30,6 +30,7 @@ from pylxpweb.devices.mid_device import MIDDevice
 from pylxpweb.models import EnergyInfo, InverterRuntime, MidboxRuntime
 from pylxpweb.transports.data import (
     BatteryBankData,
+    BatteryData,
     InverterEnergyData,
     InverterRuntimeData,
 )
@@ -614,7 +615,7 @@ class TestHybridSupplementalBattery:
         stamp = datetime.now(UTC)
         transport_battery = Mock(spec=BatteryBankData)
         transport_battery.batteries = [
-            Mock(voltage=53.0, soc=80, last_seen=stamp) for _ in range(surfaced)
+            BatteryData(voltage=53.0, soc=80, last_seen=stamp) for _ in range(surfaced)
         ]
         inverter._transport_battery = transport_battery
 
@@ -650,6 +651,39 @@ class TestHybridSupplementalBattery:
         await inverter.refresh(force=True)
 
         inverter._fetch_battery_http.assert_not_awaited()
+
+    def test_degraded_zero_voltage_master_counts_as_surfaced(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A live zero-voltage master is degraded, not a missing battery."""
+        inverter = _make_inverter(client=mock_client)
+        bank = Mock()
+        bank.battery_count = 1
+        inverter._battery_bank = bank
+        inverter._transport_battery = BatteryBankData(
+            batteries=[
+                BatteryData(
+                    voltage=0.0,
+                    soc=0,
+                    current=-20.0,
+                    temperature=19.0,
+                    cell_count=16,
+                    last_seen=datetime.now(UTC),
+                )
+            ]
+        )
+
+        assert inverter._wants_hybrid_supplemental_battery is False
+
+    def test_all_zero_slot_does_not_count_as_surfaced(self, mock_client: LuxpowerClient) -> None:
+        """An empty 5002+ register slot still triggers missing-battery supplement."""
+        inverter = _make_inverter(client=mock_client)
+        bank = Mock()
+        bank.battery_count = 1
+        inverter._battery_bank = bank
+        inverter._transport_battery = BatteryBankData(batteries=[BatteryData()])
+
+        assert inverter._wants_hybrid_supplemental_battery is True
 
     @pytest.mark.asyncio
     async def test_no_battery_bank_makes_no_cloud_battery_call(
@@ -702,8 +736,8 @@ class TestHybridSupplementalBattery:
 
         fresh = datetime.now(UTC)
         frozen = fresh - timedelta(minutes=5, seconds=11)  # ~5 min stale
-        batteries = [Mock(voltage=53.0, soc=80, last_seen=fresh) for _ in range(4)]
-        batteries.append(Mock(voltage=53.0, soc=80, last_seen=frozen))
+        batteries = [BatteryData(voltage=53.0, soc=80, last_seen=fresh) for _ in range(4)]
+        batteries.append(BatteryData(voltage=53.0, soc=80, last_seen=frozen))
         transport_battery = Mock(spec=BatteryBankData)
         transport_battery.batteries = batteries
         inverter._transport_battery = transport_battery
@@ -735,8 +769,8 @@ class TestHybridSupplementalBattery:
 
         fresh = datetime.now(UTC)
         lagging = fresh - timedelta(minutes=6, seconds=39)  # > 2 min behind
-        batteries = [Mock(voltage=53.0, soc=80, last_seen=fresh) for _ in range(4)]
-        batteries += [Mock(voltage=53.0, soc=80, last_seen=lagging) for _ in range(4)]
+        batteries = [BatteryData(voltage=53.0, soc=80, last_seen=fresh) for _ in range(4)]
+        batteries += [BatteryData(voltage=53.0, soc=80, last_seen=lagging) for _ in range(4)]
         transport_battery = Mock(spec=BatteryBankData)
         transport_battery.batteries = batteries
         inverter._transport_battery = transport_battery
@@ -769,7 +803,7 @@ class TestHybridSupplementalBattery:
         # whole feed is stale: newest stamp is ~10 minutes old — far past the
         # scaled backstop for the default 30 s TTL (max(2 min, 75 s) = 2 min).
         frozen = datetime.now(UTC) - timedelta(minutes=10)
-        batteries = [Mock(voltage=53.0, soc=80, last_seen=frozen) for _ in range(8)]
+        batteries = [BatteryData(voltage=53.0, soc=80, last_seen=frozen) for _ in range(8)]
         transport_battery = Mock(spec=BatteryBankData)
         transport_battery.batteries = batteries
         inverter._transport_battery = transport_battery
@@ -794,7 +828,9 @@ class TestHybridSupplementalBattery:
         def _combined(*_args: object, **_kwargs: object) -> tuple[Mock, Mock, Mock]:
             runtime, energy, battery = _make_combined_data()
             stamp = frozen_stamp if frozen_stamp is not None else datetime.now(UTC)
-            battery.batteries = [Mock(voltage=53.0, soc=80, last_seen=stamp) for _ in range(count)]
+            battery.batteries = [
+                BatteryData(voltage=53.0, soc=80, last_seen=stamp) for _ in range(count)
+            ]
             return runtime, energy, battery
 
         transport = AsyncMock()
@@ -810,7 +846,7 @@ class TestHybridSupplementalBattery:
         bank.battery_count = count
         inverter._battery_bank = bank
         seed = Mock(spec=BatteryBankData)
-        seed.batteries = [Mock(voltage=53.0, soc=80, last_seen=stamp) for _ in range(count)]
+        seed.batteries = [BatteryData(voltage=53.0, soc=80, last_seen=stamp) for _ in range(count)]
         inverter._transport_battery = seed
 
     @pytest.mark.asyncio

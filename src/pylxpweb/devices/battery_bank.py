@@ -254,9 +254,10 @@ class BatteryBank(BaseDevice):
             Voltage difference in volts, or None if fewer than
             2 batteries are present.
         """
-        if len(self.batteries) < 2:
+        # Zero is the transport's absent-voltage sentinel, not a real sample.
+        voltages = [b.voltage for b in self.batteries if b.voltage > 0]
+        if len(voltages) < 2:
             return None
-        voltages = [b.voltage for b in self.batteries]
         return round(max(voltages) - min(voltages), 2)
 
     @property

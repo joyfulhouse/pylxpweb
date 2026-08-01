@@ -634,13 +634,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         transport_battery = self._transport_battery
         if transport_battery is None:
             return True
-        # Count non-ghost slots: an empty 5002+ register slot reads 0V/0% SoC
-        # (pylxpweb's canonical ghost definition), so it must not count as a
-        # surfaced battery — otherwise the gate could never trip.
+        # Count non-ghost slots with the canonical predicate. A zero-voltage
+        # master carrying another live signal is surfaced-but-degraded; only an
+        # all-zero 5002+ slot is absent (#249/#248).
         candidates = [
             batt
             for batt in (getattr(transport_battery, "batteries", None) or [])
-            if not (batt.voltage == 0 and batt.soc == 0)
+            if not batt.is_absent()
         ]
         if not candidates:
             return True
