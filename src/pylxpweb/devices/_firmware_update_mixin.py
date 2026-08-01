@@ -574,13 +574,14 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         re-flashed the already-current component, and aborting on the first
         unchanged version meant the component that actually needed upgrading
         never ran (eg4_web_monitor#353). ``no_progress_grace`` therefore
-        tolerates a bounded number of *consecutive* completed-but-unchanged
-        steps before declaring the chain dead.
+        tolerates a bounded number of *consecutive* steps that ran without
+        changing the version before declaring the chain dead.
 
         Busy handling is deliberately asymmetric. Before this invocation has
         started anything, a busy device means "not now" and fails fast — the
-        caller has written nothing, and making the user wait out a multi-minute
-        retry budget only to fail is worse than telling them immediately.
+        server has accepted no update start from us, and making the user wait out
+        a multi-minute retry budget only to fail is worse than saying so
+        immediately.
         Once a component HAS been started, busy means the chain we started is
         still settling, and the bounded retry budget applies.
 
@@ -737,7 +738,7 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             # split by whether THIS invocation has already started something:
             #
             #   steps_run == 0 (pre-flight): the device was busy before we
-            #     wrote anything — someone/something else is using it, or it is
+            #     had a start accepted — someone/something else is using it, or it is
             #     still recovering from an earlier update. Fail fast on both
             #     not-eligible and any busy-family error, from the eligibility
             #     probe or the start call. Burning the whole retry budget here
@@ -788,24 +789,41 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                         break
                     except LuxpowerAPIError as err:
                         if steps_run > 0 and _is_already_latest_error(err):
-                            # The check endpoint lagged a successful final step
-                            # past the settle window and the no-progress grace
-                            # asked for one step too many: the device is
-                            # converged. Report that rather than surfacing a raw
-                            # API error after a successful update. Only mid-chain
-                            # — the same response BEFORE any step means the check
-                            # and run endpoints disagree about a device we have
-                            # not touched, which must still surface.
+                            # The run endpoint says there is nothing left to
+                            # install while the check endpoint still advertises
+                            # an update. That is expected when the check lagged
+                            # a successful final step past the settle window and
+                            # the loop asked for one step too many — but it is
+                            # NOT self-evidently convergence: the two endpoints
+                            # can genuinely disagree about a partially upgraded
+                            # device, and reporting success there would hide the
+                            # exact partial-upgrade failure this issue is about.
+                            # Re-check and let the check endpoint confirm; never
+                            # declare convergence on the refusal alone.
+                            # (Pre-flight, this still propagates untouched.)
+                            info = await self.check_firmware_updates(force=True)
+                            if info.latest_version:
+                                last_target = info.latest_version
+                            if not info.update_available:
+                                return FirmwareUpdateRunResult(
+                                    success=True,
+                                    converged=True,
+                                    steps_run=steps_run,
+                                    message=(f"Firmware update complete after {steps_run} step(s)"),
+                                    final_version=info.installed_version or last_target,
+                                )
                             return FirmwareUpdateRunResult(
-                                success=True,
-                                converged=True,
+                                success=False,
+                                converged=False,
                                 steps_run=steps_run,
-                                message=(f"Firmware update complete after {steps_run} step(s)"),
-                                # The server asserts convergence, so the target
-                                # is the truthful version here; the lagging
-                                # check's installed_version is stale by
-                                # definition.
-                                final_version=last_target or info.installed_version,
+                                message=(
+                                    "Server refused a further update step as "
+                                    "'already the latest version', but the update "
+                                    "check still reports one available — the device "
+                                    "may be partially upgraded; re-check in a few "
+                                    "minutes before retrying"
+                                ),
+                                final_version=info.installed_version,
                             )
                         if not _is_device_busy_error(err):
                             raise
@@ -928,8 +946,10 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                 # deliberately weaker signal used here, because a stronger one
                 # risks a fix that never fires in the field.
                 #
-                # Consecutive excuses are capped by no_progress_grace (and all
-                # writes by max_steps), so a genuinely stuck device still stops.
+                # Consecutive excuses are capped by no_progress_grace, and
+                # accepted update steps by max_steps (busy retries can issue
+                # more standardUpdate/run POSTs than that, but a refused one
+                # installs nothing), so a stuck device still stops.
                 if saw_in_progress and consecutive_no_progress < no_progress_grace:
                     consecutive_no_progress += 1
                     _LOGGER.info(

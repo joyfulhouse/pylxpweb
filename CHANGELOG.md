@@ -19,10 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reproduced the same loop (a 6000XP stuck at `ccaa-1E1415` with target
   `ccaa-1E1515`, [eg4_web_monitor#353](https://github.com/joyfulhouse/eg4_web_monitor/issues/353)).
   `run_firmware_update_to_completion` now tolerates a bounded number of
-  consecutive completed-but-unchanged steps (`no_progress_grace`, default 1),
+  consecutive steps that ran without changing the version
+  (`no_progress_grace`, default 1),
   and only when the step was actually observed installing and did not report
-  FAILED. A genuinely stuck device still stops, and all writes stay bounded by
-  `max_steps`. The `needRunStep2..5` flags are logged (not used as a gate —
+  FAILED. A genuinely stuck device still stops, and accepted update steps stay
+  bounded by `max_steps`. The `needRunStep2..5` flags are logged (not used as a gate —
   their firmware semantics remain unverified) so the next field report
   captures them.
 - **A device that is busy before the update starts now fails fast**: busy

@@ -61,6 +61,7 @@ class ScriptedDevice(FirmwareUpdateMixin):
         self._failed_statuses = failed_statuses or []
         self.start_calls = 0
         self.check_calls = 0
+        self.eligibility_calls = 0
 
     # Scripted overrides -------------------------------------------------
     async def check_firmware_updates(self, force: bool = False) -> FirmwareUpdateInfo:
@@ -82,6 +83,7 @@ class ScriptedDevice(FirmwareUpdateMixin):
         return True
 
     async def check_update_eligibility(self) -> bool:
+        self.eligibility_calls += 1
         if self._eligibility:
             result = self._eligibility.pop(0)
             if isinstance(result, LuxpowerAPIError):
@@ -662,7 +664,7 @@ async def test_first_eligibility_busy_error_fails_fast() -> None:
     assert not result.success and not result.converged
     assert result.steps_run == 0
     assert device.start_calls == 0
-    assert not device._eligibility  # probed exactly once, no re-poll
+    assert device.eligibility_calls == 1  # probed once, no re-poll
     assert "busy" in result.message.casefold()
     assert result.final_version == "ccaa-1E1415"
 
@@ -705,19 +707,22 @@ async def test_pre_flight_busy_does_not_wait_out_the_budget() -> None:
     assert elapsed < 1.0  # not the 900s budget, and not one 30s backoff
 
 
+def _already_latest() -> LuxpowerAPIError:
+    """A fresh instance per use — the harness raises the scripted object."""
+    return LuxpowerAPIError(
+        "API error (HTTP 200): The current machine firmware is already the latest version"
+    )
+
+
 @pytest.mark.asyncio
 async def test_mid_chain_already_latest_start_error_reports_convergence() -> None:
-    """If the check endpoint lags a successful final step, the grace can ask
-    for one step too many; the server's 'already the latest version' refusal
-    is convergence, not an error to surface after a successful update."""
+    """If the check endpoint lags a successful final step, the loop can ask for
+    one step too many. The server's 'already the latest version' refusal is not
+    surfaced as a raw error — but convergence is confirmed by a re-check, never
+    declared on the refusal alone."""
     device = ScriptedDevice(
-        checks=[STEP1_PENDING, STEP2_PENDING],
-        start_results=[
-            True,
-            LuxpowerAPIError(
-                "API error (HTTP 200): The current machine firmware is already the latest version"
-            ),
-        ],
+        checks=[STEP1_PENDING, STEP2_PENDING, UP_TO_DATE],
+        start_results=[True, _already_latest()],
     )
 
     result = await device.run_firmware_update_to_completion(
@@ -726,7 +731,30 @@ async def test_mid_chain_already_latest_start_error_reports_convergence() -> Non
 
     assert result.success and result.converged
     assert result.steps_run == 1
+    assert device.start_calls == 2  # the refusal really was exercised
     assert result.final_version == "ccaa-1E1515"
+
+
+@pytest.mark.asyncio
+async def test_mid_chain_already_latest_without_confirmation_is_not_success() -> None:
+    """The refusal alone must never be reported as success: if the re-check
+    still says an update remains, the endpoints genuinely disagree and the
+    device may be partially upgraded — exactly the failure #353 is about."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP2_PENDING, STEP2_PENDING],
+        start_results=[True, _already_latest()],
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, settle_checks=0
+    )
+
+    assert not result.success and not result.converged
+    assert result.steps_run == 1
+    assert device.start_calls == 2
+    assert "partially upgraded" in result.message
+    # The real installed version, not the target we hoped for.
+    assert result.final_version == "ccaa-1E1415"
 
 
 @pytest.mark.asyncio
@@ -740,3 +768,45 @@ async def test_pre_flight_already_latest_start_error_still_propagates() -> None:
 
     with pytest.raises(LuxpowerAPIError, match="already the latest version"):
         await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+
+
+@pytest.mark.asyncio
+async def test_grace_resets_after_a_step_that_moves_the_version() -> None:
+    """The grace is CONSECUTIVE: a no-op, then a real advance, then another
+    no-op must each get their own excuse. Pins the counter reset — without it
+    the second no-op would abort the chain."""
+    mid = _info("ccaa-1E1465", "ccaa-1E1515", app_current=0x14, param_current=0x65)
+    device = ScriptedDevice(
+        # step 1 no-op, step 2 advances, step 3 no-op, step 4 converges
+        checks=[STEP2_PENDING, STEP2_PENDING, mid, mid, UP_TO_DATE],
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 4,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=60, settle_checks=0
+    )
+
+    assert result.success and result.converged
+    assert result.steps_run == 4
+    assert device.start_calls == 4
+
+
+@pytest.mark.asyncio
+async def test_saw_in_progress_does_not_leak_across_steps() -> None:
+    """saw_in_progress is per-step evidence. A step that was observed
+    installing must not license the NEXT step's unobserved no-progress step."""
+    device = ScriptedDevice(
+        # step 1 observed installing and advances; step 2 is never observed
+        # installing and does not advance -> must abort, unearned grace.
+        checks=[STEP1_PENDING, STEP2_PENDING, STEP2_PENDING],
+        progresses=[NOOP_INSTALLING, NOOP_DONE],
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, settle_checks=0
+    )
+
+    assert not result.success
+    assert result.steps_run == 2
+    assert device.start_calls == 2  # no third write
+    assert "No firmware version progress after step 2" in result.message
