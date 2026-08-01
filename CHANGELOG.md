@@ -52,7 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the device, not one that implies failure. Version comparison is
   case-insensitive, and a device that demonstrably moved is accepted even if
   it does not string-match the target, because the target can be a
-  reconstruction the server never echoes.
+  reconstruction the server never echoes. That movement test compares the
+  runtime code against a baseline read from the SAME endpoint at the start of
+  the run: comparing it against the check endpoint's version string would be
+  a cross-source comparison, and if the two shapes ever differed by more than
+  case, "not equal" would be permanently true and every sentinel would report
+  converged on its first occurrence. Without a same-source baseline the run
+  reports indeterminate rather than treating inequality as movement.
 - **Mid-chain activity attribution no longer demands a new status row**: the
   stale-row guard added for the previous release compared each step's status
   row against a pre-POST snapshot. That is right for the FIRST step, where the
