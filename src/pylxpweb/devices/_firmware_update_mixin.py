@@ -936,13 +936,33 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         # by more than case, "not equal" would be permanently true and every
         # sentinel would report converged on its first occurrence — silent, and
         # one-directional toward false success.
-        started_from_code = await self._read_device_firmware_code()
+        started_from_code: str | None = None  # read below, once retry_backoff exists
         loop = asyncio.get_running_loop()
         # Smallest wait between busy/eligibility re-polls. Floors poll_interval
         # so neither a degenerate 0 nor a small positive value (0.001) can
         # hot-loop eligibility/start calls at the API; never exceeds the time
         # left in the budget.
         retry_backoff = max(poll_interval, _MIN_RETRY_BACKOFF)
+
+        async def _read_firmware_code_with_retry() -> str | None:
+            # The runtime read fails transiently at exactly the moments this
+            # orchestrator cares about — a device rebooting from a previous
+            # update attempt, or from the step just finished. One unlucky read
+            # must not decide the run's outcome.
+            code = await self._read_device_firmware_code()
+            for _attempt in range(corroboration_retries):
+                if code is not None:
+                    return code
+                await asyncio.sleep(retry_backoff)
+                code = await self._read_device_firmware_code()
+            return code
+
+        # The pre-run baseline gets the SAME retry as the corroboration reads.
+        # Run start is a transient-failure moment in its own right (the
+        # reporter's device was literally recovering from an earlier attempt),
+        # and a failed baseline disables the movement test for the WHOLE run —
+        # turning a successful update into an indeterminate red error.
+        started_from_code = await _read_firmware_code_with_retry()
         # Every progress key observed in this run. A step only counts as
         # progress if it reaches a state never seen before: the check endpoint
         # can flap between two stale snapshots, and treating each flap as
@@ -996,12 +1016,7 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             # rebooting after its final component — would report a SUCCESSFUL
             # update as indeterminate, which Home Assistant surfaces as a red
             # error. Retry a bounded number of times before settling for that.
-            corroborated = await self._read_device_firmware_code()
-            for _attempt in range(corroboration_retries):
-                if corroborated is not None:
-                    break
-                await asyncio.sleep(retry_backoff)
-                corroborated = await self._read_device_firmware_code()
+            corroborated = await _read_firmware_code_with_retry()
             if corroborated is not None:
                 if _same_version(corroborated, target) or target is None:
                     return (
@@ -1049,21 +1064,28 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                     # "no update available" answer was transient. Keep going.
                     return (None, corroborated)
 
-            # No corroboration available. Do not claim success, but do not
-            # imply the update failed either — say what is and is not known.
+            # Either the device's version could not be read at all, or it was
+            # read but there is no same-source baseline to compare it against.
+            # Do not claim success, and do not imply failure — report exactly
+            # what is and is not known, including the version if we have it.
             return (
                 FirmwareUpdateRunResult(
                     success=False,
                     converged=False,
                     steps_run=step_index,
                     message=(
-                        "Server reports no update remaining, but the device's "
-                        f"version could not be read back to confirm it reached "
-                        f"{target or 'the target'} — the update may well have "
-                        "completed; verify the firmware version on the device "
-                        "before running this again"
+                        "Server reports no update remaining, but this run could "
+                        f"not confirm the device reached {target or 'the target'} "
+                        + (
+                            f"(the device reports {corroborated}, with no "
+                            "pre-run version to compare it against)"
+                            if corroborated is not None
+                            else "(the device's version could not be read back)"
+                        )
+                        + " — the update may well have completed; verify the "
+                        "firmware version on the device before running this again"
                     ),
-                    final_version=installed,
+                    final_version=corroborated or installed,
                 ),
                 None,
             )

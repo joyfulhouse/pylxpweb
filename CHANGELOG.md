@@ -79,7 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   successful update as failed**: the corroboration read is retried a bounded
   number of times before settling on indeterminate, because the most likely
   moment for it to fail is while the device reboots after its final component
-  — exactly when the update has in fact succeeded. `ValidationError` is caught
+  — exactly when the update has in fact succeeded. The pre-run baseline read
+  gets the same retry: run start is a transient-failure moment in its own
+  right (a device recovering from an earlier attempt), and a failed baseline
+  disables the movement check for the entire run. `ValidationError` is caught
   alongside API errors, since `fwCode` is a required field and a device
   omitting it mid-reboot would otherwise raise straight out of the install
   action.

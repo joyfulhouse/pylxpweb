@@ -9,6 +9,8 @@ path.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -268,7 +270,7 @@ async def test_transient_device_busy_rechecks_eligibility_and_retries() -> None:
     device = ScriptedDevice(
         checks=[STEP1_PENDING, STEP2_PENDING, UP_TO_DATE],
         # step 1 starts cleanly; step 2's start races busy once, then takes.
-        start_results=[True, LuxpowerAPIError("deviceBusy"), True],
+        start_results=[True, LuxpowerAPIError("API error (HTTP 200): deviceBusy"), True],
     )
 
     result = await device.run_firmware_update_to_completion(
@@ -322,7 +324,7 @@ async def test_busy_error_from_eligibility_is_retried_not_raised() -> None:
     device = ScriptedDevice(
         checks=[STEP1_PENDING, STEP2_PENDING, UP_TO_DATE],
         # step 1 gate eligible; step 2 gate raises busy once, then eligible.
-        eligibility=[True, LuxpowerAPIError("deviceBusy"), True],
+        eligibility=[True, LuxpowerAPIError("API error (HTTP 200): deviceBusy"), True],
     )
 
     result = await device.run_firmware_update_to_completion(
@@ -376,7 +378,7 @@ async def test_no_start_write_fires_after_deadline_on_retry() -> None:
     device = SlowRetryEligibilityDevice(
         checks=[STEP1_PENDING, STEP2_PENDING],
         # step 1 starts cleanly; step 2's start races busy and never recovers.
-        start_results=[True, LuxpowerAPIError("deviceBusy")],
+        start_results=[True, LuxpowerAPIError("API error (HTTP 200): deviceBusy")],
     )
 
     result = await device.run_firmware_update_to_completion(
@@ -393,16 +395,16 @@ async def test_no_start_write_fires_after_deadline_on_retry() -> None:
 @pytest.mark.parametrize(
     "message",
     [
-        "deviceBusy",
-        "device busy",
-        "DEVICE_BUSY",
+        "API error (HTTP 200): deviceBusy",
+        "API error (HTTP 200): device busy",
+        "API error (HTTP 200): DEVICE_BUSY",
         # A start-call TOCTOU race can report the device/parallel-group as
         # already updating; these busy-family codes AND their standardUpdate/run
         # prose variants must also be tolerated, not escape raw (issue #353).
-        "deviceUpdating",
-        "parallelGroupUpdating",
-        "Device is already updating",
-        "Another device in the parallel group is updating",
+        "API error (HTTP 200): deviceUpdating",
+        "API error (HTTP 200): parallelGroupUpdating",
+        "API error (HTTP 200): Device is already updating",
+        "HTTP 500: Another device in the parallel group is updating",
     ],
 )
 @pytest.mark.asyncio
@@ -839,7 +841,7 @@ async def test_first_eligibility_busy_error_fails_fast() -> None:
     not after the multi-minute mid-chain retry budget."""
     device = ScriptedDevice(
         checks=[STEP2_PENDING],
-        eligibility=[LuxpowerAPIError("deviceBusy")],
+        eligibility=[LuxpowerAPIError("API error (HTTP 200): deviceBusy")],
     )
 
     result = await device.run_firmware_update_to_completion(
@@ -860,7 +862,7 @@ async def test_first_start_busy_error_fails_fast() -> None:
     device; before any step that is also an immediate stop, one write only."""
     device = ScriptedDevice(
         checks=[STEP2_PENDING],
-        start_results=[LuxpowerAPIError("deviceBusy")],
+        start_results=[LuxpowerAPIError("API error (HTTP 200): deviceBusy")],
     )
 
     result = await device.run_firmware_update_to_completion(
@@ -879,7 +881,7 @@ async def test_pre_flight_busy_does_not_wait_out_the_budget() -> None:
     when a large busy budget is configured."""
     device = ScriptedDevice(
         checks=[STEP2_PENDING],
-        eligibility=[LuxpowerAPIError("deviceBusy")],
+        eligibility=[LuxpowerAPIError("API error (HTTP 200): deviceBusy")],
     )
 
     result = await device.run_firmware_update_to_completion(
@@ -1201,7 +1203,7 @@ async def test_refused_starts_are_capped_per_step() -> None:
             if self.start_calls == 1:
                 self._run_seq += 1
                 return True
-            raise LuxpowerAPIError("deviceBusy")
+            raise LuxpowerAPIError("API error (HTTP 200): deviceBusy")
 
     device = AlwaysBusyAfterFirstStep(checks=[STEP1_PENDING, STEP2_PENDING])
 
@@ -1228,7 +1230,7 @@ async def test_small_positive_poll_interval_does_not_hot_loop() -> None:
             if self.start_calls == 1:
                 self._run_seq += 1
                 return True
-            raise LuxpowerAPIError("deviceBusy")
+            raise LuxpowerAPIError("API error (HTTP 200): deviceBusy")
 
     device = BusyMidChain(checks=[STEP1_PENDING, STEP2_PENDING])
 
@@ -1294,10 +1296,10 @@ async def test_first_step_attribution_is_still_strict() -> None:
 @pytest.mark.parametrize(
     "message",
     [
-        "systemBusy",
-        "Device is updating, please try again",
-        "SYSTEM_BUSY",
-        "The inverter is busy",
+        "API error (HTTP 200): systemBusy",
+        "API error (HTTP 200): Device is updating, please try again",
+        "HTTP 503: SYSTEM_BUSY",
+        "API error (HTTP 200): The inverter is busy",
     ],
 )
 @pytest.mark.asyncio
@@ -1325,10 +1327,10 @@ async def test_unrecognised_busy_phrasings_are_still_tolerated(message: str) -> 
 @pytest.mark.parametrize(
     "message",
     [
-        "Failed updating firmware: invalid checksum",
-        "Error updating firmware image",
-        "Firmware image corrupt",
-        "Update timed out while updating",
+        "API error (HTTP 200): Failed updating firmware: invalid checksum",
+        "API error (HTTP 200): Error updating firmware image",
+        "API error (HTTP 200): Firmware image corrupt",
+        "API error (HTTP 200): Update timed out while updating",
     ],
 )
 @pytest.mark.asyncio
@@ -1438,14 +1440,21 @@ async def test_no_same_source_baseline_is_indeterminate_not_movement() -> None:
     sentinel = _info("", "")
     device = ScriptedDevice(
         checks=[STEP2_PENDING, sentinel],
-        # Baseline read fails; later reads succeed with some other value.
-        firmware_codes=[None, "ccaa-1E9999", "ccaa-1E9999", "ccaa-1E9999", "ccaa-1E9999"],
+        # The baseline read fails on every attempt INCLUDING its retries (a
+        # single None would now be retried away); the later corroboration
+        # succeeds with some other value.
+        firmware_codes=[None, None, None, None, "ccaa-1E9999"],
     )
 
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert not result.success and not result.converged
     assert "verify the firmware version on the device" in result.message
+    # The corroborated version IS known here, so the message must say it
+    # rather than claiming the version could not be read.
+    assert "device reports ccaa-1E9999" in result.message
+    assert "no pre-run version to compare" in result.message
+    assert result.final_version == "ccaa-1E9999"
 
 
 # --- Round 4 ---------------------------------------------------------------
@@ -1599,22 +1608,94 @@ async def test_corroboration_read_is_retried_before_giving_up() -> None:
 
 
 @pytest.mark.asyncio
-async def test_corroboration_validation_error_is_not_raised_at_the_caller() -> None:
-    """fwCode is a required str; a device omitting it mid-reboot raises
-    ValidationError, which would escape into the HA install action."""
-    from pydantic import ValidationError
+async def test_pre_run_baseline_read_is_retried() -> None:
+    """The baseline read gets the same retry as the corroboration reads.
 
-    class ValidationFailingDevice(ScriptedDevice):
-        async def _read_device_firmware_code(self) -> str | None:
-            # Exercise the production body's except clause.
-            try:
-                raise ValidationError.from_exception_data("InverterRuntime", [])
-            except (LuxpowerAPIError, ValidationError):
-                return None
-
-    device = ValidationFailingDevice(checks=[STEP2_PENDING, _info("", "")])
+    Run start is itself a transient-failure moment — the reporter's device was
+    literally recovering from an earlier update attempt — and a failed
+    baseline disables the movement test for the WHOLE run, turning a
+    successful update into an indeterminate red error.
+    """
+    sentinel = _info("", "")
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, sentinel],
+        # Baseline fails once then succeeds; the corroboration then shows the
+        # device on the target. Without the retry the baseline stays None and
+        # the run cannot conclude anything.
+        firmware_codes=[None, "ccaa-1E1415", "ccaa-1E1515"],
+    )
 
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
-    assert not result.success  # indeterminate, but no exception escaped
-    assert "verify the firmware version on the device" in result.message
+    assert result.success and result.converged
+    assert result.final_version == "ccaa-1E1515"
+
+
+# --- Direct coverage of the REAL _read_device_firmware_code body ------------
+#
+# ScriptedDevice overrides this method wholesale, so every orchestration test
+# above exercises the harness, not production. The previous ValidationError
+# test was a tautology: it re-implemented the except clause inside a subclass,
+# so reverting the production catch left it green. These drive the actual body.
+
+
+class _BareHost(FirmwareUpdateMixin):
+    """Mixin host with nothing but what the production body touches."""
+
+    def __init__(self, runtime_result: object) -> None:
+        self._init_firmware_update_cache()
+        self.serial_number = "4413740117"
+        self._runtime_result = runtime_result
+        self._client = self._build_client()
+
+    def _build_client(self) -> MagicMock:
+        async def _get_inverter_runtime(serial: str) -> object:
+            if isinstance(self._runtime_result, Exception):
+                raise self._runtime_result
+            return self._runtime_result
+
+        client = MagicMock()
+        client.api.devices.get_inverter_runtime = _get_inverter_runtime
+        return client
+
+
+@pytest.mark.asyncio
+async def test_read_device_firmware_code_returns_the_code() -> None:
+    host = _BareHost(SimpleNamespace(fwCode="ccaa-1E1515"))
+
+    assert await host._read_device_firmware_code() == "ccaa-1E1515"
+
+
+@pytest.mark.asyncio
+async def test_read_device_firmware_code_treats_empty_as_unknown() -> None:
+    """An empty string is not a version; it must not be reported as one."""
+    host = _BareHost(SimpleNamespace(fwCode=""))
+
+    assert await host._read_device_firmware_code() is None
+
+
+@pytest.mark.asyncio
+async def test_read_device_firmware_code_swallows_api_errors() -> None:
+    host = _BareHost(LuxpowerAPIError("API error (HTTP 500): boom"))
+
+    assert await host._read_device_firmware_code() is None
+
+
+@pytest.mark.asyncio
+async def test_read_device_firmware_code_swallows_validation_errors() -> None:
+    """fwCode is a required str, so a device omitting it mid-reboot raises
+    ValidationError — which would escape into the HA install action."""
+    from pydantic import ValidationError
+
+    host = _BareHost(ValidationError.from_exception_data("InverterRuntime", []))
+
+    assert await host._read_device_firmware_code() is None
+
+
+@pytest.mark.asyncio
+async def test_read_device_firmware_code_does_not_swallow_everything() -> None:
+    """The catch is narrow on purpose: a programming error must still surface."""
+    host = _BareHost(RuntimeError("not an API failure"))
+
+    with pytest.raises(RuntimeError, match="not an API failure"):
+        await host._read_device_firmware_code()
