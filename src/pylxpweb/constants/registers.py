@@ -584,15 +584,17 @@ WEB_PARAM_TO_HOLD_REGISTER = {
 # (eg4_web_monitor #476). Both families ever hardware-toggle-tested (18kPV
 # 2026-07-21, 12000XP/SNA PR #220) match the ant0nkr/lxp_modbus
 # H_FUNCTION_ENABLE_3 lineage layout in every position this project has
-# hardware evidence for (bits 7, 14, 15), while the historic 18kPV-specific
-# upper-bit table matched none of them — so the hybrid and EG4_OFFGRID
-# tables no longer diverge. Be precise about what that evidence is, since
-# mistaking "the names lined up" for "we toggled it" is what produced #476
-# in the first place: bits 14 and 15 are toggle-proven (18kPV green,
-# 12000XP ECO), while bit 7 rests on the SNA cloud decode plus a constant
-# raw 0x0080 — strong, but not a toggle. That agreement does NOT extend to
-# every bit: at bit 5 the EG4 cloud decode and lxp_modbus genuinely
-# disagree (see below), and no toggle test has separated them.
+# hardware evidence for (bits 7, 10, 14, 15), while the historic
+# 18kPV-specific upper-bit table matched none of them — so the hybrid and
+# EG4_OFFGRID tables no longer diverge. Be precise about what that evidence
+# is, since mistaking "the names lined up" for "we toggled it" is what
+# produced #476 in the first place: bits 10, 14 and 15 are toggle-proven
+# (18kPV take-load-together, 18kPV green, 12000XP ECO), while bit 7 rests on
+# the SNA cloud decode plus a constant raw 0x0080 — strong, but not a
+# toggle. Every position that once looked like a genuine source conflict has
+# resolved in the lineage layout's favour once someone toggled it: bit 8
+# (#476) and bit 5 (#242) were both our decode being wrong about the
+# position while EG4 was only ever reporting the name.
 # Displaced/unproven slots are FUNC_110_BITn placeholders (same convention as reg 179/233 unknowns):
 # an honest gap beats an unverified decode served as truth — a local write
 # through a wrong slot flips an unrelated config bit while reporting

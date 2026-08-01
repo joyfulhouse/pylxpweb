@@ -833,6 +833,45 @@ class TestRegister110UnifiedLayout:
             ):
                 assert removed not in layout
 
+    def test_register_110_canonical_registry_agrees_with_decode_table(self) -> None:
+        """The canonical holding registry and the decode table must not drift.
+
+        Register 110's bit positions live in two places: the transport decode
+        list (REGISTER_110_PARAM_KEYS, indexed by bit) and the canonical
+        HoldingRegisterDefinition rows. Nothing forces them to agree, so a
+        position fix applied to only one — exactly what #242 and #476 each
+        had to correct — would leave the two silently contradicting each
+        other, with reads and writes disagreeing about the same flag.
+        """
+        from pylxpweb.constants.registers import get_register_to_param_mapping
+        from pylxpweb.registers.inverter_holding import BY_ADDRESS
+
+        layout = get_register_to_param_mapping()[110]
+
+        definitions = [
+            definition
+            for definition in BY_ADDRESS.get(110, ())
+            if definition.bit_position is not None
+        ]
+        assert definitions, "register 110 must have canonical bit definitions"
+
+        for definition in definitions:
+            assert definition.api_param_key is not None
+            assert layout[definition.bit_position] == definition.api_param_key, (
+                f"{definition.api_param_key} is bit {definition.bit_position} in the "
+                f"canonical registry but bit {layout.index(definition.api_param_key)} "
+                "in the decode table"
+            )
+
+        # The #242 result specifically, pinned by name rather than by scan.
+        take_load_together = next(
+            definition
+            for definition in definitions
+            if definition.api_param_key == "FUNC_TAKE_LOAD_TOGETHER"
+        )
+        assert take_load_together.address == 110
+        assert take_load_together.bit_position == 10
+
     def test_register_110_agreed_low_bits_unchanged(self) -> None:
         """Bits 0-4 agree across all sources and stay identical.
 
@@ -1055,7 +1094,8 @@ class TestRegister110UnifiedLayout:
         This inverts the old disputed-write guard: the toggle capture proved
         the position, so the write is allowed — and it must go to bit 10 with
         read-modify-write leaving every sibling bit alone, including bit 5,
-        which the capture showed is a different (CT-ratio) field.
+        which the capture showed is some other setting (lxp_modbus assigns
+        it to a CT-sample-ratio field; unconfirmed here).
         """
         # The captured baseline: bits 5 and 10 set.
         offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x0420})
@@ -1067,7 +1107,7 @@ class TestRegister110UnifiedLayout:
         # server cleared this flag: 0x0420 -> 0x0020.
         offgrid_transport.write_parameters.assert_called_once_with({110: 0x0020})
         written = offgrid_transport.write_parameters.call_args[0][0][110]
-        assert written & (1 << 5), "bit 5 (CT-ratio field) must survive the write"
+        assert written & (1 << 5), "bit 5 (a different, unidentified setting) must survive"
 
     @pytest.mark.asyncio
     async def test_disputed_write_guard_has_no_entries_but_still_works(

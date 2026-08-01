@@ -987,8 +987,10 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         description="Take load together mode (parallel load sharing). Bit 10, "
         "toggle-verified on 18kPV via EG4's own cloud functionControl: raw "
         "1056 <-> 32, a single bit-10 delta, bit 5 unmoved (pylxpweb #242). "
-        "The pre-2026-08-01 bit-5 mapping was wrong and would have written "
-        "into the CT-sample-ratio region.",
+        "The pre-2026-08-01 bit-5 mapping was wrong: a local write through it "
+        "would have flipped bit 5, which the capture shows is some other "
+        "setting (lxp_modbus assigns it to a CT-sample-ratio field, "
+        "unconfirmed here).",
     ),
     HoldingRegisterDefinition(
         address=110,
