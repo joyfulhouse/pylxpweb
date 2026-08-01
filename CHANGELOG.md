@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`FUNC_TAKE_LOAD_TOGETHER` moved from register 110 bit 5 to bit 10**
+  (hardware toggle-verified, [#242](https://github.com/joyfulhouse/pylxpweb/issues/242)).
+  EG4's cloud decode names this flag while ant0nkr/lxp_modbus put a
+  CT-sample-ratio field at bits 5-6 and TakeLoadTogether at bit 10. The only
+  live read available had bits 5 AND 10 both set (raw `0x0420`), so it could
+  not separate the two layouts, and the flag was left decode-only with LOCAL
+  writes blocked. A 2026-08-01 capture on an 18kPV settles it: driving EG4's
+  own cloud `functionControl` **by name** — the server picks the bit, we only
+  read the raw register — moved raw `1056 -> 32` on False and back to `1056`
+  on True. That is a single bit-10 delta (`0x0400`), byte-perfect on restore,
+  with bit 5 unmoved throughout. Bit 5 becomes a `FUNC_110_BIT5` placeholder
+  (decode-only) rather than taking lxp_modbus's CT-ratio name, because a
+  multi-bit sample-ratio field must never be exposed as a writable bool.
+  The two sources were never really in conflict: EG4's decode reports the
+  NAME, and its server resolves that name to bit 10 — the same way #476's
+  bit-14 green-mode result vindicated the lxp_modbus lineage layout.
+- **`FUNC_TAKE_LOAD_TOGETHER` is writable again over LOCAL transports**: with
+  the position pinned it no longer needs the disputed-write guard, so
+  `DISPUTED_WRITE_BLOCKED_PARAMS` is now empty. The guard mechanism and its
+  `write_named_parameters` check stay in place — register 110 alone has
+  produced two of these disputes — and a test pins both that the set is empty
+  and that it would still refuse a write if repopulated.
+
 ## [0.9.39b5] - 2026-07-27
 
 This section accumulates the whole 0.9.39 beta line: b1 through b4 were tagged
