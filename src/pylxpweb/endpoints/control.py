@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import math
+from typing import Any, cast
 
 from pylxpweb.constants import SCHEDULE_CONFIGS, ScheduleType
 from pylxpweb.endpoints.base import BaseEndpoint
@@ -32,6 +33,48 @@ _SCHEDULE_REGISTER_ADDRESSES: frozenset[int] = frozenset(
     for config in SCHEDULE_CONFIGS.values()
     for address in range(config.base_register, config.base_register + 2 * config.periods)
 )
+
+
+def _parse_int_parameter(raw: object) -> int | None:
+    """Parse a named cloud parameter as an integer when possible."""
+    if raw is None:
+        return None
+    try:
+        parsed: int = int(cast(Any, raw))
+    except (TypeError, ValueError):
+        return None
+    return parsed
+
+
+def _parse_float_parameter(raw: object) -> float | None:
+    """Parse a named cloud parameter as a float when possible."""
+    if raw is None:
+        return None
+    try:
+        parsed: float = float(cast(Any, raw))
+    except (TypeError, ValueError):
+        return None
+    return parsed
+
+
+def _parse_enabled_parameter(raw: object) -> bool | None:
+    """Parse a named cloud function parameter without inventing False."""
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    return None
+
+
+def _validate_tenth_resolution(value: float, name: str) -> None:
+    """Require a value to align with the cloud parameter's 0.1 step."""
+    scaled = value * 10
+    if not math.isclose(scaled, round(scaled), rel_tol=0.0, abs_tol=1e-9):
+        raise ValueError(f"{name} must be a multiple of 0.1, got {value}")
 
 
 class ControlEndpoints(BaseEndpoint):
@@ -2547,30 +2590,311 @@ class ControlEndpoints(BaseEndpoint):
         """
         params = await self.read_device_parameters_ranges(inverter_sn)
 
-        def _parse(key: str) -> int | None:
-            raw = params.get(key)
-            if raw is None:
-                return None
-            try:
-                return int(raw)
-            except (TypeError, ValueError):
-                return None
+        return {
+            "start_soc": _parse_int_parameter(params.get("_12K_HOLD_AC_COUPLE_START_SOC")),
+            "end_soc": _parse_int_parameter(params.get("_12K_HOLD_AC_COUPLE_END_SOC")),
+            "enabled": _parse_enabled_parameter(params.get("FUNC_AC_COUPLING_FUNCTION")),
+        }
 
-        def _parse_enabled(raw: object) -> bool | None:
-            if isinstance(raw, bool):
-                return raw
-            if isinstance(raw, str):
-                lowered = raw.strip().lower()
-                if lowered == "true":
-                    return True
-                if lowered == "false":
-                    return False
-            return None
+    # ============================================================================
+    # Inverter Smart Load Threshold Controls (Cloud API)
+    # ============================================================================
+    #
+    # INVERTER-LEVEL smart-load settings from the portal's Smart Load tab,
+    # distinct from the GridBOSS/MID per-port smart-load controls elsewhere in
+    # this module. The five ``_12K_HOLD_*`` values were observed on both an
+    # 18kPV and a FlexBOSS21, while a GridBOSS exposed only the function key and
+    # none of these inverter threshold keys. Their absence is therefore kept as
+    # ``None`` by the getter rather than replaced with a plausible-looking zero.
+    #
+    # CLOUD-ONLY: no local Modbus registers are pinned for these named params.
+    # Reads have been observed on live hardware, but the write path has not been
+    # verified on hardware and must remain routed through the named cloud API.
+
+    async def set_inverter_smart_load_start_soc(
+        self,
+        inverter_sn: str,
+        percent: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set the inverter smart-load START SOC threshold via cloud API.
+
+        This configures the SOC threshold used to start the inverter-level
+        smart load when the firmware is operating in SOC mode.
+
+        Warning:
+            The named cloud write path is unverified on hardware. No local
+            Modbus register is pinned for this parameter.
+
+        Args:
+            inverter_sn: Inverter serial number
+            percent: Battery SOC (%) to start the smart load (0-100)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If percent is out of range
+
+        Example:
+            >>> await client.control.set_inverter_smart_load_start_soc(
+            ...     "1234567890", 69
+            ... )
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError(f"percent must be 0-100, got {percent}")
+
+        return await self.write_parameter(
+            inverter_sn,
+            "_12K_HOLD_SMART_LOAD_START_SOC",
+            str(percent),
+            client_type=client_type,
+        )
+
+    async def set_inverter_smart_load_end_soc(
+        self,
+        inverter_sn: str,
+        percent: int,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set the inverter smart-load END SOC threshold via cloud API.
+
+        This configures the SOC threshold used to stop the inverter-level
+        smart load when the firmware is operating in SOC mode.
+
+        Warning:
+            The named cloud write path is unverified on hardware. Unlike the
+            AC-couple END SOC, no 255 sentinel has been observed here.
+
+        Args:
+            inverter_sn: Inverter serial number
+            percent: Battery SOC (%) to stop the smart load (0-100)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If percent is out of range
+
+        Example:
+            >>> await client.control.set_inverter_smart_load_end_soc(
+            ...     "1234567890", 60
+            ... )
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError(f"percent must be 0-100, got {percent}")
+
+        return await self.write_parameter(
+            inverter_sn,
+            "_12K_HOLD_SMART_LOAD_END_SOC",
+            str(percent),
+            client_type=client_type,
+        )
+
+    async def set_inverter_smart_load_start_pv_power(
+        self,
+        inverter_sn: str,
+        kilowatts: float,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set the inverter smart-load START PV power threshold via cloud API.
+
+        The named cloud parameter carries human-readable kilowatts with 0.1 kW
+        resolution. The 100 kW upper bound is a defensive sanity ceiling, not
+        a firmware-confirmed maximum.
+
+        Warning:
+            The named cloud write path is unverified on hardware. No local
+            Modbus register is pinned for this parameter.
+
+        Args:
+            inverter_sn: Inverter serial number
+            kilowatts: PV power (kW) required to start the smart load (0-100)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If kilowatts is out of range or not a multiple of 0.1
+
+        Example:
+            >>> await client.control.set_inverter_smart_load_start_pv_power(
+            ...     "1234567890", 0.5
+            ... )
+        """
+        if not 0 <= kilowatts <= 100:
+            raise ValueError(f"kilowatts must be 0-100, got {kilowatts}")
+        _validate_tenth_resolution(kilowatts, "kilowatts")
+
+        return await self.write_parameter(
+            inverter_sn,
+            "_12K_HOLD_START_PV_POWER",
+            f"{kilowatts:g}",
+            client_type=client_type,
+        )
+
+    async def set_inverter_smart_load_start_volt(
+        self,
+        inverter_sn: str,
+        volts: float,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set the inverter smart-load START voltage threshold via cloud API.
+
+        The named cloud parameter carries volts, not decivolts, with 0.1 V
+        resolution. The 100 V upper bound is a defensive sanity ceiling for
+        48 V-class battery banks, not a firmware-confirmed maximum.
+
+        Warning:
+            The named cloud write path is unverified on hardware. No local
+            Modbus register is pinned for this parameter.
+
+        Args:
+            inverter_sn: Inverter serial number
+            volts: Battery voltage (V) to start the smart load (0-100)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If volts is out of range or not a multiple of 0.1
+
+        Example:
+            >>> await client.control.set_inverter_smart_load_start_volt(
+            ...     "1234567890", 54.0
+            ... )
+        """
+        if not 0 <= volts <= 100:
+            raise ValueError(f"volts must be 0-100, got {volts}")
+        _validate_tenth_resolution(volts, "volts")
+
+        return await self.write_parameter(
+            inverter_sn,
+            "_12K_HOLD_SMART_LOAD_START_VOLT",
+            f"{volts:g}",
+            client_type=client_type,
+        )
+
+    async def set_inverter_smart_load_end_volt(
+        self,
+        inverter_sn: str,
+        volts: float,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Set the inverter smart-load END voltage threshold via cloud API.
+
+        The named cloud parameter carries volts, not decivolts, with 0.1 V
+        resolution. The 100 V upper bound is a defensive sanity ceiling for
+        48 V-class battery banks, not a firmware-confirmed maximum.
+
+        Warning:
+            The named cloud write path is unverified on hardware. No local
+            Modbus register is pinned for this parameter.
+
+        Args:
+            inverter_sn: Inverter serial number
+            volts: Battery voltage (V) to stop the smart load (0-100)
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Raises:
+            ValueError: If volts is out of range or not a multiple of 0.1
+
+        Example:
+            >>> await client.control.set_inverter_smart_load_end_volt(
+            ...     "1234567890", 48.0
+            ... )
+        """
+        if not 0 <= volts <= 100:
+            raise ValueError(f"volts must be 0-100, got {volts}")
+        _validate_tenth_resolution(volts, "volts")
+
+        return await self.write_parameter(
+            inverter_sn,
+            "_12K_HOLD_SMART_LOAD_END_VOLT",
+            f"{volts:g}",
+            client_type=client_type,
+        )
+
+    async def set_inverter_smart_load_enabled(
+        self,
+        inverter_sn: str,
+        enabled: bool,
+        client_type: str = "WEB",
+    ) -> SuccessResponse:
+        """Enable or disable the inverter's smart-load function via cloud API.
+
+        Toggles ``FUNC_SMART_LOAD_ENABLE`` — the inverter-level Smart Load tab
+        function, distinct from the GridBOSS/MID per-port
+        ``FUNC_SMART_LOAD_EN_{n}`` functions (``enable_smart_load`` /
+        ``disable_smart_load``). These controls target different hardware and
+        must not be confused.
+
+        Cloud-routed: no local Modbus register is pinned for this function, and
+        the named cloud write path remains unverified on hardware.
+
+        Args:
+            inverter_sn: Inverter serial number
+            enabled: Enable or disable the inverter smart-load function
+            client_type: Client type (WEB/APP)
+
+        Returns:
+            SuccessResponse: Operation result
+
+        Example:
+            >>> await client.control.set_inverter_smart_load_enabled(
+            ...     "1234567890", True
+            ... )
+        """
+        return await self.control_function(
+            inverter_sn,
+            "FUNC_SMART_LOAD_ENABLE",
+            enabled,
+            client_type=client_type,
+        )
+
+    async def get_inverter_smart_load_limits(
+        self, inverter_sn: str
+    ) -> dict[str, int | float | bool | None]:
+        """Get inverter smart-load thresholds and enable state via cloud API.
+
+        Returns:
+            Dictionary with ``start_soc``, ``end_soc``, ``start_pv_power``,
+            ``start_volt``, ``end_volt`` and ``enabled``. SOC values are whole
+            percentages; PV power is in kilowatts; voltage values are in volts.
+            Any absent, non-numeric or otherwise unparseable field is ``None``.
+            This preserves the distinction from legal numeric zeroes and from
+            a real disabled (``False``) function state. Function params arrive
+            as JSON booleans; string ``"true"``/``"false"`` is also accepted
+            defensively.
+
+        Example:
+            >>> # Illustrative only — shape of the return value. The exact
+            >>> # numbers depend on the device; a set→get round-trip through
+            >>> # this cloud getter is unverified pending a live call on
+            >>> # smart-load-capable hardware.
+            >>> limits = await client.control.get_inverter_smart_load_limits(
+            ...     "1234567890"
+            ... )
+            >>> limits  # doctest: +SKIP
+            {'start_soc': 90, 'end_soc': 60, 'start_pv_power': 0.5,
+             'start_volt': 54.0, 'end_volt': 48.0, 'enabled': False}
+        """
+        params = await self.read_device_parameters_ranges(inverter_sn)
 
         return {
-            "start_soc": _parse("_12K_HOLD_AC_COUPLE_START_SOC"),
-            "end_soc": _parse("_12K_HOLD_AC_COUPLE_END_SOC"),
-            "enabled": _parse_enabled(params.get("FUNC_AC_COUPLING_FUNCTION")),
+            "start_soc": _parse_int_parameter(params.get("_12K_HOLD_SMART_LOAD_START_SOC")),
+            "end_soc": _parse_int_parameter(params.get("_12K_HOLD_SMART_LOAD_END_SOC")),
+            "start_pv_power": _parse_float_parameter(params.get("_12K_HOLD_START_PV_POWER")),
+            "start_volt": _parse_float_parameter(params.get("_12K_HOLD_SMART_LOAD_START_VOLT")),
+            "end_volt": _parse_float_parameter(params.get("_12K_HOLD_SMART_LOAD_END_VOLT")),
+            "enabled": _parse_enabled_parameter(params.get("FUNC_SMART_LOAD_ENABLE")),
         }
 
     # ============================================================================

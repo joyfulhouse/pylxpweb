@@ -997,6 +997,318 @@ class TestInverterACCoupleSocLimitsCloud:
         assert limits["enabled"] is False
 
 
+class TestInverterSmartLoadLimitsCloud:
+    """Inverter-level smart-load cloud API methods (eg4_web_monitor#499)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method_name", "value", "hold_param", "value_text"),
+        [
+            (
+                "set_inverter_smart_load_start_soc",
+                69,
+                "_12K_HOLD_SMART_LOAD_START_SOC",
+                "69",
+            ),
+            (
+                "set_inverter_smart_load_end_soc",
+                60,
+                "_12K_HOLD_SMART_LOAD_END_SOC",
+                "60",
+            ),
+            (
+                "set_inverter_smart_load_start_pv_power",
+                0.5,
+                "_12K_HOLD_START_PV_POWER",
+                "0.5",
+            ),
+            (
+                "set_inverter_smart_load_start_volt",
+                54.0,
+                "_12K_HOLD_SMART_LOAD_START_VOLT",
+                "54",
+            ),
+            (
+                "set_inverter_smart_load_end_volt",
+                48.5,
+                "_12K_HOLD_SMART_LOAD_END_VOLT",
+                "48.5",
+            ),
+        ],
+    )
+    async def test_set_inverter_smart_load_parameter_wire_values(
+        self,
+        control: ControlEndpoints,
+        method_name: str,
+        value: int | float,
+        hold_param: str,
+        value_text: str,
+    ) -> None:
+        """Each setter sends the observed named param in portal units."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await getattr(control, method_name)(SERIAL, value)
+
+        assert result.success is True
+        control.write_parameter.assert_called_once_with(
+            SERIAL, hold_param, value_text, client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "set_inverter_smart_load_start_soc",
+            "set_inverter_smart_load_end_soc",
+        ],
+    )
+    async def test_set_inverter_smart_load_soc_boundaries(
+        self, control: ControlEndpoints, method_name: str
+    ) -> None:
+        """Both SOC endpoints accept the documented 0 and 100 boundaries."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        assert (await getattr(control, method_name)(SERIAL, 0)).success is True
+        assert (await getattr(control, method_name)(SERIAL, 100)).success is True
+        assert [call.args[2] for call in control.write_parameter.await_args_list] == [
+            "0",
+            "100",
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "set_inverter_smart_load_start_soc",
+            "set_inverter_smart_load_end_soc",
+        ],
+    )
+    @pytest.mark.parametrize("bad", [-1, 101, 255])
+    async def test_set_inverter_smart_load_soc_rejects_out_of_range(
+        self, control: ControlEndpoints, method_name: str, bad: int
+    ) -> None:
+        """Smart-load SOC has no 255 sentinel and rejects outside 0-100."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        with pytest.raises(ValueError, match="percent must be 0-100"):
+            await getattr(control, method_name)(SERIAL, bad)
+
+        control.write_parameter.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "set_inverter_smart_load_start_pv_power",
+            "set_inverter_smart_load_start_volt",
+            "set_inverter_smart_load_end_volt",
+        ],
+    )
+    async def test_set_inverter_smart_load_float_boundaries(
+        self, control: ControlEndpoints, method_name: str
+    ) -> None:
+        """PV power and voltage setters accept and compactly format 0 and 100."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        assert (await getattr(control, method_name)(SERIAL, 0.0)).success is True
+        assert (await getattr(control, method_name)(SERIAL, 100.0)).success is True
+        assert [call.args[2] for call in control.write_parameter.await_args_list] == [
+            "0",
+            "100",
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "set_inverter_smart_load_start_pv_power",
+            "set_inverter_smart_load_start_volt",
+            "set_inverter_smart_load_end_volt",
+        ],
+    )
+    @pytest.mark.parametrize("bad", [-0.1, 100.1])
+    async def test_set_inverter_smart_load_float_rejects_out_of_range(
+        self, control: ControlEndpoints, method_name: str, bad: float
+    ) -> None:
+        """PV power and voltage writes reject values outside 0-100."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        with pytest.raises(ValueError, match="must be 0-100"):
+            await getattr(control, method_name)(SERIAL, bad)
+
+        control.write_parameter.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "set_inverter_smart_load_start_pv_power",
+            "set_inverter_smart_load_start_volt",
+            "set_inverter_smart_load_end_volt",
+        ],
+    )
+    async def test_set_inverter_smart_load_float_rejects_sub_tenth_step(
+        self, control: ControlEndpoints, method_name: str
+    ) -> None:
+        """The observed 0.1 resolution rejects a value between valid steps."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        with pytest.raises(ValueError, match="multiple of 0.1"):
+            await getattr(control, method_name)(SERIAL, 54.25)
+
+        control.write_parameter.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "set_inverter_smart_load_start_pv_power",
+            "set_inverter_smart_load_start_volt",
+            "set_inverter_smart_load_end_volt",
+        ],
+    )
+    async def test_set_inverter_smart_load_float_accepts_roundoff(
+        self, control: ControlEndpoints, method_name: str
+    ) -> None:
+        """Normal binary float noise around a tenth does not reject a write."""
+        control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+
+        result = await getattr(control, method_name)(SERIAL, 0.1 + 0.2)
+
+        assert result.success is True
+
+    @pytest.mark.asyncio
+    async def test_set_inverter_smart_load_enabled(self, control: ControlEndpoints) -> None:
+        """Enable state uses the inverter-level FUNC_SMART_LOAD_ENABLE param."""
+        control.control_function = AsyncMock(return_value=SuccessResponse(success=True))
+
+        assert (await control.set_inverter_smart_load_enabled(SERIAL, True)).success is True
+        control.control_function.assert_called_with(
+            SERIAL, "FUNC_SMART_LOAD_ENABLE", True, client_type="WEB"
+        )
+
+        assert (await control.set_inverter_smart_load_enabled(SERIAL, False)).success is True
+        control.control_function.assert_called_with(
+            SERIAL, "FUNC_SMART_LOAD_ENABLE", False, client_type="WEB"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_smart_load_limits_observed_payload(
+        self, control: ControlEndpoints
+    ) -> None:
+        """The getter parses the six values observed on two inverter families."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "FUNC_SMART_LOAD_ENABLE": False,
+                "_12K_HOLD_SMART_LOAD_START_SOC": "90",
+                "_12K_HOLD_SMART_LOAD_END_SOC": "60",
+                "_12K_HOLD_START_PV_POWER": "0.5",
+                "_12K_HOLD_SMART_LOAD_START_VOLT": "54",
+                "_12K_HOLD_SMART_LOAD_END_VOLT": "48",
+            }
+        )
+
+        limits = await control.get_inverter_smart_load_limits(SERIAL)
+
+        assert limits == {
+            "start_soc": 90,
+            "end_soc": 60,
+            "start_pv_power": 0.5,
+            "start_volt": 54.0,
+            "end_volt": 48.0,
+            "enabled": False,
+        }
+        control.read_device_parameters_ranges.assert_called_once_with(SERIAL)
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_smart_load_limits_gridboss_shape(
+        self, control: ControlEndpoints
+    ) -> None:
+        """GridBOSS has the function key but none of the inverter HOLD keys."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={"FUNC_SMART_LOAD_ENABLE": True}
+        )
+
+        limits = await control.get_inverter_smart_load_limits(SERIAL)
+
+        assert limits == {
+            "start_soc": None,
+            "end_soc": None,
+            "start_pv_power": None,
+            "start_volt": None,
+            "end_volt": None,
+            "enabled": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_smart_load_limits_non_numeric(
+        self, control: ControlEndpoints
+    ) -> None:
+        """Every unparseable value becomes None rather than a fake zero/off."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "FUNC_SMART_LOAD_ENABLE": "unknown",
+                "_12K_HOLD_SMART_LOAD_START_SOC": "n/a",
+                "_12K_HOLD_SMART_LOAD_END_SOC": object(),
+                "_12K_HOLD_START_PV_POWER": "not-a-number",
+                "_12K_HOLD_SMART_LOAD_START_VOLT": object(),
+                "_12K_HOLD_SMART_LOAD_END_VOLT": None,
+            }
+        )
+
+        limits = await control.get_inverter_smart_load_limits(SERIAL)
+
+        assert limits == {
+            "start_soc": None,
+            "end_soc": None,
+            "start_pv_power": None,
+            "start_volt": None,
+            "end_volt": None,
+            "enabled": None,
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_inverter_smart_load_limits_preserves_zero_values(
+        self, control: ControlEndpoints
+    ) -> None:
+        """Legal zero thresholds and a real False remain distinct from absence."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={
+                "FUNC_SMART_LOAD_ENABLE": False,
+                "_12K_HOLD_SMART_LOAD_START_SOC": "0",
+                "_12K_HOLD_SMART_LOAD_END_SOC": "0",
+                "_12K_HOLD_START_PV_POWER": "0",
+                "_12K_HOLD_SMART_LOAD_START_VOLT": "0",
+                "_12K_HOLD_SMART_LOAD_END_VOLT": "0",
+            }
+        )
+
+        limits = await control.get_inverter_smart_load_limits(SERIAL)
+
+        assert limits == {
+            "start_soc": 0,
+            "end_soc": 0,
+            "start_pv_power": 0.0,
+            "start_volt": 0.0,
+            "end_volt": 0.0,
+            "enabled": False,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("raw", "expected"), [("TRUE", True), ("false", False)])
+    async def test_get_inverter_smart_load_limits_enabled_string(
+        self, control: ControlEndpoints, raw: str, expected: bool
+    ) -> None:
+        """Defensive parsing accepts case-insensitive boolean strings."""
+        control.read_device_parameters_ranges = AsyncMock(
+            return_value={"FUNC_SMART_LOAD_ENABLE": raw}
+        )
+
+        limits = await control.get_inverter_smart_load_limits(SERIAL)
+
+        assert limits["enabled"] is expected
+
+
 class TestACChargeVoltageLimitsCloud:
     """Test AC charge voltage limit cloud API methods."""
 
