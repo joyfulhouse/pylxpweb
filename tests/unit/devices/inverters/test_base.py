@@ -10,9 +10,12 @@ import pytest
 
 from pylxpweb import LuxpowerClient
 from pylxpweb.devices.inverters.base import BaseInverter
+from pylxpweb.devices.inverters.hybrid import HybridInverter
 from pylxpweb.devices.models import DeviceInfo, Entity
 from pylxpweb.exceptions import LuxpowerDeviceError
 from pylxpweb.models import EnergyInfo, InverterRuntime, SuccessResponse
+from pylxpweb.transports.http import HTTPTransport
+from pylxpweb.transports.hybrid import HybridTransport
 from pylxpweb.transports.modbus import ModbusTransport
 
 
@@ -807,14 +810,19 @@ class TestInverterControlOperations:
         deprecated write path returned False here; the loud failure is the
         library's control-op convention.
         """
+        transport = Mock()
+        transport.write_named_parameters = AsyncMock(return_value=False)
         inverter = ConcreteInverter(
-            client=mock_client, serial_number="1234567890", model="TestModel", transport=Mock()
+            client=mock_client,
+            serial_number="1234567890",
+            model="TestModel",
+            transport=transport,
         )
-        inverter.read_transport_register = AsyncMock(return_value=512)
-        inverter.write_transport_register = AsyncMock(return_value=False)
 
         with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
             await inverter.set_standby_mode(True)
+
+        transport.write_named_parameters.assert_awaited_once_with({"FUNC_SET_TO_STANDBY": False})
 
     @pytest.mark.asyncio
     async def test_get_battery_soc_limits(self, mock_client: LuxpowerClient) -> None:
@@ -1468,11 +1476,13 @@ class TestGreenModeControls:
         )
         cache_time = datetime.now()
         inverter._parameters_cache_time = cache_time
+        write_seq = inverter._parameters_write_seq
 
         result = await inverter.enable_green_mode()
 
         assert result is False
         assert inverter._parameters_cache_time is cache_time
+        assert inverter._parameters_write_seq == write_seq
 
     @pytest.mark.asyncio
     async def test_get_green_mode_status_cloud(self, mock_client: LuxpowerClient) -> None:
@@ -1677,8 +1687,6 @@ class TestClientFirstFunctionBitControls:
         cloud_param_key: str,
     ) -> None:
         """LOCAL status getters read their verified register bit."""
-        if helper_base == "battery_backup_ctrl":
-            pytest.skip("battery_backup_ctrl exposes no status getter")
         inverter, transport = self._local_inverter(register, 1 << bit)
 
         assert inverter._cloud_param_key(register, bit) == cloud_param_key
@@ -1705,9 +1713,11 @@ class TestClientFirstFunctionBitControls:
         )
 
         assert inverter._cloud_param_key(register, bit) == cloud_param_key
-        method_names = [f"enable_{helper_base}", f"disable_{helper_base}"]
-        if helper_base != "battery_backup_ctrl":
-            method_names.append(f"get_{helper_base}_status")
+        method_names = [
+            f"enable_{helper_base}",
+            f"disable_{helper_base}",
+            f"get_{helper_base}_status",
+        ]
         for method_name in method_names:
             with pytest.raises(
                 LuxpowerDeviceError,
@@ -1752,11 +1762,10 @@ class TestClientFirstFunctionBitControls:
             endpoint.assert_awaited_once_with("1234567890")
             assert inverter._parameters_cache_time is None
 
-        if helper_base != "battery_backup_ctrl":
-            status_endpoint = AsyncMock(return_value=True)
-            setattr(mock_client.api.control, f"get_{helper_base}_status", status_endpoint)
-            assert await getattr(inverter, f"get_{helper_base}_status")() is True
-            status_endpoint.assert_awaited_once_with("1234567890")
+        status_endpoint = AsyncMock(return_value=True)
+        setattr(mock_client.api.control, f"get_{helper_base}_status", status_endpoint)
+        assert await getattr(inverter, f"get_{helper_base}_status")() is True
+        status_endpoint.assert_awaited_once_with("1234567890")
 
         transport.read_parameters.assert_not_awaited()
         transport.write_parameters.assert_not_awaited()
@@ -1778,22 +1787,84 @@ class TestClientFirstFunctionBitControls:
         inverter, _ = self._local_inverter(register, 0, write_success=False)
         cache_time = datetime.now()
         inverter._parameters_cache_time = cache_time
+        write_seq = inverter._parameters_write_seq
 
         assert inverter._cloud_param_key(register, bit) == cloud_param_key
         with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
             await getattr(inverter, f"enable_{helper_base}")()
 
         assert inverter._parameters_cache_time is cache_time
+        assert inverter._parameters_write_seq == write_seq
 
     @pytest.mark.asyncio
-    async def test_local_battery_backup_write_is_atomic_with_concurrent_ac_update(
+    @pytest.mark.parametrize(
+        (
+            "register",
+            "helper_name",
+            "helper_bit",
+            "concurrent_param",
+            "concurrent_bit",
+            "initial_bit",
+            "inverter_type",
+        ),
+        [
+            pytest.param(
+                21,
+                "enable_battery_backup",
+                0,
+                "FUNC_AC_CHARGE",
+                7,
+                10,
+                ConcreteInverter,
+                id="reg-21-battery-backup",
+            ),
+            pytest.param(
+                110,
+                "enable_fast_zero_export",
+                1,
+                "FUNC_BATTERY_ECO_EN",
+                15,
+                7,
+                ConcreteInverter,
+                id="reg-110-fast-zero-export",
+            ),
+            pytest.param(
+                179,
+                "enable_pv_sell_to_grid",
+                3,
+                "FUNC_GRID_PEAK_SHAVING",
+                7,
+                9,
+                HybridInverter,
+                id="reg-179-pv-sell-to-grid",
+            ),
+            pytest.param(
+                233,
+                "enable_battery_backup_ctrl",
+                1,
+                "FUNC_SPORADIC_CHARGE",
+                12,
+                0,
+                ConcreteInverter,
+                id="reg-233-battery-backup-ctrl",
+            ),
+        ],
+    )
+    async def test_function_bit_write_is_atomic_with_concurrent_named_update(
         self,
+        register: int,
+        helper_name: str,
+        helper_bit: int,
+        concurrent_param: str,
+        concurrent_bit: int,
+        initial_bit: int,
+        inverter_type: type[BaseInverter],
     ) -> None:
-        """The transport lock spans battery backup's complete register-21 RMW."""
-        register_21 = 1 << 10
+        """Every touched register uses the real transport's lock-held RMW."""
+        register_value = 1 << initial_bit
         transport = ModbusTransport(host="192.0.2.1", serial="1234567890")
         transport._connected = True
-        inverter = ConcreteInverter(
+        inverter = inverter_type(
             client=None,
             serial_number="1234567890",
             model="TestModel",
@@ -1806,8 +1877,8 @@ class TestClientFirstFunctionBitControls:
 
         async def read_holding(address: int, count: int) -> list[int]:
             nonlocal first_read
-            assert (address, count) == (21, 1)
-            snapshot = register_21
+            assert (address, count) == (register, 1)
+            snapshot = register_value
             if first_read:
                 first_read = False
                 first_read_started.set()
@@ -1815,30 +1886,196 @@ class TestClientFirstFunctionBitControls:
             return [snapshot]
 
         async def write_holding(address: int, values: list[int]) -> bool:
-            nonlocal register_21
-            assert address == 21
-            register_21 = values[0]
+            nonlocal register_value
+            assert address == register
+            register_value = values[0]
             return True
 
-        async def enable_ac_charge() -> bool:
+        async def concurrent_update() -> bool:
             other_write_started.set()
-            return await transport.write_named_parameters({"FUNC_AC_CHARGE": True})
+            return await transport.write_named_parameters({concurrent_param: True})
 
         with (
             patch.object(transport, "_read_holding_registers", side_effect=read_holding),
             patch.object(transport, "_write_holding_registers", side_effect=write_holding),
         ):
-            backup_task = asyncio.create_task(inverter.enable_battery_backup())
+            helper_task = asyncio.create_task(getattr(inverter, helper_name)())
             await asyncio.wait_for(first_read_started.wait(), timeout=1)
-            ac_task = asyncio.create_task(enable_ac_charge())
+            concurrent_task = asyncio.create_task(concurrent_update())
             await asyncio.wait_for(other_write_started.wait(), timeout=1)
             release_first_read.set()
             results = await asyncio.wait_for(
-                asyncio.gather(backup_task, ac_task),
+                asyncio.gather(helper_task, concurrent_task),
                 timeout=1,
             )
 
         assert results == [True, True]
-        # A non-atomic RMW would write battery backup's stale snapshot (bit 10
-        # only, plus bit 0) over the concurrent AC-charge write and drop bit 7.
-        assert register_21 == (1 << 0) | (1 << 7) | (1 << 10)
+        assert register_value == (1 << initial_bit) | (1 << helper_bit) | (1 << concurrent_bit)
+
+    @pytest.mark.asyncio
+    async def test_disputed_named_write_is_wrapped_as_device_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A blocked local param cannot escape the helper as plain ValueError."""
+        from pylxpweb.constants import registers
+
+        inverter, _ = self._local_inverter(110, 0)
+        monkeypatch.setattr(
+            registers,
+            "DISPUTED_WRITE_BLOCKED_PARAMS",
+            frozenset({"FUNC_RUN_WITHOUT_GRID"}),
+        )
+
+        with pytest.raises(
+            LuxpowerDeviceError,
+            match=r"FUNC_RUN_WITHOUT_GRID.*register 110",
+        ) as exc_info:
+            await inverter.enable_fast_zero_export()
+
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+    @pytest.mark.asyncio
+    async def test_clientless_hybrid_status_falls_back_to_http_named_read(self) -> None:
+        """A local read failure falls back to the cloud's named bit value."""
+        from pylxpweb.transports.exceptions import TransportReadError
+
+        local = Mock()
+        local.serial = "1234567890"
+        local.is_connected = True
+        local.capabilities = Mock()
+        local.read_parameters = AsyncMock(side_effect=TransportReadError("local down"))
+        local.read_named_parameters = AsyncMock(side_effect=TransportReadError("local down"))
+        client = Mock(spec=LuxpowerClient)
+        client.api = Mock()
+        client.api.control = Mock()
+        response = Mock()
+        response.parameters = {"FUNC_EPS_EN": True}
+        client.api.control.read_parameters = AsyncMock(return_value=response)
+        http = HTTPTransport(client, "1234567890")
+        http._connected = True
+        transport = HybridTransport(local, http)
+        transport._connected = True
+        inverter = ConcreteInverter(
+            client=None,
+            serial_number="1234567890",
+            model="TestModel",
+            transport=transport,
+        )
+
+        assert await inverter.get_battery_backup_status() is True
+
+        client.api.control.read_parameters.assert_awaited_once_with(
+            "1234567890", start_register=21, point_number=1
+        )
+
+    @pytest.mark.asyncio
+    async def test_clientless_hybrid_write_falls_back_to_real_http_transport(self) -> None:
+        """A local write failure reaches HTTPTransport's direct named API."""
+        from pylxpweb.transports.exceptions import TransportWriteError
+
+        local = Mock()
+        local.serial = "1234567890"
+        local.is_connected = True
+        local.capabilities = Mock()
+        local.write_named_parameters = AsyncMock(side_effect=TransportWriteError("local down"))
+        client = Mock(spec=LuxpowerClient)
+        client.api = Mock()
+        client.api.control = Mock()
+        client.api.control.control_function = AsyncMock(return_value=SuccessResponse(success=True))
+        http = HTTPTransport(client, "1234567890")
+        http._connected = True
+        transport = HybridTransport(local, http)
+        transport._connected = True
+        inverter = ConcreteInverter(
+            client=None,
+            serial_number="1234567890",
+            model="TestModel",
+            transport=transport,
+        )
+
+        assert await inverter.enable_battery_backup() is True
+
+        client.api.control.control_function.assert_awaited_once_with(
+            "1234567890", "FUNC_EPS_EN", True
+        )
+
+    @pytest.mark.asyncio
+    async def test_write_during_parameter_refresh_prevents_fresh_cache_stamp(self) -> None:
+        """An in-flight pre-write snapshot is installed only as stale data."""
+        first_range_started = asyncio.Event()
+        release_first_range = asyncio.Event()
+        read_count = 0
+
+        async def read_named_parameters(start: int, count: int) -> dict[str, bool]:
+            nonlocal read_count
+            read_count += 1
+            assert count == 125
+            if start == 0:
+                stale_snapshot = {"FUNC_EPS_EN": False}
+                first_range_started.set()
+                await release_first_range.wait()
+                return stale_snapshot
+            return {}
+
+        transport = Mock()
+        transport.read_named_parameters = AsyncMock(side_effect=read_named_parameters)
+        transport.write_named_parameters = AsyncMock(return_value=True)
+        inverter = ConcreteInverter(
+            client=None,
+            serial_number="1234567890",
+            model="TestModel",
+            transport=transport,
+        )
+        inverter._parameters_cache_time = datetime.now()
+
+        refresh_task = asyncio.create_task(inverter._fetch_parameters())
+        await asyncio.wait_for(first_range_started.wait(), timeout=1)
+        assert await inverter.enable_battery_backup() is True
+        release_first_range.set()
+        await asyncio.wait_for(refresh_task, timeout=1)
+
+        assert read_count == 2
+        assert inverter.parameters == {"FUNC_EPS_EN": False}
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    async def test_cloud_write_during_parameter_refresh_prevents_fresh_cache_stamp(
+        self,
+    ) -> None:
+        """The cloud refresh branch observes the same write generation guard."""
+        first_range_started = asyncio.Event()
+        release_first_range = asyncio.Event()
+
+        async def read_parameters(serial: str, start_register: int, point_number: int) -> Mock:
+            assert serial == "1234567890"
+            assert point_number == 127
+            response = Mock()
+            response.parameters = {"FUNC_EPS_EN": False} if start_register == 0 else {}
+            if start_register == 0:
+                first_range_started.set()
+                await release_first_range.wait()
+            return response
+
+        client = Mock(spec=LuxpowerClient)
+        client.api = Mock()
+        client.api.control = Mock()
+        client.api.control.read_parameters = AsyncMock(side_effect=read_parameters)
+        client.api.control.enable_battery_backup = AsyncMock(
+            return_value=SuccessResponse(success=True)
+        )
+        inverter = ConcreteInverter(
+            client=client,
+            serial_number="1234567890",
+            model="TestModel",
+        )
+        inverter._parameters_cache_time = datetime.now()
+
+        refresh_task = asyncio.create_task(inverter._fetch_parameters())
+        await asyncio.wait_for(first_range_started.wait(), timeout=1)
+        assert await inverter.enable_battery_backup() is True
+        release_first_range.set()
+        await asyncio.wait_for(refresh_task, timeout=1)
+
+        assert client.api.control.read_parameters.await_count == 3
+        assert inverter.parameters == {"FUNC_EPS_EN": False}
+        assert inverter._parameters_cache_time is None

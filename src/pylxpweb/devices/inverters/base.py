@@ -152,6 +152,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         self._parameters_cache_time: datetime | None = None
         self._parameters_cache_ttl = timedelta(hours=1)  # 1-hour TTL for parameters
         self._parameters_cache_lock = asyncio.Lock()
+        # Monotonic invalidation generation. Parameter refreshes snapshot this
+        # before their reads so a write can invalidate an in-flight stale
+        # snapshot without waiting for the (potentially slow) refresh lock.
+        self._parameters_write_seq = 0
 
         # Runtime data cache
         self._runtime_cache_time: datetime | None = None
@@ -202,6 +206,11 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if cache_time is None:
             return True
         return (datetime.now() - cache_time) > ttl
+
+    def _invalidate_parameters_cache(self) -> None:
+        """Mark cached parameters stale after a successful device write."""
+        self._parameters_write_seq += 1
+        self._parameters_cache_time = None
 
     def set_transport_cache_ttls(self) -> None:
         """Adjust cache TTLs based on attached transport type.
@@ -1217,6 +1226,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         - Range 3: Registers 240-366 (extended parameters 2)
         """
         async with self._parameters_cache_lock:
+            write_seq_at_read_start = self._parameters_write_seq
             try:
                 # Link-down guard (#206): the runtime/energy/battery legs of
                 # refresh() gate their transport reads behind
@@ -1291,12 +1301,20 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                                 ", ".join(failed_ranges),
                             )
                         self.parameters = all_parameters
-                        if not failed_ranges:
+                        if (
+                            not failed_ranges
+                            and self._parameters_write_seq == write_seq_at_read_start
+                        ):
                             # Stamp only a FULLY successful read: a partial
                             # one must retry on the next include_parameters
                             # refresh instead of serving a degraded snapshot
                             # for the whole parameter TTL.
                             self._parameters_cache_time = datetime.now()
+                        elif not failed_ranges:
+                            # A successful write landed after these reads
+                            # began. Keep the installed snapshot explicitly
+                            # stale so the next access re-reads the device.
+                            self._parameters_cache_time = None
                     elif failed_ranges and self.parameters:
                         # Total failure with carried parameters: without this
                         # the staleness signal was silent (#282 review P2).
@@ -1379,10 +1397,17 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                                 ", ".join(failed_cloud_ranges),
                             )
                         self.parameters = all_parameters
-                        if not failed_cloud_ranges:
+                        if (
+                            not failed_cloud_ranges
+                            and self._parameters_write_seq == write_seq_at_read_start
+                        ):
                             # Stamp only a FULLY successful read (see the
                             # transport path above).
                             self._parameters_cache_time = datetime.now()
+                        elif not failed_cloud_ranges:
+                            # Match the transport branch: a write concurrent
+                            # with these cloud reads invalidates their snapshot.
+                            self._parameters_cache_time = None
                     elif failed_cloud_ranges and self.parameters:
                         # Total failure with carried parameters: without this
                         # the staleness signal was silent (#282 review P2).
@@ -1854,7 +1879,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             try:
                 success = await self._transport.write_parameters(parameters)
                 if success:
-                    self._parameters_cache_time = None
+                    self._invalidate_parameters_cache()
                 return success
             except Exception as err:
                 _LOGGER.warning(
@@ -1884,7 +1909,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
             # Invalidate parameter cache on successful write
             if response.success:
-                self._parameters_cache_time = None
+                self._invalidate_parameters_cache()
 
             return response.success
 
@@ -1954,7 +1979,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                         current_value,
                         new_value,
                     )
-                    self._parameters_cache_time = None
+                    self._invalidate_parameters_cache()
                 return success
             else:
                 _LOGGER.debug(
@@ -2016,7 +2041,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                     value,
                     self.serial_number,
                 )
-                self._parameters_cache_time = None
+                self._invalidate_parameters_cache()
             return success
         except Exception as err:
             _LOGGER.warning(
@@ -2156,31 +2181,54 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         return bool(response.success)
 
     async def _get_register_bit(self, register: int, bit: int) -> bool:
-        """Read a single bit, via transport (raw mask) or cloud (named bool param)."""
-        if self._transport is not None:
-            raw = await self.read_transport_register(register)
-            if raw is None:
-                raise LuxpowerDeviceError(
-                    f"Register {register} read requires a successful Modbus read"
-                )
-            return bool(raw & (1 << bit))
-        client = self._require_client(register, "read")
+        """Read a single bit through its named bool parameter on either route."""
         param_key = self._cloud_param_key(register, bit)
+        if self._transport is not None:
+            from pylxpweb.transports.exceptions import TransportError
+
+            try:
+                parameters = await self._transport.read_named_parameters(register, 1)
+            except TransportError as err:
+                raise LuxpowerDeviceError(
+                    f"Named parameter {param_key} (register {register} bit {bit}) "
+                    "read failed via transport"
+                ) from err
+            if param_key not in parameters:
+                raise LuxpowerDeviceError(
+                    f"Named parameter {param_key} (register {register} bit {bit}) "
+                    "was missing from the transport response"
+                )
+            return bool(parameters[param_key])
+        client = self._require_client(register, "read")
         response = await client.api.control.read_parameters(self.serial_number, register, 1)
         return bool(response.parameters.get(param_key, False))
 
     async def _set_modbus_register_bit(self, register: int, bit: int, enabled: bool) -> bool:
         """Set/clear a single register bit, via transport or cloud.
 
-        Transport mode performs an atomic read-modify-write that preserves the
-        other bits. Cloud mode uses the function-control API, which applies the
-        bit update server-side (also preserving the other bits) — avoiding a
-        read-modify-write race across the slower HTTP round-trip.
+        Transport mode writes the named bit through the transport's lock-held
+        read-modify-write, preserving concurrent changes to other bits. Cloud
+        mode uses the function-control API, which applies the named bit update
+        server-side without a raw-register round trip.
         """
         if self._transport is not None:
-            current_value = await self._read_modbus_register(register)
-            new_value = current_value | (1 << bit) if enabled else current_value & ~(1 << bit)
-            return await self._write_modbus_register(register, new_value)
+            from pylxpweb.transports.exceptions import TransportError
+
+            param_key = self._cloud_param_key(register, bit)
+            try:
+                success = await self._transport.write_named_parameters({param_key: enabled})
+            except (TransportError, ValueError) as err:
+                raise LuxpowerDeviceError(
+                    f"Named parameter {param_key} (register {register} bit {bit}) "
+                    "write requires a successful Modbus write"
+                ) from err
+            if not success:
+                raise LuxpowerDeviceError(
+                    f"Named parameter {param_key} (register {register} bit {bit}) "
+                    "write requires a successful Modbus write"
+                )
+            self._invalidate_parameters_cache()
+            return True
         client = self._require_client(register, "write")
         param_key = self._cloud_param_key(register, bit)
         response = await client.api.control.control_function(self.serial_number, param_key, enabled)
@@ -2218,17 +2266,19 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             param_key = self._cloud_param_key(register, bit)
             try:
                 success = await transport.write_named_parameters({param_key: enabled})
-            except TransportError as err:
+            except (TransportError, ValueError) as err:
                 raise LuxpowerDeviceError(
-                    f"Register {register} write requires a successful Modbus write"
+                    f"Named parameter {param_key} (register {register} bit {bit}) "
+                    "write requires a successful Modbus write"
                 ) from err
             if not success:
                 raise LuxpowerDeviceError(
-                    f"Register {register} write requires a successful Modbus write"
+                    f"Named parameter {param_key} (register {register} bit {bit}) "
+                    "write requires a successful Modbus write"
                 )
 
         if success:
-            self._parameters_cache_time = None
+            self._invalidate_parameters_cache()
 
         return success
 
@@ -2245,8 +2295,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         **NO API CALLS ARE MADE** - this is purely a cache lookup.
 
-        The cache is automatically refreshed on parameter writes and can be
-        manually invalidated via `self._parameters_cache_time = None`.
+        The cache is automatically invalidated on successful parameter writes.
 
         Helper method to:
         - Reduce code repetition in property accessors
@@ -2328,7 +2377,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             self.serial_number, param_key, str(value)
         )
         if result.success:
-            self._parameters_cache_time = None
+            self._invalidate_parameters_cache()
         return result.success
 
     async def set_standby_mode(self, standby: bool) -> bool:
@@ -2363,7 +2412,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         # Invalidate parameter cache on successful write
         if result:
-            self._parameters_cache_time = None
+            self._invalidate_parameters_cache()
 
         return result
 
@@ -2438,7 +2487,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         # Invalidate parameter cache on successful write
         if success:
-            self._parameters_cache_time = None
+            self._invalidate_parameters_cache()
 
         return success
 
@@ -2617,6 +2666,34 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             True
         """
         return await self._set_battery_backup_ctrl(enabled=False)
+
+    async def get_battery_backup_ctrl_status(self) -> bool:
+        """Get current battery backup control status (register 233 bit 1).
+
+        Routing is client-first: cloud and HYBRID instances use the dedicated
+        cloud getter; a clientless LOCAL instance reads
+        FUNC_BATTERY_BACKUP_CTRL through the attached transport.
+
+        Returns:
+            True if battery backup control is enabled, False otherwise.
+
+        Raises:
+            LuxpowerDeviceError: If the transport read fails, or if neither a
+                transport nor a cloud client is attached.
+
+        Example:
+            >>> enabled = await inverter.get_battery_backup_ctrl_status()
+            >>> enabled
+            True
+        """
+        from pylxpweb.constants import (
+            FUNC_EN_2_BIT_BATTERY_BACKUP_CTRL,
+            FUNC_EN_2_REGISTER,
+        )
+
+        if self._client is not None:
+            return await self._client.api.control.get_battery_backup_ctrl_status(self.serial_number)
+        return await self._get_register_bit(FUNC_EN_2_REGISTER, FUNC_EN_2_BIT_BATTERY_BACKUP_CTRL)
 
     # ============================================================================
     # Green Mode Control (Off-Grid Mode in Web Monitor)
@@ -3463,7 +3540,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         )
 
         if result.success:
-            self._parameters_cache_time = None
+            self._invalidate_parameters_cache()
 
         return result.success
 
@@ -3590,7 +3667,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         # Invalidate parameter cache on successful write
         if result.success:
-            self._parameters_cache_time = None
+            self._invalidate_parameters_cache()
 
         return result.success
 
@@ -3618,7 +3695,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         # Invalidate parameter cache on successful write
         if result.success:
-            self._parameters_cache_time = None
+            self._invalidate_parameters_cache()
 
         return result.success
 
@@ -3763,7 +3840,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         # Invalidate parameter cache on successful write
         if result:
-            self._parameters_cache_time = None
+            self._invalidate_parameters_cache()
 
         return result
 
@@ -3887,7 +3964,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if reg is not None:
             try:
                 if await transport.write_parameters({233: reg | 0x1, 234: minute}):
-                    self._parameters_cache_time = None
+                    self._invalidate_parameters_cache()
                     return True
             except Exception as err:
                 _LOGGER.debug(

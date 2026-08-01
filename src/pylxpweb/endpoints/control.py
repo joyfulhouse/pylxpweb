@@ -816,6 +816,22 @@ class ControlEndpoints(BaseEndpoint):
             inverter_sn, "FUNC_BATTERY_BACKUP_CTRL", False, client_type=client_type
         )
 
+    async def get_battery_backup_ctrl_status(self, inverter_sn: str) -> bool:
+        """Get battery backup control enabled status via cloud API.
+
+        Reads register 233 and extracts FUNC_BATTERY_BACKUP_CTRL.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if battery backup control is enabled
+
+        Example:
+            >>> enabled = await client.control.get_battery_backup_ctrl_status("1234567890")
+        """
+        return await self._get_function_status(inverter_sn, 233, "FUNC_BATTERY_BACKUP_CTRL")
+
     async def enable_normal_mode(
         self, inverter_sn: str, client_type: str = "WEB"
     ) -> SuccessResponse:

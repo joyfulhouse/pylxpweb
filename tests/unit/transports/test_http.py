@@ -7,9 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerAuthError
+from pylxpweb.models import SuccessResponse
 from pylxpweb.transports.exceptions import (
     TransportConnectionError,
     TransportReadError,
+    TransportTimeoutError,
+    TransportWriteError,
 )
 from pylxpweb.transports.http import HTTPTransport
 
@@ -495,8 +498,6 @@ class TestHTTPTransport:
     @pytest.mark.asyncio
     async def test_write_parameters_value_error_wrapped(self) -> None:
         """A bitfield/unmapped-register ValueError surfaces as TransportWriteError."""
-        from pylxpweb.transports.exceptions import TransportWriteError
-
         client = MagicMock()
         client.login = AsyncMock()
         client.api.control.write_parameters = AsyncMock(
@@ -508,3 +509,64 @@ class TestHTTPTransport:
 
         with pytest.raises(TransportWriteError, match="Register 21 is a bitfield"):
             await transport.write_parameters({21: 512})
+
+    @pytest.mark.asyncio
+    async def test_write_named_parameters_uses_direct_cloud_operations(self) -> None:
+        """Named writes call function/value cloud APIs without a raw RMW."""
+        client = MagicMock()
+        client.api.control.control_function = AsyncMock(return_value=SuccessResponse(success=True))
+        client.api.control.write_parameter = AsyncMock(return_value=SuccessResponse(success=True))
+        transport = HTTPTransport(client, serial="CE12345678")
+        transport._connected = True
+
+        result = await transport.write_named_parameters(
+            {"FUNC_EPS_EN": True, "HOLD_AC_CHARGE_POWER_CMD": 75}
+        )
+
+        assert result is True
+        client.api.control.control_function.assert_awaited_once_with(
+            "CE12345678", "FUNC_EPS_EN", True
+        )
+        client.api.control.write_parameter.assert_awaited_once_with(
+            "CE12345678", "HOLD_AC_CHARGE_POWER_CMD", "75"
+        )
+        client.api.control.write_parameters.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_named_parameters_rejection_names_parameter(self) -> None:
+        """A cloud rejection raises a transport error naming its exact write."""
+        client = MagicMock()
+        client.api.control.control_function = AsyncMock(
+            return_value=SuccessResponse(success=False, message="REMOTE_SET_ERROR")
+        )
+        transport = HTTPTransport(client, serial="CE12345678")
+        transport._connected = True
+
+        with pytest.raises(
+            TransportWriteError,
+            match=r"CE12345678.*FUNC_EPS_EN.*REMOTE_SET_ERROR",
+        ):
+            await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "expected_type"),
+        [
+            pytest.param(ValueError("bad value"), TransportWriteError, id="value"),
+            pytest.param(TimeoutError(), TransportTimeoutError, id="timeout"),
+            pytest.param(LuxpowerAPIError("API error"), TransportWriteError, id="api"),
+        ],
+    )
+    async def test_write_named_parameters_wraps_cloud_errors(
+        self,
+        error: Exception,
+        expected_type: type[Exception],
+    ) -> None:
+        """Named writes retain the HTTP transport's timeout/write contract."""
+        client = MagicMock()
+        client.api.control.write_parameter = AsyncMock(side_effect=error)
+        transport = HTTPTransport(client, serial="CE12345678")
+        transport._connected = True
+
+        with pytest.raises(expected_type, match="CE12345678"):
+            await transport.write_named_parameters({"HOLD_AC_CHARGE_POWER_CMD": 75})

@@ -419,3 +419,70 @@ class HTTPTransport(BaseTransport):
             raise TransportReadError(
                 f"Failed to read named parameters for {self._serial}: {err}"
             ) from err
+
+    async def write_named_parameters(
+        self,
+        parameters: dict[str, Any],
+    ) -> bool:
+        """Write configuration parameters as named key-value pairs.
+
+        This HTTP implementation sends each name directly to the cloud's
+        function or value endpoint, avoiding a raw-register read-modify-write.
+
+        Args:
+            parameters: Dict mapping parameter name to value. Boolean values
+                use the function-control API; all other values use the named
+                parameter API and are serialized as strings.
+
+        Returns:
+            True when every named write succeeds.
+
+        Raises:
+            TransportWriteError: If the API rejects or fails a write.
+            TransportTimeoutError: If a write times out.
+        """
+        self._ensure_connected()
+
+        for name, value in parameters.items():
+            try:
+                if isinstance(value, bool):
+                    result = await self._client.api.control.control_function(
+                        self._serial, name, value
+                    )
+                else:
+                    result = await self._client.api.control.write_parameter(
+                        self._serial, name, str(value)
+                    )
+
+                if not result.success:
+                    raise TransportWriteError(
+                        f"Cloud rejected named parameter write for {self._serial} "
+                        f"parameter {name}: {result.message or 'success=false'}"
+                    )
+            except TimeoutError as err:
+                _LOGGER.error("Timeout writing named parameter %s for %s", name, self._serial)
+                raise TransportTimeoutError(
+                    f"Timeout writing named parameter {name} for {self._serial}"
+                ) from err
+            except ValueError as err:
+                _LOGGER.error(
+                    "Cannot write named parameter %s for %s: %s",
+                    name,
+                    self._serial,
+                    err,
+                )
+                raise TransportWriteError(
+                    f"Cannot write named parameter {name} for {self._serial}: {err}"
+                ) from err
+            except (LuxpowerAPIError, LuxpowerDeviceError, LuxpowerConnectionError) as err:
+                _LOGGER.error(
+                    "Failed to write named parameter %s for %s: %s",
+                    name,
+                    self._serial,
+                    err,
+                )
+                raise TransportWriteError(
+                    f"Failed to write named parameter {name} for {self._serial}: {err}"
+                ) from err
+
+        return True

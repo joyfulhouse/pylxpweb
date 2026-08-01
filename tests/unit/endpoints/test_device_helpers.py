@@ -199,31 +199,28 @@ class TestBulkDeviceData:
 
         mock_overview.rows = [mock_device1, mock_device2]
 
-        # Track how many calls are in flight at once. Wall-clock timing cannot
-        # tell concurrency from a slow runner: the concurrent floor here is
-        # 0.02s, so any absolute budget tight enough to catch sequential
-        # execution is also tight enough for CI load to trip. Peak in-flight
-        # count answers the actual question and is independent of machine speed.
+        # Track each gather group's overlap independently. A global peak would
+        # miss a half-sequential regression where runtime still fans out but
+        # battery calls are accidentally serialized (or vice versa).
         calls: list[str] = []
-        in_flight = 0
-        peak_in_flight = 0
+        in_flight = {"runtime": 0, "battery": 0}
+        peak_in_flight = {"runtime": 0, "battery": 0}
 
-        async def record_concurrent_call(serial: str) -> None:
-            nonlocal in_flight, peak_in_flight
+        async def record_concurrent_call(group: str, serial: str) -> None:
             calls.append(serial)
-            in_flight += 1
-            peak_in_flight = max(peak_in_flight, in_flight)
+            in_flight[group] += 1
+            peak_in_flight[group] = max(peak_in_flight[group], in_flight[group])
             await asyncio.sleep(0.01)  # Simulate API delay
-            in_flight -= 1
+            in_flight[group] -= 1
 
         async def mock_runtime_call(serial: str) -> Mock:
-            await record_concurrent_call(serial)
+            await record_concurrent_call("runtime", serial)
             mock = Mock(spec=InverterRuntime)
             mock.serialNum = serial
             return mock
 
         async def mock_battery_call(serial: str) -> Mock:
-            await record_concurrent_call(serial)
+            await record_concurrent_call("battery", serial)
             mock = Mock(spec=BatteryInfo)
             mock.serialNum = serial
             return mock
@@ -236,10 +233,8 @@ class TestBulkDeviceData:
         # Call get_all_device_data
         await devices_endpoint.get_all_device_data(12345)
 
-        # Verify calls were made concurrently (not sequentially): the two
-        # devices are fetched in parallel, so at least two calls must overlap.
-        # Sequential execution would never exceed one call in flight.
-        assert peak_in_flight >= 2, f"Calls appear to be sequential: {peak_in_flight} in flight"
+        # Both sequential gather groups must fan out over both devices.
+        assert peak_in_flight == {"runtime": 2, "battery": 2}
 
         # Verify all 4 calls were made (2 runtime + 2 battery)
         assert len(calls) == 4

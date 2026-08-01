@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from pylxpweb.devices.inverters._features import InverterFamily
+from pylxpweb.models import SuccessResponse
 from pylxpweb.transports.http import HTTPTransport
 from pylxpweb.transports.hybrid import HybridTransport
 from pylxpweb.transports.modbus import ModbusTransport
@@ -351,21 +352,27 @@ class TestNamedParametersHybrid:
 
     @pytest.mark.asyncio
     async def test_write_named_parameters_falls_back_to_http(
-        self, mock_local_transport: MagicMock, mock_http_transport: MagicMock
+        self, mock_local_transport: MagicMock
     ) -> None:
-        """Test HybridTransport write falls back to HTTP on local failure."""
+        """Hybrid fallback exercises HTTPTransport's real named cloud write."""
         from pylxpweb.transports.exceptions import TransportWriteError
 
         mock_local_transport.write_named_parameters.side_effect = TransportWriteError(
             "Local failed"
         )
-        transport = HybridTransport(mock_local_transport, mock_http_transport)
+        client = MagicMock()
+        client.api.control.control_function = AsyncMock(return_value=SuccessResponse(success=True))
+        http_transport = HTTPTransport(client, "CE12345678")
+        http_transport._connected = True
+        transport = HybridTransport(mock_local_transport, http_transport)
         transport._connected = True
 
         result = await transport.write_named_parameters({"FUNC_EPS_EN": True})
 
         assert result is True
-        mock_http_transport.write_named_parameters.assert_called_once_with({"FUNC_EPS_EN": True})
+        client.api.control.control_function.assert_awaited_once_with(
+            "CE12345678", "FUNC_EPS_EN", True
+        )
 
 
 class TestInverterFamilySupport:

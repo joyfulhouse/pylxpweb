@@ -96,6 +96,7 @@ class TestFunctionStatusHelpers:
         ("method_name", "register", "param_key"),
         [
             ("get_battery_backup_status", 21, "FUNC_EPS_EN"),
+            ("get_battery_backup_ctrl_status", 233, "FUNC_BATTERY_BACKUP_CTRL"),
             ("get_ac_charge_mode_status", 21, "FUNC_AC_CHARGE"),
             ("get_pv_charge_priority_status", 21, "FUNC_FORCED_CHG_EN"),
             ("get_forced_discharge_status", 21, "FUNC_FORCED_DISCHG_EN"),
@@ -127,6 +128,7 @@ class TestFunctionStatusHelpers:
         ("method_name", "register", "param_key"),
         [
             ("get_battery_backup_status", 21, "FUNC_EPS_EN"),
+            ("get_battery_backup_ctrl_status", 233, "FUNC_BATTERY_BACKUP_CTRL"),
             ("get_green_mode_status", 110, "FUNC_GREEN_EN"),
             ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
             ("get_feed_in_grid_status", 21, "FUNC_FEED_IN_GRID_EN"),

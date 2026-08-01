@@ -118,23 +118,22 @@ class TestACChargeOperations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_set_ac_charge_enable_transport_preserves_bits(
+    async def test_set_ac_charge_enable_transport_uses_named_write(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Transport mode RMW sets bit 7 while preserving other reg-21 bits."""
+        """Transport mode delegates bit 7 to the lock-held named RMW."""
+        transport = Mock()
+        transport.write_named_parameters = AsyncMock(return_value=True)
         inverter = HybridInverter(
             client=mock_client,
             serial_number="1234567890",
             model="FlexBOSS21",
-            transport=Mock(),
+            transport=transport,
         )
-        inverter.read_transport_register = AsyncMock(return_value=2048)  # bit 11 set
-        inverter.write_transport_register = AsyncMock(return_value=True)
 
         result = await inverter.set_ac_charge(enabled=True)
 
-        inverter.read_transport_register.assert_awaited_once_with(21)
-        inverter.write_transport_register.assert_awaited_once_with(21, 2176)  # 2048|128
+        transport.write_named_parameters.assert_awaited_once_with({"FUNC_AC_CHARGE": True})
         assert result is True
 
     @pytest.mark.asyncio
@@ -234,14 +233,14 @@ class TestACChargeOperations:
         self, mock_client: LuxpowerClient
     ) -> None:
         """Transport-mode Modbus write failure raises (control-op convention)."""
+        transport = Mock()
+        transport.write_named_parameters = AsyncMock(return_value=False)
         inverter = HybridInverter(
             client=mock_client,
             serial_number="1234567890",
             model="FlexBOSS21",
-            transport=Mock(),
+            transport=transport,
         )
-        inverter.read_transport_register = AsyncMock(return_value=0)
-        inverter.write_transport_register = AsyncMock(return_value=False)
 
         with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
             await inverter.set_ac_charge(enabled=True)
@@ -307,23 +306,22 @@ class TestEPSOperations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_set_eps_enabled_transport_preserves_bits(
+    async def test_set_eps_enabled_transport_uses_named_write(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Transport mode RMW sets bit 0 while preserving other reg-21 bits."""
+        """Transport mode delegates bit 0 to the lock-held named RMW."""
+        transport = Mock()
+        transport.write_named_parameters = AsyncMock(return_value=True)
         inverter = HybridInverter(
             client=mock_client,
             serial_number="1234567890",
             model="FlexBOSS21",
-            transport=Mock(),
+            transport=transport,
         )
-        inverter.read_transport_register = AsyncMock(return_value=2048)  # bit 11 set
-        inverter.write_transport_register = AsyncMock(return_value=True)
 
         result = await inverter.set_eps_enabled(True)
 
-        inverter.read_transport_register.assert_awaited_once_with(21)
-        inverter.write_transport_register.assert_awaited_once_with(21, 2049)  # 2048|1
+        transport.write_named_parameters.assert_awaited_once_with({"FUNC_EPS_EN": True})
         assert result is True
 
 
@@ -1189,45 +1187,41 @@ class TestSporadicChargeOperations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_set_sporadic_charge_transport_preserves_other_bits(
+    async def test_set_sporadic_charge_transport_uses_named_write(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Transport RMW sets bit 12 while preserving other reg-233 bits."""
+        """Transport delegates bit 12 enable to the lock-held named RMW."""
+        transport = Mock()
+        transport.write_named_parameters = AsyncMock(return_value=True)
         inverter = HybridInverter(
             client=mock_client,
             serial_number="1234567890",
             model="FlexBOSS21",
-            transport=Mock(),
+            transport=transport,
         )
-        # Bit 1 (battery backup) set = 2
-        inverter.read_transport_register = AsyncMock(return_value=2)
-        inverter.write_transport_register = AsyncMock(return_value=True)
 
         result = await inverter.set_sporadic_charge(True)
 
-        # Set bit 12 (4096) while preserving bit 1 (2) = 4098
-        inverter.write_transport_register.assert_awaited_once_with(233, 4098)
+        transport.write_named_parameters.assert_awaited_once_with({"FUNC_SPORADIC_CHARGE": True})
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_set_sporadic_charge_transport_disable_preserves_other_bits(
+    async def test_set_sporadic_charge_transport_disable_uses_named_write(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Transport RMW clears bit 12 while preserving other reg-233 bits."""
+        """Transport delegates bit 12 disable to the lock-held named RMW."""
+        transport = Mock()
+        transport.write_named_parameters = AsyncMock(return_value=True)
         inverter = HybridInverter(
             client=mock_client,
             serial_number="1234567890",
             model="FlexBOSS21",
-            transport=Mock(),
+            transport=transport,
         )
-        # Bit 1 (2) + bit 12 (4096) = 4098
-        inverter.read_transport_register = AsyncMock(return_value=4098)
-        inverter.write_transport_register = AsyncMock(return_value=True)
 
         result = await inverter.set_sporadic_charge(False)
 
-        # Clear bit 12 while preserving bit 1 (2)
-        inverter.write_transport_register.assert_awaited_once_with(233, 2)
+        transport.write_named_parameters.assert_awaited_once_with({"FUNC_SPORADIC_CHARGE": False})
         assert result is True
 
 
@@ -1283,23 +1277,25 @@ class TestModbusOnlyChargeDischargeOperations:
     @pytest.mark.asyncio
     async def test_get_charge_last_enabled(self, mock_client: LuxpowerClient) -> None:
         inverter = self._inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=16)  # bit 4
+        transport = inverter._transport
+        assert transport is not None
+        transport.read_named_parameters = AsyncMock(return_value={"FUNC_CHARGE_LAST": True})
 
         result = await inverter.get_charge_last()
 
-        inverter.read_transport_register.assert_awaited_once_with(110)
+        transport.read_named_parameters.assert_awaited_once_with(110, 1)
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_set_charge_last_preserves_other_bits(self, mock_client: LuxpowerClient) -> None:
+    async def test_set_charge_last_uses_named_write(self, mock_client: LuxpowerClient) -> None:
         inverter = self._inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=3)
-        inverter.write_transport_register = AsyncMock(return_value=True)
+        transport = inverter._transport
+        assert transport is not None
+        transport.write_named_parameters = AsyncMock(return_value=True)
 
         result = await inverter.set_charge_last(True)
 
-        inverter.read_transport_register.assert_awaited_once_with(110)
-        inverter.write_transport_register.assert_awaited_once_with(110, 19)
+        transport.write_named_parameters.assert_awaited_once_with({"FUNC_CHARGE_LAST": True})
         assert result is True
 
     @pytest.mark.asyncio
@@ -1307,25 +1303,29 @@ class TestModbusOnlyChargeDischargeOperations:
         self, mock_client: LuxpowerClient
     ) -> None:
         inverter = self._inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=512)  # bit 9
+        transport = inverter._transport
+        assert transport is not None
+        transport.read_named_parameters = AsyncMock(return_value={"FUNC_BAT_CHARGE_CONTROL": True})
 
         result = await inverter.get_battery_charge_control()
 
-        inverter.read_transport_register.assert_awaited_once_with(179)
+        transport.read_named_parameters.assert_awaited_once_with(179, 1)
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_set_battery_discharge_control_preserves_charge_bit(
+    async def test_set_battery_discharge_control_uses_named_write(
         self, mock_client: LuxpowerClient
     ) -> None:
         inverter = self._inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=512)
-        inverter.write_transport_register = AsyncMock(return_value=True)
+        transport = inverter._transport
+        assert transport is not None
+        transport.write_named_parameters = AsyncMock(return_value=True)
 
         result = await inverter.set_battery_discharge_control(voltage_mode=True)
 
-        inverter.read_transport_register.assert_awaited_once_with(179)
-        inverter.write_transport_register.assert_awaited_once_with(179, 1536)
+        transport.write_named_parameters.assert_awaited_once_with(
+            {"FUNC_BAT_DISCHARGE_CONTROL": True}
+        )
         assert result is True
 
     @pytest.mark.asyncio
@@ -1628,33 +1628,42 @@ class TestBatteryControlModeHelpers:
     @pytest.mark.asyncio
     async def test_get_charge_control_mode_soc(self, mock_client: LuxpowerClient) -> None:
         inverter = self._inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=0)  # bit 9 clear
+        transport = inverter._transport
+        assert transport is not None
+        transport.read_named_parameters = AsyncMock(return_value={"FUNC_BAT_CHARGE_CONTROL": False})
 
         assert await inverter.get_battery_charge_control_mode() is BatteryControlMode.SOC
 
     @pytest.mark.asyncio
     async def test_get_charge_control_mode_voltage(self, mock_client: LuxpowerClient) -> None:
         inverter = self._inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=512)  # bit 9 set
+        transport = inverter._transport
+        assert transport is not None
+        transport.read_named_parameters = AsyncMock(return_value={"FUNC_BAT_CHARGE_CONTROL": True})
 
         assert await inverter.get_battery_charge_control_mode() is BatteryControlMode.VOLTAGE
 
     @pytest.mark.asyncio
     async def test_set_discharge_control_mode_voltage(self, mock_client: LuxpowerClient) -> None:
         inverter = self._inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=0)
-        inverter.write_transport_register = AsyncMock(return_value=True)
+        transport = inverter._transport
+        assert transport is not None
+        transport.write_named_parameters = AsyncMock(return_value=True)
 
         result = await inverter.set_battery_discharge_control_mode(BatteryControlMode.VOLTAGE)
 
-        inverter.write_transport_register.assert_awaited_once_with(179, 1024)  # bit 10
+        transport.write_named_parameters.assert_awaited_once_with(
+            {"FUNC_BAT_DISCHARGE_CONTROL": True}
+        )
         assert result is True
 
     @pytest.mark.asyncio
     async def test_active_charge_limit_voltage_mode(self, mock_client: LuxpowerClient) -> None:
         inverter = self._inverter(mock_client)
-        # reg 179 read → bit 9 set (Voltage); reg 228 read → 580 (58.0V)
-        inverter.read_transport_register = AsyncMock(side_effect=[512, 580])
+        transport = inverter._transport
+        assert transport is not None
+        transport.read_named_parameters = AsyncMock(return_value={"FUNC_BAT_CHARGE_CONTROL": True})
+        inverter.read_transport_register = AsyncMock(return_value=580)
 
         result = await inverter.get_active_charge_limit()
 
@@ -1665,8 +1674,12 @@ class TestBatteryControlModeHelpers:
         self, mock_client: LuxpowerClient
     ) -> None:
         inverter = self._inverter(mock_client)
-        # reg 179 read → bit 10 clear (SOC); reg 105 read → 20 (%)
-        inverter.read_transport_register = AsyncMock(side_effect=[0, 20])
+        transport = inverter._transport
+        assert transport is not None
+        transport.read_named_parameters = AsyncMock(
+            return_value={"FUNC_BAT_DISCHARGE_CONTROL": False}
+        )
+        inverter.read_transport_register = AsyncMock(return_value=20)
 
         result = await inverter.get_active_discharge_cutoff()
 
@@ -2145,16 +2158,16 @@ class TestPVSellToGridDualPath:
         )
 
     @pytest.mark.asyncio
-    async def test_transport_enable_replays_live_frames(self, mock_client: LuxpowerClient) -> None:
-        """Enable over Modbus: RMW 0x1044 -> 0x104c, preserving bits 2/6/12."""
+    async def test_transport_enable_uses_named_write(self, mock_client: LuxpowerClient) -> None:
+        """Enable stays transport-first and uses the named atomic RMW."""
         inverter = self._transport_inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=0x1044)
-        inverter.write_transport_register = AsyncMock(return_value=True)
+        transport = inverter._transport
+        assert transport is not None
+        transport.write_named_parameters = AsyncMock(return_value=True)
 
         assert await inverter.enable_pv_sell_to_grid() is True
 
-        inverter.read_transport_register.assert_awaited_once_with(179)
-        inverter.write_transport_register.assert_awaited_once_with(179, 0x104C)
+        transport.write_named_parameters.assert_awaited_once_with({"FUNC_PV_SELL_TO_GRID_EN": True})
 
     @pytest.mark.asyncio
     async def test_client_and_transport_keep_transport_first_override(
@@ -2162,37 +2175,41 @@ class TestPVSellToGridDualPath:
     ) -> None:
         """Hybrid PV sell-to-grid ignores cloud when both routes exist."""
         inverter = self._transport_inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=0x1044)
-        inverter.write_transport_register = AsyncMock(return_value=True)
+        transport = inverter._transport
+        assert transport is not None
+        transport.write_named_parameters = AsyncMock(return_value=True)
         mock_client.api.control.enable_pv_sell_to_grid = AsyncMock(return_value=_cloud_success())
 
         assert await inverter.enable_pv_sell_to_grid() is True
 
-        inverter.read_transport_register.assert_awaited_once_with(179)
-        inverter.write_transport_register.assert_awaited_once_with(179, 0x104C)
+        transport.write_named_parameters.assert_awaited_once_with({"FUNC_PV_SELL_TO_GRID_EN": True})
         mock_client.api.control.enable_pv_sell_to_grid.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_transport_disable_replays_live_frames(self, mock_client: LuxpowerClient) -> None:
-        """Disable over Modbus: RMW 0x104c -> 0x1044 (the live toggle)."""
+    async def test_transport_disable_uses_named_write(self, mock_client: LuxpowerClient) -> None:
+        """Disable stays transport-first and uses the named atomic RMW."""
         inverter = self._transport_inverter(mock_client)
-        inverter.read_transport_register = AsyncMock(return_value=0x104C)
-        inverter.write_transport_register = AsyncMock(return_value=True)
+        transport = inverter._transport
+        assert transport is not None
+        transport.write_named_parameters = AsyncMock(return_value=True)
 
         assert await inverter.disable_pv_sell_to_grid() is True
 
-        inverter.read_transport_register.assert_awaited_once_with(179)
-        inverter.write_transport_register.assert_awaited_once_with(179, 0x1044)
+        transport.write_named_parameters.assert_awaited_once_with(
+            {"FUNC_PV_SELL_TO_GRID_EN": False}
+        )
 
     @pytest.mark.asyncio
     async def test_transport_status_reads_bit3(self, mock_client: LuxpowerClient) -> None:
         """Status over Modbus reads bit 3 of register 179."""
         inverter = self._transport_inverter(mock_client)
+        transport = inverter._transport
+        assert transport is not None
 
-        inverter.read_transport_register = AsyncMock(return_value=0x104C)
+        transport.read_named_parameters = AsyncMock(return_value={"FUNC_PV_SELL_TO_GRID_EN": True})
         assert await inverter.get_pv_sell_to_grid_status() is True
 
-        inverter.read_transport_register = AsyncMock(return_value=0x1044)
+        transport.read_named_parameters = AsyncMock(return_value={"FUNC_PV_SELL_TO_GRID_EN": False})
         assert await inverter.get_pv_sell_to_grid_status() is False
 
     @pytest.mark.asyncio
