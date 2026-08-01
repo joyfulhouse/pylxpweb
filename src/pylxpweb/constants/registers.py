@@ -584,15 +584,17 @@ WEB_PARAM_TO_HOLD_REGISTER = {
 # (eg4_web_monitor #476). Both families ever hardware-toggle-tested (18kPV
 # 2026-07-21, 12000XP/SNA PR #220) match the ant0nkr/lxp_modbus
 # H_FUNCTION_ENABLE_3 lineage layout in every position this project has
-# hardware evidence for (bits 7, 14, 15), while the historic 18kPV-specific
-# upper-bit table matched none of them — so the hybrid and EG4_OFFGRID
-# tables no longer diverge. Be precise about what that evidence is, since
-# mistaking "the names lined up" for "we toggled it" is what produced #476
-# in the first place: bits 14 and 15 are toggle-proven (18kPV green,
-# 12000XP ECO), while bit 7 rests on the SNA cloud decode plus a constant
-# raw 0x0080 — strong, but not a toggle. That agreement does NOT extend to
-# every bit: at bit 5 the EG4 cloud decode and lxp_modbus genuinely
-# disagree (see below), and no toggle test has separated them.
+# hardware evidence for (bits 7, 10, 14, 15), while the historic
+# 18kPV-specific upper-bit table matched none of them — so the hybrid and
+# EG4_OFFGRID tables no longer diverge. Be precise about what that evidence
+# is, since mistaking "the names lined up" for "we toggled it" is what
+# produced #476 in the first place: bits 10, 14 and 15 are toggle-proven
+# (18kPV take-load-together, 18kPV green, 12000XP ECO), while bit 7 rests on
+# the SNA cloud decode plus a constant raw 0x0080 — strong, but not a
+# toggle. Every position that once looked like a genuine source conflict has
+# resolved in the lineage layout's favour once someone toggled it: bit 8
+# (#476) and bit 5 (#242) were both our decode being wrong about the
+# position while EG4 was only ever reporting the name.
 # Displaced/unproven slots are FUNC_110_BITn placeholders (same convention as reg 179/233 unknowns):
 # an honest gap beats an unverified decode served as truth — a local write
 # through a wrong slot flips an unrelated config bit while reporting
@@ -602,24 +604,30 @@ WEB_PARAM_TO_HOLD_REGISTER = {
 # Evidence per bit:
 #   0-4:   all sources agree (18kPV cloud decode, SNA cloud decode,
 #          lxp_modbus).
-#   5:     FUNC_TAKE_LOAD_TOGETHER — live 18kPV read 2026-07-21: raw bit 5
-#          set while the EG4 cloud decode reports TAKE_LOAD_TOGETHER as the
-#          only set FUNC_ (lxp_modbus puts a CT-ratio bit here and
-#          TakeLoadTogether at bit 10; the EG4 firmware's own decode wins).
-#          UNRESOLVED: that read had bits 5 and 10 both set (raw 0x0420),
-#          so it cannot separate the two candidate layouts — only a toggle
-#          test can. Carried over unchanged from before #476; nothing in
-#          this library or the EG4 integration writes this key.
-#   6:     unknown (old table's buzzer slot; buzzer is pinned at 7).
+#   5-6:   unknown (lxp_modbus: CT-sample-ratio field). Bit 5 was the
+#          FUNC_TAKE_LOAD_TOGETHER slot — DISPROVEN by the 2026-08-01 18kPV
+#          toggle test below: bit 5 stayed SET across a take-load-together
+#          off/on cycle, so whatever it is, it is not that flag. It keeps a
+#          placeholder rather than lxp_modbus's CT-ratio name because a
+#          multi-bit sample-ratio field must never be exposed as a writable
+#          bool, and its low bit has had no independent test here. Bit 6 was
+#          the old table's buzzer slot; buzzer is pinned at 7.
 #   7:     FUNC_BUZZER_EN — SNA cloud decode + constant raw 0x0080
 #          (PR #220); lxp_modbus agrees lineage-wide.
 #   8-9:   unknown (lxp_modbus: PVCT sample type field). Bit 8 was the old
 #          FUNC_GREEN_EN slot — DISPROVEN by the 2026-07-21 18kPV toggle
 #          test (eg4_web_monitor #476/#194).
-#   10-13: unknown (old working-mode/PVCT/CT slots; live 18kPV read
-#          2026-07-21 shows raw bit 10 set while the cloud decodes
-#          BIT_WORKING_MODE=0 and BIT_CT_SAMPLE_RATIO=1 — those names were
-#          misplaced).
+#   10:    FUNC_TAKE_LOAD_TOGETHER — hardware toggle-verified 2026-08-01 on
+#          an 18kPV (45XXXXXX18, pylxpweb #242). Driving EG4's OWN cloud
+#          functionControl by NAME (the server picks the bit, we only read
+#          raw) moved raw 1056 -> 32 on False and back to 1056 on True: a
+#          single bit-10 delta (0x0400), byte-perfect on restore, with bit 5
+#          untouched throughout. This is the capture the issue asked for; it
+#          settles the EG4-decode-vs-lxp_modbus dispute in lxp_modbus's
+#          favour, the same way #476's bit-14 result did. The two sources
+#          never actually conflicted about behaviour — EG4's decode reports
+#          the NAME and its server resolves that name to bit 10.
+#   11-13: unknown (old PVCT/CT sample slots).
 #   14:    FUNC_GREEN_EN — hardware toggle-verified 2026-07-21 on an 18kPV
 #          (45XXXXXX18): cloud green-mode enable flips raw 1056 <-> 17440, a
 #          single bit-14 delta, with the EG4 cloud decode changing in
@@ -632,12 +640,12 @@ REGISTER_110_PARAM_KEYS: list[str] = [
     "FUNC_MICRO_GRID_EN",  # Bit 2
     "FUNC_BAT_SHARED",  # Bit 3
     "FUNC_CHARGE_LAST",  # Bit 4
-    "FUNC_TAKE_LOAD_TOGETHER",  # Bit 5
+    "FUNC_110_BIT5",  # Bit 5: unknown (old take-load-together slot — disproven, #242)
     "FUNC_110_BIT6",  # Bit 6: unknown
     "FUNC_BUZZER_EN",  # Bit 7 (hardware-verified, PR #220)
     "FUNC_110_BIT8",  # Bit 8: unknown (old green slot — disproven, #476)
     "FUNC_110_BIT9",  # Bit 9: unknown (old ECO slot)
-    "FUNC_110_BIT10",  # Bit 10: unknown (old working-mode slot — contradicted)
+    "FUNC_TAKE_LOAD_TOGETHER",  # Bit 10 (hardware toggle-verified 2026-08-01, #242)
     "FUNC_110_BIT11",  # Bit 11: unknown
     "FUNC_110_BIT12",  # Bit 12: unknown
     "FUNC_110_BIT13",  # Bit 13: unknown
@@ -970,6 +978,14 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
 # green pinned, the "green mode is cloud-only on EG4_OFFGRID" restriction
 # (eg4_web_monitor #197 follow-ups) is lifted: local reads and writes use
 # bit 14 on every family.
+#
+# Because this is an ALIAS and not a copy, the 2026-08-01 take-load-together
+# result (bit 5 -> bit 10, #242) lands on EG4_OFFGRID too. That is lineage
+# inference, not per-family proof: the toggle ran on an 18kPV (EG4_HYBRID).
+# It follows the #476 precedent — that result also shipped lineage-wide on
+# the strength of the shared lxp_modbus H_FUNCTION_ENABLE_3 layout, which
+# every hardware test on both families has matched. A per-family reg-110
+# contract test pins the shape so a future divergence has to be deliberate.
 OFFGRID_REGISTER_110_PARAM_KEYS: list[str] = REGISTER_110_PARAM_KEYS
 
 
@@ -988,13 +1004,20 @@ OFFGRID_REGISTER_110_PARAM_KEYS: list[str] = REGISTER_110_PARAM_KEYS
 # extending this to ControlEndpoints.control_function(): that would remove a
 # working capability to guard against a hazard the cloud path does not have.
 #
-#   FUNC_TAKE_LOAD_TOGETHER — EG4's own cloud decode puts it at register 110
-#   bit 5; ant0nkr/lxp_modbus puts a CT-sample-ratio field at bits 5-6 and
-#   TakeLoadTogether at bit 10. The live 18kPV read that would settle it had
-#   bits 5 AND 10 both set (raw 0x0420), so it separates nothing. Reads keep
-#   EG4's name because EG4's decode is first-party evidence; writes wait for
-#   a toggle capture. See pylxpweb #242.
-DISPUTED_WRITE_BLOCKED_PARAMS: frozenset[str] = frozenset({"FUNC_TAKE_LOAD_TOGETHER"})
+# Currently EMPTY, and that is the intended steady state — a name belongs here
+# only while a dispute is live. The mechanism and its guard in
+# transports/protocol.py stay in place because this situation recurs: reg 110
+# alone has produced two of them.
+#
+# Resolved entries, kept as precedent for how one leaves this set:
+#   FUNC_TAKE_LOAD_TOGETHER — listed while EG4's cloud decode was read as
+#   putting it at register 110 bit 5 and ant0nkr/lxp_modbus put a
+#   CT-sample-ratio field at 5-6 with TakeLoadTogether at bit 10. Settled
+#   2026-08-01 by the toggle capture the issue asked for (pylxpweb #242): the
+#   flag is at bit 10, bit 5 never moved, and it is now writable locally. The
+#   sources were never really in conflict — EG4's decode reports the NAME, and
+#   its server resolves that name to bit 10.
+DISPUTED_WRITE_BLOCKED_PARAMS: frozenset[str] = frozenset()
 
 
 def _copy_register_mapping(mapping: dict[int, list[str]]) -> dict[int, list[str]]:

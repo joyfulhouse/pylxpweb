@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -10,6 +10,14 @@ from pylxpweb.devices.inverters._features import InverterFamily
 from pylxpweb.transports.http import HTTPTransport
 from pylxpweb.transports.hybrid import HybridTransport
 from pylxpweb.transports.modbus import ModbusTransport
+
+# The two register-110 values the 18kPV reported either side of a
+# take-load-together toggle driven through EG4's OWN cloud functionControl
+# (2026-08-01, serial 45XXXXXX18, pylxpweb #242). Their XOR is exactly bit 10,
+# which is the entire evidence for the mapping this module pins. Defined once
+# so a fixture cannot be corrupted in one test and stay consistent elsewhere.
+CAPTURE_BASELINE_RAW = 0x0420  # bits 5 + 10 — flag ON
+CAPTURE_TOGGLED_OFF_RAW = 0x0020  # bit 5 only — flag OFF
 
 
 class TestReadNamedParametersModbus:
@@ -802,7 +810,7 @@ class TestRegister110UnifiedLayout:
     # ------------------------------------------------------------------
 
     def test_register_110_layout(self) -> None:
-        """Every family maps green to 14, ECO to 15, buzzer to 7."""
+        """Every family maps green to 14, ECO to 15, buzzer to 7, TLT to 10."""
         from pylxpweb.constants.registers import get_register_to_param_mapping
 
         for family in (None, "EG4_HYBRID", "EG4_OFFGRID", "LXP", "UNKNOWN"):
@@ -812,12 +820,15 @@ class TestRegister110UnifiedLayout:
             assert layout.index("FUNC_GREEN_EN") == 14
             assert layout.index("FUNC_BATTERY_ECO_EN") == 15
             assert layout.index("FUNC_BUZZER_EN") == 7
+            # Toggle-verified on an 18kPV and applied lineage-wide, same as
+            # green at 14 — a per-family divergence has to be deliberate (#242).
+            assert layout.index("FUNC_TAKE_LOAD_TOGETHER") == 10
             # Displaced/unproven 18kPV names are placeholders, not silent
             # reuse — a wrong slot writes an unrelated config bit (#476).
+            assert layout[5] == "FUNC_110_BIT5"  # old TLT slot, disproven (#242)
             assert layout[6] == "FUNC_110_BIT6"
             assert layout[8] == "FUNC_110_BIT8"  # old green slot, disproven
             assert layout[9] == "FUNC_110_BIT9"  # old ECO slot
-            assert layout[10] == "FUNC_110_BIT10"  # old working-mode slot
             assert layout[11] == "FUNC_110_BIT11"
             assert layout[12] == "FUNC_110_BIT12"
             assert layout[13] == "FUNC_110_BIT13"
@@ -830,18 +841,61 @@ class TestRegister110UnifiedLayout:
             ):
                 assert removed not in layout
 
+    def test_register_110_canonical_registry_agrees_with_decode_table(self) -> None:
+        """The canonical holding registry and the decode table must not drift.
+
+        Register 110's bit positions live in two places: the transport decode
+        list (REGISTER_110_PARAM_KEYS, indexed by bit) and the canonical
+        HoldingRegisterDefinition rows. Nothing forces them to agree, so a
+        position fix applied to only one — exactly what #242 and #476 each
+        had to correct — would leave the two silently contradicting each
+        other, with reads and writes disagreeing about the same flag.
+        """
+        from pylxpweb.constants.registers import get_register_to_param_mapping
+        from pylxpweb.registers.inverter_holding import BY_ADDRESS
+
+        layout = get_register_to_param_mapping()[110]
+
+        definitions = [
+            definition
+            for definition in BY_ADDRESS.get(110, ())
+            if definition.bit_position is not None
+        ]
+        assert definitions, "register 110 must have canonical bit definitions"
+
+        for definition in definitions:
+            assert definition.api_param_key is not None
+            assert layout[definition.bit_position] == definition.api_param_key, (
+                f"{definition.api_param_key} is bit {definition.bit_position} in the "
+                f"canonical registry but bit {layout.index(definition.api_param_key)} "
+                "in the decode table"
+            )
+
+        # The #242 result specifically, pinned by name rather than by scan.
+        take_load_together = next(
+            definition
+            for definition in definitions
+            if definition.api_param_key == "FUNC_TAKE_LOAD_TOGETHER"
+        )
+        assert take_load_together.address == 110
+        assert take_load_together.bit_position == 10
+
     def test_register_110_agreed_low_bits_unchanged(self) -> None:
-        """Bits 0-5 agree across all sources and stay identical."""
+        """Bits 0-4 agree across all sources and stay identical.
+
+        Bit 5 used to be in this set on the strength of EG4's decode naming
+        TAKE_LOAD_TOGETHER; the #242 toggle capture moved that flag to bit 10
+        and left 5 unidentified, so the agreed run now stops at 4.
+        """
         from pylxpweb.constants.registers import get_register_to_param_mapping
 
         layout = get_register_to_param_mapping()[110]
-        assert layout[:6] == [
+        assert layout[:5] == [
             "FUNC_PV_GRID_OFF_EN",
             "FUNC_RUN_WITHOUT_GRID",
             "FUNC_MICRO_GRID_EN",
             "FUNC_BAT_SHARED",
             "FUNC_CHARGE_LAST",
-            "FUNC_TAKE_LOAD_TOGETHER",
         ]
 
     def test_offgrid_alias_is_the_shared_layout(self) -> None:
@@ -1040,26 +1094,110 @@ class TestRegister110UnifiedLayout:
         assert not written & (1 << 8), "bit 8 (old green slot) must stay untouched"
 
     @pytest.mark.asyncio
-    async def test_disputed_bit_decodes_but_is_not_writable(
+    async def test_take_load_together_writes_bit_10(
         self, offgrid_transport: ModbusTransport
     ) -> None:
-        """A disputed bit still reads, but refuses to be written (#242).
+        """Once settled, the flag is writable and lands on bit 10 (#242).
 
-        FUNC_TAKE_LOAD_TOGETHER keeps EG4's own name because EG4's cloud
-        decode is first-party evidence for bit 5. lxp_modbus puts it at
-        bit 10 instead, and the one live read that could separate them had
-        both bits set. Writing the wrong one is ACKed and moves some other
-        setting, so writes wait for a toggle capture while reads carry on.
+        This inverts the old disputed-write guard: the toggle capture proved
+        the position, so the write is allowed — and it must go to bit 10 with
+        read-modify-write leaving every sibling bit alone, including bit 5,
+        which the capture showed is some other setting (lxp_modbus assigns
+        it to a CT-sample-ratio field; unconfirmed here).
         """
-        offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x0020})
+        # The captured baseline: bits 5 and 10 set.
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: CAPTURE_BASELINE_RAW})
 
-        decoded = await offgrid_transport.read_named_parameters(110, 1)
-        assert decoded["FUNC_TAKE_LOAD_TOGETHER"] is True
+        result = await offgrid_transport.write_named_parameters({"FUNC_TAKE_LOAD_TOGETHER": False})
 
-        with pytest.raises(ValueError, match="disagree"):
+        assert result is True
+        # Exactly the raw value the live capture produced when EG4's own
+        # server cleared this flag: 0x0420 -> 0x0020.
+        offgrid_transport.write_parameters.assert_called_once_with({110: CAPTURE_TOGGLED_OFF_RAW})
+        written = offgrid_transport.write_parameters.call_args[0][0][110]
+        assert written & (1 << 5), "bit 5 (a different, unidentified setting) must survive"
+
+    @pytest.mark.asyncio
+    async def test_disputed_write_guard_has_no_entries_but_still_works(
+        self, offgrid_transport: ModbusTransport
+    ) -> None:
+        """The guard mechanism outlives the dispute that motivated it.
+
+        DISPUTED_WRITE_BLOCKED_PARAMS is empty now that #242 is settled, but
+        register 110 alone has produced two disputes, so the machinery stays.
+        Pin that it is empty *and* that it would still bite, so a future
+        "unused, delete it" cleanup has to argue with a failing test.
+        """
+        from pylxpweb.constants.registers import DISPUTED_WRITE_BLOCKED_PARAMS
+
+        assert frozenset() == DISPUTED_WRITE_BLOCKED_PARAMS
+
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: CAPTURE_BASELINE_RAW})
+        with (
+            patch(
+                "pylxpweb.constants.registers.DISPUTED_WRITE_BLOCKED_PARAMS",
+                frozenset({"FUNC_TAKE_LOAD_TOGETHER"}),
+            ),
+            pytest.raises(ValueError, match="disagree"),
+        ):
             await offgrid_transport.write_named_parameters({"FUNC_TAKE_LOAD_TOGETHER": False})
 
         offgrid_transport.write_parameters.assert_not_called()
+
+    def test_capture_constants_match_the_recorded_evidence(self) -> None:
+        """Pin the recorded numbers themselves, not just what they decode to.
+
+        The decode assertions below are insensitive to small corruptions of the
+        fixtures — 0x0421 still has bit 10 set and still has bit 5 set, so it
+        decodes identically while no longer being the value the 18kPV actually
+        reported. The PR claims byte-perfect evidence, so the bytes are pinned
+        here: mutating a captured value fails CI instead of quietly
+        invalidating the claim.
+        """
+        # As printed by the capture script on 2026-08-01 (18kPV 45XXXXXX18).
+        assert CAPTURE_BASELINE_RAW == 1056
+        assert CAPTURE_TOGGLED_OFF_RAW == 32
+        # The whole argument in one line: EG4's own server clearing
+        # take-load-together moved exactly one bit, and that bit is 10.
+        assert CAPTURE_BASELINE_RAW ^ CAPTURE_TOGGLED_OFF_RAW == 1 << 10
+        # ...and bit 5, the position we used to claim, did not move.
+        assert CAPTURE_BASELINE_RAW & (1 << 5)
+        assert CAPTURE_TOGGLED_OFF_RAW & (1 << 5)
+
+    @pytest.mark.parametrize(
+        ("raw", "expected_true_keys"),
+        [
+            # Captured baseline: flag on (bits 5 + 10 set).
+            (CAPTURE_BASELINE_RAW, {"FUNC_110_BIT5", "FUNC_TAKE_LOAD_TOGETHER"}),
+            # Captured after EG4 cleared it: only bit 5 left.
+            (CAPTURE_TOGGLED_OFF_RAW, {"FUNC_110_BIT5"}),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_take_load_together_capture_evidence(
+        self,
+        hybrid_transport: ModbusTransport,
+        raw: int,
+        expected_true_keys: set[str],
+    ) -> None:
+        """Pin the two raw values from the 2026-08-01 18kPV capture (#242).
+
+        These are the actual register reads either side of a take-load-together
+        toggle driven through EG4's own cloud functionControl. Under the old
+        bit-5 mapping the second value decoded True — i.e. the decode could not
+        see the change EG4 had just made.
+
+        The assertion is on the EXACT set of set flags, not just this one key,
+        so a corrupted fixture (an extra or missing bit) fails rather than
+        decoding the same way by luck.
+        """
+        hybrid_transport.read_parameters = AsyncMock(return_value={110: raw})
+
+        result = await hybrid_transport.read_named_parameters(110, 1)
+
+        assert {key for key, value in result.items() if value is True} == expected_true_keys
+        # Bit 5 is set in BOTH captures, so it cannot be this flag.
+        assert result["FUNC_110_BIT5"] is True
 
     @pytest.mark.asyncio
     async def test_placeholder_bits_are_not_writable(

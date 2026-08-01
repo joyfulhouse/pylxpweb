@@ -964,22 +964,6 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         category=HoldingCategory.FUNCTION,
         description="Charge last mode — charge battery after loads satisfied.",
     ),
-    HoldingRegisterDefinition(
-        address=110,
-        bit_position=5,
-        canonical_name="take_load_together",
-        # DISPUTED POSITION, not verified: EG4's cloud decode puts this at
-        # bit 5, ant0nkr/lxp_modbus puts a CT-ratio field at 5-6 and
-        # TakeLoadTogether at bit 10, and the one live read that could
-        # separate them had both bits set (raw 0x0420). The name is EG4's,
-        # so reads keep it; LOCAL writes are refused via
-        # DISPUTED_WRITE_BLOCKED_PARAMS until a toggle capture settles it.
-        # The old "# verified" here meant the NAME matched the cloud, never
-        # that the bit was toggle-tested — the exact conflation behind #476.
-        api_param_key="FUNC_TAKE_LOAD_TOGETHER",
-        category=HoldingCategory.FUNCTION,
-        description="Take load together mode (parallel load sharing).",
-    ),
     # Register 110 upper-bit layout rewritten 2026-07-21 (eg4_web_monitor
     # #476): the historic 18kPV-derived positions (buzzer 6, go-to-offgrid
     # 7, green 8, ECO 9, working-mode 10, PVCT/CT sample 11-13) were an
@@ -993,6 +977,20 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         api_param_key="FUNC_BUZZER_EN",  # hardware-verified (PR #220 + lxp_modbus)
         category=HoldingCategory.FUNCTION,
         description="Audible buzzer enable for alarms.",
+    ),
+    HoldingRegisterDefinition(
+        address=110,
+        bit_position=10,
+        canonical_name="take_load_together",
+        api_param_key="FUNC_TAKE_LOAD_TOGETHER",  # hardware toggle-verified 2026-08-01 (#242)
+        category=HoldingCategory.FUNCTION,
+        description="Take load together mode (parallel load sharing). Bit 10, "
+        "toggle-verified on 18kPV via EG4's own cloud functionControl: raw "
+        "1056 <-> 32, a single bit-10 delta, bit 5 unmoved (pylxpweb #242). "
+        "The pre-2026-08-01 bit-5 mapping was wrong: a local write through it "
+        "would have flipped bit 5, which the capture shows is some other "
+        "setting (lxp_modbus assigns it to a CT-sample-ratio field, "
+        "unconfirmed here).",
     ),
     HoldingRegisterDefinition(
         address=110,
