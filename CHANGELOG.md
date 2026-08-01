@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Firmware chains no longer stall on a component that is already at the
+  target version**: `standardUpdate/run` takes no component selector, so the
+  server chooses which component a run installs. On a partially upgraded
+  device it can choose one that is already current — that run downloads and
+  flashes normally but cannot move the version string. The orchestrator
+  treated the first unchanged version as a dead chain and aborted, so the
+  component that actually needed upgrading never ran and every retry
+  reproduced the same loop (a 6000XP stuck at `ccaa-1E1415` with target
+  `ccaa-1E1515`, [eg4_web_monitor#353](https://github.com/joyfulhouse/eg4_web_monitor/issues/353)).
+  `run_firmware_update_to_completion` now tolerates a bounded number of
+  consecutive completed-but-unchanged steps (`no_progress_grace`, default 1),
+  and only when the step was actually observed installing and did not report
+  FAILED. A genuinely stuck device still stops, and all writes stay bounded by
+  `max_steps`. The `needRunStep2..5` flags are logged (not used as a gate —
+  their firmware semantics remain unverified) so the next field report
+  captures them.
+- **A device that is busy before the update starts now fails fast**: busy
+  tolerance was introduced for inter-component settling of a chain already in
+  flight, but it also applied before the first step, so a device still
+  recovering from an earlier update held the caller for the whole retry budget
+  (~5 minutes of "Installing") before failing. Busy responses — from the
+  eligibility probe or the start call — now return immediately while
+  `steps_run == 0`, with a message saying the device is busy and to retry
+  shortly. The deliberate mid-chain tolerance is unchanged and now runs on its
+  own wider budget (`busy_grace`, default 900s, bounded by `step_timeout`),
+  because a component reboot can outlast the post-start visibility grace and
+  giving up there strands the device mid-chain.
+- **An "already the latest version" refusal mid-chain is reported as
+  convergence**: if the check endpoint lags a successful final step past the
+  settle window, the no-progress grace can ask for one step too many; the
+  server's refusal is convergence, not an error to surface after a successful
+  update. Before any step, the same response still propagates — that is a
+  genuine disagreement between the check and run endpoints about a device we
+  have not touched.
+
 ## [0.9.39b5] - 2026-07-27
 
 This section accumulates the whole 0.9.39 beta line: b1 through b4 were tagged

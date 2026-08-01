@@ -8,8 +8,11 @@ detection capabilities with caching and Home Assistant compatibility.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
+
+_LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
@@ -543,6 +546,8 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         start_grace: float = 300.0,
         settle_checks: int = 3,
         settle_interval: float = 30.0,
+        no_progress_grace: int = 1,
+        busy_grace: float = 900.0,
     ) -> FirmwareUpdateRunResult:
         """Run firmware updates until the device converges on the latest version.
 
@@ -556,10 +561,28 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
         advertises the chain via ``needRunStep2``..``needRunStep5``.
 
         This orchestrator loops: check → start → poll to completion →
-        re-check, until no update remains, a step makes no version progress
+        re-check, until no update remains, the no-progress grace is spent
         (fail-safe against server-side loops), the step budget is exhausted,
         or a step times out. Each iteration re-verifies eligibility before
         issuing the next run.
+
+        A component that is ALREADY at the target version still flashes when
+        the server selects it — ``standardUpdate/run`` takes no step/component
+        parameter, so which component a run installs is the server's choice.
+        Such a run completes normally and cannot move the version string,
+        which is exactly how a partially-upgraded 6000XP got stuck: step 1
+        re-flashed the already-current component, and aborting on the first
+        unchanged version meant the component that actually needed upgrading
+        never ran (eg4_web_monitor#353). ``no_progress_grace`` therefore
+        tolerates a bounded number of *consecutive* completed-but-unchanged
+        steps before declaring the chain dead.
+
+        Busy handling is deliberately asymmetric. Before this invocation has
+        started anything, a busy device means "not now" and fails fast — the
+        caller has written nothing, and making the user wait out a multi-minute
+        retry budget only to fail is worse than telling them immediately.
+        Once a component HAS been started, busy means the chain we started is
+        still settling, and the bounded retry budget applies.
 
         Args:
             try_fast_mode: Attempt fast update mode on each run.
@@ -578,6 +601,18 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                 unchanged version is declared "no progress" (the check
                 endpoint can lag the status endpoint's terminal state).
             settle_interval: Seconds between those settle re-checks.
+            no_progress_grace: How many *consecutive* steps may complete
+                without moving the version before the chain is abandoned.
+                Only steps that were actually observed installing are
+                excused (see the loop body); 0 restores the pre-#353
+                abort-on-first-unchanged-version behaviour.
+            busy_grace: Seconds to keep re-polling a busy device BETWEEN
+                components before giving up on the chain (bounded by
+                ``step_timeout``). Only applies once a step has been started:
+                a device that is busy before the first step fails fast. A
+                component reboot/settle can outlast ``start_grace``, and
+                giving up there strands the device mid-chain, so this budget
+                is deliberately wider than the post-start visibility grace.
 
         Returns:
             FirmwareUpdateRunResult describing convergence, steps run, and a
@@ -589,6 +624,7 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             LuxpowerConnectionError: If connection fails.
         """
         # Import here to avoid circular imports
+        from pylxpweb.endpoints.firmware import FIRMWARE_UP_TO_DATE_MESSAGES
         from pylxpweb.exceptions import LuxpowerAPIError
         from pylxpweb.models import FirmwareUpdateRunResult
 
@@ -623,6 +659,15 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             message = str(err).casefold()
             return "busy" in message or "updating" in message
 
+        def _is_already_latest_error(err: LuxpowerAPIError) -> bool:
+            # ``standardUpdate/run`` refuses a converged device with the same
+            # "already the latest version" prose the check endpoint uses. That
+            # is convergence, not a failure — reachable when the check endpoint
+            # lags a successful final step past the settle window and the
+            # no-progress grace lets the loop ask for one step too many.
+            message = str(err).casefold()
+            return any(stem in message for stem in FIRMWARE_UP_TO_DATE_MESSAGES)
+
         info = await self.check_firmware_updates(force=True)
         if not info.update_available:
             return FirmwareUpdateRunResult(
@@ -634,6 +679,9 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             )
 
         steps_run = 0
+        # Consecutive steps that completed without moving the version. Reset
+        # on any version movement; compared against no_progress_grace.
+        consecutive_no_progress = 0
         # The converged version to report: once the device is up to date the
         # check endpoint answers with the bare "already latest" sentinel
         # (empty fwCodeBeforeUpload), so remember the target we converged to.
@@ -658,47 +706,77 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                 final_version=installed_version,
             )
 
+        def _busy_before_any_step(installed_version: str | None) -> FirmwareUpdateRunResult:
+            # Nothing has been written yet, so there is no chain of ours to
+            # protect: report immediately instead of holding the caller (and
+            # the HA install action) for the whole retry budget only to fail.
+            return FirmwareUpdateRunResult(
+                success=False,
+                converged=False,
+                steps_run=0,
+                message=(
+                    "Device is busy and cannot start a firmware update right now "
+                    "(it may still be installing, or recovering from a previous "
+                    "update); wait a few minutes and try again"
+                ),
+                final_version=installed_version,
+            )
+
         for _ in range(max_steps):
             before = _progress_key(info)
+            _LOGGER.debug(
+                "Firmware chain for %s: step %d, installed=%s, target=%s, needRunStep flags=%s",
+                self.serial_number,
+                steps_run + 1,
+                info.installed_version,
+                info.latest_version,
+                info.needs_run_steps,
+            )
 
-            # Become eligible and start the next component, tolerating a
-            # transient busy race. After a component finishes uploading, the
-            # device can still be settling/rebooting, so both the eligibility
-            # gate AND the start call may briefly report the device busy — the
-            # multi-step chain (issue #353) must not abort in that window.
-            # First step: a not-eligible result is a genuine pre-flight
-            # rejection (fail fast, no write). Later steps, or once a start has
-            # already raced busy: treat not-eligible/deviceBusy as "still
-            # working" and re-poll within a bounded budget. A non-busy API
-            # error still propagates. Bounded by min(start_grace, step_timeout).
-            busy_deadline = loop.time() + min(start_grace, step_timeout)
+            # Become eligible and start the next component. Busy handling is
+            # split by whether THIS invocation has already started something:
+            #
+            #   steps_run == 0 (pre-flight): the device was busy before we
+            #     wrote anything — someone/something else is using it, or it is
+            #     still recovering from an earlier update. Fail fast on both
+            #     not-eligible and any busy-family error, from the eligibility
+            #     probe or the start call. Burning the whole retry budget here
+            #     only to fail is strictly worse UX than saying so immediately
+            #     (eg4_web_monitor#353: a user watched "Installing" for five
+            #     minutes before being told the device was busy the whole time).
+            #
+            #   steps_run > 0 (mid-chain): the device is settling/rebooting
+            #     between components of a chain WE started, so both the
+            #     eligibility gate and the start call may briefly report busy —
+            #     the multi-step chain must not abort in that window. Re-poll
+            #     within a bounded budget of min(busy_grace, step_timeout).
+            #
+            # A non-busy API error still propagates in both cases.
+            busy_deadline = loop.time() + min(busy_grace, step_timeout)
 
             started = False
-            saw_busy = False
             attempted = False
             while True:
                 # Never issue a RETRY start write once the budget is spent
                 # (checked before the attempt; the first genuine try is exempt
-                # so a zero/expired start_grace still gets one shot).
+                # so a zero/expired busy_grace still gets one shot).
                 if attempted and loop.time() >= busy_deadline:
                     return _budget_spent(steps_run, info.installed_version)
                 first_attempt = not attempted
                 attempted = True
 
                 # The eligibility probe is itself a network call that can come
-                # back busy (transport BUSY / deviceUpdating / parallelGroup);
-                # treat that as "still working" and retry within budget rather
-                # than letting it escape raw and abort the chain. A non-busy
-                # API error still propagates.
+                # back busy (transport BUSY / deviceUpdating / parallelGroup).
                 try:
                     eligible = await self.check_update_eligibility()
-                    busy = False
                 except LuxpowerAPIError as err:
                     if not _is_device_busy_error(err):
                         raise
+                    if steps_run == 0:
+                        return _busy_before_any_step(info.installed_version)
+                    # Mid-chain: still working — fall through to the bounded
+                    # retry below rather than letting it escape raw.
                     eligible = False
-                    busy = True
-                    saw_busy = True
 
                 if eligible:
                     # The eligibility call can straddle the deadline; never fire
@@ -709,10 +787,31 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                         started = await self.start_firmware_update(try_fast_mode=try_fast_mode)
                         break
                     except LuxpowerAPIError as err:
+                        if steps_run > 0 and _is_already_latest_error(err):
+                            # The check endpoint lagged a successful final step
+                            # past the settle window and the no-progress grace
+                            # asked for one step too many: the device is
+                            # converged. Report that rather than surfacing a raw
+                            # API error after a successful update. Only mid-chain
+                            # — the same response BEFORE any step means the check
+                            # and run endpoints disagree about a device we have
+                            # not touched, which must still surface.
+                            return FirmwareUpdateRunResult(
+                                success=True,
+                                converged=True,
+                                steps_run=steps_run,
+                                message=(f"Firmware update complete after {steps_run} step(s)"),
+                                # The server asserts convergence, so the target
+                                # is the truthful version here; the lagging
+                                # check's installed_version is stale by
+                                # definition.
+                                final_version=last_target or info.installed_version,
+                            )
                         if not _is_device_busy_error(err):
                             raise
-                        saw_busy = True
-                elif not busy and steps_run == 0 and not saw_busy:
+                        if steps_run == 0:
+                            return _busy_before_any_step(info.installed_version)
+                elif steps_run == 0:
                     # Genuine pre-flight rejection on the very first step.
                     return FirmwareUpdateRunResult(
                         success=False,
@@ -808,16 +907,49 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
                         final_version=info.installed_version or last_target,
                     )
                 if _progress_key(info) != before:
+                    consecutive_no_progress = 0
                     break  # component advanced — continue the chain
             else:
-                # No version movement across the settle window — do not
-                # keep issuing writes against an unresponsive chain.
+                # No version movement across the settle window. This is NOT
+                # automatically a dead chain: standardUpdate/run takes no
+                # component selector, so the server can pick a component that
+                # is already at the target version, which flashes normally and
+                # cannot move the version string (eg4_web_monitor#353 — the
+                # 6000XP stuck at ccaa-1E1415 re-flashed its already-current
+                # component as step 1 and the remaining one never ran).
+                #
+                # Excuse such a step only with positive evidence that it really
+                # ran: `saw_in_progress` means the status endpoint reported the
+                # device installing, and the FAILED check above already passed.
+                # A terminal SUCCESS/COMPLETE row would be stronger evidence,
+                # but it is not reliably observable on the reporting hardware —
+                # the poll loop exits as soon as in_progress goes false — so
+                # "was seen installing and did not report FAILED" is the
+                # deliberately weaker signal used here, because a stronger one
+                # risks a fix that never fires in the field.
+                #
+                # Consecutive excuses are capped by no_progress_grace (and all
+                # writes by max_steps), so a genuinely stuck device still stops.
+                if saw_in_progress and consecutive_no_progress < no_progress_grace:
+                    consecutive_no_progress += 1
+                    _LOGGER.info(
+                        "Firmware step %d for %s completed without changing the "
+                        "version (%s) — a component already at the target flashes "
+                        "as a no-op; continuing the chain (needRunStep flags=%s)",
+                        steps_run,
+                        self.serial_number,
+                        info.installed_version,
+                        info.needs_run_steps,
+                    )
+                    continue
+                # Do not keep issuing writes against an unresponsive chain.
                 return FirmwareUpdateRunResult(
                     success=False,
                     converged=False,
                     steps_run=steps_run,
                     message=(
-                        f"No firmware version progress after step {steps_run}; "
+                        f"No firmware version progress after step {steps_run} "
+                        f"(needRunStep flags: {info.needs_run_steps or 'none'}); "
                         "stopping to avoid repeated update commands (if the "
                         "device is still installing, wait for it to finish "
                         "before retrying)"
