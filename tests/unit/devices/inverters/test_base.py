@@ -1558,3 +1558,287 @@ class TestGreenModeControls:
             await inverter.disable_green_mode()
         with pytest.raises(LuxpowerDeviceError, match="transport or a cloud client"):
             await inverter.get_green_mode_status()
+
+
+_CLIENT_FIRST_FUNCTION_BITS = [
+    pytest.param("battery_backup", 21, 0, "FUNC_EPS_EN", id="battery-backup"),
+    pytest.param(
+        "battery_backup_ctrl",
+        233,
+        1,
+        "FUNC_BATTERY_BACKUP_CTRL",
+        id="battery-backup-ctrl",
+    ),
+    pytest.param("feed_in_grid", 21, 15, "FUNC_FEED_IN_GRID_EN", id="feed-in-grid"),
+    pytest.param(
+        "pv_sell_to_grid",
+        179,
+        3,
+        "FUNC_PV_SELL_TO_GRID_EN",
+        id="pv-sell-to-grid",
+    ),
+    pytest.param(
+        "fast_zero_export",
+        110,
+        1,
+        "FUNC_RUN_WITHOUT_GRID",
+        id="fast-zero-export",
+    ),
+    pytest.param("ac_charge_mode", 21, 7, "FUNC_AC_CHARGE", id="ac-charge-mode"),
+    pytest.param(
+        "pv_charge_priority",
+        21,
+        11,
+        "FUNC_FORCED_CHG_EN",
+        id="pv-charge-priority",
+    ),
+    pytest.param(
+        "forced_discharge",
+        21,
+        10,
+        "FUNC_FORCED_DISCHG_EN",
+        id="forced-discharge",
+    ),
+    pytest.param(
+        "peak_shaving_mode",
+        179,
+        7,
+        "FUNC_GRID_PEAK_SHAVING",
+        id="peak-shaving-mode",
+    ),
+]
+
+
+class TestClientFirstFunctionBitControls:
+    """Named function bits support LOCAL without changing cloud routing."""
+
+    def _local_inverter(
+        self,
+        register: int,
+        raw_value: int,
+        *,
+        write_success: bool = True,
+    ) -> tuple[ConcreteInverter, ModbusTransport]:
+        """Create a clientless inverter backed by the real named RMW."""
+        transport = ModbusTransport(host="192.0.2.1", serial="1234567890")
+        transport._connected = True
+        transport.read_parameters = AsyncMock(return_value={register: raw_value})
+        transport.write_parameters = AsyncMock(return_value=write_success)
+        inverter = ConcreteInverter(
+            client=None,
+            serial_number="1234567890",
+            model="TestModel",
+            transport=transport,
+        )
+        return inverter, transport
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("helper_base", "register", "bit", "cloud_param_key"),
+        _CLIENT_FIRST_FUNCTION_BITS,
+    )
+    @pytest.mark.parametrize("enabled", [True, False], ids=["enable", "disable"])
+    async def test_clientless_transport_write_preserves_other_bits(
+        self,
+        helper_base: str,
+        register: int,
+        bit: int,
+        cloud_param_key: str,
+        enabled: bool,
+    ) -> None:
+        """LOCAL writes use the named atomic RMW and invalidate the cache."""
+        unrelated_mask = 1 << 5
+        original = unrelated_mask | (0 if enabled else 1 << bit)
+        expected = original | (1 << bit) if enabled else original & ~(1 << bit)
+        inverter, transport = self._local_inverter(register, original)
+        inverter._parameters_cache_time = datetime.now()
+
+        method = getattr(inverter, f"{'enable' if enabled else 'disable'}_{helper_base}")
+        assert await method() is True
+
+        assert inverter._cloud_param_key(register, bit) == cloud_param_key
+        transport.read_parameters.assert_awaited_once_with(register, 1)
+        transport.write_parameters.assert_awaited_once_with({register: expected})
+        written = transport.write_parameters.await_args.args[0][register]
+        assert written & unrelated_mask
+        assert bool(written & (1 << bit)) is enabled
+        assert inverter._parameters_cache_time is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("helper_base", "register", "bit", "cloud_param_key"),
+        _CLIENT_FIRST_FUNCTION_BITS,
+    )
+    async def test_clientless_transport_status_reads_named_bit(
+        self,
+        helper_base: str,
+        register: int,
+        bit: int,
+        cloud_param_key: str,
+    ) -> None:
+        """LOCAL status getters read their verified register bit."""
+        if helper_base == "battery_backup_ctrl":
+            pytest.skip("battery_backup_ctrl exposes no status getter")
+        inverter, transport = self._local_inverter(register, 1 << bit)
+
+        assert inverter._cloud_param_key(register, bit) == cloud_param_key
+        assert await getattr(inverter, f"get_{helper_base}_status")() is True
+        transport.read_parameters.assert_awaited_once_with(register, 1)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("helper_base", "register", "bit", "cloud_param_key"),
+        _CLIENT_FIRST_FUNCTION_BITS,
+    )
+    async def test_clientless_without_transport_raises_device_error(
+        self,
+        helper_base: str,
+        register: int,
+        bit: int,
+        cloud_param_key: str,
+    ) -> None:
+        """No route raises LuxpowerDeviceError for every available operation."""
+        inverter = ConcreteInverter(
+            client=None,
+            serial_number="1234567890",
+            model="TestModel",
+        )
+
+        assert inverter._cloud_param_key(register, bit) == cloud_param_key
+        method_names = [f"enable_{helper_base}", f"disable_{helper_base}"]
+        if helper_base != "battery_backup_ctrl":
+            method_names.append(f"get_{helper_base}_status")
+        for method_name in method_names:
+            with pytest.raises(
+                LuxpowerDeviceError,
+                match=rf"Register {register} .* requires a transport or a cloud client",
+            ):
+                await getattr(inverter, method_name)()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("helper_base", "register", "bit", "cloud_param_key"),
+        _CLIENT_FIRST_FUNCTION_BITS,
+    )
+    async def test_client_and_transport_use_cloud_first(
+        self,
+        mock_client: LuxpowerClient,
+        helper_base: str,
+        register: int,
+        bit: int,
+        cloud_param_key: str,
+    ) -> None:
+        """Base helpers keep dedicated cloud endpoints when both routes exist."""
+        transport = Mock()
+        transport.read_parameters = AsyncMock(return_value={register: 0})
+        transport.write_parameters = AsyncMock(return_value=True)
+        transport.write_named_parameters = AsyncMock(return_value=True)
+        inverter = ConcreteInverter(
+            client=mock_client,
+            serial_number="1234567890",
+            model="TestModel",
+            transport=transport,
+        )
+        mock_client.api.control = Mock()
+
+        assert inverter._cloud_param_key(register, bit) == cloud_param_key
+        for action in ("enable", "disable"):
+            endpoint = AsyncMock(return_value=SuccessResponse(success=True))
+            setattr(mock_client.api.control, f"{action}_{helper_base}", endpoint)
+            inverter._parameters_cache_time = datetime.now()
+
+            assert await getattr(inverter, f"{action}_{helper_base}")() is True
+
+            endpoint.assert_awaited_once_with("1234567890")
+            assert inverter._parameters_cache_time is None
+
+        if helper_base != "battery_backup_ctrl":
+            status_endpoint = AsyncMock(return_value=True)
+            setattr(mock_client.api.control, f"get_{helper_base}_status", status_endpoint)
+            assert await getattr(inverter, f"get_{helper_base}_status")() is True
+            status_endpoint.assert_awaited_once_with("1234567890")
+
+        transport.read_parameters.assert_not_awaited()
+        transport.write_parameters.assert_not_awaited()
+        transport.write_named_parameters.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("helper_base", "register", "bit", "cloud_param_key"),
+        _CLIENT_FIRST_FUNCTION_BITS,
+    )
+    async def test_clientless_transport_write_failure_keeps_cache(
+        self,
+        helper_base: str,
+        register: int,
+        bit: int,
+        cloud_param_key: str,
+    ) -> None:
+        """A rejected LOCAL write raises without invalidating the cache."""
+        inverter, _ = self._local_inverter(register, 0, write_success=False)
+        cache_time = datetime.now()
+        inverter._parameters_cache_time = cache_time
+
+        assert inverter._cloud_param_key(register, bit) == cloud_param_key
+        with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
+            await getattr(inverter, f"enable_{helper_base}")()
+
+        assert inverter._parameters_cache_time is cache_time
+
+    @pytest.mark.asyncio
+    async def test_local_battery_backup_write_is_atomic_with_concurrent_ac_update(
+        self,
+    ) -> None:
+        """The transport lock spans battery backup's complete register-21 RMW."""
+        register_21 = 1 << 10
+        transport = ModbusTransport(host="192.0.2.1", serial="1234567890")
+        transport._connected = True
+        inverter = ConcreteInverter(
+            client=None,
+            serial_number="1234567890",
+            model="TestModel",
+            transport=transport,
+        )
+        first_read_started = asyncio.Event()
+        release_first_read = asyncio.Event()
+        other_write_started = asyncio.Event()
+        first_read = True
+
+        async def read_holding(address: int, count: int) -> list[int]:
+            nonlocal first_read
+            assert (address, count) == (21, 1)
+            snapshot = register_21
+            if first_read:
+                first_read = False
+                first_read_started.set()
+                await release_first_read.wait()
+            return [snapshot]
+
+        async def write_holding(address: int, values: list[int]) -> bool:
+            nonlocal register_21
+            assert address == 21
+            register_21 = values[0]
+            return True
+
+        async def enable_ac_charge() -> bool:
+            other_write_started.set()
+            return await transport.write_named_parameters({"FUNC_AC_CHARGE": True})
+
+        with (
+            patch.object(transport, "_read_holding_registers", side_effect=read_holding),
+            patch.object(transport, "_write_holding_registers", side_effect=write_holding),
+        ):
+            backup_task = asyncio.create_task(inverter.enable_battery_backup())
+            await asyncio.wait_for(first_read_started.wait(), timeout=1)
+            ac_task = asyncio.create_task(enable_ac_charge())
+            await asyncio.wait_for(other_write_started.wait(), timeout=1)
+            release_first_read.set()
+            results = await asyncio.wait_for(
+                asyncio.gather(backup_task, ac_task),
+                timeout=1,
+            )
+
+        assert results == [True, True]
+        # A non-atomic RMW would write battery backup's stale snapshot (bit 10
+        # only, plus bit 0) over the concurrent AC-charge write and drop bit 7.
+        assert register_21 == (1 << 0) | (1 << 7) | (1 << 10)

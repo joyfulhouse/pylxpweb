@@ -2157,6 +2157,22 @@ class TestPVSellToGridDualPath:
         inverter.write_transport_register.assert_awaited_once_with(179, 0x104C)
 
     @pytest.mark.asyncio
+    async def test_client_and_transport_keep_transport_first_override(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Hybrid PV sell-to-grid ignores cloud when both routes exist."""
+        inverter = self._transport_inverter(mock_client)
+        inverter.read_transport_register = AsyncMock(return_value=0x1044)
+        inverter.write_transport_register = AsyncMock(return_value=True)
+        mock_client.api.control.enable_pv_sell_to_grid = AsyncMock(return_value=_cloud_success())
+
+        assert await inverter.enable_pv_sell_to_grid() is True
+
+        inverter.read_transport_register.assert_awaited_once_with(179)
+        inverter.write_transport_register.assert_awaited_once_with(179, 0x104C)
+        mock_client.api.control.enable_pv_sell_to_grid.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_transport_disable_replays_live_frames(self, mock_client: LuxpowerClient) -> None:
         """Disable over Modbus: RMW 0x104c -> 0x1044 (the live toggle)."""
         inverter = self._transport_inverter(mock_client)

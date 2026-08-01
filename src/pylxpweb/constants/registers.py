@@ -147,20 +147,24 @@ FUNC_EN_BIT_AC_CHARGE_EN = 7  # AC charge enable
 FUNC_EN_BIT_SET_TO_STANDBY = 9  # 0=Standby, 1=Power On
 FUNC_EN_BIT_FORCED_DISCHG_EN = 10  # Forced discharge enable
 FUNC_EN_BIT_FORCED_CHG_EN = 11  # Force charge enable
+FUNC_EN_BIT_FEED_IN_GRID_EN = 15  # Feed-in grid enable (live-verified)
 
 # System Function Register (Address 110) - Bit Field
 FUNC_SYS_REGISTER = 110
+FUNC_SYS_BIT_RUN_WITHOUT_GRID = 1  # Fast Zero Export (LXP FunctionEn1 mapping)
 FUNC_SYS_BIT_CHARGE_LAST = 4  # Charge last: charge battery after loads satisfied
 FUNC_SYS_BIT_GREEN_EN = 14  # Green/off-grid mode (hardware toggle-verified 2026-07-21, #476)
 
 # Extended Function Enable Register (Address 179) - Bit Field
 FUNC_EXT_REGISTER = 179
 FUNC_EXT_BIT_PV_SELL_TO_GRID = 3  # Export PV Only (pinned 2026-06-12 live cloud toggle)
+FUNC_EXT_BIT_GRID_PEAK_SHAVING = 7  # Grid peak shaving (live 18kPV + FlexBOSS21 reads 2026-06-12)
 FUNC_EXT_BIT_BAT_CHARGE_CONTROL = 9  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
 FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL = 10  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
 
 # Extended Function Enable Register 2 (Address 233) - Bit Field
 FUNC_EN_2_REGISTER = 233
+FUNC_EN_2_BIT_BATTERY_BACKUP_CTRL = 1  # Confirmed via live toggle test
 FUNC_EN_2_BIT_SPORADIC_CHARGE = 12  # Sporadic charge enable (confirmed via Modbus)
 
 # AC Charge Parameters
