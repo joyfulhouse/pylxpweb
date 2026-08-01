@@ -11,6 +11,14 @@ from pylxpweb.transports.http import HTTPTransport
 from pylxpweb.transports.hybrid import HybridTransport
 from pylxpweb.transports.modbus import ModbusTransport
 
+# The two register-110 values the 18kPV reported either side of a
+# take-load-together toggle driven through EG4's OWN cloud functionControl
+# (2026-08-01, serial 45XXXXXX18, pylxpweb #242). Their XOR is exactly bit 10,
+# which is the entire evidence for the mapping this module pins. Defined once
+# so a fixture cannot be corrupted in one test and stay consistent elsewhere.
+CAPTURE_BASELINE_RAW = 0x0420  # bits 5 + 10 — flag ON
+CAPTURE_TOGGLED_OFF_RAW = 0x0020  # bit 5 only — flag OFF
+
 
 class TestReadNamedParametersModbus:
     """Tests for Modbus transport read_named_parameters."""
@@ -1098,14 +1106,14 @@ class TestRegister110UnifiedLayout:
         it to a CT-sample-ratio field; unconfirmed here).
         """
         # The captured baseline: bits 5 and 10 set.
-        offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x0420})
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: CAPTURE_BASELINE_RAW})
 
         result = await offgrid_transport.write_named_parameters({"FUNC_TAKE_LOAD_TOGETHER": False})
 
         assert result is True
         # Exactly the raw value the live capture produced when EG4's own
         # server cleared this flag: 0x0420 -> 0x0020.
-        offgrid_transport.write_parameters.assert_called_once_with({110: 0x0020})
+        offgrid_transport.write_parameters.assert_called_once_with({110: CAPTURE_TOGGLED_OFF_RAW})
         written = offgrid_transport.write_parameters.call_args[0][0][110]
         assert written & (1 << 5), "bit 5 (a different, unidentified setting) must survive"
 
@@ -1124,7 +1132,7 @@ class TestRegister110UnifiedLayout:
 
         assert frozenset() == DISPUTED_WRITE_BLOCKED_PARAMS
 
-        offgrid_transport.read_parameters = AsyncMock(return_value={110: 0x0420})
+        offgrid_transport.read_parameters = AsyncMock(return_value={110: CAPTURE_BASELINE_RAW})
         with (
             patch(
                 "pylxpweb.constants.registers.DISPUTED_WRITE_BLOCKED_PARAMS",
@@ -1136,16 +1144,41 @@ class TestRegister110UnifiedLayout:
 
         offgrid_transport.write_parameters.assert_not_called()
 
+    def test_capture_constants_match_the_recorded_evidence(self) -> None:
+        """Pin the recorded numbers themselves, not just what they decode to.
+
+        The decode assertions below are insensitive to small corruptions of the
+        fixtures — 0x0421 still has bit 10 set and still has bit 5 set, so it
+        decodes identically while no longer being the value the 18kPV actually
+        reported. The PR claims byte-perfect evidence, so the bytes are pinned
+        here: mutating a captured value fails CI instead of quietly
+        invalidating the claim.
+        """
+        # As printed by the capture script on 2026-08-01 (18kPV 45XXXXXX18).
+        assert CAPTURE_BASELINE_RAW == 1056
+        assert CAPTURE_TOGGLED_OFF_RAW == 32
+        # The whole argument in one line: EG4's own server clearing
+        # take-load-together moved exactly one bit, and that bit is 10.
+        assert CAPTURE_BASELINE_RAW ^ CAPTURE_TOGGLED_OFF_RAW == 1 << 10
+        # ...and bit 5, the position we used to claim, did not move.
+        assert CAPTURE_BASELINE_RAW & (1 << 5)
+        assert CAPTURE_TOGGLED_OFF_RAW & (1 << 5)
+
     @pytest.mark.parametrize(
-        ("raw", "expected"),
+        ("raw", "expected_true_keys"),
         [
-            (0x0420, True),  # captured baseline: flag on (bits 5 + 10 set)
-            (0x0020, False),  # captured after EG4 cleared it: only bit 5 left
+            # Captured baseline: flag on (bits 5 + 10 set).
+            (CAPTURE_BASELINE_RAW, {"FUNC_110_BIT5", "FUNC_TAKE_LOAD_TOGETHER"}),
+            # Captured after EG4 cleared it: only bit 5 left.
+            (CAPTURE_TOGGLED_OFF_RAW, {"FUNC_110_BIT5"}),
         ],
     )
     @pytest.mark.asyncio
     async def test_take_load_together_capture_evidence(
-        self, hybrid_transport: ModbusTransport, raw: int, expected: bool
+        self,
+        hybrid_transport: ModbusTransport,
+        raw: int,
+        expected_true_keys: set[str],
     ) -> None:
         """Pin the two raw values from the 2026-08-01 18kPV capture (#242).
 
@@ -1153,12 +1186,16 @@ class TestRegister110UnifiedLayout:
         toggle driven through EG4's own cloud functionControl. Under the old
         bit-5 mapping the second value decoded True — i.e. the decode could not
         see the change EG4 had just made.
+
+        The assertion is on the EXACT set of set flags, not just this one key,
+        so a corrupted fixture (an extra or missing bit) fails rather than
+        decoding the same way by luck.
         """
         hybrid_transport.read_parameters = AsyncMock(return_value={110: raw})
 
         result = await hybrid_transport.read_named_parameters(110, 1)
 
-        assert result["FUNC_TAKE_LOAD_TOGETHER"] is expected
+        assert {key for key, value in result.items() if value is True} == expected_true_keys
         # Bit 5 is set in BOTH captures, so it cannot be this flag.
         assert result["FUNC_110_BIT5"] is True
 
