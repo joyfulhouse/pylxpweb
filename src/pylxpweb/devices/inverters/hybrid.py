@@ -1192,12 +1192,11 @@ class HybridInverter(GenericInverter):
         the cloud endpoint.
 
         The lock matters here specifically. Register 179 already carried one
-        local writer (Grid Peak Shaving, bit 7); bit 11 makes two, and the
-        raw read-modify-write in :meth:`_set_modbus_register_bit` drops
-        whichever bit lands between the two writers' read and write —
-        reproduced as a lost bit 7 (pylxpweb#254). Passing ``cloud_write=None``
-        selects the named-write route that holds the transport lock across
-        the whole sequence.
+        local writer (Grid Peak Shaving, bit 7); bit 11 makes two, and a raw
+        read-modify-write drops whichever bit lands between the two writers'
+        read and write — reproduced as a lost bit 7 (pylxpweb#254, which put
+        the whole library on the lock-held named write). Passing
+        ``cloud_write=None`` selects that route here.
 
         Args:
             enabled: True to enable AC coupling, False to disable it

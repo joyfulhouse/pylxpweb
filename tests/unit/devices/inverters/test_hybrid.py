@@ -2367,12 +2367,20 @@ class TestACCoupleDualPath:
 
     @pytest.mark.asyncio
     async def test_transport_status_reads_bit11(self, mock_client: LuxpowerClient) -> None:
+        """Both polarities through the transport's NAMED read (#254)."""
         inverter = self._transport_inverter(mock_client)
+        transport = inverter._transport
+        assert transport is not None
 
-        inverter.read_transport_register = AsyncMock(return_value=0xAA55)
+        transport.read_named_parameters = AsyncMock(
+            return_value={"FUNC_AC_COUPLING_FUNCTION": True}
+        )
         assert await inverter.get_ac_couple_status() is True
+        transport.read_named_parameters.assert_awaited_once_with(179, 1)
 
-        inverter.read_transport_register = AsyncMock(return_value=0xA255)
+        transport.read_named_parameters = AsyncMock(
+            return_value={"FUNC_AC_COUPLING_FUNCTION": False}
+        )
         assert await inverter.get_ac_couple_status() is False
 
     @pytest.mark.asyncio
@@ -2416,7 +2424,11 @@ class TestACCoupleDualPath:
     async def test_clientless_transport_read_needs_no_client(self) -> None:
         """Same for the status read on a clientless instance."""
         inverter = self._transport_inverter(None)
-        inverter.read_transport_register = AsyncMock(return_value=0xAA55)
+        transport = inverter._transport
+        assert transport is not None
+        transport.read_named_parameters = AsyncMock(
+            return_value={"FUNC_AC_COUPLING_FUNCTION": True}
+        )
 
         assert await inverter.get_ac_couple_status() is True
 
@@ -2534,6 +2546,52 @@ class TestACCoupleDualPath:
         # All three bits survive: the pre-existing sibling, AC couple (11)
         # and the racing peak-shaving write (7).
         assert register_value == (1 << 9) | (1 << 11) | (1 << 7)
+
+    @pytest.mark.asyncio
+    async def test_ac_couple_write_during_refresh_cannot_stamp_a_stale_cache(self) -> None:
+        """The AC-couple write uses the GENERATION-COUNTER invalidation.
+
+        pylxpweb#254's ``_set_client_first_function_bit`` bumps
+        ``_parameters_write_seq`` so a refresh already in flight cannot stamp
+        a pre-write snapshot as fresh. The #472 branch briefly carried its
+        own copy of that helper whose invalidation only cleared the cache
+        timestamp — no counter — because the mainline helper did not exist
+        yet. This pins that the rebase kept the RIGHT copy: a plain
+        timestamp-clearing implementation leaves ``_parameters_cache_time``
+        stamped by the racing refresh and fails here.
+        """
+        import asyncio
+
+        first_range_started = asyncio.Event()
+        release_first_range = asyncio.Event()
+
+        async def read_named_parameters(start: int, count: int) -> dict[str, bool]:
+            if start == 0:
+                first_range_started.set()
+                await release_first_range.wait()
+                return {"FUNC_AC_COUPLING_FUNCTION": False}
+            return {}
+
+        transport = Mock()
+        transport.read_named_parameters = AsyncMock(side_effect=read_named_parameters)
+        transport.write_named_parameters = AsyncMock(return_value=True)
+        inverter = HybridInverter(
+            client=None,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=transport,
+        )
+        inverter._parameters_cache_time = datetime.now()
+        seq_before = inverter._parameters_write_seq
+
+        refresh_task = asyncio.create_task(inverter._fetch_parameters())
+        await asyncio.wait_for(first_range_started.wait(), timeout=1)
+        assert await inverter.set_ac_couple(True) is True
+        release_first_range.set()
+        await asyncio.wait_for(refresh_task, timeout=1)
+
+        assert inverter._parameters_write_seq > seq_before
+        assert inverter._parameters_cache_time is None
 
     @pytest.mark.asyncio
     async def test_generic_inverter_uses_existing_cloud_helpers(

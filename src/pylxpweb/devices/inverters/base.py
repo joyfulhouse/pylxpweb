@@ -3279,10 +3279,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         never an AttributeError on an absent client (pylxpweb#247).
 
         Deliberately delegates rather than inlining a transport read: that
-        one seam is where pylxpweb#254 moves every bit read onto the named
-        read path, so this getter converges with the rest of the library
-        instead of leaving a second copy behind that conversion cannot
-        reach.
+        one seam is where pylxpweb#254 put every bit read onto the named
+        read path, so this getter stays converged with the rest of the
+        library instead of carrying a second copy that fixes there would
+        not reach.
 
         An absent parameter reads False here, as it does for every other
         boolean function getter; callers that must tell "absent" from a real
