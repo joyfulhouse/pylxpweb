@@ -161,6 +161,7 @@ FUNC_EXT_BIT_PV_SELL_TO_GRID = 3  # Export PV Only (pinned 2026-06-12 live cloud
 FUNC_EXT_BIT_GRID_PEAK_SHAVING = 7  # Grid peak shaving (live 18kPV + FlexBOSS21 reads 2026-06-12)
 FUNC_EXT_BIT_BAT_CHARGE_CONTROL = 9  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
 FUNC_EXT_BIT_BAT_DISCHARGE_CONTROL = 10  # 0=SOC, 1=Voltage (confirmed 2026-02-18)
+FUNC_EXT_BIT_AC_COUPLING = 11  # AC coupling function (lineage inference; #472)
 
 # Extended Function Enable Register 2 (Address 233) - Bit Field
 FUNC_EN_2_REGISTER = 233
@@ -848,15 +849,32 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # Other known params: FUNC_ACTIVE_POWER_LIMIT_MODE, FUNC_AC_COUPLING_FUNCTION,
     # FUNC_CT_DIRECTION_REVERSED,
     #
-    # FUNC_AC_COUPLING_FUNCTION: BIT 11 CANDIDATE (eg4_web_monitor#471,
-    # ivanfmartinez 2026-07-17): the Luxpower Modbus doc places it at reg 179
-    # bit 11, another integration uses that mapping, and the reporter has
-    # driven the control through it before on his LXP (his LXPUS810K dump —
-    # AC couple enabled — reads the named param True; the SNA12K-US probe —
-    # disabled — reads False). NOT yet pinned by this project's raw↔named
-    # lockstep standard (the bit-3 procedure below); until a live toggle
-    # verifies the bit, reads/writes stay on the named cloud path
-    # (set_inverter_ac_couple_enabled / get_inverter_ac_couple_soc_limits).
+    # FUNC_AC_COUPLING_FUNCTION: BIT 11 LINEAGE INFERENCE (eg4_web_monitor#472).
+    # Evidence:
+    #   (1) The Luxpower Modbus doc places AC coupling at reg 179 bit 11.
+    #   (2) ant0nkr/luxpower-ha-integration
+    #       (custom_components/lxp_modbus/constants/hold_registers.py,
+    #       H_FUNCTION_ENABLE_4 = 179) documents
+    #       "Bit 11: uFunctionEn2.ubACcoupling (0=Disable, 1=Enable)". Its full
+    #       16-bit layout for reg 179 matches this repo's canonical
+    #       inverter_holding.py table bit-for-bit, and four bits of that shared
+    #       layout are independently hardware-proven on EG4 hardware: bit 3 by
+    #       the 2026-06-12 raw-verified cloud toggle on a FlexBOSS21 and an
+    #       18kPV, bit 7 by a live toggle, and bits 9/10 by the 2026-02-18
+    #       SOC-vs-Voltage confirmation. No bit of the reg-179 layout has ever
+    #       been found wrong.
+    #   (3) Reporter ivanfmartinez (eg4_web_monitor#471) has driven this control
+    #       through that mapping on his LXP hardware before, and his live
+    #       named-read correlation agrees: his AC-couple-enabled LXPUS810K
+    #       reads the cloud param True, while a disabled SNA12K-US probe unit
+    #       reads False.
+    #   (4) NOT done: this project's strictest raw↔named lockstep toggle (flip
+    #       the named param, read raw reg 179 before/after, verify the XOR is
+    #       exactly bit 11, flip back). The bit ships on lineage inference,
+    #       exactly like the #476 off-grid green-mode decision; see
+    #       eg4_web_monitor#472 for the outstanding capture.
+    # EG4_OFFGRID receives this entry through a copy of the shared table, like
+    # bit 3. Family overrides remain reserved for hardware-PROVEN divergence.
     # FUNC_GEN_PEAK_SHAVING, FUNC_ON_GRID_ALWAYS_ON, FUNC_PV_ARC, FUNC_PV_ARC_FAULT_CLEAR,
     # FUNC_PV_SELL_TO_GRID_EN, FUNC_RSD_DISABLE, FUNC_SMART_LOAD_ENABLE,
     # FUNC_TOTAL_LOAD_COMPENSATION_EN, FUNC_TRIP_TIME_UNIT, FUNC_WATT_VOLT_EN
@@ -878,12 +896,11 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # single-register named reads 2026-06-12 (remoteRead (179, 1) returns it
     # on both inverters).  The canonical holding table's spec name for bit 3
     # is FUNC_BAT_WAKEUP_EN ("Battery wakeup / PV sell first enable") — the
-    # "PV sell first" wording corroborates the pin.  EG4_OFFGRID inherits
-    # this entry like the other reg-179 bits (7, 9, 10, 11 — all 12K-pinned):
-    # per the eg4-juzg adjudication, family overrides are reserved for
-    # hardware-PROVEN divergence (reg 110); no SNA evidence contradicts the
-    # shared reg-179 layout, and consumers suppress sell-back controls on
-    # that no-sellback family.
+    # "PV sell first" wording corroborates the pin. EG4_OFFGRID inherits this
+    # entry through the shared reg-179 table; per the eg4-juzg adjudication,
+    # family overrides are reserved for hardware-PROVEN divergence (reg 110).
+    # No SNA evidence contradicts the shared layout, and consumers suppress
+    # sell-back controls on that no-sellback family.
     179: [
         "FUNC_179_BIT0",  # Bit 0: unknown
         "FUNC_179_BIT1",  # Bit 1: unknown
@@ -896,7 +913,7 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "FUNC_179_BIT8",  # Bit 8: unknown
         "FUNC_BAT_CHARGE_CONTROL",  # Bit 9: 0=SOC, 1=Voltage (confirmed 2026-02-18)
         "FUNC_BAT_DISCHARGE_CONTROL",  # Bit 10: 0=SOC, 1=Voltage (confirmed 2026-02-18)
-        "FUNC_AC_COUPLE_EN",  # Bit 11: AC Coupling enable (confirmed on 12000XP via Modbus probe)
+        "FUNC_AC_COUPLING_FUNCTION",  # Bit 11: AC coupling function (lineage inference; see above)
         "FUNC_179_BIT12",  # Bit 12: unknown
         "FUNC_179_BIT13",  # Bit 13: unknown
         "FUNC_179_BIT14",  # Bit 14: unknown

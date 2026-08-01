@@ -66,6 +66,28 @@ class TestReadNamedParametersModbus:
         assert result.get("FUNC_OVF_LOAD_DERATE_EN") is False
 
     @pytest.mark.asyncio
+    async def test_read_ac_coupling_both_polarities_preserves_sibling_decode(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Register 179 bit 11 decodes under the cloud parameter name.
+
+        The two raw words differ by exactly bit 11, so every sibling must
+        decode identically while AC coupling changes polarity.
+        """
+        mock_modbus_transport.read_parameters = AsyncMock(
+            side_effect=[{179: 0xAA55}, {179: 0xA255}]
+        )
+
+        enabled = await mock_modbus_transport.read_named_parameters(179, 1)
+        disabled = await mock_modbus_transport.read_named_parameters(179, 1)
+
+        assert enabled["FUNC_AC_COUPLING_FUNCTION"] is True
+        assert disabled["FUNC_AC_COUPLING_FUNCTION"] is False
+        assert {
+            key: value for key, value in enabled.items() if key != "FUNC_AC_COUPLING_FUNCTION"
+        } == {key: value for key, value in disabled.items() if key != "FUNC_AC_COUPLING_FUNCTION"}
+
+    @pytest.mark.asyncio
     async def test_read_named_parameters_unknown_register(
         self, mock_modbus_transport: ModbusTransport
     ) -> None:
@@ -187,6 +209,35 @@ class TestWriteNamedParametersModbus:
 
         assert result is True
         mock_modbus_transport.write_parameters.assert_called_once_with({161: 85})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("enabled", "current_word", "expected_word"),
+        [
+            (True, 0xA255, 0xAA55),
+            (False, 0xAA55, 0xA255),
+        ],
+    )
+    async def test_write_ac_coupling_rmw_preserves_every_sibling_bit(
+        self,
+        mock_modbus_transport: ModbusTransport,
+        enabled: bool,
+        current_word: int,
+        expected_word: int,
+    ) -> None:
+        """The named write changes bit 11 and no other register-179 bit."""
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={179: current_word})
+
+        result = await mock_modbus_transport.write_named_parameters(
+            {"FUNC_AC_COUPLING_FUNCTION": enabled}
+        )
+
+        assert result is True
+        mock_modbus_transport.write_parameters.assert_called_once_with({179: expected_word})
+        written_word = mock_modbus_transport.write_parameters.call_args.args[0][179]
+        assert written_word ^ current_word == 1 << 11
+        sibling_mask = 0xFFFF ^ (1 << 11)
+        assert written_word & sibling_mask == current_word & sibling_mask
 
     @pytest.mark.asyncio
     async def test_write_named_parameters_bit_field_single(

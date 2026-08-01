@@ -1702,7 +1702,13 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         api_param_key="FUNC_AC_COUPLING",
         ha_entity_key="ac_coupling",
         category=HoldingCategory.FUNCTION,
-        description="AC coupling enable.",
+        description=(
+            "AC coupling enable. The transport map carries the cloud name "
+            "FUNC_AC_COUPLING_FUNCTION; register 179 bit 11 comes from the "
+            "matching Luxpower/lxp_modbus layouts plus reporter use and "
+            "named-read correlation, while the strict raw-to-named lockstep "
+            "toggle remains outstanding in eg4_web_monitor#472."
+        ),
     ),
     HoldingRegisterDefinition(
         address=179,

@@ -57,11 +57,25 @@ class TestReg179Bitfield:
         assert reg.ha_entity_key == "battery_discharge_control"
 
     def test_ac_coupling_bit11(self) -> None:
+        from pylxpweb.constants import (
+            FUNC_EXT_BIT_AC_COUPLING,
+            FUNC_EXT_REGISTER,
+            REGISTER_TO_PARAM_KEYS,
+        )
+        from pylxpweb.constants.registers import get_register_to_param_mapping
+
         reg = BY_NAME["ac_coupling_enable"]
         assert reg.address == 179
         assert reg.bit_position == 11
         assert reg.api_param_key == "FUNC_AC_COUPLING"
         assert reg.ha_entity_key == "ac_coupling"
+        assert FUNC_EXT_REGISTER == 179
+        assert FUNC_EXT_BIT_AC_COUPLING == 11
+        assert REGISTER_TO_PARAM_KEYS[179].index("FUNC_AC_COUPLING_FUNCTION") == 11
+
+        offgrid_mapping = get_register_to_param_mapping("EG4_OFFGRID")
+        assert offgrid_mapping[179][11] == "FUNC_AC_COUPLING_FUNCTION"
+        assert offgrid_mapping[179] is not REGISTER_TO_PARAM_KEYS[179]
 
     def test_smart_load_bit13(self) -> None:
         reg = BY_NAME["smart_load_enable"]

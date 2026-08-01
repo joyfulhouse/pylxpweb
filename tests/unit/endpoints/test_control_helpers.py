@@ -107,6 +107,7 @@ class TestFunctionStatusHelpers:
             ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
             ("get_feed_in_grid_status", 21, "FUNC_FEED_IN_GRID_EN"),
             ("get_pv_sell_to_grid_status", 179, "FUNC_PV_SELL_TO_GRID_EN"),
+            ("get_inverter_ac_couple_status", 179, "FUNC_AC_COUPLING_FUNCTION"),
             ("get_fast_zero_export_status", 110, "FUNC_RUN_WITHOUT_GRID"),
         ],
     )
@@ -133,6 +134,7 @@ class TestFunctionStatusHelpers:
             ("get_sporadic_charge_status", 233, "FUNC_SPORADIC_CHARGE"),
             ("get_feed_in_grid_status", 21, "FUNC_FEED_IN_GRID_EN"),
             ("get_pv_sell_to_grid_status", 179, "FUNC_PV_SELL_TO_GRID_EN"),
+            ("get_inverter_ac_couple_status", 179, "FUNC_AC_COUPLING_FUNCTION"),
             ("get_fast_zero_export_status", 110, "FUNC_RUN_WITHOUT_GRID"),
         ],
     )

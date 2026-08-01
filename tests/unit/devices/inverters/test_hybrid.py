@@ -2354,6 +2354,91 @@ class TestPVSellToGridDualPath:
         mock_client.api.control.enable_pv_sell_to_grid.assert_called_once_with("52842P0581")
 
 
+class TestACCoupleDualPath:
+    """Inverter AC coupling — register 179 bit 11 dual-path control."""
+
+    def _transport_inverter(self, client: LuxpowerClient) -> HybridInverter:
+        return HybridInverter(
+            client=client,
+            serial_number="52842P0581",
+            model="FlexBOSS21",
+            transport=Mock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_transport_status_reads_bit11(self, mock_client: LuxpowerClient) -> None:
+        inverter = self._transport_inverter(mock_client)
+
+        inverter.read_transport_register = AsyncMock(return_value=0xAA55)
+        assert await inverter.get_ac_couple_status() is True
+
+        inverter.read_transport_register = AsyncMock(return_value=0xA255)
+        assert await inverter.get_ac_couple_status() is False
+
+    @pytest.mark.asyncio
+    async def test_transport_set_performs_sibling_preserving_rmw(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        inverter = self._transport_inverter(mock_client)
+        inverter.read_transport_register = AsyncMock(return_value=0xA255)
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        assert await inverter.set_ac_couple(True) is True
+
+        inverter.read_transport_register.assert_awaited_once_with(179)
+        inverter.write_transport_register.assert_awaited_once_with(179, 0xAA55)
+
+    @pytest.mark.asyncio
+    async def test_cloud_status_reads_named_parameter(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="52842P0581", model="FlexBOSS21"
+        )
+        mock_client.api.control.read_parameters = AsyncMock(
+            return_value=_cloud_read_response(FUNC_AC_COUPLING_FUNCTION=True)
+        )
+
+        assert await inverter.get_ac_couple_status() is True
+
+        mock_client.api.control.read_parameters.assert_awaited_once_with("52842P0581", 179, 1)
+
+    @pytest.mark.asyncio
+    async def test_cloud_set_uses_function_control(self, mock_client: LuxpowerClient) -> None:
+        inverter = HybridInverter(
+            client=mock_client, serial_number="52842P0581", model="FlexBOSS21"
+        )
+        mock_client.api.control.control_function = AsyncMock(return_value=_cloud_success())
+
+        assert await inverter.set_ac_couple(False) is True
+
+        mock_client.api.control.control_function.assert_awaited_once_with(
+            "52842P0581", "FUNC_AC_COUPLING_FUNCTION", False
+        )
+
+    @pytest.mark.asyncio
+    async def test_generic_inverter_uses_existing_cloud_helpers(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        from pylxpweb.devices.inverters.generic import GenericInverter
+
+        inverter = GenericInverter(
+            client=mock_client, serial_number="52842P0581", model="FlexBOSS21"
+        )
+        mock_client.api.control.set_inverter_ac_couple_enabled = AsyncMock(
+            return_value=_cloud_success()
+        )
+        mock_client.api.control.get_inverter_ac_couple_status = AsyncMock(return_value=True)
+
+        assert await inverter.set_ac_couple(True) is True
+        assert await inverter.get_ac_couple_status() is True
+
+        mock_client.api.control.set_inverter_ac_couple_enabled.assert_awaited_once_with(
+            "52842P0581", True
+        )
+        # The single-register function getter, NOT the three-range SOC-window
+        # read: one bool must not cost three HTTP range reads.
+        mock_client.api.control.get_inverter_ac_couple_status.assert_awaited_once_with("52842P0581")
+
+
 class TestStopDischargeVoltageOperations:
     """Forced-discharge stop voltage (reg 202, eg4-aa3t).
 

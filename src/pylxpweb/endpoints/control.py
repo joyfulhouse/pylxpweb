@@ -1278,6 +1278,32 @@ class ControlEndpoints(BaseEndpoint):
         """
         return await self._get_function_status(inverter_sn, 179, "FUNC_PV_SELL_TO_GRID_EN")
 
+    async def get_inverter_ac_couple_status(self, inverter_sn: str) -> bool:
+        """Get the inverter-level AC couple function status.
+
+        Reads register 179 (extended function enable) and extracts
+        FUNC_AC_COUPLING_FUNCTION — the bit-11 counterpart of
+        :meth:`get_pv_sell_to_grid_status`, one register read rather than the
+        three-range read :meth:`get_inverter_ac_couple_soc_limits` needs for
+        the SOC window beside it. Use that method instead when the SOC
+        thresholds are wanted too, or when an ABSENT parameter must stay
+        distinguishable from a real ``False`` — it returns ``None`` there,
+        whereas this boolean getter reads absent as ``False`` like every
+        other ``_get_function_status`` caller.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns:
+            bool: True if the AC couple function is enabled, False otherwise
+
+        Example:
+            >>> enabled = await client.control.get_inverter_ac_couple_status(
+            ...     "1234567890"
+            ... )
+        """
+        return await self._get_function_status(inverter_sn, 179, "FUNC_AC_COUPLING_FUNCTION")
+
     async def enable_fast_zero_export(
         self, inverter_sn: str, client_type: str = "WEB"
     ) -> SuccessResponse:
@@ -2506,11 +2532,10 @@ class ControlEndpoints(BaseEndpoint):
         wire name confirmed by two independent reporters in
         eg4_web_monitor#352).
 
-        Cloud-routed: the Luxpower doc places the param at holding register
-        179 bit 11 (candidate, see the reg-179 note in
-        ``constants/registers.py``), but the bit is not yet pinned by this
-        project's raw↔named lockstep standard — a local register path is a
-        follow-up once a live toggle verifies it.
+        This endpoint remains the cloud-specific route. ``HybridInverter``
+        also exposes a local register 179 bit 11 path based on the lineage
+        evidence in ``constants/registers.py``; eg4_web_monitor#472 tracks the
+        outstanding strict raw↔named lockstep capture.
 
         Args:
             inverter_sn: Inverter serial number

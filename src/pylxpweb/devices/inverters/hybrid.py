@@ -1158,6 +1158,47 @@ class HybridInverter(GenericInverter):
         return {"mode": mode, "value": soc_value, "unit": "%"}
 
     # ============================================================================
+    # AC Couple Operations (GH eg4_web_monitor#472)
+    # ============================================================================
+    # Register 179 bit 11 (FUNC_AC_COUPLING_FUNCTION). This local path ships
+    # on the lineage evidence recorded in constants/registers.py; the strict
+    # raw↔named lockstep toggle remains an outstanding #472 capture. These
+    # overrides give the cloud-only BaseInverter methods the same dual-path
+    # dispatch used by the other register-179 function controls.
+
+    async def get_ac_couple_status(self) -> bool:
+        """Get the inverter-level AC couple function status.
+
+        Reads register 179 bit 11 via the transport when one is attached,
+        otherwise via the cloud named-parameter read.
+
+        Returns:
+            True if AC coupling is enabled, False otherwise
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_AC_COUPLING, FUNC_EXT_REGISTER
+
+        return await self._get_register_bit(FUNC_EXT_REGISTER, FUNC_EXT_BIT_AC_COUPLING)
+
+    async def set_ac_couple(self, enabled: bool) -> bool:
+        """Enable or disable the inverter-level AC couple function.
+
+        Transport mode performs a read-modify-write on register 179 that
+        preserves every other function bit; cloud mode applies the named bit
+        server-side through the function-control API.
+
+        Args:
+            enabled: True to enable AC coupling, False to disable it
+
+        Returns:
+            True if successful
+        """
+        from pylxpweb.constants import FUNC_EXT_BIT_AC_COUPLING, FUNC_EXT_REGISTER
+
+        return await self._set_modbus_register_bit(
+            FUNC_EXT_REGISTER, FUNC_EXT_BIT_AC_COUPLING, enabled
+        )
+
+    # ============================================================================
     # PV Sell to Grid / Export PV Only Operations (GH eg4_web_monitor#135)
     # ============================================================================
     # Register 179 bit 3 (FUNC_PV_SELL_TO_GRID_EN, "Export PV Only" in the EG4

@@ -3264,6 +3264,44 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             return None
 
     # ============================================================================
+    # Inverter AC Couple Controls (GH eg4_web_monitor#472)
+    # ============================================================================
+
+    async def get_ac_couple_status(self) -> bool:
+        """Get the inverter-level AC couple function status via cloud API.
+
+        Single-register named read of 179 bit 11, mirroring
+        :meth:`get_pv_sell_to_grid_status`. An absent parameter reads False
+        here, as it does for every other boolean function getter; callers
+        that must tell "absent" from a real False want
+        ``control.get_inverter_ac_couple_soc_limits``, whose ``enabled`` is
+        tri-state. :class:`HybridInverter` overrides this cloud-only
+        implementation with dual-path access for attached local transports.
+
+        Returns:
+            True if the AC couple function is enabled, False otherwise
+        """
+        return await self._client.api.control.get_inverter_ac_couple_status(self.serial_number)
+
+    async def set_ac_couple(self, enabled: bool) -> bool:
+        """Enable or disable the inverter-level AC couple function via cloud API.
+
+        Delegates to the existing inverter AC-couple endpoint helper.
+        :class:`HybridInverter` overrides this method with dual-path register
+        179 bit 11 access for attached local transports.
+
+        Args:
+            enabled: True to enable AC coupling, False to disable it
+
+        Returns:
+            True if successful
+        """
+        result = await self._client.api.control.set_inverter_ac_couple_enabled(
+            self.serial_number, enabled
+        )
+        return result.success
+
+    # ============================================================================
     # Grid Sell Back / Export Controls (GH eg4_web_monitor#135)
     # ============================================================================
 
