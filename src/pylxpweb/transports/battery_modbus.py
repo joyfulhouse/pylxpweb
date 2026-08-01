@@ -620,6 +620,17 @@ class BatteryModbusTransport:
         # so its already-individual aggregate remains unchanged. After a removed
         # battery is absent for six hours it is evicted and re-decode resumes
         # against the remaining topology; this is intentional convergence (#249).
+        #
+        # KNOWN BOUNDARY -- auto-scan cold start. Topology memory cannot
+        # remember a unit it has never seen, so on a fresh transport with
+        # unit_ids=None whose first scan misses a unit, the remembered set is
+        # already short and this gate passes on incomplete topology. It is the
+        # original defect's shape in a narrow, self-healing window: the missing
+        # unit's first genuine response is remembered permanently, after which
+        # its silence blocks the gate like any other. Explicit unit_ids have no
+        # such window because the declared list seeds memory before the first
+        # read. Closing it would need a declared expected count, which is the
+        # configuration auto-scan exists to avoid.
         remembered_unit_ids = self._remembered_unit_ids()
         required_slave_ids = (
             remembered_unit_ids - {master_uid} if master_uid is not None else remembered_unit_ids

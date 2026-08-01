@@ -1609,6 +1609,89 @@ class TestReadAllWithSlaves:
         assert transport._evicted_units == {3}
 
     @pytest.mark.asyncio
+    async def test_auto_scan_cold_start_boundary_is_pinned_as_is(self) -> None:
+        """Auto-scan's first scan cannot protect against a unit never seen (#249).
+
+        Topology memory is built from observation, so a fresh transport with
+        unit_ids=None whose very first scan misses a unit has nothing to compare
+        against: the remembered set is already short and the re-decode gate
+        passes on incomplete topology.  This is the original defect's shape in a
+        narrow, self-healing window, and it is pinned deliberately rather than
+        fixed -- closing it would require a declared expected unit count, which
+        is exactly the configuration auto-scan exists to avoid.  The second half
+        of this test is the self-heal: once the missing unit answers even once,
+        it is remembered and its later silence blocks the gate.
+        """
+        transport = BatteryModbusTransport(host="10.100.3.27", max_units=3)
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+
+        with (
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+            patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0),
+        ):
+            transport._client.read_holding_registers = AsyncMock(
+                side_effect=[
+                    _mock_result([100]),  # scan: unit 1 answers
+                    _mock_result([100]),  # scan: unit 2 answers
+                    _mock_error(),  # scan: unit 3 silent on the very first scan
+                    _mock_result(_make_master_regs(soc=79, reg26=43700, reg27=56000)),
+                    _mock_result([3310] * 16),
+                    _mock_result(_make_slave_regs(soc=80, remaining=224)),
+                    _mock_result([0] * 23),
+                ]
+            )
+            cold = await transport.read_all()
+
+        # Boundary: the gate passed, because unit 3 was never observed.
+        assert cold[0].current_capacity == pytest.approx(213.0)
+        assert set(transport._unit_last_seen) == {1, 2}
+
+        # Self-heal: unit 3 answers once, so it joins remembered topology...
+        with (
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+            patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=2.0),
+        ):
+            transport._client.read_holding_registers = AsyncMock(
+                side_effect=[
+                    _mock_result([100]),
+                    _mock_result([100]),
+                    _mock_result([100]),  # unit 3 present this time
+                    _mock_result(_make_master_regs(soc=79, reg26=43700, reg27=56000)),
+                    _mock_result([3310] * 16),
+                    _mock_result(_make_slave_regs(soc=80, remaining=224)),
+                    _mock_result([0] * 23),
+                    _mock_result(_make_slave_regs(soc=80, remaining=223)),
+                    _mock_result([0] * 23),
+                ]
+            )
+            await transport.read_all()
+        assert set(transport._unit_last_seen) == {1, 2, 3}
+
+        # ...and from now on its silence keeps the master on the aggregate.
+        with (
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+            patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=3.0),
+        ):
+            transport._client.read_holding_registers = AsyncMock(
+                side_effect=[
+                    _mock_result([100]),
+                    _mock_result([100]),
+                    _mock_error(),  # unit 3 silent again, but now remembered
+                    _mock_result(_make_master_regs(soc=79, reg26=43700, reg27=56000)),
+                    _mock_result([3310] * 16),
+                    _mock_result(_make_slave_regs(soc=80, remaining=224)),
+                    _mock_result([0] * 23),
+                ]
+            )
+            healed = await transport.read_all()
+
+        assert healed[0].current_capacity is None
+        assert healed[0].soc == 79
+
+    @pytest.mark.asyncio
     async def test_returning_unit_is_readmitted_after_eviction(self) -> None:
         """A battery that comes back must rejoin topology and re-gate the master.
 
