@@ -37,11 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own wider budget (`busy_grace`, default 900s, bounded by `step_timeout`),
   because a component reboot can outlast the post-start visibility grace and
   giving up there strands the device mid-chain.
-- **An "already the latest version" refusal mid-chain is reported as
-  convergence**: if the check endpoint lags a successful final step past the
-  settle window, the no-progress grace can ask for one step too many; the
-  server's refusal is convergence, not an error to surface after a successful
-  update. Before any step, the same response still propagates — that is a
+- **An "already the latest version" refusal mid-chain no longer surfaces as a
+  raw error**: if the check endpoint lags a successful final step past the
+  settle window, the no-progress grace can ask for one step too many. The
+  refusal now triggers a forced re-check, and convergence is reported only if
+  that check agrees no update remains; otherwise the run reports a possible
+  partial upgrade with the real installed version, because the two endpoints
+  can genuinely disagree and a false success would hide exactly the failure
+  this fix is about. Before any step, the same response still propagates — that is a
   genuine disagreement between the check and run endpoints about a device we
   have not touched.
 

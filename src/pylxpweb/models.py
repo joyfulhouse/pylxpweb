@@ -1608,7 +1608,8 @@ class FirmwareUpdateRunResult(BaseModel):
         converged: Same signal as success for completed runs; False when the
             run stopped early (start refused, timeout, no progress, or step
             budget exhausted).
-        steps_run: Number of ``standardUpdate/run`` invocations issued.
+        steps_run: Number of update steps the server accepted (refused
+            busy retries are not counted).
         message: Human-readable outcome summary (safe to surface in UI/logs).
         final_version: The device's firmware code after the run, when known.
     """

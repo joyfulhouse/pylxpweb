@@ -62,10 +62,12 @@ class ScriptedDevice(FirmwareUpdateMixin):
         self.start_calls = 0
         self.check_calls = 0
         self.eligibility_calls = 0
+        self.check_force_flags: list[bool] = []
 
     # Scripted overrides -------------------------------------------------
     async def check_firmware_updates(self, force: bool = False) -> FirmwareUpdateInfo:
         self.check_calls += 1
+        self.check_force_flags.append(force)
         return self._checks.pop(0)
 
     async def get_firmware_update_progress(self, force: bool = False) -> FirmwareUpdateInfo:
@@ -733,6 +735,9 @@ async def test_mid_chain_already_latest_start_error_reports_convergence() -> Non
     assert result.steps_run == 1
     assert device.start_calls == 2  # the refusal really was exercised
     assert result.final_version == "ccaa-1E1515"
+    # The confirming re-check must bypass the 24h check cache, or it would
+    # simply replay the stale pre-step answer it is meant to supersede.
+    assert device.check_force_flags and all(device.check_force_flags)
 
 
 @pytest.mark.asyncio

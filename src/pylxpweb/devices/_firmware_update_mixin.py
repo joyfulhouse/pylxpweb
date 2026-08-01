@@ -589,8 +589,10 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             try_fast_mode: Attempt fast update mode on each run.
             poll_interval: Seconds between progress polls while a step is
                 installing.
-            max_steps: Upper bound on ``standardUpdate/run`` invocations
-                (the API defines steps 2-5, so 5 covers every known chain).
+            max_steps: Upper bound on ACCEPTED update steps (the API defines
+                steps 2-5, so 5 covers every known chain). Busy retries can
+                issue additional ``standardUpdate/run`` POSTs beyond this,
+                but a refused call installs nothing.
             step_timeout: Seconds to wait for a single step to finish
                 installing before aborting.
             start_grace: Seconds to keep polling for the update to become
@@ -661,11 +663,13 @@ class FirmwareUpdateMixin(_FirmwareMixinBase):
             return "busy" in message or "updating" in message
 
         def _is_already_latest_error(err: LuxpowerAPIError) -> bool:
-            # ``standardUpdate/run`` refuses a converged device with the same
-            # "already the latest version" prose the check endpoint uses. That
-            # is convergence, not a failure — reachable when the check endpoint
-            # lags a successful final step past the settle window and the
+            # ``standardUpdate/run`` refuses a device it considers converged
+            # with the same "already the latest version" prose the check
+            # endpoint uses. Reachable when the check endpoint lags a
+            # successful final step past the settle window and the
             # no-progress grace lets the loop ask for one step too many.
+            # The refusal alone does NOT establish convergence — the caller
+            # confirms with a forced re-check before reporting success.
             message = str(err).casefold()
             return any(stem in message for stem in FIRMWARE_UP_TO_DATE_MESSAGES)
 
