@@ -2430,7 +2430,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             FUNC_EN_REGISTER, FUNC_EN_BIT_SET_TO_STANDBY, enabled=not standby
         )
 
-        # Invalidate parameter cache on successful write
+        # _set_modbus_register_bit already invalidated on both routes; this
+        # re-invalidation is redundant but harmless (the generation counter is
+        # an ordering token, not a write count) and is kept deliberately so the
+        # invalidation survives any future change to that helper's contract.
         if result:
             self._invalidate_parameters_cache()
 
