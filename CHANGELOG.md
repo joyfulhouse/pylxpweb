@@ -20,12 +20,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ccaa-1E1515`, [eg4_web_monitor#353](https://github.com/joyfulhouse/eg4_web_monitor/issues/353)).
   `run_firmware_update_to_completion` now tolerates a bounded number of
   consecutive steps that ran without changing the version
-  (`no_progress_grace`, default 1),
-  and only when the step was actually observed installing and did not report
-  FAILED. A genuinely stuck device still stops, and accepted update steps stay
-  bounded by `max_steps`. The `needRunStep2..5` flags are logged (not used as a gate —
-  their firmware semantics remain unverified) so the next field report
-  captures them.
+  (`no_progress_grace`, **default 2**), and only when that step's OWN start was
+  observed installing — evidence attributed to our start POST, not any
+  in-progress row for the serial, since a leftover row from an earlier run
+  reads identically — and did not report FAILED. **Honest residual: this
+  converges only while the server does not select more than
+  `no_progress_grace` already-current components in a row.** The default is 2
+  rather than 1 because a device can have several already-current components
+  and the server picks the order; with 1, a device whose first two selections
+  are already-current fails with the identical symptom one step later. The
+  same number sets the blind-reflash exposure on a genuinely stuck device:
+  `no_progress_grace + 1` accepted writes (3). A step only counts as progress
+  if it reaches a version state not already seen in this run, so a check
+  endpoint flapping between two stale snapshots cannot reset the grace
+  indefinitely. Accepted update steps stay bounded by `max_steps`, and refused
+  starts are separately capped per step so the write endpoint cannot be called
+  without bound inside the busy budget. The `needRunStep2..5` flags are logged
+  (not used as a gate — their firmware semantics remain unverified) so the next
+  field report captures them.
+- **Convergence now requires evidence, not just the absence of an update**:
+  "no update available" was treated as success, and an empty installed version
+  in the up-to-date sentinel was backfilled with the target — so a device still
+  sitting on the old firmware could be reported as successfully updated to a
+  version it never reached, silently reintroducing the partial upgrade this
+  release exists to fix. Convergence now requires a concrete installed version
+  equal to the target the run set out to reach (pinned from the first check, so
+  a later answer cannot redefine the goal); anything else is reported as a
+  possible partial upgrade with only what is actually known.
 - **A device that is busy before the update starts now fails fast**: busy
   tolerance was introduced for inter-component settling of a chain already in
   flight, but it also applied before the first step, so a device still
@@ -36,7 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shortly. The deliberate mid-chain tolerance is unchanged and now runs on its
   own wider budget (`busy_grace`, default 900s, bounded by `step_timeout`),
   because a component reboot can outlast the post-start visibility grace and
-  giving up there strands the device mid-chain.
+  giving up there strands the device mid-chain. Busy classification is now
+  matched against the known busy codes instead of any message containing
+  "updating": a permanent failure like "Failed updating firmware: invalid
+  checksum" was being retried for the whole budget and then reported as "device
+  remained busy", burying the real cause — which mattered more once that budget
+  tripled. A structurally permanent eligibility refusal (`notAllowedInParallel`)
+  is likewise surfaced at once instead of polled, since waiting cannot clear it.
 - **An "already the latest version" refusal mid-chain no longer surfaces as a
   raw error**: if the check endpoint lags a successful final step past the
   settle window, the no-progress grace can ask for one step too many. The

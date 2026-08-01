@@ -12,9 +12,18 @@ import asyncio
 
 import pytest
 
-from pylxpweb.devices._firmware_update_mixin import FirmwareUpdateMixin
+from pylxpweb.devices._firmware_update_mixin import (
+    _MAX_START_ATTEMPTS_PER_STEP,
+    FirmwareUpdateMixin,
+)
 from pylxpweb.exceptions import LuxpowerAPIError
-from pylxpweb.models import FirmwareUpdateInfo
+from pylxpweb.models import (
+    FirmwareDeviceInfo,
+    FirmwareUpdateInfo,
+    UpdateEligibilityMessage,
+    UpdateEligibilityStatus,
+    UpdateStatus,
+)
 
 
 def _info(
@@ -38,6 +47,33 @@ def _info(
     )
 
 
+def _row(
+    *,
+    start_time: str,
+    in_progress: bool,
+    serial: str = "4413740117",
+) -> FirmwareDeviceInfo:
+    """A ``remoteUpdate/info`` row, in-progress or idle.
+
+    ``startTime`` is the only field that distinguishes one update run from the
+    next, which is what lets the orchestrator tell its own step's activity
+    from a leftover row (the stale-evidence guard).
+    """
+    return FirmwareDeviceInfo(
+        inverterSn=serial,
+        startTime=start_time,
+        stopTime="" if in_progress else "2026-08-01 10:00:00",
+        standardUpdate=True,
+        firmware="ccaa-1E1415",
+        firmwareType="STANDARD",
+        updateStatus=UpdateStatus.UPLOADING if in_progress else UpdateStatus.COMPLETE,
+        isSendStartUpdate=True,
+        isSendEndUpdate=not in_progress,
+        packageIndex=1,
+        updateRate="50% - 280 / 561" if in_progress else "",
+    )
+
+
 class ScriptedDevice(FirmwareUpdateMixin):
     """Mixin host with scripted firmware API responses."""
 
@@ -47,8 +83,9 @@ class ScriptedDevice(FirmwareUpdateMixin):
         checks: list[FirmwareUpdateInfo],
         progresses: list[FirmwareUpdateInfo] | None = None,
         start_results: list[bool | LuxpowerAPIError] | None = None,
-        eligibility: list[bool | LuxpowerAPIError] | None = None,
+        eligibility: list[bool | LuxpowerAPIError | UpdateEligibilityMessage] | None = None,
         failed_statuses: list[bool] | None = None,
+        status_rows: list[FirmwareDeviceInfo | None] | None = None,
     ) -> None:
         self._init_firmware_update_cache()
         # The orchestrator logs against the host's serial (issue #353 chain
@@ -59,6 +96,14 @@ class ScriptedDevice(FirmwareUpdateMixin):
         self._start_results = start_results or []
         self._eligibility = eligibility or []
         self._failed_statuses = failed_statuses or []
+        # When None, status rows are SYNTHESISED to model a well-behaved
+        # server: each accepted start opens a new record (a fresh startTime),
+        # and the row is in-progress whenever the last progress poll was.
+        # Tests that need a misbehaving server (a stale row that never
+        # changes) script the rows explicitly.
+        self._status_rows = status_rows
+        self._run_seq = 0
+        self._last_progress_in_progress = False
         self.start_calls = 0
         self.check_calls = 0
         self.eligibility_calls = 0
@@ -71,9 +116,9 @@ class ScriptedDevice(FirmwareUpdateMixin):
         return self._checks.pop(0)
 
     async def get_firmware_update_progress(self, force: bool = False) -> FirmwareUpdateInfo:
-        if self._progresses:
-            return self._progresses.pop(0)
-        return _info("X-0000", "X-0000")
+        info = self._progresses.pop(0) if self._progresses else _info("X-0000", "X-0000")
+        self._last_progress_in_progress = info.in_progress
+        return info
 
     async def start_firmware_update(self, try_fast_mode: bool = False) -> bool:
         self.start_calls += 1
@@ -81,17 +126,39 @@ class ScriptedDevice(FirmwareUpdateMixin):
             result = self._start_results.pop(0)
             if isinstance(result, LuxpowerAPIError):
                 raise result
+            if result:
+                self._run_seq += 1
             return result
+        self._run_seq += 1
         return True
 
-    async def check_update_eligibility(self) -> bool:
+    async def _update_eligibility_status(self) -> UpdateEligibilityStatus:
         self.eligibility_calls += 1
+        result: bool | LuxpowerAPIError | UpdateEligibilityMessage = True
         if self._eligibility:
             result = self._eligibility.pop(0)
-            if isinstance(result, LuxpowerAPIError):
-                raise result
-            return result
-        return True
+        if isinstance(result, LuxpowerAPIError):
+            raise result
+        if isinstance(result, UpdateEligibilityMessage):
+            return UpdateEligibilityStatus(success=True, msg=result)
+        return UpdateEligibilityStatus(
+            success=True,
+            msg=(
+                UpdateEligibilityMessage.ALLOW_TO_UPDATE
+                if result
+                # Not-allowed defaults to the TRANSIENT code: a permanent
+                # refusal has its own message and its own tests.
+                else UpdateEligibilityMessage.DEVICE_UPDATING
+            ),
+        )
+
+    async def _current_status_row(self) -> FirmwareDeviceInfo | None:
+        if self._status_rows is not None:
+            return self._status_rows.pop(0) if self._status_rows else None
+        return _row(
+            start_time=f"run-{self._run_seq}",
+            in_progress=self._last_progress_in_progress,
+        )
 
     async def _update_step_reported_failed(self) -> bool:
         if self._failed_statuses:
@@ -147,7 +214,10 @@ async def test_start_refused_reports_failure() -> None:
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
     assert not result.success and not result.converged
-    assert result.steps_run == 1
+    # steps_run counts steps the SERVER ACCEPTED. A refused start installed
+    # nothing, so it must not be counted — the docstring and
+    # FirmwareUpdateRunResult both promise that.
+    assert result.steps_run == 0
     assert "refused" in result.message
 
 
@@ -270,14 +340,12 @@ async def test_no_start_write_fires_after_deadline_on_retry() -> None:
     start write may fire past it — the budget is a hard bound on retry writes."""
 
     class SlowRetryEligibilityDevice(ScriptedDevice):
-        elig_calls = 0
-
-        async def check_update_eligibility(self) -> bool:
-            self.elig_calls += 1
-            if self.elig_calls >= 3:
+        async def _update_eligibility_status(self) -> UpdateEligibilityStatus:
+            status = await super()._update_eligibility_status()
+            if self.eligibility_calls >= 3:
                 # the step-2 retry probe runs long, past the tiny budget
                 await asyncio.sleep(0.2)
-            return True
+            return status
 
     device = SlowRetryEligibilityDevice(
         checks=[STEP1_PENDING, STEP2_PENDING],
@@ -499,17 +567,39 @@ def test_scripted_device_is_mixin() -> None:
 
 
 @pytest.mark.asyncio
-async def test_converged_final_version_survives_up_to_date_sentinel() -> None:
-    """When the post-step check answers with the bare 'already latest'
-    sentinel (empty version strings), the result reports the target we
-    converged to, not an empty string (agy review finding)."""
+async def test_up_to_date_sentinel_alone_is_not_convergence() -> None:
+    """An empty 'already latest' sentinel must NOT be reported as success.
+
+    This test previously asserted the opposite: that the remembered target be
+    substituted for the sentinel's empty installed_version. That is precisely
+    how a partially upgraded device could be reported as converged on a
+    version it never reached — the failure this whole change exists to
+    prevent, with the evidence blanked out. "No update available" is
+    necessary but not sufficient; convergence needs a concrete installed
+    version matching the target.
+    """
     sentinel = _info("", "")  # create_up_to_date shape: both fields empty
     device = ScriptedDevice(checks=[STEP2_PENDING, sentinel])
 
     result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
 
-    assert result.success and result.converged
-    assert result.final_version == "ccaa-1E1515"
+    assert not result.success and not result.converged
+    assert result.final_version is None
+    assert "partially upgraded" in result.message
+
+
+@pytest.mark.asyncio
+async def test_convergence_requires_the_target_version() -> None:
+    """A check that reports no update while still on the OLD version is not
+    convergence either — it is the indeterminate case, reported honestly."""
+    stale = _info("ccaa-1E1415", "ccaa-1E1415")  # no update "available", old version
+    device = ScriptedDevice(checks=[STEP2_PENDING, stale])
+
+    result = await device.run_firmware_update_to_completion(poll_interval=0, start_grace=0)
+
+    assert not result.success and not result.converged
+    assert result.final_version == "ccaa-1E1415"  # what it actually reports
+    assert "ccaa-1E1515" in result.message  # the target it could not confirm
 
 
 @pytest.mark.asyncio
@@ -582,7 +672,7 @@ async def test_no_progress_grace_is_not_unlimited() -> None:
     )
 
     result = await device.run_firmware_update_to_completion(
-        poll_interval=0, start_grace=60, settle_checks=0
+        poll_interval=0, start_grace=60, settle_checks=0, no_progress_grace=1
     )
 
     assert not result.success and not result.converged
@@ -699,14 +789,17 @@ async def test_pre_flight_busy_does_not_wait_out_the_budget() -> None:
         eligibility=[LuxpowerAPIError("deviceBusy")],
     )
 
-    started = asyncio.get_running_loop().time()
     result = await device.run_firmware_update_to_completion(
         poll_interval=30, start_grace=300, busy_grace=900
     )
-    elapsed = asyncio.get_running_loop().time() - started
 
+    # Structural, not wall-clock: the point is that it does not RETRY, and a
+    # timing assertion would both flake under load and pass for the wrong
+    # reason if the retry loop were merely fast.
     assert not result.success
-    assert elapsed < 1.0  # not the 900s budget, and not one 30s backoff
+    assert device.eligibility_calls == 1
+    assert device.start_calls == 0
+    assert result.steps_run == 0
 
 
 def _already_latest() -> LuxpowerAPIError:
@@ -815,3 +908,242 @@ async def test_saw_in_progress_does_not_leak_across_steps() -> None:
     assert result.steps_run == 2
     assert device.start_calls == 2  # no third write
     assert "No firmware version progress after step 2" in result.message
+
+
+# --- Tri-model review round (PR #256) --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_default_config_survives_two_already_current_components() -> None:
+    """The eode case with DEFAULT settings, one component deeper.
+
+    A device can have more than one component already at the target and the
+    server picks the order. With a grace of 1 this fails with the VERBATIM
+    #353 symptom one step later, which is why the default is 2. No explicit
+    no_progress_grace here on purpose: this pins the SHIPPED default.
+    """
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, STEP2_PENDING, STEP2_PENDING, UP_TO_DATE],
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 3,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=60, settle_checks=0
+    )
+
+    assert result.success and result.converged
+    assert result.steps_run == 3
+    assert result.final_version == "ccaa-1E1515"
+
+
+@pytest.mark.asyncio
+async def test_default_grace_still_stops_a_stuck_device() -> None:
+    """The default grace is 2, so a stuck device costs 3 accepted writes and
+    then stops. That coupling (grace + 1) is the blind-reflash bound."""
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING] * 6,
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 6,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=60, settle_checks=0
+    )
+
+    assert not result.success
+    assert device.start_calls == 3  # grace(2) + 1, well inside max_steps
+    assert result.steps_run == 3
+
+
+@pytest.mark.asyncio
+async def test_stale_installing_row_does_not_buy_the_grace() -> None:
+    """A leftover in-progress row must not forge the grace's evidence.
+
+    The aggregated progress flag matches ANY in-progress row for the serial.
+    A device whose previous run left an UPLOADING row would look "installing"
+    for a step the server never ran, spending real firmware writes on the
+    strength of someone else's status. Only evidence that appeared or
+    transitioned after our start POST counts.
+    """
+    stale = _row(start_time="run-from-yesterday", in_progress=True)
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING] * 4,
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 4,
+        # Same row, unchanged, before and after our start: stale.
+        status_rows=[stale] * 8,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=60, settle_checks=0
+    )
+
+    assert not result.success
+    assert device.start_calls == 1  # grace refused, no second blind write
+    assert "No firmware version progress after step 1" in result.message
+
+
+@pytest.mark.asyncio
+async def test_fresh_row_after_our_start_does_buy_the_grace() -> None:
+    """The complement: a row whose startTime changes after our POST is ours."""
+    before_start = _row(start_time="run-1", in_progress=False)
+    ours = _row(start_time="run-2", in_progress=True)
+    device = ScriptedDevice(
+        checks=[STEP2_PENDING, STEP2_PENDING, UP_TO_DATE],
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 2,
+        status_rows=[before_start, ours, before_start, ours],
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=60, settle_checks=0
+    )
+
+    assert result.success and result.converged
+    assert device.start_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_flapping_check_data_does_not_reset_the_grace() -> None:
+    """Alternating stale snapshots are not progress.
+
+    A check endpoint flapping between two states it has already reported is
+    not the device advancing. Counting each flap as movement reset the grace
+    every time and spent the entire step budget on blind reflashes.
+    """
+    a = _info("ccaa-1E1413", "ccaa-1E1515", app_current=0x14, param_current=0x13)
+    b = _info("ccaa-1E1414", "ccaa-1E1515", app_current=0x14, param_current=0x14)
+    device = ScriptedDevice(
+        checks=[a, b, a, b, a, b, a, b],
+        progresses=[NOOP_INSTALLING, NOOP_DONE] * 8,
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=60, settle_checks=0
+    )
+
+    assert not result.success
+    # a->b is genuine novelty once; every later flap revisits a seen state.
+    assert device.start_calls <= 4
+    assert result.steps_run <= 4
+
+
+@pytest.mark.asyncio
+async def test_permanent_eligibility_denial_surfaces_immediately() -> None:
+    """notAllowedInParallel will never clear; do not poll it for 15 minutes."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP2_PENDING, STEP2_PENDING],
+        progresses=[NOOP_INSTALLING, NOOP_DONE],
+        eligibility=[
+            UpdateEligibilityMessage.ALLOW_TO_UPDATE,
+            UpdateEligibilityMessage.NOT_ALLOWED_IN_PARALLEL,
+        ],
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, busy_grace=600, settle_checks=0
+    )
+
+    assert not result.success and not result.converged
+    assert device.start_calls == 1  # step 1 only; step 2 never attempted
+    assert device.eligibility_calls == 2  # probed once, not re-polled
+    assert "notAllowedInParallel" in result.message
+    assert "will not clear" in result.message
+
+
+@pytest.mark.asyncio
+async def test_transient_denial_is_still_waited_out() -> None:
+    """The complement: deviceUpdating IS transient and must still be retried."""
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP2_PENDING, UP_TO_DATE],
+        eligibility=[
+            UpdateEligibilityMessage.ALLOW_TO_UPDATE,
+            UpdateEligibilityMessage.DEVICE_UPDATING,
+            UpdateEligibilityMessage.ALLOW_TO_UPDATE,
+        ],
+    )
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, busy_grace=60, settle_checks=0
+    )
+
+    assert result.success and result.converged
+    assert device.start_calls == 2
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Failed updating firmware: invalid checksum",
+        "Error updating firmware image",
+    ],
+)
+@pytest.mark.asyncio
+async def test_permanent_failure_mentioning_updating_is_not_busy(message: str) -> None:
+    """A bare "updating" substring is not a busy signal.
+
+    The loose matcher classified these as transient, so a permanent failure
+    was retried for the whole busy budget and then reported as "device
+    remained busy" — burying the real cause. They must propagate.
+    """
+    device = ScriptedDevice(
+        checks=[STEP1_PENDING, STEP2_PENDING],
+        start_results=[True, LuxpowerAPIError(message)],
+    )
+
+    with pytest.raises(LuxpowerAPIError, match="updating"):
+        await device.run_firmware_update_to_completion(
+            poll_interval=0, start_grace=0, busy_grace=60, settle_checks=0
+        )
+
+
+@pytest.mark.asyncio
+async def test_refused_starts_are_capped_per_step() -> None:
+    """The busy budget bounds elapsed time, not request count.
+
+    With a small backoff and a long budget, an always-busy device could hammer
+    the WRITE endpoint indefinitely. Cap the POSTs per step explicitly.
+    """
+
+    class AlwaysBusyAfterFirstStep(ScriptedDevice):
+        async def start_firmware_update(self, try_fast_mode: bool = False) -> bool:
+            self.start_calls += 1
+            if self.start_calls == 1:
+                self._run_seq += 1
+                return True
+            raise LuxpowerAPIError("deviceBusy")
+
+    device = AlwaysBusyAfterFirstStep(checks=[STEP1_PENDING, STEP2_PENDING])
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0, start_grace=0, busy_grace=600, settle_checks=0
+    )
+
+    assert not result.success
+    # step 1 accepted + the per-step cap on step 2, and no more.
+    assert device.start_calls == 1 + _MAX_START_ATTEMPTS_PER_STEP
+    assert "consecutive attempts" in result.message
+
+
+@pytest.mark.asyncio
+async def test_small_positive_poll_interval_does_not_hot_loop() -> None:
+    """A tiny poll_interval must not slip past the backoff floor.
+
+    The floor used to apply only to exactly 0, so 0.001 hot-looped the API.
+    """
+
+    class BusyMidChain(ScriptedDevice):
+        async def start_firmware_update(self, try_fast_mode: bool = False) -> bool:
+            self.start_calls += 1
+            if self.start_calls == 1:
+                self._run_seq += 1
+                return True
+            raise LuxpowerAPIError("deviceBusy")
+
+    device = BusyMidChain(checks=[STEP1_PENDING, STEP2_PENDING])
+
+    result = await device.run_firmware_update_to_completion(
+        poll_interval=0.001, start_grace=0, busy_grace=0.3, settle_checks=0
+    )
+
+    assert not result.success
+    # At a 0.05s floor, a 0.3s budget allows a handful of attempts — not the
+    # hundreds an unfloored 0.001s interval would have issued.
+    assert device.start_calls <= 1 + _MAX_START_ATTEMPTS_PER_STEP
