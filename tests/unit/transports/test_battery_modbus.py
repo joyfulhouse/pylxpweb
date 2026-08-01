@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +16,7 @@ from pylxpweb.transports.battery_modbus import (
     _INITIAL_BLOCK_COUNT,
     _MIN_INITIAL_REGISTERS,
     _PROTOCOL_MAP,
+    _UNIT_TOPOLOGY_RETENTION,
     BatteryModbusTransport,
     _initial_block_requirement,
 )
@@ -166,6 +168,57 @@ class TestBatteryModbusTransportConnect:
             await transport.connect()
 
         assert transport.is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_connect_waits_for_in_flight_read(self) -> None:
+        """A public connect cannot replace the client between read blocks (#248)."""
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[2])
+        original_client = AsyncMock()
+        original_client.connected = True
+        original_client.close = MagicMock()
+        transport._client = original_client
+        transport._connected = True
+
+        first_block_started = asyncio.Event()
+        release_first_block = asyncio.Event()
+        original_calls = 0
+
+        async def read_original_block(*_args: object, **_kwargs: object) -> MagicMock:
+            nonlocal original_calls
+            original_calls += 1
+            if original_calls == 1:
+                first_block_started.set()
+                await release_first_block.wait()
+                return _mock_result(_make_slave_regs())
+            return _mock_result([0] * 23)
+
+        original_client.read_holding_registers = AsyncMock(side_effect=read_original_block)
+
+        replacement_client = AsyncMock()
+        replacement_client.connected = True
+        replacement_client.connect = AsyncMock()
+        replacement_client.close = MagicMock()
+        replacement_client.read_holding_registers = AsyncMock(return_value=_mock_result([0] * 23))
+
+        with patch(
+            "pylxpweb.transports.battery_modbus.AsyncModbusTcpClient",
+            return_value=replacement_client,
+        ):
+            read_task = asyncio.create_task(transport.read_unit(2))
+            await asyncio.wait_for(first_block_started.wait(), timeout=1.0)
+
+            connect_task = asyncio.create_task(transport.connect())
+            await asyncio.sleep(0)
+            connect_interleaved = connect_task.done()
+
+            release_first_block.set()
+            data = await asyncio.wait_for(read_task, timeout=1.0)
+            await asyncio.wait_for(connect_task, timeout=1.0)
+
+        assert connect_interleaved is False
+        assert data is not None
+        assert original_client.read_holding_registers.await_count == 2
+        replacement_client.read_holding_registers.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_disconnect(self, connected_transport: BatteryModbusTransport) -> None:
@@ -962,10 +1015,10 @@ class TestBatteryModbusTransportHealth:
         assert connected_transport._degraded_units == {2}
 
     @pytest.mark.asyncio
-    async def test_successful_reconnect_resets_counter(
+    async def test_successful_reconnect_completes_without_deadlock_and_resets_counter(
         self, connected_transport: BatteryModbusTransport
     ) -> None:
-        """Only a genuinely connected replacement client resets the error gate."""
+        """Locked reconnect completes and a connected client resets the gate (#248)."""
         connected_transport._client.read_holding_registers = AsyncMock(
             side_effect=[
                 _mock_error(),
@@ -984,9 +1037,11 @@ class TestBatteryModbusTransportHealth:
         )
 
         async def disconnect_side_effect() -> None:
+            assert connected_transport._operation_lock.locked()
             connected_transport._connected = False
 
         async def connect_side_effect() -> None:
+            assert connected_transport._operation_lock.locked()
             connected_transport._connected = True
             assert connected_transport._client is not None
             connected_transport._client.connected = True
@@ -994,16 +1049,16 @@ class TestBatteryModbusTransportHealth:
         with (
             patch.object(
                 connected_transport,
-                "disconnect",
+                "_disconnect_locked",
                 new=AsyncMock(side_effect=disconnect_side_effect),
             ) as disconnect,
             patch.object(
                 connected_transport,
-                "connect",
+                "_connect_locked",
                 new=AsyncMock(side_effect=connect_side_effect),
             ) as connect,
         ):
-            data = await connected_transport.read_unit(2)
+            data = await asyncio.wait_for(connected_transport.read_unit(2), timeout=1.0)
 
         assert data is not None
         disconnect.assert_awaited_once()
@@ -1019,10 +1074,10 @@ class TestBatteryModbusTransportHealth:
         connected_transport._connected = False
 
         with (
-            patch.object(connected_transport, "disconnect", new_callable=AsyncMock),
+            patch.object(connected_transport, "_disconnect_locked", new_callable=AsyncMock),
             patch.object(
                 connected_transport,
-                "connect",
+                "_connect_locked",
                 new=AsyncMock(return_value=False),
             ) as connect,
             patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0),
@@ -1044,10 +1099,10 @@ class TestBatteryModbusTransportHealth:
         connected_transport._client.read_holding_registers = AsyncMock(return_value=_mock_error())
 
         with (
-            patch.object(connected_transport, "disconnect", new_callable=AsyncMock),
+            patch.object(connected_transport, "_disconnect_locked", new_callable=AsyncMock),
             patch.object(
                 connected_transport,
-                "connect",
+                "_connect_locked",
                 new=AsyncMock(side_effect=OSError("bridge down")),
             ),
             patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0),
@@ -1066,15 +1121,18 @@ class TestBatteryModbusTransportHealth:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A small monotonic value permits attempt one, then cooldown/dedup apply."""
+        assert connected_transport._reconnect_retry_after is None
         connected_transport._consecutive_errors = connected_transport._max_consecutive_errors
         connected_transport._connected = False
 
         with (
             caplog.at_level(logging.DEBUG),
-            patch.object(connected_transport, "disconnect", new_callable=AsyncMock) as disconnect,
+            patch.object(
+                connected_transport, "_disconnect_locked", new_callable=AsyncMock
+            ) as disconnect,
             patch.object(
                 connected_transport,
-                "connect",
+                "_connect_locked",
                 new=AsyncMock(return_value=False),
             ) as connect,
             patch(
@@ -1342,6 +1400,247 @@ class TestReadAllWithSlaves:
         assert len(results) == 2
         assert results[0].soc == 79
         assert results[0].current_capacity is None
+
+    @pytest.mark.asyncio
+    async def test_auto_scan_remembers_a_missing_slave(self) -> None:
+        """A shrunken later scan cannot validate its own partial topology (#249)."""
+        transport = BatteryModbusTransport(host="10.100.3.27", max_units=3)
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result([100]),
+                _mock_result([100]),
+                _mock_result([100]),
+                _mock_result(_make_master_regs()),
+                _mock_result([3310] * 16),
+                _mock_result(_make_slave_regs(remaining=224)),
+                _mock_result([0] * 23),
+                _mock_result(_make_slave_regs(remaining=223)),
+                _mock_result([0] * 23),
+                _mock_result([100]),
+                _mock_result([100]),
+                _mock_error(),
+                _mock_result(_make_master_regs()),
+                _mock_result([3310] * 16),
+                _mock_result(_make_slave_regs(remaining=224)),
+                _mock_result([0] * 23),
+            ]
+        )
+
+        with patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock):
+            with patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0):
+                complete_results = await transport.read_all()
+            with patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=2.0):
+                partial_results = await transport.read_all()
+
+        assert complete_results[0].soc == 76
+        assert complete_results[0].current_capacity == pytest.approx(213.0)
+        assert len(partial_results) == 2
+        assert partial_results[0].soc == 79
+        assert partial_results[0].current_capacity is None
+
+    @pytest.mark.asyncio
+    async def test_auto_scan_two_battery_bank_redecodes_master(self) -> None:
+        """Remembered topology permits a complete genuine two-unit bank (#249)."""
+        transport = BatteryModbusTransport(host="10.100.3.27", max_units=2)
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result([100]),
+                _mock_result([100]),
+                _mock_result(_make_master_regs(reg26=43700, reg27=56000)),
+                _mock_result([3310] * 16),
+                _mock_result(_make_slave_regs(remaining=224)),
+                _mock_result([0] * 23),
+            ]
+        )
+
+        with (
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+            patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0),
+        ):
+            results = await transport.read_all()
+
+        assert len(results) == 2
+        assert results[0].soc == 76
+        assert results[0].current_capacity == pytest.approx(213.0)
+
+    @pytest.mark.asyncio
+    async def test_never_seen_explicit_slave_remains_required(self) -> None:
+        """A configured slave is required even before its first response (#249)."""
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(_make_master_regs()),
+                _mock_result([3310] * 16),
+                _mock_result(_make_slave_regs(remaining=224)),
+                _mock_result([0] * 23),
+                _mock_error(),
+            ]
+        )
+
+        with (
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+            patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0),
+        ):
+            results = await transport.read_all()
+
+        assert len(results) == 2
+        assert results[0].soc == 79
+        assert results[0].current_capacity is None
+        assert transport._unit_last_seen == {1: 1.0, 2: 1.0, 3: 1.0}
+
+    @pytest.mark.asyncio
+    async def test_stale_topology_evicts_after_retention_from_small_monotonic(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A removed unit eventually stops pinning aggregate SOC on low uptime (#249)."""
+        transport = BatteryModbusTransport(host="10.100.3.27", max_units=3)
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result([100]),
+                _mock_result([100]),
+                _mock_result([100]),
+                _mock_result(_make_master_regs()),
+                _mock_result([3310] * 16),
+                _mock_result(_make_slave_regs(remaining=224)),
+                _mock_result([0] * 23),
+                _mock_result(_make_slave_regs(remaining=223)),
+                _mock_result([0] * 23),
+                _mock_result([100]),
+                _mock_result([100]),
+                _mock_error(),
+                _mock_result(_make_master_regs(reg26=43700, reg27=56000)),
+                _mock_result([3310] * 16),
+                _mock_result(_make_slave_regs(remaining=224)),
+                _mock_result([0] * 23),
+            ]
+        )
+
+        with (
+            caplog.at_level(logging.INFO),
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            with patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0):
+                await transport.read_all()
+            with patch(
+                "pylxpweb.transports.battery_modbus.time.monotonic",
+                return_value=_UNIT_TOPOLOGY_RETENTION + 2.0,
+            ):
+                results = await transport.read_all()
+
+        assert len(results) == 2
+        assert results[0].soc == 76
+        assert results[0].current_capacity == pytest.approx(213.0)
+        assert set(transport._unit_last_seen) == {1, 2}
+        assert any(
+            record.levelno == logging.INFO
+            and "unit 3" in record.getMessage()
+            and "topology" in record.getMessage()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_evicted_declared_unit_does_not_re_arm_the_gate(self) -> None:
+        """Convergence must hold, not flap once per retention window (#249).
+
+        With explicit unit_ids, every poll re-offers the configured list to
+        topology memory.  Seeding on that offer alone would re-admit a unit the
+        previous cycle had just evicted, so an removed-but-still-configured
+        battery would hand back one cycle of individual SOC/capacity every six
+        hours and revert in between -- a periodic step in history rather than a
+        convergence.  Only a genuine response re-admits an evicted unit, so the
+        cycle after eviction must look exactly like the eviction cycle.
+        """
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+
+        def one_poll() -> list[MagicMock]:
+            return [
+                _mock_result(_make_master_regs(soc=79, reg26=43700, reg27=56000)),
+                _mock_result([3310] * 16),
+                _mock_result(_make_slave_regs(soc=80, remaining=224)),
+                _mock_result([0] * 23),
+                _mock_error(),  # unit 3 stays dead throughout
+            ]
+
+        with patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock):
+            with patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0):
+                transport._client.read_holding_registers = AsyncMock(side_effect=one_poll())
+                first = await transport.read_all()
+            assert first[0].current_capacity is None  # aggregate held
+
+            with patch(
+                "pylxpweb.transports.battery_modbus.time.monotonic",
+                return_value=_UNIT_TOPOLOGY_RETENTION * 3,
+            ):
+                transport._client.read_holding_registers = AsyncMock(side_effect=one_poll())
+                converged = await transport.read_all()
+            assert converged[0].current_capacity == pytest.approx(213.0)
+
+            # The next poll re-offers unit 3; it must not be re-seeded.
+            with patch(
+                "pylxpweb.transports.battery_modbus.time.monotonic",
+                return_value=_UNIT_TOPOLOGY_RETENTION * 3 + 60.0,
+            ):
+                transport._client.read_holding_registers = AsyncMock(side_effect=one_poll())
+                after = await transport.read_all()
+
+        assert after[0].current_capacity == pytest.approx(213.0)
+        assert after[0].soc == converged[0].soc
+        assert set(transport._unit_last_seen) == {1, 2}
+        assert transport._evicted_units == {3}
+
+    @pytest.mark.asyncio
+    async def test_returning_unit_is_readmitted_after_eviction(self) -> None:
+        """A battery that comes back must rejoin topology and re-gate the master.
+
+        Eviction is not a permanent blacklist: a genuine response re-admits the
+        unit, which immediately makes the re-decode gate demand it again.
+        """
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+        transport._evicted_units = {3}
+
+        with (
+            patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
+            patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=10.0),
+        ):
+            transport._client.read_holding_registers = AsyncMock(
+                side_effect=[
+                    _mock_result(_make_master_regs(soc=79, reg26=43700, reg27=56000)),
+                    _mock_result([3310] * 16),
+                    _mock_result(_make_slave_regs(soc=80, remaining=224)),
+                    _mock_result([0] * 23),
+                    _mock_result(_make_slave_regs(soc=80, remaining=223)),  # unit 3 returns
+                    _mock_result([0] * 23),
+                ]
+            )
+            results = await transport.read_all()
+
+        assert len(results) == 3
+        assert transport._evicted_units == set()
+        assert set(transport._unit_last_seen) == {1, 2, 3}
 
 
 class TestOverlayInverterBMS:

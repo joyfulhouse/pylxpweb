@@ -50,9 +50,16 @@ _INTER_READ_DELAY = 0.1
 # Delay between sequential unit reads during scan or read_all (seconds)
 _INTER_UNIT_DELAY = 0.2
 
-# Minimum interval between reconnect attempts. The first attempt uses a None
-# sentinel rather than 0.0 because monotonic time can be below this interval on
-# a freshly booted host (the failure mode fixed in EG4 PRs #378/#380).
+# A unit that stops answering must not silently shrink the remembered topology
+# and re-enable master back-calculation against a partial bank. Retention mirrors
+# the 6h battery-eviction precedent (#258/#170) so a genuinely removed battery
+# still converges instead of pinning the master to the aggregate forever (#249).
+_UNIT_TOPOLOGY_RETENTION = 6 * 3600.0
+
+# Minimum interval between reconnect attempts. This code uses an absolute
+# deadline (``now < retry_after``), so 0.0 would not throttle the first attempt.
+# None remains the honest "never attempted" state and protects a future change
+# to the delta form whose 0.0 default caused the low-uptime EG4 #378/#380 bug.
 _RECONNECT_COOLDOWN = 30.0
 
 # Protocol name -> class mapping
@@ -144,6 +151,10 @@ class BatteryModbusTransport:
         self._empty_scan_warned = False
         # Unit degradation is transition-based so persistent faults warn once (#248).
         self._degraded_units: set[int] = set()
+        self._unit_last_seen: dict[int, float] = {}
+        # Units evicted from topology memory. Only a genuine response re-admits
+        # one, which is what keeps the re-decode gate from flapping (#249).
+        self._evicted_units: set[int] = set()
         # Cache detected protocols per unit ID
         self._detected_protocols: dict[int, BatteryProtocol] = {}
 
@@ -167,7 +178,17 @@ class BatteryModbusTransport:
         await self.disconnect()
 
     async def connect(self) -> None:
-        """Establish Modbus TCP connection to the RS485 bridge."""
+        """Establish a connection while excluding shared-client operations.
+
+        Public lifecycle methods acquire the operation lock. Code that already
+        owns it, such as ``_reconnect()``, must call ``_connect_locked()`` to
+        preserve the operation -> reconnect lock order and avoid re-entry (#248).
+        """
+        async with self._operation_lock:
+            await self._connect_locked()
+
+    async def _connect_locked(self) -> None:
+        """Establish a connection while the caller holds the operation lock."""
         self._client = AsyncModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
         await self._client.connect()
         self._connected = self._client.connected
@@ -181,7 +202,17 @@ class BatteryModbusTransport:
             )
 
     async def disconnect(self) -> None:
-        """Close the Modbus TCP connection."""
+        """Close the connection while excluding shared-client operations.
+
+        Public lifecycle methods acquire the operation lock. Code that already
+        owns it must call ``_disconnect_locked()`` so this non-reentrant lock is
+        never acquired twice (#248).
+        """
+        async with self._operation_lock:
+            await self._disconnect_locked()
+
+    async def _disconnect_locked(self) -> None:
+        """Close the connection while the caller holds the operation lock."""
         if self._client:
             self._client.close()
         self._connected = False
@@ -189,7 +220,7 @@ class BatteryModbusTransport:
     async def _reconnect(self) -> None:
         """Reconnect after the consecutive-error gate trips.
 
-        ``_read_unit_raw()`` and ``scan_units()`` call this while holding the
+        ``_read_unit_raw_locked()`` and ``scan_units()`` call this while holding the
         operation lock, so no public read can queue work on a client being
         closed. The distinct reconnect lock protects the threshold/cooldown
         transition itself. Locks are always acquired operation-first and never
@@ -220,9 +251,9 @@ class BatteryModbusTransport:
                     self._consecutive_errors,
                 )
 
-            await self.disconnect()
+            await self._disconnect_locked()
             try:
-                await self.connect()
+                await self._connect_locked()
             except Exception as exc:
                 # Reads are non-raising by contract. A connector implementation
                 # that raises must not crash the whole battery poll (#248).
@@ -433,6 +464,7 @@ class BatteryModbusTransport:
             List of responding unit IDs.
         """
         if self.unit_ids is not None:
+            self._remember_polled_units(self.unit_ids)
             return self.unit_ids
 
         async with self._operation_lock:
@@ -443,6 +475,7 @@ class BatteryModbusTransport:
                 regs = await self._read_registers(0, 1, uid, probe=True)
                 if regs is not None:
                     responding.append(uid)
+                    self._observe_unit(uid)
                 await asyncio.sleep(_INTER_UNIT_DELAY)
 
             if responding:
@@ -480,6 +513,59 @@ class BatteryModbusTransport:
         )
         return responding
 
+    def _remember_polled_units(self, unit_ids: list[int]) -> None:
+        """Seed topology memory for declared or discovered units.
+
+        A configured unit must count before its first successful response;
+        otherwise explicit configuration would permit the same partial-bank
+        master back-calculation that topology memory prevents (#249).
+
+        Args:
+            unit_ids: Unit IDs declared or selected for the current poll.
+        """
+        now = time.monotonic()
+        for unit_id in unit_ids:
+            if unit_id in self._evicted_units:
+                # Seeding a still-absent declared unit again would re-arm the
+                # gate one cycle after eviction, so an explicitly configured but
+                # removed battery would flap between individual and aggregate
+                # SOC once per retention window instead of converging. Only a
+                # genuine response re-admits an evicted unit (#249).
+                continue
+            self._unit_last_seen.setdefault(unit_id, now)
+
+    def _observe_unit(self, unit_id: int) -> None:
+        """Record a genuine response from a unit, re-admitting it if evicted.
+
+        Args:
+            unit_id: Modbus unit/slave ID that answered.
+        """
+        self._unit_last_seen[unit_id] = time.monotonic()
+        self._evicted_units.discard(unit_id)
+
+    def _remembered_unit_ids(self) -> set[int]:
+        """Return retained topology, evicting units absent for six hours.
+
+        Returns:
+            Unit IDs still within the topology retention window.
+        """
+        now = time.monotonic()
+        stale_units = [
+            (unit_id, last_seen)
+            for unit_id, last_seen in self._unit_last_seen.items()
+            if now - last_seen > _UNIT_TOPOLOGY_RETENTION
+        ]
+        for unit_id, last_seen in stale_units:
+            del self._unit_last_seen[unit_id]
+            self._evicted_units.add(unit_id)
+            _LOGGER.info(
+                "Battery unit %d evicted from remembered topology after %.0f seconds "
+                "without observation (#249)",
+                unit_id,
+                now - last_seen,
+            )
+        return set(self._unit_last_seen)
+
     async def read_all(
         self,
         inverter_bms_data: InverterRuntimeData | None = None,
@@ -501,10 +587,12 @@ class BatteryModbusTransport:
             List of BatteryData objects for responding units, master first.
         """
         units = self.unit_ids or await self.scan_units()
+        self._remember_polled_units(units)
 
         # Read all units, keeping track of raw registers for master re-decode
         raw_by_unit: dict[int, dict[int, int]] = {}
         slave_results: list[BatteryData] = []
+        decoded_slave_ids: set[int] = set()
         master_uid: int | None = None
         master_data: BatteryData | None = None
 
@@ -513,6 +601,7 @@ class BatteryModbusTransport:
             if data is None:
                 continue
 
+            self._observe_unit(uid)
             raw_by_unit[uid] = raw
             protocol = self._get_protocol(uid, raw)
 
@@ -521,21 +610,25 @@ class BatteryModbusTransport:
                 master_data = data
             else:
                 slave_results.append(data)
+                decoded_slave_ids.add(uid)
 
             await asyncio.sleep(_INTER_UNIT_DELAY)
 
-        # Re-decode master only with the complete slave topology. A partial set
-        # is as unsafe as an empty one: in a three-battery bank, subtracting one
-        # of two slaves over-reports the master by the missing pack's capacity.
-        # With incomplete context, reg 21 remains a real aggregate bank SOC
-        # rather than a fabricated individual number (#249). A genuine one-unit
-        # bank needs no re-decode because its aggregate is already individual.
-        expected_slaves = len(units) - 1
+        # Re-decode only when decoded slave IDs cover the retained topology.
+        # Thus a three-unit bank scanning as [1, 2] keeps aggregate reg 21, while
+        # a genuine [1, 2] bank re-decodes. A one-unit bank has no slave result,
+        # so its already-individual aggregate remains unchanged. After a removed
+        # battery is absent for six hours it is evicted and re-decode resumes
+        # against the remaining topology; this is intentional convergence (#249).
+        remembered_unit_ids = self._remembered_unit_ids()
+        required_slave_ids = (
+            remembered_unit_ids - {master_uid} if master_uid is not None else remembered_unit_ids
+        )
         if (
             master_uid is not None
             and master_data is not None
             and slave_results
-            and len(slave_results) == expected_slaves
+            and decoded_slave_ids.issuperset(required_slave_ids)
         ):
             master_proto = self._get_protocol(master_uid, raw_by_unit[master_uid])
             if isinstance(master_proto, EG4MasterProtocol):
