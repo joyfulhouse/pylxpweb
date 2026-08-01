@@ -23,6 +23,11 @@ Temperature limitations (master RS485):
   - No min temperature register exists. Probed regs 0-255; confirmed no hidden data.
   - Per-cell NTC readings are only available via CAN bus (cloud API).
   - min_cell_temperature and max_cell_temperature are both set to reg 24 value.
+
+Master pack voltage is derived only from a complete, usable cell-voltage set.
+Register 22 is a bank minimum, so it is never exposed as the master's own
+voltage; when the cells are unavailable, voltage is the explicit 0.0 absent
+sentinel instead.
 """
 
 from __future__ import annotations
@@ -42,7 +47,12 @@ _RUNTIME_REGISTERS = (
     BatteryRegister(19, "status", ScaleFactor.SCALE_NONE),
     BatteryRegister(20, "protection", ScaleFactor.SCALE_NONE),
     BatteryRegister(21, "soc", ScaleFactor.SCALE_NONE, unit="%"),
-    BatteryRegister(22, "voltage", ScaleFactor.SCALE_100, unit="V"),
+    # Named for what it is, not for the field it used to populate. Calling reg
+    # 22 "voltage" in the master's map is what let a bank aggregate be decoded
+    # as the master's own pack voltage; the name is the guardrail against a
+    # future _reg("voltage") reintroducing that (#249). Kept in the map because
+    # it is real bank data that the block still reads.
+    BatteryRegister(22, "bank_min_voltage", ScaleFactor.SCALE_100, unit="V"),
     BatteryRegister(23, "current", ScaleFactor.SCALE_100, signed=True, unit="A"),
     BatteryRegister(24, "temperature", ScaleFactor.SCALE_NONE, signed=True, unit="\u00b0C"),
     BatteryRegister(28, "firmware_version", ScaleFactor.SCALE_NONE),
@@ -61,6 +71,31 @@ _RUNTIME_REGISTERS = (
 
 _RUNTIME_BLOCK = BatteryRegisterBlock(start=19, count=23, registers=_RUNTIME_REGISTERS)
 _CELL_BLOCK = BatteryRegisterBlock(start=113, count=16, registers=())
+
+# Sanity bounds against corrupt registers, not LiFePO4 specification limits.
+_MIN_PLAUSIBLE_CELL_V = 1.0
+_MAX_PLAUSIBLE_CELL_V = 5.0
+
+
+def _derive_master_voltage(cell_voltages: list[float], cell_count: int) -> float:
+    """Derive master pack voltage from a complete, plausible cell set.
+
+    Register 22 is the minimum pack voltage across the bank, not the master's
+    own pack voltage. A missing, partial, zeroed, or corrupt cell set therefore
+    returns the schema's explicit absent sentinel rather than that aggregate.
+
+    Args:
+        cell_voltages: Decoded individual cell voltages in volts.
+        cell_count: Expected cell count from register 41.
+
+    Returns:
+        Rounded sum of all cells, or 0.0 when the cell set is unusable.
+    """
+    if cell_count <= 0 or len(cell_voltages) != cell_count:
+        return 0.0
+    if not all(_MIN_PLAUSIBLE_CELL_V <= value <= _MAX_PLAUSIBLE_CELL_V for value in cell_voltages):
+        return 0.0
+    return round(sum(cell_voltages), 2)
 
 
 class EG4MasterProtocol(BatteryProtocol):
@@ -142,6 +177,14 @@ class EG4MasterProtocol(BatteryProtocol):
     def decode(self, raw_regs: dict[int, int], battery_index: int = 0) -> BatteryData:
         """Decode master battery registers into BatteryData.
 
+        Register 22 is never used as the master's own voltage because it is
+        the minimum across the whole bank. It can look correct in a genuine
+        single-battery bank, but the protocol cannot distinguish that case
+        from a multi-battery bank whose slaves failed to read. A plausible
+        aggregate mislabeled as master data is worse than the explicit 0.0
+        absent sentinel, so only a complete plausible cell set is trusted
+        (#249).
+
         Args:
             raw_regs: Dict mapping register address to raw 16-bit value.
             battery_index: 0-based index of the battery in the bank.
@@ -149,12 +192,10 @@ class EG4MasterProtocol(BatteryProtocol):
         Returns:
             BatteryData with all values properly scaled.
         """
-        voltage_reg = self._reg("voltage")
         current_reg = self._reg("current")
         max_cell_reg = self._reg("max_cell_voltage")
         min_cell_reg = self._reg("min_cell_voltage")
 
-        voltage = self.decode_register(voltage_reg, raw_regs.get(voltage_reg.address, 0))
         current = self.decode_register(current_reg, raw_regs.get(current_reg.address, 0))
 
         temperature = float(signed_int16(raw_regs.get(24, 0)))
@@ -177,6 +218,7 @@ class EG4MasterProtocol(BatteryProtocol):
         cell_voltages, fallback_min, fallback_max = self.decode_cell_voltages(
             raw_regs, start_address=113, num_cells=num_cells
         )
+        voltage = _derive_master_voltage(cell_voltages, num_cells)
 
         # Prefer dedicated max/min cell voltage registers; fall back to computed values
         max_cell_v = self.decode_register(max_cell_reg, raw_regs.get(max_cell_reg.address, 0))
@@ -262,16 +304,9 @@ class EG4MasterProtocol(BatteryProtocol):
         master_soc = round(master_remaining / designed_ah * 100) if designed_ah > 0 else 0
         master_soc = max(0, min(100, master_soc))
 
-        # Compute master voltage from cell voltages (more accurate than reg 22 = MIN all)
-        voltage = data.voltage
-        if data.cell_voltages:
-            cell_sum = sum(data.cell_voltages)
-            if cell_sum > 0:
-                voltage = round(cell_sum, 2)
-
         return BatteryData(
             battery_index=data.battery_index,
-            voltage=voltage,
+            voltage=data.voltage,
             current=data.current,
             soc=master_soc,
             soh=data.soh,

@@ -126,13 +126,18 @@ class BatteryModbusTransport:
         self.timeout = timeout
         self._client: AsyncModbusTcpClient | None = None
         self._connected = False
+        self._reconnect_lock = asyncio.Lock()
+        self._consecutive_errors = 0
+        self._max_consecutive_errors = 3
+        # Unit degradation is transition-based so persistent faults warn once (#248).
+        self._degraded_units: set[int] = set()
         # Cache detected protocols per unit ID
         self._detected_protocols: dict[int, BatteryProtocol] = {}
 
     @property
     def is_connected(self) -> bool:
         """Check if transport is connected to the RS485 bridge."""
-        return self._connected
+        return self._connected and self._client is not None and bool(self._client.connected)
 
     async def __aenter__(self) -> Self:
         """Enter async context manager, connecting the transport."""
@@ -168,12 +173,75 @@ class BatteryModbusTransport:
             self._client.close()
         self._connected = False
 
+    async def _reconnect(self) -> None:
+        """Reconnect after the consecutive-error gate trips.
+
+        The double-check under the lock prevents concurrent unit reads from
+        rebuilding the shared client more than once.
+        """
+        async with self._reconnect_lock:
+            if self._consecutive_errors < self._max_consecutive_errors:
+                return
+
+            _LOGGER.warning(
+                "Reconnecting battery RS485 bridge at %s:%d after %d consecutive errors",
+                self.host,
+                self.port,
+                self._consecutive_errors,
+            )
+            await self.disconnect()
+            await self.connect()
+            self._consecutive_errors = 0
+
+    def _degrade_unit(
+        self,
+        unit_id: int,
+        start: int,
+        expected: int,
+        got: int,
+    ) -> None:
+        """Warn once when a unit transitions into degraded reads.
+
+        Args:
+            unit_id: Modbus unit/slave ID.
+            start: First register address of the failed block.
+            expected: Minimum register count needed from the block.
+            got: Register count returned, or zero on an error/exception.
+        """
+        if unit_id in self._degraded_units:
+            return
+
+        self._degraded_units.add(unit_id)
+        _LOGGER.warning(
+            "Battery unit %d read degraded: start=%d expected=%d got=%d registers. "
+            "Possible causes: bus contention, wiring problems, a BMS that truncates "
+            "responses, or the unit powered down (#248)",
+            unit_id,
+            start,
+            expected,
+            got,
+        )
+
+    def _recover_unit(self, unit_id: int) -> None:
+        """Clear degradation after every block for a unit reads cleanly.
+
+        Args:
+            unit_id: Modbus unit/slave ID.
+        """
+        if unit_id not in self._degraded_units:
+            return
+
+        self._degraded_units.remove(unit_id)
+        # Recovery is INFO: it confirms health without repeating the fault severity (#248).
+        _LOGGER.info("Battery unit %d read recovered; all register blocks completed", unit_id)
+
     async def _read_registers(
         self,
         start: int,
         count: int,
         unit_id: int,
         minimum: int | None = None,
+        probe: bool = False,
     ) -> list[int] | None:
         """Read holding registers from a battery unit.
 
@@ -184,18 +252,32 @@ class BatteryModbusTransport:
             minimum: Registers that must come back for the response to be
                 usable. Defaults to ``count``; pass a lower value only when
                 the request deliberately over-reads what will be decoded.
+            probe: Whether this is an expected-miss discovery probe. Probe
+                failures do not affect degradation or reconnect state.
 
         Returns:
             List of register values, or None on error/timeout/short read.
         """
-        if not self._client:
-            return None
         required = count if minimum is None else minimum
+        if not self._client:
+            if not probe:
+                self._consecutive_errors += 1
+                self._degrade_unit(unit_id, start, required, 0)
+            return None
         try:
             result = await self._client.read_holding_registers(
                 start, count=count, device_id=unit_id
             )
             if result.isError():
+                _LOGGER.debug(
+                    "Modbus error response: unit=%d start=%d count=%d",
+                    unit_id,
+                    start,
+                    count,
+                )
+                if not probe:
+                    self._consecutive_errors += 1
+                    self._degrade_unit(unit_id, start, required, 0)
                 return None
             registers = list(result.registers)
             # pymodbus decodes registers from the response's own byte_count
@@ -208,8 +290,8 @@ class BatteryModbusTransport:
             # Rejecting a block does not make its fields absent: BatteryData
             # has no nullable cell fields, so a dropped block reads out as
             # zeroes or as whatever fallback the protocol has. See the note
-            # on _read_unit_raw. Callers get no signal beyond this DEBUG
-            # line; per-unit health reporting is pylxpweb#248.
+            # on _read_unit_raw. The DEBUG detail is paired with a single
+            # per-unit degradation transition WARNING (#248).
             if len(registers) < required:
                 _LOGGER.debug(
                     "Short read: unit=%d start=%d expected %d registers, got %d",
@@ -218,10 +300,18 @@ class BatteryModbusTransport:
                     required,
                     len(registers),
                 )
+                if not probe:
+                    self._consecutive_errors += 1
+                    self._degrade_unit(unit_id, start, required, len(registers))
                 return None
+            if not probe:
+                self._consecutive_errors = 0
             return registers
         except Exception:
             _LOGGER.debug("Read failed: unit=%d start=%d count=%d", unit_id, start, count)
+            if not probe:
+                self._consecutive_errors += 1
+                self._degrade_unit(unit_id, start, required, 0)
             return None
 
     def _get_protocol(self, unit_id: int, raw_regs: dict[int, int]) -> BatteryProtocol:
@@ -280,7 +370,8 @@ class BatteryModbusTransport:
 
         responding: list[int] = []
         for uid in range(1, self.max_units + 1):
-            regs = await self._read_registers(0, 1, uid)
+            # Non-responding IDs are expected discovery misses, not bus faults (#248).
+            regs = await self._read_registers(0, 1, uid, probe=True)
             if regs is not None:
                 responding.append(uid)
             await asyncio.sleep(_INTER_UNIT_DELAY)
@@ -337,9 +428,11 @@ class BatteryModbusTransport:
             await asyncio.sleep(_INTER_UNIT_DELAY)
 
         # Re-decode master with slave context for individual SOC
-        if master_uid is not None and master_data is not None and slave_results:
+        if master_uid is not None and master_data is not None:
             master_proto = self._get_protocol(master_uid, raw_by_unit[master_uid])
             if isinstance(master_proto, EG4MasterProtocol):
+                # An empty slave list is the correct single-bank context: the
+                # full unwrapped total is the master's own remaining capacity (#249).
                 master_data = master_proto.decode_with_slaves(
                     raw_by_unit[master_uid],
                     slave_results,
@@ -376,17 +469,14 @@ class BatteryModbusTransport:
 
         Note:
             An extra block that fails is dropped whole rather than partially
-            decoded, but "dropped" is not "absent" — ``BatteryData`` has no
-            nullable cell fields, and consumers publish these fields directly.
-            For the master cell block (113-128) that means sixteen 0.000 V
-            cells, a 0 V min/max wherever regs 37/38 also read zero, and --
-            via ``decode_with_slaves`` -- a master voltage that quietly
-            reverts to reg 22, the bank MINIMUM rather than the master's own
-            sum-of-cells. The first two are implausible enough to notice; the
-            last is not. Dropping the block is still right (a min/max computed
-            over half a cell block is plausible AND wrong), but it buys
-            detectability, not correctness.
+            decoded. ``BatteryData`` has no nullable cell fields, so the
+            master cell block becomes zeroed cells and the explicit 0.0
+            absent pack-voltage sentinel. The unit remains degraded until a
+            later read completes its runtime block and every extra block.
         """
+        if self._consecutive_errors >= self._max_consecutive_errors:
+            await self._reconnect()
+
         runtime_regs = await self._read_registers(
             0, _INITIAL_BLOCK_COUNT, unit_id, minimum=_MIN_INITIAL_REGISTERS
         )
@@ -412,18 +502,25 @@ class BatteryModbusTransport:
                 required,
                 len(runtime_regs),
             )
+            self._consecutive_errors += 1
+            self._degrade_unit(unit_id, 0, required, len(runtime_regs))
             return {}, None
 
+        unit_read_clean = True
         for block in protocol.register_blocks:
             if block.start >= _INITIAL_BLOCK_COUNT:
                 extra = await self._read_registers(block.start, block.count, unit_id)
-                if extra:
+                if extra is not None:
                     for i, v in enumerate(extra):
                         raw[block.start + i] = v
+                else:
+                    unit_read_clean = False
                 await asyncio.sleep(_INTER_READ_DELAY)
 
         battery_index = unit_id - 1
         data = protocol.decode(raw, battery_index=battery_index)
+        if unit_read_clean:
+            self._recover_unit(unit_id)
         return raw, data
 
     @staticmethod

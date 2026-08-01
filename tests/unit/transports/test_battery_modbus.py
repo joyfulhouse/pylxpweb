@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -35,6 +36,7 @@ def transport() -> BatteryModbusTransport:
 def connected_transport(transport: BatteryModbusTransport) -> BatteryModbusTransport:
     """Create a transport with a mocked connected client."""
     mock_client = AsyncMock()
+    mock_client.connected = True
     # close() is synchronous on real pymodbus client
     mock_client.close = MagicMock()
     transport._client = mock_client
@@ -180,6 +182,16 @@ class TestBatteryModbusTransportConnect:
         await transport.disconnect()  # Should not raise
         assert transport.is_connected is False
 
+    def test_is_connected_tracks_underlying_client(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """A mid-session socket drop is visible without explicit disconnect()."""
+        assert connected_transport.is_connected is True
+
+        connected_transport._client.connected = False
+
+        assert connected_transport.is_connected is False
+
 
 class TestBatteryModbusTransportReadUnit:
     """Tests for reading a single battery unit."""
@@ -241,7 +253,7 @@ class TestBatteryModbusTransportReadUnit:
 
         data = await connected_transport.read_unit(1)
         assert data is not None
-        assert data.voltage == pytest.approx(52.94)
+        assert data.voltage == pytest.approx(52.8)
         assert data.soc == 76
         assert data.battery_index == 0  # unit_id 1 -> index 0
 
@@ -397,13 +409,16 @@ class TestBatteryModbusTransportScanUnits:
         assert result == [1, 3]
 
     @pytest.mark.asyncio
-    async def test_scan_no_units_responding(self) -> None:
-        """Scan returns empty list when no units respond."""
+    async def test_scan_nonresponding_units_does_not_degrade_or_reconnect(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Expected scan misses stay outside health warnings and the reconnect gate."""
         transport = BatteryModbusTransport(
             host="10.100.3.27",
-            max_units=2,
+            max_units=4,
         )
         transport._client = AsyncMock()
+        transport._client.connected = True
         transport._connected = True
 
         err_result = MagicMock()
@@ -411,8 +426,17 @@ class TestBatteryModbusTransportScanUnits:
 
         transport._client.read_holding_registers = AsyncMock(return_value=err_result)
 
-        result = await transport.scan_units()
+        with (
+            caplog.at_level(logging.WARNING),
+            patch.object(transport, "_reconnect", new_callable=AsyncMock) as reconnect,
+        ):
+            result = await transport.scan_units()
+
         assert result == []
+        assert transport._consecutive_errors == 0
+        assert transport._degraded_units == set()
+        reconnect.assert_not_awaited()
+        assert not [record for record in caplog.records if "read degraded" in record.getMessage()]
 
 
 class TestBatteryModbusTransportReadAll:
@@ -511,16 +535,26 @@ class TestBatteryModbusTransportReadRegisters:
         assert result == [100, 200, 300]
 
     @pytest.mark.asyncio
-    async def test_read_registers_error(self, connected_transport: BatteryModbusTransport) -> None:
-        """Error response returns None."""
+    async def test_read_registers_error_logs_debug(
+        self,
+        connected_transport: BatteryModbusTransport,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A Modbus error response is DEBUG-visible while retaining drop semantics."""
         mock_result = MagicMock()
         mock_result.isError.return_value = True
         connected_transport._client.read_holding_registers = AsyncMock(  # type: ignore[union-attr]
             return_value=mock_result,
         )
 
-        result = await connected_transport._read_registers(0, 3, 1)
+        with caplog.at_level(logging.DEBUG):
+            result = await connected_transport._read_registers(0, 3, 1)
+
         assert result is None
+        assert any(
+            "Modbus error response: unit=1 start=0 count=3" in record.getMessage()
+            for record in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_read_registers_exception(
@@ -601,9 +635,9 @@ class TestBatteryModbusTransportShortRead:
         plausible wrong min/max computed over the surviving fragment for
         an implausible 0.0, and implausible-wrong is far easier to spot.
 
-        That trade does not hold for every field:
-        ``test_dropped_cell_block_falls_back_to_bank_minimum_voltage``
-        pins one that moves the other way.
+        ``test_dropped_cell_block_uses_absent_voltage_sentinel`` also pins
+        that the master pack voltage follows the same detectable sentinel
+        policy instead of falling back to the bank minimum.
         """
         master_regs = _make_master_regs()
         short_cell_regs = [3310] * 8  # 8 of 16 requested
@@ -759,20 +793,13 @@ class TestBatteryModbusTransportShortRead:
         assert connected_transport._detected_protocols[1].name == "eg4_master"
 
     @pytest.mark.asyncio
-    async def test_dropped_cell_block_falls_back_to_bank_minimum_voltage(self) -> None:
-        """A dropped cell block silently reverts master voltage to reg 22.
+    async def test_dropped_cell_block_uses_absent_voltage_sentinel(self) -> None:
+        """A dropped master cell block yields 0.0 instead of bank-minimum reg 22.
 
-        ``decode_with_slaves`` normally overrides reg 22 (the MINIMUM
-        across all batteries) with the sum of the master's own cells,
-        because reg 22 is not the master's individual voltage.  A
-        dropped cell block leaves ``cell_voltages`` as sixteen zeros —
-        which is a *truthy* list, so the override branch is entered and
-        then abandoned on ``cell_sum > 0``.  Voltage falls back to the
-        bank minimum.
-
-        Unlike the zeroed cells, this one is a plausible-looking number:
-        the guard makes this field *less* detectable, not more, and it
-        is pinned here so that trade is visible rather than assumed.
+        Master pack voltage is derivable only from a complete, usable cell
+        set. A short block is dropped whole and decoded as sixteen zero cells,
+        so 0.0 is the explicit absent sentinel. Returning reg 22 would attach
+        a plausible bank aggregate to the master and hide the failed block.
         """
 
         async def read(cell_regs: list[int]) -> BatteryData:
@@ -793,10 +820,104 @@ class TestBatteryModbusTransportShortRead:
         # Full block: master voltage is the sum of its own 16 cells.
         assert (await read([3310] * 16)).voltage == pytest.approx(52.96)
 
-        # Short block: falls back to reg 22 = 5294, the bank minimum.
-        # Without the guard this would be the 8-cell fragment sum, 26.48 —
-        # wrong, but obviously so.
-        assert (await read([3310] * 8)).voltage == pytest.approx(52.94)
+        # Short block: no complete master cell set, so voltage is absent.
+        assert (await read([3310] * 8)).voltage == 0.0
+
+
+class TestBatteryModbusTransportHealth:
+    """Tests for per-unit degradation and reconnect state."""
+
+    @pytest.mark.asyncio
+    async def test_repeated_unit_failures_warn_once(
+        self,
+        connected_transport: BatteryModbusTransport,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A persistently failing extra block warns only on degradation transition."""
+        connected_transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(_make_slave_regs()),
+                _mock_error(),
+                _mock_result(_make_slave_regs()),
+                _mock_error(),
+            ],
+        )
+
+        with caplog.at_level(logging.WARNING):
+            assert await connected_transport.read_unit(2) is not None
+            assert await connected_transport.read_unit(2) is not None
+
+        warnings = [
+            record
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+            and "Battery unit 2 read degraded" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "start=105 expected=23 got=0" in warnings[0].getMessage()
+        assert connected_transport._consecutive_errors == 1
+
+    @pytest.mark.asyncio
+    async def test_clean_unit_read_recovers_and_rearms_warning(
+        self,
+        connected_transport: BatteryModbusTransport,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Only a wholly clean unit read logs recovery and permits a later warning."""
+        connected_transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(_make_slave_regs()),
+                _mock_error(),
+                _mock_result(_make_slave_regs()),
+                _mock_result([0] * 23),
+                _mock_result(_make_slave_regs()),
+                _mock_error(),
+            ],
+        )
+
+        with caplog.at_level(logging.INFO):
+            assert await connected_transport.read_unit(2) is not None
+            assert await connected_transport.read_unit(2) is not None
+            assert await connected_transport.read_unit(2) is not None
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert sum("Battery unit 2 read degraded" in message for message in messages) == 2
+        assert sum("Battery unit 2 read recovered" in message for message in messages) == 1
+        assert connected_transport._consecutive_errors == 1
+        assert connected_transport._degraded_units == {2}
+
+    @pytest.mark.asyncio
+    async def test_max_consecutive_errors_trigger_reconnect_and_reset(
+        self, connected_transport: BatteryModbusTransport
+    ) -> None:
+        """The request after three failed unit reads reconnects before a clean read."""
+        connected_transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_error(),
+                _mock_error(),
+                _mock_error(),
+                _mock_result(_make_slave_regs()),
+                _mock_result([0] * 23),
+            ],
+        )
+
+        for _ in range(connected_transport._max_consecutive_errors):
+            assert await connected_transport.read_unit(2) is None
+
+        assert (
+            connected_transport._consecutive_errors == connected_transport._max_consecutive_errors
+        )
+
+        with (
+            patch.object(connected_transport, "disconnect", new_callable=AsyncMock) as disconnect,
+            patch.object(connected_transport, "connect", new_callable=AsyncMock) as connect,
+        ):
+            data = await connected_transport.read_unit(2)
+
+        assert data is not None
+        disconnect.assert_awaited_once()
+        connect.assert_awaited_once()
+        assert connected_transport._consecutive_errors == 0
 
 
 class TestInitialBlockRequirement:
@@ -922,28 +1043,29 @@ class TestReadAllWithSlaves:
         assert results[2].soc == 80
 
     @pytest.mark.asyncio
-    async def test_master_without_slaves_uses_aggregate(self) -> None:
-        """When no slaves respond, master keeps aggregate SOC."""
-        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2])
+    async def test_master_without_slaves_is_redecoded(self) -> None:
+        """A master-only bank still derives voltage and individual capacity."""
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1])
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
+        transport._client.connected = True
         transport._connected = True
 
-        master_regs = _make_master_regs(soc=79)
+        master_regs = _make_master_regs(soc=79, reg26=22400, reg27=28000)
         cell_regs = [3310] * 16
 
         transport._client.read_holding_registers = AsyncMock(
             side_effect=[
                 _mock_result(master_regs),
                 _mock_result(cell_regs),
-                _mock_error(),  # unit 2 fails
             ],
         )
 
         results = await transport.read_all()
         assert len(results) == 1
-        # No slaves → no re-decode → aggregate SOC
-        assert results[0].soc == 79
+        assert results[0].voltage == pytest.approx(52.96)
+        assert results[0].soc == 80
+        assert results[0].current_capacity == pytest.approx(224.0)
 
 
 class TestOverlayInverterBMS:
