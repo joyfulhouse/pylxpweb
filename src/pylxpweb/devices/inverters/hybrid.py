@@ -9,13 +9,17 @@ This module provides the HybridInverter class for hybrid inverters that support:
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 from pylxpweb.constants import ScheduleType
 from pylxpweb.exceptions import LuxpowerDeviceError
 from pylxpweb.models import BatteryControlMode
 
 from .generic import GenericInverter
+
+if TYPE_CHECKING:
+    from pylxpweb.models import SuccessResponse
 
 
 class HybridInverter(GenericInverter):
@@ -1182,20 +1186,44 @@ class HybridInverter(GenericInverter):
     async def set_ac_couple(self, enabled: bool) -> bool:
         """Enable or disable the inverter-level AC couple function.
 
-        Transport mode performs a read-modify-write on register 179 that
-        preserves every other function bit; cloud mode applies the named bit
-        server-side through the function-control API.
+        Transport-FIRST, unlike the client-first base: an attached transport
+        writes the named bit through the transport's lock-held
+        read-modify-write, and only a transport-less instance falls back to
+        the cloud endpoint.
+
+        The lock matters here specifically. Register 179 already carried one
+        local writer (Grid Peak Shaving, bit 7); bit 11 makes two, and the
+        raw read-modify-write in :meth:`_set_modbus_register_bit` drops
+        whichever bit lands between the two writers' read and write —
+        reproduced as a lost bit 7 (pylxpweb#254). Passing ``cloud_write=None``
+        selects the named-write route that holds the transport lock across
+        the whole sequence.
 
         Args:
             enabled: True to enable AC coupling, False to disable it
 
         Returns:
             True if successful
+
+        Raises:
+            LuxpowerDeviceError: If the transport write fails, or if neither
+                a transport nor a cloud client is attached.
         """
+        from functools import partial
+
         from pylxpweb.constants import FUNC_EXT_BIT_AC_COUPLING, FUNC_EXT_REGISTER
 
-        return await self._set_modbus_register_bit(
-            FUNC_EXT_REGISTER, FUNC_EXT_BIT_AC_COUPLING, enabled
+        client = self._client
+        cloud_write: Callable[[str], Awaitable[SuccessResponse]] | None = None
+        if self._transport is None and client is not None:
+            cloud_write = partial(
+                client.api.control.set_inverter_ac_couple_enabled, enabled=enabled
+            )
+        return await self._set_client_first_function_bit(
+            FUNC_EXT_REGISTER,
+            FUNC_EXT_BIT_AC_COUPLING,
+            enabled,
+            cloud_write,
         )
 
     # ============================================================================

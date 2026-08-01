@@ -3268,38 +3268,80 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     # ============================================================================
 
     async def get_ac_couple_status(self) -> bool:
-        """Get the inverter-level AC couple function status via cloud API.
+        """Get the inverter-level AC couple function status.
 
-        Single-register named read of 179 bit 11, mirroring
-        :meth:`get_pv_sell_to_grid_status`. An absent parameter reads False
-        here, as it does for every other boolean function getter; callers
-        that must tell "absent" from a real False want
-        ``control.get_inverter_ac_couple_soc_limits``, whose ``enabled`` is
-        tri-state. :class:`HybridInverter` overrides this cloud-only
-        implementation with dual-path access for attached local transports.
+        Client-first: a client-bearing inverter uses the single-register
+        named read (:meth:`ControlEndpoints.get_inverter_ac_couple_status`,
+        mirroring :meth:`get_pv_sell_to_grid_status`). A CLIENTLESS inverter
+        falls through to :meth:`_get_register_bit`, which reads register 179
+        over the attached transport and raises
+        :class:`LuxpowerDeviceError` when there is no transport either —
+        never an AttributeError on an absent client (pylxpweb#247).
+
+        Deliberately delegates rather than inlining a transport read: that
+        one seam is where pylxpweb#254 moves every bit read onto the named
+        read path, so this getter converges with the rest of the library
+        instead of leaving a second copy behind that conversion cannot
+        reach.
+
+        An absent parameter reads False here, as it does for every other
+        boolean function getter; callers that must tell "absent" from a real
+        False want ``control.get_inverter_ac_couple_soc_limits``, whose
+        ``enabled`` is tri-state.
 
         Returns:
             True if the AC couple function is enabled, False otherwise
+
+        Raises:
+            LuxpowerDeviceError: If neither a transport nor a client is
+                attached, or the transport read fails.
         """
-        return await self._client.api.control.get_inverter_ac_couple_status(self.serial_number)
+        from pylxpweb.constants import FUNC_EXT_BIT_AC_COUPLING, FUNC_EXT_REGISTER
+
+        client = self._client
+        if client is not None:
+            return await client.api.control.get_inverter_ac_couple_status(self.serial_number)
+        return await self._get_register_bit(FUNC_EXT_REGISTER, FUNC_EXT_BIT_AC_COUPLING)
 
     async def set_ac_couple(self, enabled: bool) -> bool:
-        """Enable or disable the inverter-level AC couple function via cloud API.
+        """Enable or disable the inverter-level AC couple function.
 
-        Delegates to the existing inverter AC-couple endpoint helper.
-        :class:`HybridInverter` overrides this method with dual-path register
-        179 bit 11 access for attached local transports.
+        Client-first: a client-bearing inverter keeps the dedicated cloud
+        endpoint, while a CLIENTLESS one writes the named bit through the
+        transport's lock-held read-modify-write. Neither attached raises
+        :class:`LuxpowerDeviceError` rather than an AttributeError on the
+        absent client (pylxpweb#247).
 
         Args:
             enabled: True to enable AC coupling, False to disable it
 
         Returns:
-            True if successful
+            True if successful; in cloud mode, False if the API rejected the
+            write
+
+        Raises:
+            LuxpowerDeviceError: If the transport write fails, or if neither
+                a transport nor a cloud client is attached.
         """
-        result = await self._client.api.control.set_inverter_ac_couple_enabled(
-            self.serial_number, enabled
+        from functools import partial
+
+        from pylxpweb.constants import FUNC_EXT_BIT_AC_COUPLING, FUNC_EXT_REGISTER
+
+        client = self._client
+        cloud_write: Callable[[str], Awaitable[SuccessResponse]] | None = None
+        if client is not None:
+            # Bound to the requested state so the callable takes only the
+            # serial, matching the enable_/disable_ endpoint pairs the other
+            # function bits pass here.
+            cloud_write = partial(
+                client.api.control.set_inverter_ac_couple_enabled, enabled=enabled
+            )
+        return await self._set_client_first_function_bit(
+            FUNC_EXT_REGISTER,
+            FUNC_EXT_BIT_AC_COUPLING,
+            enabled,
+            cloud_write,
         )
-        return result.success
 
     # ============================================================================
     # Grid Sell Back / Export Controls (GH eg4_web_monitor#135)
