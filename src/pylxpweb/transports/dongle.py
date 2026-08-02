@@ -410,6 +410,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                             retry_delay,
                         )
                         await asyncio.sleep(retry_delay)
+                        # Shutdown may arrive while this task is parked in the
+                        # retry backoff. Never start a new TCP dial afterward.
+                        self._raise_if_shutdown()
                         retry_delay *= 2  # Exponential backoff
 
                     self._reader, self._writer = await asyncio.wait_for(
@@ -501,8 +504,10 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         the full response timeout.  This method is deliberately terminal.  It
         marks the transport first, detaches and closes the current writer, and
         makes an in-flight or later ``connect()`` close its result instead of
-        resurrecting the socket.  Ordinary reusable disconnects retain the
-        fully serialised :meth:`disconnect` contract.
+        resurrecting the socket. Retry and I/O boundaries re-check the terminal
+        flag after awaited backoffs, drains, writes, and reads, so shutdown does
+        not permit another dial or sequence retry. Ordinary reusable disconnects
+        retain the fully serialised :meth:`disconnect` contract.
         """
         self._shutdown_requested = True
         self._connected = False
@@ -869,10 +874,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
                     # Drain any pending data before sending (handles unsolicited packets)
                     await self._drain_buffer()
+                    self._raise_if_shutdown()
 
                     # Send packet
-                    self._writer.write(packet)
-                    await self._writer.drain()
+                    writer = self._writer
+                    if writer is None:
+                        raise TransportConnectionError("Socket not initialized")
+                    writer.write(packet)
+                    await writer.drain()
+                    self._raise_if_shutdown()
 
                     # Assemble one complete protocol frame.  The single
                     # wait_for bounds the entire prefix/header/body sequence;
@@ -881,6 +891,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         self._receive_frame(),
                         timeout=self._timeout,
                     )
+                    self._raise_if_shutdown()
 
                     # Parse response with cross-request validation.  The
                     # request's own TCP function (packet byte 7) is the
@@ -963,6 +974,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     raise TransportReadError(f"[{self._serial}] Socket error: {err}") from err
                 except TransportReadError as err:
                     last_error = err
+                    self._raise_if_shutdown()
                     if attempt < max_retries:
                         _LOGGER.debug(
                             "[%s] Read error (attempt %d/%d): %s, retrying...",
@@ -1565,6 +1577,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         there is no inner request-level resend multiplying this.
 
         Raises:
+            TransportConnectionError: If terminal shutdown is requested. This
+                is never retried or recast as a generic write failure.
             TransportWriteError: If the write sequence fails after all
                 attempts.  A ``TransportError`` subclass, so HYBRID-mode
                 consumers can still dispatch their cloud API fallback.
@@ -1575,6 +1589,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             last_error: TransportError | None = None
 
             for attempt in range(1, attempts + 1):
+                self._raise_if_shutdown()
                 try:
                     result = await super().write_named_parameters(parameters)
                 except (
@@ -1583,6 +1598,10 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     TransportTimeoutError,
                     TransportWriteError,
                 ) as err:
+                    # A terminal close is not a transient link failure. Preserve
+                    # its connection-error contract instead of entering the
+                    # sequence retry/backoff and eventually recasting it.
+                    self._raise_if_shutdown()
                     last_error = err
                     if attempt < attempts:
                         _LOGGER.warning(
@@ -1594,15 +1613,19 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                             err,
                         )
                         await self._force_reconnect()
+                        self._raise_if_shutdown()
                         await asyncio.sleep(WRITE_RETRY_DELAY * attempt)
+                        self._raise_if_shutdown()
                     continue
 
+                self._raise_if_shutdown()
                 if not self._verify_writes:
                     return result
 
                 try:
                     mismatches = await self._verify_named_parameters(parameters)
                 except TransportError as err:
+                    self._raise_if_shutdown()
                     # The write itself was acknowledged by the inverter; a
                     # failed verification READ must not fail the operation.
                     _LOGGER.debug(
@@ -1613,6 +1636,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     )
                     return result
 
+                self._raise_if_shutdown()
                 if not mismatches:
                     return result
 

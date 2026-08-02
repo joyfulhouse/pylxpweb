@@ -268,6 +268,79 @@ class TestDongleConnection:
         assert transport._writer is None
 
     @pytest.mark.asyncio
+    async def test_async_shutdown_during_connect_backoff_prevents_second_dial(
+        self,
+    ) -> None:
+        """Terminal shutdown in retry sleep must stop before another TCP dial."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            connection_retries=2,
+        )
+        backoff_started = asyncio.Event()
+        release_backoff = asyncio.Event()
+
+        async def controlled_backoff(delay: float) -> None:
+            assert delay == 1.0
+            backoff_started.set()
+            await release_backoff.wait()
+
+        open_connection = AsyncMock(side_effect=ConnectionRefusedError("first dial failed"))
+        with (
+            patch("asyncio.open_connection", open_connection),
+            patch("asyncio.sleep", side_effect=controlled_backoff) as sleep,
+        ):
+            connect_task = asyncio.create_task(transport.connect())
+            await asyncio.wait_for(backoff_started.wait(), timeout=1.0)
+            await transport.async_shutdown()
+            release_backoff.set()
+
+            with pytest.raises(TransportConnectionError, match="shut down"):
+                await connect_task
+
+        open_connection.assert_awaited_once()
+        sleep.assert_awaited_once_with(1.0)
+        assert transport.is_connected is False
+        assert transport._reader is None
+        assert transport._writer is None
+
+    @pytest.mark.asyncio
+    async def test_terminal_read_error_does_not_enter_request_retry_backoff(
+        self,
+    ) -> None:
+        """A request observing terminal shutdown rejects before retry sleep."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        reader = AsyncMock()
+        writer = AsyncMock()
+        writer.write = MagicMock()
+        writer.close = MagicMock()
+        transport._reader = reader
+        transport._writer = writer
+        transport._connected = True
+        transport._drain_buffer = AsyncMock()  # type: ignore[method-assign]
+
+        async def shutdown_then_fail() -> bytes:
+            await transport.async_shutdown()
+            raise TransportReadError("request ended during terminal shutdown")
+
+        transport._receive_frame = shutdown_then_fail  # type: ignore[method-assign]
+        retry_sleep = AsyncMock()
+
+        with (
+            patch("asyncio.sleep", retry_sleep),
+            pytest.raises(TransportConnectionError, match="shut down"),
+        ):
+            await transport._send_receive(b"\x00" * 10, max_retries=2)
+
+        retry_sleep.assert_not_awaited()
+        writer.close.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_teardown_connection_awaits_wait_closed(self) -> None:
         """_teardown_connection closes AND awaits wait_closed(), clearing state.
 
@@ -1621,6 +1694,25 @@ class TestDongleWriteSequenceResilience:
 
     Regression tests for joyfulhouse/eg4_web_monitor#201.
     """
+
+    @pytest.mark.asyncio
+    async def test_terminal_shutdown_rejects_without_sequence_retry_or_recast(
+        self,
+    ) -> None:
+        """Terminal connection errors escape immediately as their original type."""
+        transport = _make_write_test_transport()
+        await transport.async_shutdown()
+        transport._force_reconnect = AsyncMock()  # type: ignore[method-assign]
+        retry_sleep = AsyncMock()
+
+        with (
+            patch("asyncio.sleep", retry_sleep),
+            pytest.raises(TransportConnectionError, match="shut down"),
+        ):
+            await transport.write_named_parameters({"FUNC_EPS_EN": True})
+
+        transport._force_reconnect.assert_not_awaited()
+        retry_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_drop_on_read_rereads_and_writes(self) -> None:
