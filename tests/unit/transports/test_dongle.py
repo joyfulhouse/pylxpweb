@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pylxpweb.registers import PV4_6_INPUT_REGISTER_GROUP
+from pylxpweb.transports.capabilities import DONGLE_CAPABILITIES
 from pylxpweb.transports.dongle import (
     DEFAULT_PORT,
     MODBUS_READ_HOLDING,
@@ -107,6 +108,8 @@ class TestDongleTransport:
         assert caps.can_write_parameters is True
         assert caps.can_discover_devices is False
         assert caps.is_local is True
+        assert caps.supports_concurrent_reads is False
+        assert caps is DONGLE_CAPABILITIES
 
 
 class TestDongleConnection:
@@ -1584,6 +1587,41 @@ class TestDongleWriteVerification:
         mock_write.assert_called_once_with(20, [0b0110])
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("parameter", "requested", "raw"),
+        [
+            ("FUNC_HALF_HOUR_AC_CHG_START_EN", True, 0x0001),
+            ("BIT_AC_CHARGE_TYPE", 5, 0x000A),
+            ("BIT_DISCHG_CONTROL_TYPE", 3, 0x0030),
+            ("BIT_ON_GRID_EOD_TYPE", True, 0x0040),
+            ("BIT_GENERATOR_CHARGE_TYPE", True, 0x0080),
+        ],
+    )
+    async def test_verification_uses_register_120_explicit_layout(
+        self,
+        parameter: str,
+        requested: bool | int,
+        raw: int,
+    ) -> None:
+        """H120 readback compares each field at its real sparse offset."""
+        transport = _make_write_test_transport()
+        transport.read_parameters = AsyncMock(return_value={120: raw})  # type: ignore[method-assign]
+
+        mismatches = await transport._verify_named_parameters({parameter: requested})
+
+        assert mismatches == []
+
+    @pytest.mark.asyncio
+    async def test_verification_reports_register_120_compound_mismatch(self) -> None:
+        """A different H120 compound value is reported diagnostically."""
+        transport = _make_write_test_transport()
+        transport.read_parameters = AsyncMock(return_value={120: 0x0004})  # type: ignore[method-assign]
+
+        mismatches = await transport._verify_named_parameters({"BIT_AC_CHARGE_TYPE": 5})
+
+        assert mismatches == ["BIT_AC_CHARGE_TYPE: wrote 5, read back 2"]
+
+    @pytest.mark.asyncio
     async def test_verification_skipped_when_not_cheap(self) -> None:
         """Writes spanning many registers skip the readback (not cheap)."""
         transport = _make_write_test_transport()
@@ -1794,6 +1832,30 @@ class TestWriteAckEchoValidation:
             patch("asyncio.sleep", AsyncMock()),
             pytest.raises(TransportWriteError, match="count mismatch"),
         ):
+            await transport._write_holding_registers(110, [1, 2])
+
+    @pytest.mark.asyncio
+    async def test_fc16_read_style_count_match_succeeds(self) -> None:
+        """The supported one-value read-layout fallback may confirm FC16."""
+        transport = self._connected_transport()
+        echo = _build_mock_response(
+            modbus_func=MODBUS_WRITE_MULTI,
+            start_register=110,
+            register_values=[2],
+        )
+        transport._reader.read = AsyncMock(side_effect=[b"", echo])
+
+        with patch("asyncio.sleep", AsyncMock()):
+            assert await transport._write_holding_registers(110, [1, 2]) is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("ack", [[0x9999, 0x8888], [2, 0x8888]])
+    async def test_fc16_multi_value_read_style_ack_raises(self, ack: list[int]) -> None:
+        """A read payload is not an FC16 count echo, even if its first value matches."""
+        transport = self._connected_transport()
+        transport._send_receive = AsyncMock(return_value=ack)  # type: ignore[method-assign]
+
+        with pytest.raises(TransportWriteError, match="malformed"):
             await transport._write_holding_registers(110, [1, 2])
 
     @pytest.mark.asyncio

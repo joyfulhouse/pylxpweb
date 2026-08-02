@@ -35,7 +35,7 @@ from ._register_data import (
     DEFAULT_INPUT_BLOCK_SIZE,
     RegisterDataMixin,
 )
-from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
+from .capabilities import DONGLE_CAPABILITIES, TransportCapabilities
 from .exceptions import (
     TransportConnectionError,
     TransportError,
@@ -244,8 +244,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
     @property
     def capabilities(self) -> TransportCapabilities:
-        """Get dongle transport capabilities (same as Modbus)."""
-        return MODBUS_CAPABILITIES
+        """Get capabilities for the dongle's serialized TCP connection."""
+        return DONGLE_CAPABILITIES
 
     @property
     def host(self) -> str:
@@ -1244,7 +1244,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     f"Write ACK empty/short for register {address}: no echoed "
                     "register count to confirm the write"
                 )
-            if len(ack) == 1 and ack[0] != len(values):
+            if len(ack) != 1:
+                # The supported read-layout fallback still has exactly one
+                # count value.  Two or more parsed values are a read payload,
+                # not an unambiguous FC16 acknowledgement.
+                raise TransportWriteError(
+                    f"Write ACK malformed for register {address}: expected one "
+                    f"echoed register count, got {len(ack)} values"
+                )
+            if ack[0] != len(values):
                 # FC16 ACK echoes the written register count.
                 raise TransportWriteError(
                     f"Write ACK count mismatch for register {address}: wrote "
@@ -1483,7 +1491,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             TransportTimeoutError: If the readback read times out.
             TransportConnectionError: If reconnecting for the readback fails.
         """
-        from pylxpweb.constants.registers import LOCAL_PARAM_SCALE_DIV10, MULTI_BIT_FIELDS
+        from pylxpweb.constants.registers import BIT_FIELD_LAYOUT, LOCAL_PARAM_SCALE_DIV10
 
         register_to_params, param_to_register = self._resolve_register_mappings(
             param_names=list(parameters.keys()),
@@ -1514,11 +1522,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             param_keys = register_to_params.get(param_register, [])
 
             if self._is_bit_field_register(param_keys):
-                if name in MULTI_BIT_FIELDS:
-                    offset, width = MULTI_BIT_FIELDS[name]
+                explicit_layout = BIT_FIELD_LAYOUT.get(name)
+                if explicit_layout is not None:
+                    offset, width = explicit_layout
                     got_field = (raw >> offset) & ((1 << width) - 1)
-                    if got_field != int(value):
-                        mismatches.append(f"{name}: wrote {int(value)}, read back {got_field}")
+                    expected_field = int(value) if width > 1 else int(bool(value))
+                    if got_field != expected_field:
+                        mismatches.append(f"{name}: wrote {expected_field}, read back {got_field}")
                 elif name in param_keys:
                     got_bit = bool((raw >> param_keys.index(name)) & 1)
                     if got_bit is not bool(value):

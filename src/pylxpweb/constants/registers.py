@@ -780,10 +780,15 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # at 6, working-mode at 10) was disproven by live hardware toggles
     # (eg4_web_monitor #476 + PR #220) and is gone.
     110: REGISTER_110_PARAM_KEYS,
+    # System enable 2 is NOT seven consecutive booleans.  The documented
+    # LuxPower layout, independently corroborated by the dedicated AC charge
+    # type API's 0x0e mask, is bit 0; compound fields at bits 1-3 and 4-5;
+    # then bits 6 and 7.  The explicit offsets live in BIT_FIELD_LAYOUT below.
+    # Do not restore FUNC_SNA_BAT_DISCHARGE_CONTROL or
+    # FUNC_PHASE_INDEPEND_COMPENSATE_EN here: those legacy names overlap the
+    # ACChargeType field and therefore cannot represent safe local controls.
     120: [
         "FUNC_HALF_HOUR_AC_CHG_START_EN",
-        "FUNC_SNA_BAT_DISCHARGE_CONTROL",
-        "FUNC_PHASE_INDEPEND_COMPENSATE_EN",
         "BIT_AC_CHARGE_TYPE",
         "BIT_DISCHG_CONTROL_TYPE",
         "BIT_ON_GRID_EOD_TYPE",
@@ -1082,13 +1087,32 @@ MIDBOX_REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     ],
 }
 
-# Multi-bit fields: param name → (bit_offset, bit_width)
-# Standard bit fields use 1 bit per param. These use wider fields.
-MULTI_BIT_FIELDS: dict[str, tuple[int, int]] = {
+# Explicit GridBOSS bit-field offsets.  Keeping this subset distinct lets the
+# mapping resolver detect MIDBOX-only parameter names without mistaking the
+# inverter register-120 fields for MIDBOX parameters.
+MIDBOX_BIT_FIELD_LAYOUT: dict[str, tuple[int, int]] = {
     "BIT_MIDBOX_SP_MODE_1": (0, 2),  # bits 0-1
     "BIT_MIDBOX_SP_MODE_2": (2, 2),  # bits 2-3
     "BIT_MIDBOX_SP_MODE_3": (4, 2),  # bits 4-5
     "BIT_MIDBOX_SP_MODE_4": (6, 2),  # bits 6-7
+}
+
+# Explicit offsets for named bit fields that cannot safely use list position.
+# Width-one entries preserve boolean read/write semantics; wider entries are
+# integer fields validated against the width before an RMW write.
+BIT_FIELD_LAYOUT: dict[str, tuple[int, int]] = {
+    "FUNC_HALF_HOUR_AC_CHG_START_EN": (0, 1),
+    "BIT_AC_CHARGE_TYPE": (1, 3),
+    "BIT_DISCHG_CONTROL_TYPE": (4, 2),
+    "BIT_ON_GRID_EOD_TYPE": (6, 1),
+    "BIT_GENERATOR_CHARGE_TYPE": (7, 1),
+    **MIDBOX_BIT_FIELD_LAYOUT,
+}
+
+# Backward-compatible public subset for callers that need to identify fields
+# whose values are integers rather than booleans.
+MULTI_BIT_FIELDS: dict[str, tuple[int, int]] = {
+    name: layout for name, layout in BIT_FIELD_LAYOUT.items() if layout[1] > 1
 }
 
 # Named value parameters whose raw local register holds a deci-unit encoding

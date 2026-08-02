@@ -302,6 +302,111 @@ class TestWriteNamedParametersModbus:
             await mock_modbus_transport.write_named_parameters({"UNKNOWN_PARAM": 123})
 
 
+class TestRegister120CompoundFields:
+    """Register 120 is one bit, two compound fields, then two sparse bits."""
+
+    @pytest.fixture
+    def mock_modbus_transport(self) -> ModbusTransport:
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+        )
+        transport._connected = True
+        transport.read_parameters = AsyncMock(return_value={120: 0})
+        transport.write_parameters = AsyncMock(return_value=True)
+        return transport
+
+    @pytest.mark.asyncio
+    async def test_read_field_matrix_uses_documented_offsets_and_widths(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """Every low-byte combination decodes without overlapping fake bits."""
+        for half_hour in (False, True):
+            for ac_charge_type in range(8):
+                for discharge_type in range(4):
+                    for on_grid_eod in (False, True):
+                        for generator_charge in (False, True):
+                            raw = (
+                                0xA500
+                                | int(half_hour)
+                                | (ac_charge_type << 1)
+                                | (discharge_type << 4)
+                                | (int(on_grid_eod) << 6)
+                                | (int(generator_charge) << 7)
+                            )
+                            mock_modbus_transport.read_parameters = AsyncMock(
+                                return_value={120: raw}
+                            )
+
+                            result = await mock_modbus_transport.read_named_parameters(120, 1)
+
+                            assert result == {
+                                "FUNC_HALF_HOUR_AC_CHG_START_EN": half_hour,
+                                "BIT_AC_CHARGE_TYPE": ac_charge_type,
+                                "BIT_DISCHG_CONTROL_TYPE": discharge_type,
+                                "BIT_ON_GRID_EOD_TYPE": on_grid_eod,
+                                "BIT_GENERATOR_CHARGE_TYPE": generator_charge,
+                            }
+
+    @pytest.mark.asyncio
+    async def test_write_all_fields_preserves_unmapped_upper_bits(
+        self, mock_modbus_transport: ModbusTransport
+    ) -> None:
+        """A combined RMW changes only H120's documented low-byte fields."""
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={120: 0xA555})
+
+        result = await mock_modbus_transport.write_named_parameters(
+            {
+                "FUNC_HALF_HOUR_AC_CHG_START_EN": True,
+                "BIT_AC_CHARGE_TYPE": 5,
+                "BIT_DISCHG_CONTROL_TYPE": 2,
+                "BIT_ON_GRID_EOD_TYPE": False,
+                "BIT_GENERATOR_CHARGE_TYPE": True,
+            }
+        )
+
+        assert result is True
+        mock_modbus_transport.write_parameters.assert_awaited_once_with({120: 0xA5AB})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("parameter", "value"),
+        [
+            ("BIT_AC_CHARGE_TYPE", -1),
+            ("BIT_AC_CHARGE_TYPE", 8),
+            ("BIT_DISCHG_CONTROL_TYPE", -1),
+            ("BIT_DISCHG_CONTROL_TYPE", 4),
+        ],
+    )
+    async def test_write_compound_field_rejects_values_outside_width(
+        self,
+        mock_modbus_transport: ModbusTransport,
+        parameter: str,
+        value: int,
+    ) -> None:
+        mock_modbus_transport.read_parameters = AsyncMock(return_value={120: 0})
+
+        with pytest.raises(ValueError, match="out of range"):
+            await mock_modbus_transport.write_named_parameters({parameter: value})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "unsupported_parameter",
+        [
+            "FUNC_SNA_BAT_DISCHARGE_CONTROL",
+            "FUNC_PHASE_INDEPEND_COMPENSATE_EN",
+        ],
+    )
+    async def test_overlapping_legacy_names_are_not_locally_writable(
+        self,
+        mock_modbus_transport: ModbusTransport,
+        unsupported_parameter: str,
+    ) -> None:
+        """Names that overlap ACChargeType bits must not imply safe local writes."""
+        with pytest.raises(ValueError, match="Unknown parameter name"):
+            await mock_modbus_transport.write_named_parameters({unsupported_parameter: True})
+
+
 class TestReadNamedParametersHTTP:
     """Tests for HTTP transport read_named_parameters."""
 
@@ -657,7 +762,7 @@ class TestMultiBitFieldReadWrite:
         """Test that multi-bit fields work even without _device_type set.
 
         The _resolve_register_mappings method auto-detects MIDBOX params
-        from MULTI_BIT_FIELDS.
+        from the MIDBOX-only field layout.
         """
         transport = ModbusTransport(
             host="192.168.1.100",

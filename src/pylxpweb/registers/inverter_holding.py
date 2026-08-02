@@ -14,8 +14,8 @@ Each HoldingRegisterDefinition carries:
 
 Two types of entries:
   - Value registers: bit_position=None, full 16-bit (or 32-bit) value with scale/min/max.
-  - Bitfield entries: bit_position=0-15, single boolean bit within a bitfield register.
-    Multiple bitfield entries share the same address.
+  - Bit-field entries: bit_position=0-15 and field_width=1-16 within a register.
+    Multiple bit-field entries may share the same address.
 
 The `api_param_key` field matches the HOLD_* or FUNC_* strings returned by the
 cloud API and local Modbus parameter reads.  These are the keys used by pylxpweb's
@@ -52,8 +52,9 @@ class HoldingRegisterDefinition:
     """Single holding register parameter definition.
 
     For value registers: bit_position is None, address is the Modbus register.
-    For bitfield entries: bit_position is 0-15 within the register at address.
-      Multiple bitfield entries share the same address.
+    For bit-field entries: bit_position is 0-15 within the register at address
+      and field_width is the number of occupied bits. Multiple entries may
+      share the same address.
 
     Attributes:
         address: Modbus holding register address (function code 0x03).
@@ -74,6 +75,8 @@ class HoldingRegisterDefinition:
         category: Logical grouping for UI organisation and read scheduling.
         models: Which InverterFamily values support this register.
         description: Human-readable description.
+        field_width: Number of bits occupied by a bit-field entry. Defaults to
+            one for boolean fields; compound selectors use a wider value.
     """
 
     address: int
@@ -91,6 +94,7 @@ class HoldingRegisterDefinition:
     category: HoldingCategory = HoldingCategory.POWER
     models: frozenset[str] = ALL
     description: str = ""
+    field_width: int = 1
 
 
 # =============================================================================
@@ -1027,7 +1031,7 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         description="Parallel system type. 0=Single, 1=Master, 2=Slave, 3=3-Phase Master.",
     ),
     # =========================================================================
-    # SYSTEM ENABLE BITFIELD — Register 120 (7 bits, verified)
+    # SYSTEM ENABLE COMPOUND FIELD — Register 120 (bits 0-7)
     # =========================================================================
     HoldingRegisterDefinition(
         address=120,
@@ -1040,38 +1044,28 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     HoldingRegisterDefinition(
         address=120,
         bit_position=1,
-        canonical_name="sna_battery_discharge_control",
-        api_param_key="FUNC_SNA_BAT_DISCHARGE_CONTROL",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="SNA battery discharge control enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=120,
-        bit_position=2,
-        canonical_name="phase_independent_compensate_enable",
-        api_param_key="FUNC_PHASE_INDEPEND_COMPENSATE_EN",  # verified
-        category=HoldingCategory.FUNCTION,
-        description="Phase-independent power compensation enable.",
-    ),
-    HoldingRegisterDefinition(
-        address=120,
-        bit_position=3,
+        field_width=3,
         canonical_name="ac_charge_type",
         api_param_key="BIT_AC_CHARGE_TYPE",  # verified
+        min_value=0,
+        max_value=7,
         category=HoldingCategory.FUNCTION,
-        description="AC charge type selection bit.",
+        description="AC charge type selector (bits 1-3).",
     ),
     HoldingRegisterDefinition(
         address=120,
         bit_position=4,
+        field_width=2,
         canonical_name="discharge_control_type",
         api_param_key="BIT_DISCHG_CONTROL_TYPE",  # verified
+        min_value=0,
+        max_value=3,
         category=HoldingCategory.FUNCTION,
-        description="Discharge control type selection bit.",
+        description="Discharge control type selector (bits 4-5).",
     ),
     HoldingRegisterDefinition(
         address=120,
-        bit_position=5,
+        bit_position=6,
         canonical_name="ongrid_eod_type",
         api_param_key="BIT_ON_GRID_EOD_TYPE",  # verified
         category=HoldingCategory.FUNCTION,
@@ -1079,7 +1073,7 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     ),
     HoldingRegisterDefinition(
         address=120,
-        bit_position=6,
+        bit_position=7,
         canonical_name="generator_charge_type",
         api_param_key="BIT_GENERATOR_CHARGE_TYPE",  # verified
         category=HoldingCategory.FUNCTION,
@@ -1869,7 +1863,7 @@ def value_registers() -> tuple[HoldingRegisterDefinition, ...]:
 
 
 def bitfield_registers() -> tuple[HoldingRegisterDefinition, ...]:
-    """Return only bitfield entries (individual bits within bitfield registers)."""
+    """Return bit-field entries (boolean bits and compound fields)."""
     return tuple(r for r in INVERTER_HOLDING_REGISTERS if r.bit_position is not None)
 
 

@@ -390,7 +390,7 @@ class BaseTransport:
             Tuple of (register_to_params, param_to_register) dicts.
         """
         from pylxpweb.constants.registers import (
-            MULTI_BIT_FIELDS,
+            MIDBOX_BIT_FIELD_LAYOUT,
             get_param_to_register_mapping,
             get_register_to_param_mapping,
         )
@@ -404,8 +404,8 @@ class BaseTransport:
             param_to_reg = get_param_to_register_mapping(family, device_type="MIDBOX")
             return reg_to_params, param_to_reg
 
-        # Check if any param names are multi-bit (MIDBOX) fields
-        needs_midbox = param_names and any(p in MULTI_BIT_FIELDS for p in param_names)
+        # Check if any requested names belong to the MIDBOX-only mapping.
+        needs_midbox = param_names and any(p in MIDBOX_BIT_FIELD_LAYOUT for p in param_names)
 
         reg_to_params = get_register_to_param_mapping(family)
         param_to_reg = get_param_to_register_mapping(family)
@@ -431,8 +431,8 @@ class BaseTransport:
         the library maps register addresses to parameter names using the
         appropriate mapping for the inverter family.
 
-        Multi-bit fields (e.g., GridBOSS smart port modes) are decoded as
-        integers rather than booleans.
+        Multi-bit fields (e.g., register-120 selectors and GridBOSS smart port
+        modes) are decoded as integers rather than booleans.
 
         Args:
             start_address: Starting register address
@@ -441,7 +441,8 @@ class BaseTransport:
         Returns:
             Dict mapping parameter name to value. Values are typed appropriately:
             - Boolean for standard 1-bit fields (FUNC_*, BIT_*)
-            - Integer for multi-bit fields (BIT_MIDBOX_SP_MODE_*)
+            - Integer for compound fields (e.g. BIT_AC_CHARGE_TYPE and
+              BIT_MIDBOX_SP_MODE_*)
             - String for serial numbers, firmware versions
             - Integer for most other parameters
 
@@ -457,8 +458,8 @@ class BaseTransport:
             # Returns: {"HOLD_AC_CHARGE_POWER_CMD": 50, "HOLD_AC_CHARGE_SOC_LIMIT": 95}
         """
         from pylxpweb.constants.registers import (
+            BIT_FIELD_LAYOUT,
             LOCAL_PARAM_SCALE_DIV10,
-            MULTI_BIT_FIELDS,
             format_deci_as_cloud_string,
         )
 
@@ -475,10 +476,12 @@ class BaseTransport:
 
             if self._is_bit_field_register(param_keys):
                 for bit_index, param_key in enumerate(param_keys):
-                    if param_key in MULTI_BIT_FIELDS:
-                        offset, width = MULTI_BIT_FIELDS[param_key]
+                    explicit_layout = BIT_FIELD_LAYOUT.get(param_key)
+                    if explicit_layout is not None:
+                        offset, width = explicit_layout
                         field_mask = (1 << width) - 1
-                        result[param_key] = (value >> offset) & field_mask
+                        field_value = (value >> offset) & field_mask
+                        result[param_key] = field_value if width > 1 else bool(field_value)
                     else:
                         result[param_key] = bool((value >> bit_index) & 1)
             elif len(param_keys) == 1:
@@ -507,8 +510,8 @@ class BaseTransport:
         bit fields into register values, using the appropriate mapping for
         the inverter family.
 
-        Multi-bit fields (e.g., GridBOSS smart port modes with 2 bits per port)
-        are handled with proper masking instead of single-bit set/clear.
+        Multi-bit fields (e.g., register-120 selectors and GridBOSS smart port
+        modes) are handled with proper masking instead of single-bit set/clear.
 
         Args:
             parameters: Dict mapping parameter name to value. For standard bit
@@ -534,15 +537,15 @@ class BaseTransport:
                 "FUNC_AC_CHARGE": False,
             })
 
-            # Write multi-bit field (GridBOSS smart port mode)
+            # Write a multi-bit field (GridBOSS smart port mode)
             await transport.write_named_parameters({
                 "BIT_MIDBOX_SP_MODE_1": 2,  # AC Couple
             })
         """
         from pylxpweb.constants.registers import (
+            BIT_FIELD_LAYOUT,
             DISPUTED_WRITE_BLOCKED_PARAMS,
             LOCAL_PARAM_SCALE_DIV10,
-            MULTI_BIT_FIELDS,
         )
 
         register_to_params, param_to_register = self._resolve_register_mappings(
@@ -597,12 +600,15 @@ class BaseTransport:
                     raise ValueError(
                         f"Bit field '{param_name}' not in register {register_addr} mapping"
                     )
-                if param_name in MULTI_BIT_FIELDS:
-                    # Multi-bit field: mask out old value, OR in new
-                    offset, width = MULTI_BIT_FIELDS[param_name]
+                explicit_layout = BIT_FIELD_LAYOUT.get(param_name)
+                if explicit_layout is not None:
+                    # Explicit field: mask out the old value, then OR in the
+                    # requested value at its documented (possibly sparse)
+                    # offset.  Width-one fields retain boolean semantics.
+                    offset, width = explicit_layout
                     field_mask = (1 << width) - 1
-                    int_value = int(value)
-                    if int_value < 0 or int_value > field_mask:
+                    int_value = int(value) if width > 1 else int(bool(value))
+                    if width > 1 and (int_value < 0 or int_value > field_mask):
                         raise ValueError(
                             f"Value {int_value} out of range for {param_name} (0-{field_mask})"
                         )
