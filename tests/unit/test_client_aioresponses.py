@@ -5,7 +5,9 @@ This approach is faster and more reliable than using TestServer.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -440,6 +442,171 @@ class TestErrorHandling:
 
 class TestSessionManagement:
     """Test session management."""
+
+    @pytest.mark.asyncio
+    async def test_expired_session_authentication_is_single_flight(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Concurrent expired-session checks share one login attempt."""
+        client = LuxpowerClient("testuser", "testpass")
+        client._session_expires = datetime.now() - timedelta(seconds=1)
+        start = asyncio.Event()
+        login_started = asyncio.Event()
+        release_login = asyncio.Event()
+        login_calls = 0
+
+        async def fake_login(_retry_count: int = 0) -> None:
+            nonlocal login_calls
+            login_calls += 1
+            login_started.set()
+            await release_login.wait()
+            client._session_expires = datetime.now() + timedelta(hours=2)
+
+        async def authenticate_after_start() -> None:
+            await start.wait()
+            await client._ensure_authenticated()
+
+        monkeypatch.setattr(client, "login", fake_login)
+        tasks = [asyncio.create_task(authenticate_after_start()) for _ in range(10)]
+        start.set()
+        await asyncio.wait_for(login_started.wait(), timeout=1)
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        try:
+            assert login_calls == 1
+        finally:
+            release_login.set()
+            await asyncio.gather(*tasks)
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_waiter_does_not_cancel_shared_authentication(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cancelling one waiter leaves the shared login running for others."""
+        client = LuxpowerClient("testuser", "testpass")
+        client._session_expires = datetime.now() - timedelta(seconds=1)
+        login_started = asyncio.Event()
+        release_login = asyncio.Event()
+        login_calls = 0
+
+        async def fake_login(_retry_count: int = 0) -> None:
+            nonlocal login_calls
+            login_calls += 1
+            login_started.set()
+            await release_login.wait()
+            client._session_expires = datetime.now() + timedelta(hours=2)
+
+        monkeypatch.setattr(client, "login", fake_login)
+        cancelled_waiter = asyncio.create_task(client._ensure_authenticated())
+        await asyncio.wait_for(login_started.wait(), timeout=1)
+        surviving_waiter = asyncio.create_task(client._ensure_authenticated())
+        await asyncio.sleep(0)
+
+        try:
+            cancelled_waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_waiter
+            release_login.set()
+            await surviving_waiter
+            assert login_calls == 1
+        finally:
+            release_login.set()
+            for task in (cancelled_waiter, surviving_waiter):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(cancelled_waiter, surviving_waiter, return_exceptions=True)
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_failed_authentication_is_shared_and_later_call_retries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Waiters share one failure, while a later caller starts a new login."""
+        client = LuxpowerClient("testuser", "testpass")
+        client._session_expires = datetime.now() - timedelta(seconds=1)
+        start = asyncio.Event()
+        login_started = asyncio.Event()
+        release_login = asyncio.Event()
+        first_error = LuxpowerConnectionError("renewal failed")
+        login_calls = 0
+
+        async def fake_login(_retry_count: int = 0) -> None:
+            nonlocal login_calls
+            login_calls += 1
+            if login_calls == 1:
+                login_started.set()
+                await release_login.wait()
+                raise first_error
+            client._session_expires = datetime.now() + timedelta(hours=2)
+
+        async def authenticate_after_start() -> None:
+            await start.wait()
+            await client._ensure_authenticated()
+
+        monkeypatch.setattr(client, "login", fake_login)
+        tasks = [asyncio.create_task(authenticate_after_start()) for _ in range(10)]
+        start.set()
+        await asyncio.wait_for(login_started.wait(), timeout=1)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        release_login.set()
+
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            assert login_calls == 1
+            assert all(result is first_error for result in results)
+
+            await client._ensure_authenticated()
+            assert login_calls == 2
+        finally:
+            release_login.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_only_waiter_does_not_pin_failed_authentication(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A background login failure is cleared even after its waiter cancels."""
+        client = LuxpowerClient("testuser", "testpass")
+        client._session_expires = datetime.now() - timedelta(seconds=1)
+        login_started = asyncio.Event()
+        release_login = asyncio.Event()
+        login_finished = asyncio.Event()
+        first_error = LuxpowerConnectionError("renewal failed after cancellation")
+        login_calls = 0
+
+        async def fake_login(_retry_count: int = 0) -> None:
+            nonlocal login_calls
+            login_calls += 1
+            if login_calls == 1:
+                login_started.set()
+                try:
+                    await release_login.wait()
+                    raise first_error
+                finally:
+                    login_finished.set()
+            client._session_expires = datetime.now() + timedelta(hours=2)
+
+        monkeypatch.setattr(client, "login", fake_login)
+        waiter = asyncio.create_task(client._ensure_authenticated())
+        await asyncio.wait_for(login_started.wait(), timeout=1)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+        release_login.set()
+        await asyncio.wait_for(login_finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        try:
+            await client._ensure_authenticated()
+            assert login_calls == 2
+        finally:
+            release_login.set()
+            await client.close()
 
     @pytest.mark.asyncio
     async def test_session_creation(

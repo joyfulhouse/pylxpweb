@@ -119,6 +119,7 @@ class LuxpowerClient:
         self._user_role: str | None = None  # VIEWER, INSTALLER, I_ASSISTANT, ADMIN
         # Account level: "guest", "viewer", "operator", "owner", "installer"
         self._account_level: str | None = None
+        self._authentication_task: asyncio.Task[LoginResponse] | None = None
 
         # Response cache with TTL configuration
         self._response_cache: dict[str, dict[str, Any]] = {}
@@ -806,7 +807,19 @@ class LuxpowerClient:
         """Ensure we have a valid session, re-authenticating if needed."""
         if not self._session_expires or datetime.now() >= self._session_expires:
             _LOGGER.debug("Session expired or missing, re-authenticating")
-            await self.login()
+            task = self._authentication_task
+            if task is None:
+                task = asyncio.create_task(self.login())
+                self._authentication_task = task
+                task.add_done_callback(self._authentication_task_done)
+            await asyncio.shield(task)
+
+    def _authentication_task_done(self, task: asyncio.Task[LoginResponse]) -> None:
+        """Clear a completed shared login and consume an unobserved failure."""
+        if self._authentication_task is task:
+            self._authentication_task = None
+        if not task.cancelled():
+            task.exception()
 
     @property
     def is_installer_role(self) -> bool:
