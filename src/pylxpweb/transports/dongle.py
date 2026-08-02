@@ -86,6 +86,7 @@ _FRAME_CRC_SIZE = 2
 _MIN_ADVERTISED_FRAME_LENGTH = _FRAME_FIXED_FIELDS_SIZE + _FRAME_CRC_SIZE
 _MAX_PACKET_SIZE = RECV_BUFFER_SIZE
 _MAX_PREFIX_SCAN_BYTES = RECV_BUFFER_SIZE
+_SHUTDOWN_CLOSE_TIMEOUT = 0.25
 
 # Write resilience settings (joyfulhouse/eg4_web_monitor#201)
 # The dongle drops its TCP connection mid-sequence during parameter writes
@@ -252,6 +253,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         # under _connect_lock ever takes _lock, so no cycle.
         self._connect_lock = asyncio.Lock()
         self._transaction_id = 0
+        self._shutdown_requested = False
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -382,7 +384,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         Raises:
             TransportConnectionError: If all connection attempts fail
         """
+        self._raise_if_shutdown()
         async with self._connect_lock:
+            self._raise_if_shutdown()
             if self._connected:
                 return  # another task already (re)connected
 
@@ -394,6 +398,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             await self._close_connection()
 
             for attempt in range(self._connection_retries):
+                self._raise_if_shutdown()
                 try:
                     if attempt > 0:
                         _LOGGER.info(
@@ -411,6 +416,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         asyncio.open_connection(self._host, self._port),
                         timeout=self._timeout,
                     )
+                    if self._shutdown_requested:
+                        await self._close_connection()
+                        self._raise_if_shutdown()
 
                     # Discard any initial data the dongle sends after
                     # connection (some dongles send unsolicited packets that
@@ -419,6 +427,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # instead of leaking a connected-looking transport with
                     # a broken socket.
                     await self._discard_initial_data()
+                    self._raise_if_shutdown()
 
                     self._connected = True
                     _LOGGER.info(
@@ -434,6 +443,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 except TimeoutError as err:
                     last_error = err
                     await self._close_connection()
+                    self._raise_if_shutdown()
                     _LOGGER.warning(
                         "Timeout connecting to dongle at %s:%s (attempt %d/%d)",
                         self._host,
@@ -444,6 +454,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 except OSError as err:
                     last_error = err
                     await self._close_connection()
+                    self._raise_if_shutdown()
                     _LOGGER.warning(
                         "Connection failed to %s:%s: %s (attempt %d/%d)",
                         self._host,
@@ -481,6 +492,39 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         async with self._lock:
             await self._teardown_connection()
         _LOGGER.debug("Dongle transport disconnected for %s", self._serial)
+
+    async def async_shutdown(self) -> None:
+        """Terminally close the socket without waiting for a held transaction lock.
+
+        Home Assistant unloads must close the stream before cancelling the task
+        that owns ``_lock``; otherwise a muted dongle can hold shutdown behind
+        the full response timeout.  This method is deliberately terminal.  It
+        marks the transport first, detaches and closes the current writer, and
+        makes an in-flight or later ``connect()`` close its result instead of
+        resurrecting the socket.  Ordinary reusable disconnects retain the
+        fully serialised :meth:`disconnect` contract.
+        """
+        self._shutdown_requested = True
+        self._connected = False
+        self._reader = None
+        self._receive_buffer.clear()
+        writer = self._writer
+        self._writer = None
+        if writer is not None:
+            with contextlib.suppress(Exception):
+                writer.close()
+                await asyncio.wait_for(
+                    writer.wait_closed(),
+                    timeout=min(self._timeout, _SHUTDOWN_CLOSE_TIMEOUT),
+                )
+        _LOGGER.debug("Dongle transport shut down for %s", self._serial)
+
+    def _raise_if_shutdown(self) -> None:
+        """Reject socket creation or use after terminal shutdown."""
+        if self._shutdown_requested:
+            raise TransportConnectionError(
+                f"Dongle transport for {self._serial} has been shut down"
+            )
 
     def _build_packet(
         self,
@@ -796,8 +840,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         """
         last_error: TransportReadError | None = None
 
+        self._raise_if_shutdown()
         async with self._lock:
+            self._raise_if_shutdown()
             for attempt in range(max_retries + 1):
+                self._raise_if_shutdown()
                 try:
                     # (Re)connect when there is no live connection: first
                     # use, after _teardown_connection(), or an external
@@ -854,6 +901,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # Retry only after a fresh connection.
                     last_error = err
                     await self._teardown_connection()
+                    self._raise_if_shutdown()
                     if attempt < max_retries:
                         _LOGGER.debug(
                             "[%s] Frame error (attempt %d/%d): %s, reconnecting...",
@@ -875,6 +923,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # below — dials a fresh connection instead of polling
                     # the dead flow forever (#226).
                     await self._teardown_connection()
+                    self._raise_if_shutdown()
                     if retry_on_timeout and attempt < max_retries:
                         _LOGGER.warning(
                             "[%s] Timeout on attempt %d/%d, will reconnect and resend",
@@ -895,6 +944,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # Tear down the broken connection; next iteration
                     # will reconnect via the top-of-loop guard.
                     await self._teardown_connection()
+                    self._raise_if_shutdown()
 
                     if attempt < max_retries:
                         _LOGGER.warning(

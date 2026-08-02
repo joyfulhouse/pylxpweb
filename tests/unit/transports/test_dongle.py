@@ -195,6 +195,79 @@ class TestDongleConnection:
             assert transport.is_connected is False
 
     @pytest.mark.asyncio
+    async def test_async_shutdown_bypasses_inflight_transaction_lock(self) -> None:
+        """Terminal shutdown closes the socket while a request owns ``_lock``."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        receive_started = asyncio.Event()
+        never_respond = asyncio.Event()
+
+        async def blocked_receive() -> bytes:
+            receive_started.set()
+            await never_respond.wait()
+            return b""
+
+        reader = AsyncMock()
+        writer = AsyncMock()
+        writer.write = MagicMock()
+        writer.close = MagicMock()
+        transport._reader = reader
+        transport._writer = writer
+        transport._connected = True
+        transport._drain_buffer = AsyncMock()  # type: ignore[method-assign]
+        transport._receive_frame = blocked_receive  # type: ignore[method-assign]
+
+        request = asyncio.create_task(transport._send_receive(b"\x00" * 10, max_retries=0))
+        await asyncio.wait_for(receive_started.wait(), timeout=1.0)
+        try:
+            await asyncio.wait_for(transport.async_shutdown(), timeout=0.1)
+            assert transport._lock.locked() is True
+            writer.close.assert_called_once()
+            assert transport.is_connected is False
+        finally:
+            request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_async_shutdown_closes_late_connect_and_is_terminal(self) -> None:
+        """A socket produced after shutdown is closed and cannot reconnect."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        open_started = asyncio.Event()
+        release_open = asyncio.Event()
+        reader = AsyncMock()
+        writer = AsyncMock()
+        writer.close = MagicMock()
+
+        async def delayed_open_connection(_host: str, _port: int) -> tuple[AsyncMock, AsyncMock]:
+            open_started.set()
+            await release_open.wait()
+            return reader, writer
+
+        with patch("asyncio.open_connection", side_effect=delayed_open_connection) as open_:
+            connect_task = asyncio.create_task(transport.connect())
+            await asyncio.wait_for(open_started.wait(), timeout=1.0)
+            await asyncio.wait_for(transport.async_shutdown(), timeout=0.1)
+            release_open.set()
+
+            with pytest.raises(TransportConnectionError, match="shut down"):
+                await connect_task
+            with pytest.raises(TransportConnectionError, match="shut down"):
+                await transport.connect()
+
+        assert open_.await_count == 1
+        writer.close.assert_called_once()
+        assert transport.is_connected is False
+        assert transport._reader is None
+        assert transport._writer is None
+
+    @pytest.mark.asyncio
     async def test_teardown_connection_awaits_wait_closed(self) -> None:
         """_teardown_connection closes AND awaits wait_closed(), clearing state.
 
