@@ -80,6 +80,12 @@ MODBUS_WRITE_MULTI = 0x10  # Write multiple holding registers
 DEFAULT_PORT = 8000
 DEFAULT_TIMEOUT = 10.0
 RECV_BUFFER_SIZE = 4096
+_FRAME_HEADER_SIZE = 6
+_FRAME_FIXED_FIELDS_SIZE = 14
+_FRAME_CRC_SIZE = 2
+_MIN_ADVERTISED_FRAME_LENGTH = _FRAME_FIXED_FIELDS_SIZE + _FRAME_CRC_SIZE
+_MAX_PACKET_SIZE = RECV_BUFFER_SIZE
+_MAX_PREFIX_SCAN_BYTES = RECV_BUFFER_SIZE
 
 # Write resilience settings (joyfulhouse/eg4_web_monitor#201)
 # The dongle drops its TCP connection mid-sequence during parameter writes
@@ -143,6 +149,10 @@ def _mismatch_context(expected: str, received: str) -> str:
     share one grep-able shape (joyfulhouse/pylxpweb#213).
     """
     return f"expected [{expected}], received [{received}]"
+
+
+class _DongleFrameError(TransportReadError):
+    """A stream-framing failure that makes the current socket unusable."""
 
 
 class DongleTransport(RegisterDataMixin, BaseTransport):
@@ -232,6 +242,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._verify_writes = verify_writes
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._receive_buffer = bytearray()
         self._lock = asyncio.Lock()
         # Serialises connect() itself: _send_receive reconnects under
         # self._lock, but external callers (e.g. a coordinator write path
@@ -462,27 +473,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     async def disconnect(self) -> None:
         """Close TCP connection to the dongle.
 
-        Uses timeout on wait_closed() to prevent hanging if the connection
-        is in a bad state. The dongle only supports one connection at a time,
-        so proper cleanup is essential.
+        Serialises with both in-flight transactions and connection lifecycle
+        changes.  If a connect is already establishing a socket, disconnect
+        waits and closes that result; if disconnect starts first, a later
+        connect waits until the old socket is fully closed before dialing.
         """
-        if self._writer:
-            try:
-                self._writer.close()
-                # Use timeout to prevent indefinite hang if connection is stuck
-                await asyncio.wait_for(self._writer.wait_closed(), timeout=5.0)
-            except TimeoutError:
-                _LOGGER.warning(
-                    "Timeout waiting for connection close to %s:%s",
-                    self._host,
-                    self._port,
-                )
-            except Exception:  # noqa: BLE001
-                pass  # Ignore other errors during disconnect
-
-        self._reader = None
-        self._writer = None
-        self._connected = False
+        async with self._lock:
+            await self._teardown_connection()
         _LOGGER.debug("Dongle transport disconnected for %s", self._serial)
 
     def _build_packet(
@@ -575,6 +572,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         stale data from previous requests. This method clears the buffer
         before sending a new request to ensure clean communication.
         """
+        # Any bytes retained after extracting a previous frame are stale at
+        # this request boundary (typically an unsolicited heartbeat or a
+        # coalesced late reply), just like bytes waiting in StreamReader.
+        self._receive_buffer.clear()
+
         if not self._reader:
             return
 
@@ -599,6 +601,103 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     break
         except Exception as err:
             _LOGGER.debug("Error draining buffer: %s", err)
+
+    async def _receive_frame(self) -> bytes:
+        """Read one complete packet from the TCP byte stream.
+
+        TCP reads do not preserve protocol-message boundaries: the two-byte
+        prefix, six-byte outer header, and body may all arrive separately.
+        Locate the prefix with a bounded junk scan, validate the advertised
+        packet size before reading its body, and retain any over-read bytes
+        for the next request-boundary drain.
+
+        The caller owns the single overall response timeout.  This helper
+        deliberately does not start a new timeout per fragment.
+        """
+        reader = self._reader
+        if reader is None:
+            raise TransportConnectionError("Socket not initialized")
+
+        discarded = 0
+
+        async def read_more(expected_size: int | None = None) -> None:
+            chunk = await reader.read(RECV_BUFFER_SIZE)
+            if chunk:
+                self._receive_buffer.extend(chunk)
+                return
+
+            if not self._receive_buffer and discarded == 0:
+                raise _DongleFrameError(
+                    f"[{self._serial}] Empty response from dongle. This may indicate: "
+                    "(1) Dongle firmware is blocking local Modbus access, "
+                    "(2) Connection was closed by dongle, or "
+                    "(3) Dongle requires more time to respond. "
+                    "Try increasing timeout or check dongle firmware version."
+                )
+
+            expected = f" of {expected_size} advertised bytes" if expected_size is not None else ""
+            raise _DongleFrameError(
+                f"[{self._serial}] Connection closed before complete frame: "
+                f"received {len(self._receive_buffer)} bytes{expected}"
+            )
+
+        # Locate a prefix without allowing a peer to grow the retained junk
+        # indefinitely.  Preserve one trailing 0xA1 because the 0xA1 0x1A
+        # prefix itself may straddle two TCP reads.
+        while True:
+            packet_start = self._receive_buffer.find(PACKET_PREFIX)
+            if packet_start >= 0:
+                if packet_start:
+                    discarded += packet_start
+                    if discarded > _MAX_PREFIX_SCAN_BYTES:
+                        raise _DongleFrameError(
+                            f"[{self._serial}] Packet prefix scan exceeded "
+                            f"{_MAX_PREFIX_SCAN_BYTES} bytes"
+                        )
+                    _LOGGER.debug(
+                        "Found packet start after discarding %d bytes of junk data",
+                        discarded,
+                    )
+                    del self._receive_buffer[:packet_start]
+                break
+
+            preserve = int(
+                bool(self._receive_buffer) and self._receive_buffer[-1] == PACKET_PREFIX[0]
+            )
+            junk_size = len(self._receive_buffer) - preserve
+            if junk_size:
+                discarded += junk_size
+                if discarded > _MAX_PREFIX_SCAN_BYTES:
+                    raise _DongleFrameError(
+                        f"[{self._serial}] Packet prefix scan exceeded "
+                        f"{_MAX_PREFIX_SCAN_BYTES} bytes"
+                    )
+                del self._receive_buffer[:junk_size]
+            await read_more()
+
+        while len(self._receive_buffer) < _FRAME_HEADER_SIZE:
+            await read_more()
+
+        advertised_length = struct.unpack("<H", self._receive_buffer[4:6])[0]
+        if advertised_length < _MIN_ADVERTISED_FRAME_LENGTH:
+            raise _DongleFrameError(
+                f"[{self._serial}] Invalid advertised frame length "
+                f"{advertised_length}; minimum is {_MIN_ADVERTISED_FRAME_LENGTH}"
+            )
+
+        packet_size = _FRAME_HEADER_SIZE + advertised_length
+        if packet_size > _MAX_PACKET_SIZE:
+            raise _DongleFrameError(
+                f"[{self._serial}] Advertised packet size {packet_size} exceeds maximum "
+                f"{_MAX_PACKET_SIZE}"
+            )
+
+        while len(self._receive_buffer) < packet_size:
+            await read_more(packet_size)
+
+        packet = bytes(self._receive_buffer[:packet_size])
+        del self._receive_buffer[:packet_size]
+        return packet
 
     async def _teardown_connection(self) -> None:
         """Tear down the connection, serialised on ``_connect_lock``.
@@ -627,6 +726,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         """
         self._connected = False
         self._reader = None
+        self._receive_buffer.clear()
         writer = self._writer
         self._writer = None
         if writer is not None:
@@ -727,37 +827,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     self._writer.write(packet)
                     await self._writer.drain()
 
-                    # Receive response with slightly longer timeout for dongles
+                    # Assemble one complete protocol frame.  The single
+                    # wait_for bounds the entire prefix/header/body sequence;
+                    # fragmented reads do not each restart the timeout.
                     response = await asyncio.wait_for(
-                        self._reader.read(RECV_BUFFER_SIZE),
+                        self._receive_frame(),
                         timeout=self._timeout,
                     )
-
-                    if not response:
-                        # recv returned b'' = EOF: the dongle closed the
-                        # connection (or the transport died locally).  This
-                        # socket can never yield a response again — tear it
-                        # down so the retry below (or the next request)
-                        # reconnects instead of re-reading a dead socket.
-                        await self._teardown_connection()
-                        if attempt < max_retries:
-                            _LOGGER.debug(
-                                "[%s] Empty response from dongle (attempt %d/%d), retrying...",
-                                self._serial,
-                                attempt + 1,
-                                max_retries + 1,
-                            )
-                            # Small delay before retry
-                            await asyncio.sleep(0.5)
-                            continue
-                        # Final attempt failed
-                        raise TransportReadError(
-                            f"[{self._serial}] Empty response from dongle. This may indicate: "
-                            "(1) Dongle firmware is blocking local Modbus access, "
-                            "(2) Connection was closed by dongle, or "
-                            "(3) Dongle requires more time to respond. "
-                            "Try increasing timeout or check dongle firmware version."
-                        )
 
                     # Parse response with cross-request validation.  The
                     # request's own TCP function (packet byte 7) is the
@@ -772,6 +848,23 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         expected_tcp_func=packet[7],
                     )
 
+                except _DongleFrameError as err:
+                    # EOF, invalid/oversized advertised lengths, or an
+                    # exhausted prefix scan leaves stream alignment unusable.
+                    # Retry only after a fresh connection.
+                    last_error = err
+                    await self._teardown_connection()
+                    if attempt < max_retries:
+                        _LOGGER.debug(
+                            "[%s] Frame error (attempt %d/%d): %s, reconnecting...",
+                            self._serial,
+                            attempt + 1,
+                            max_retries + 1,
+                            err,
+                        )
+                        await asyncio.sleep(0.5)
+                        continue
+                    raise
                 except TimeoutError as err:
                     # The connection is suspect after ANY response timeout:
                     # the dongle went mute, or the path dropped silently
@@ -923,10 +1016,47 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         # Adjust response to start at the packet
         response = response[packet_start:]
 
-        # Minimum response: prefix(2) + version(2) + length(2) + addr(1) + func(1)
-        # + dongle(10) + data_len(2) + some data
-        if len(response) < 20:
+        if len(response) < _FRAME_HEADER_SIZE:
             raise TransportReadError(f"[{self._serial}] Response too short: {len(response)} bytes")
+
+        advertised_length = struct.unpack("<H", response[4:6])[0]
+        if advertised_length < _MIN_ADVERTISED_FRAME_LENGTH:
+            raise TransportReadError(
+                f"[{self._serial}] Invalid advertised frame length "
+                f"{advertised_length}; minimum is {_MIN_ADVERTISED_FRAME_LENGTH}"
+            )
+
+        packet_size = _FRAME_HEADER_SIZE + advertised_length
+        if packet_size > _MAX_PACKET_SIZE:
+            raise TransportReadError(
+                f"[{self._serial}] Advertised packet size {packet_size} exceeds maximum "
+                f"{_MAX_PACKET_SIZE}"
+            )
+        if packet_size > len(response):
+            raise TransportReadError(
+                f"[{self._serial}] Response truncated: advertised {packet_size} bytes, "
+                f"got {len(response)}"
+            )
+
+        # The outer length covers fixed address/function/serial/data-length
+        # fields plus the inner data and CRC.  Requiring both length fields
+        # to agree prevents accepting a CRC-valid prefix of a malformed frame.
+        data_length = struct.unpack("<H", response[18:20])[0]
+        expected_advertised_length = _FRAME_FIXED_FIELDS_SIZE + data_length
+        if advertised_length != expected_advertised_length:
+            raise TransportReadError(
+                f"[{self._serial}] Frame length mismatch: outer advertises "
+                f"{advertised_length}, inner requires {expected_advertised_length}"
+            )
+        if data_length < _FRAME_CRC_SIZE:
+            raise TransportReadError(
+                f"[{self._serial}] Invalid data length {data_length}; minimum is {_FRAME_CRC_SIZE}"
+            )
+
+        # Ignore bytes following the advertised frame.  Stream reads extract
+        # exactly one packet before this parser, while direct parser callers
+        # may supply a buffer containing trailing data.
+        response = response[:packet_size]
 
         # --- TCP function validation (must precede the data-frame checks) ---
         # The dongle shares the 0xA1 0x1A prefix across ALL its frames — the
@@ -958,9 +1088,6 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     f"0x{response_tcp_func:02x} ({label}): {context} "
                     "— misrouted/unsolicited frame"
                 )
-
-        # Extract data length (frame_length and tcp_func available at bytes 4-6 and 7 if needed)
-        data_length = struct.unpack("<H", response[18:20])[0]
 
         # Data starts at offset 20
         data_start = 20

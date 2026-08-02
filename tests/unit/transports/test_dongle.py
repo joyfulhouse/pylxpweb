@@ -18,6 +18,7 @@ from pylxpweb.transports.dongle import (
     MODBUS_WRITE_SINGLE,
     PACKET_PREFIX,
     PROTOCOL_VERSION,
+    RECV_BUFFER_SIZE,
     TCP_FUNC_HEARTBEAT,
     TCP_FUNC_TRANSLATED,
     DongleTransport,
@@ -262,6 +263,95 @@ class TestDongleConnection:
         assert transport._writer is None
 
     @pytest.mark.asyncio
+    async def test_disconnect_waits_for_inflight_connect_and_closes_result(self) -> None:
+        """A disconnect racing an in-flight dial must close the winning socket."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        open_started = asyncio.Event()
+        release_open = asyncio.Event()
+
+        reader = AsyncMock()
+        reader.read = AsyncMock(side_effect=TimeoutError())
+        writer = MagicMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+
+        async def delayed_open_connection(_host: str, _port: int) -> tuple[AsyncMock, MagicMock]:
+            open_started.set()
+            await release_open.wait()
+            return reader, writer
+
+        with patch("asyncio.open_connection", side_effect=delayed_open_connection):
+            connect_task = asyncio.create_task(transport.connect())
+            await asyncio.wait_for(open_started.wait(), timeout=1.0)
+            disconnect_task = asyncio.create_task(transport.disconnect())
+            try:
+                await asyncio.sleep(0)
+                assert not disconnect_task.done()
+            finally:
+                release_open.set()
+                await asyncio.gather(connect_task, disconnect_task, return_exceptions=True)
+
+        assert transport.is_connected is False
+        assert transport._reader is None
+        assert transport._writer is None
+        writer.close.assert_called_once()
+        writer.wait_closed.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_connect_waits_for_inflight_disconnect_and_keeps_new_socket(self) -> None:
+        """A connect racing teardown must dial after the old socket is closed."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        close_started = asyncio.Event()
+        release_close = asyncio.Event()
+
+        old_reader = AsyncMock()
+        old_writer = MagicMock()
+        old_writer.close = MagicMock()
+
+        async def delayed_wait_closed() -> None:
+            close_started.set()
+            await release_close.wait()
+
+        old_writer.wait_closed = AsyncMock(side_effect=delayed_wait_closed)
+        transport._reader = old_reader
+        transport._writer = old_writer
+        transport._connected = True
+
+        new_reader = AsyncMock()
+        new_reader.read = AsyncMock(side_effect=TimeoutError())
+        new_writer = MagicMock()
+        new_writer.close = MagicMock()
+        new_writer.wait_closed = AsyncMock()
+
+        with patch(
+            "asyncio.open_connection", return_value=(new_reader, new_writer)
+        ) as open_connection:
+            disconnect_task = asyncio.create_task(transport.disconnect())
+            await asyncio.wait_for(close_started.wait(), timeout=1.0)
+            connect_task = asyncio.create_task(transport.connect())
+            try:
+                await asyncio.sleep(0)
+                assert not connect_task.done()
+            finally:
+                release_close.set()
+                await asyncio.gather(disconnect_task, connect_task, return_exceptions=True)
+
+        open_connection.assert_awaited_once_with("192.168.1.100", DEFAULT_PORT)
+        old_writer.close.assert_called_once()
+        assert transport.is_connected is True
+        assert transport._reader is new_reader
+        assert transport._writer is new_writer
+        new_writer.close.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_context_manager(self) -> None:
         """Test async context manager."""
         transport = DongleTransport(
@@ -419,6 +509,185 @@ def _build_write_ack_frame(
     response += data_frame
     response += struct.pack("<H", crc)
     return response
+
+
+class TestDongleFrameAssembly:
+    """Regression tests for TCP stream framing by advertised packet length."""
+
+    @staticmethod
+    def _connected_transport(
+        reader: AsyncMock, *, timeout: float = 1.0
+    ) -> tuple[DongleTransport, MagicMock]:
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+            timeout=timeout,
+        )
+        writer = MagicMock()
+        writer.write = MagicMock()
+        writer.drain = AsyncMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        transport._reader = reader
+        transport._writer = writer
+        transport._connected = True
+        return transport, writer
+
+    @staticmethod
+    def _read_packet(transport: DongleTransport) -> bytes:
+        return transport._build_packet(
+            tcp_func=TCP_FUNC_TRANSLATED,
+            modbus_func=MODBUS_READ_INPUT,
+            start_register=0,
+            register_count=2,
+        )
+
+    @pytest.mark.asyncio
+    async def test_fragmented_prefix_header_and_body_are_assembled(self) -> None:
+        """Legal TCP fragmentation must not be treated as a truncated reply."""
+        response = _build_mock_response(register_values=[111, 222])
+        reader = AsyncMock()
+        reader.read = AsyncMock(
+            side_effect=[
+                b"stale" + response[:1],
+                response[1:4],
+                response[4:6],
+                response[6:17],
+                response[17:],
+            ]
+        )
+        transport, _writer = self._connected_transport(reader)
+
+        with patch.object(transport, "_drain_buffer", new=AsyncMock()):
+            registers = await transport._send_receive(
+                self._read_packet(transport),
+                max_retries=0,
+                expected_func=MODBUS_READ_INPUT,
+                expected_register=0,
+                expected_count=2,
+            )
+
+        assert registers == [111, 222]
+        assert reader.read.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_partial_frame_then_eof_tears_down_connection(self) -> None:
+        """EOF after a valid header reports a partial frame and poisons the socket."""
+        response = _build_mock_response(register_values=[111, 222])
+        reader = AsyncMock()
+        reader.read = AsyncMock(side_effect=[response[:13], b""])
+        transport, writer = self._connected_transport(reader)
+
+        with (
+            patch.object(transport, "_drain_buffer", new=AsyncMock()),
+            pytest.raises(TransportReadError, match="closed before complete frame"),
+        ):
+            await transport._send_receive(self._read_packet(transport), max_retries=0)
+
+        assert transport.is_connected is False
+        assert transport._reader is None
+        assert transport._writer is None
+        writer.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_invalid_advertised_length_is_rejected_before_body_read(self) -> None:
+        """A length too short for the fixed header and CRC cannot define a frame."""
+        header = PACKET_PREFIX + struct.pack("<HH", PROTOCOL_VERSION, 15)
+        reader = AsyncMock()
+        reader.read = AsyncMock(return_value=header)
+        transport, writer = self._connected_transport(reader)
+
+        with (
+            patch.object(transport, "_drain_buffer", new=AsyncMock()),
+            pytest.raises(TransportReadError, match="Invalid advertised frame length"),
+        ):
+            await transport._send_receive(self._read_packet(transport), max_retries=0)
+
+        reader.read.assert_awaited_once()
+        writer.close.assert_called_once()
+        assert transport.is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_oversize_advertised_length_is_rejected_before_body_read(self) -> None:
+        """A peer cannot force an unbounded allocation/read with its length field."""
+        header = PACKET_PREFIX + struct.pack("<HH", PROTOCOL_VERSION, RECV_BUFFER_SIZE)
+        reader = AsyncMock()
+        reader.read = AsyncMock(return_value=header)
+        transport, writer = self._connected_transport(reader)
+
+        with (
+            patch.object(transport, "_drain_buffer", new=AsyncMock()),
+            pytest.raises(TransportReadError, match="exceeds maximum"),
+        ):
+            await transport._send_receive(self._read_packet(transport), max_retries=0)
+
+        reader.read.assert_awaited_once()
+        writer.close.assert_called_once()
+        assert transport.is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_fragment_assembly_uses_one_overall_timeout(self) -> None:
+        """Each fragment must not restart the response timeout budget."""
+        first_chunk = PACKET_PREFIX + struct.pack("<HH", PROTOCOL_VERSION, 32)
+        block_forever = asyncio.Event()
+        calls = 0
+
+        async def fragmented_read(_size: int) -> bytes:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return first_chunk
+            await block_forever.wait()
+            return b""
+
+        reader = AsyncMock()
+        reader.read = AsyncMock(side_effect=fragmented_read)
+        transport, writer = self._connected_transport(reader, timeout=0.02)
+        started = asyncio.get_running_loop().time()
+
+        with (
+            patch.object(transport, "_drain_buffer", new=AsyncMock()),
+            pytest.raises(TransportTimeoutError, match="Timeout waiting"),
+        ):
+            await transport._send_receive(self._read_packet(transport), max_retries=0)
+
+        elapsed = asyncio.get_running_loop().time() - started
+        assert elapsed < 0.5
+        assert reader.read.await_count == 2
+        writer.close.assert_called_once()
+        assert transport.is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_prefix_search_is_bounded(self) -> None:
+        """Junk without a prefix cannot grow the receive buffer indefinitely."""
+        reader = AsyncMock()
+        reader.read = AsyncMock(return_value=b"x" * (RECV_BUFFER_SIZE + 1))
+        transport, writer = self._connected_transport(reader)
+
+        with (
+            patch.object(transport, "_drain_buffer", new=AsyncMock()),
+            pytest.raises(TransportReadError, match="prefix scan exceeded"),
+        ):
+            await transport._send_receive(self._read_packet(transport), max_retries=0)
+
+        reader.read.assert_awaited_once()
+        writer.close.assert_called_once()
+        assert transport.is_connected is False
+
+    def test_parser_rejects_outer_and_inner_length_disagreement(self) -> None:
+        """The outer frame length and inner data length must describe one packet."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+        response = bytearray(_build_mock_response())
+        advertised = struct.unpack("<H", response[4:6])[0]
+        response[4:6] = struct.pack("<H", advertised - 1)
+
+        with pytest.raises(TransportReadError, match="length mismatch"):
+            transport._parse_response(bytes(response))
 
 
 class TestDongleResponseParsing:
@@ -1999,6 +2268,7 @@ class _ScriptedDongleServer:
 
     def __init__(self, response: bytes) -> None:
         self._response = response
+        self.response_chunks: list[bytes] | None = None
         self._server: asyncio.Server | None = None
         self.mode = "reply"
         self.accepted = 0
@@ -2027,8 +2297,14 @@ class _ScriptedDongleServer:
                     break
                 self.requests_received += 1
                 if self.mode == "reply":
-                    writer.write(self._response)
-                    await writer.drain()
+                    chunks = self.response_chunks or [self._response]
+                    for chunk in chunks:
+                        writer.write(chunk)
+                        await writer.drain()
+                        if self.response_chunks is not None:
+                            # Give StreamReader a chance to observe each TCP
+                            # fragment instead of coalescing the whole reply.
+                            await asyncio.sleep(0.001)
                 # mode == "mute": swallow the request, never respond
         except (ConnectionError, OSError):
             pass
@@ -2313,6 +2589,29 @@ class TestDongleSilentPathLoss:
             # review: no bare sleep).
             assert await transport._read_input_registers(0, 1) == [3]
             assert server.accepted == 1
+        finally:
+            await transport.disconnect()
+            await server.stop()
+
+    @pytest.mark.asyncio
+    async def test_loopback_server_fragmented_response_is_assembled(self) -> None:
+        """Real StreamReader fragmentation is assembled into one validated frame."""
+        response = _build_mock_response(start_register=0, register_values=[13, 21])
+        server = _ScriptedDongleServer(response)
+        server.response_chunks = [
+            b"stale" + response[:1],
+            response[1:4],
+            response[4:6],
+            response[6:19],
+            response[19:],
+        ]
+        port = await server.start()
+        transport = self._transport(port, timeout=0.5)
+        try:
+            await transport.connect()
+            assert await transport._read_input_registers(0, 2) == [13, 21]
+            assert server.accepted == 1
+            assert server.requests_received == 1
         finally:
             await transport.disconnect()
             await server.stop()
