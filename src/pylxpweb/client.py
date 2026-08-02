@@ -26,6 +26,7 @@ import logging
 import random
 import time
 from collections import deque
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urljoin
@@ -121,6 +122,12 @@ class LuxpowerClient:
         self._account_level: str | None = None
         self._authentication_task: asyncio.Task[LoginResponse] | None = None
         self._authentication_generation: int = 0
+        self._authentication_close_lock = asyncio.Lock()
+        self._authentication_closing: bool = False
+        self._reactive_authentication_replay: ContextVar[bool] = ContextVar(
+            f"pylxpweb_reactive_authentication_replay_{id(self)}",
+            default=False,
+        )
 
         # Response cache with TTL configuration
         self._response_cache: dict[str, dict[str, Any]] = {}
@@ -202,20 +209,31 @@ class LuxpowerClient:
         return self._session
 
     async def close(self) -> None:
-        """Cancel owned authentication work and close an owned HTTP session.
+        """Drain authentication work and close an owned HTTP session.
 
         Authentication renewal tasks are always created and owned by this client,
-        even when the HTTP session was injected. Injected sessions remain open.
-        """
-        authentication_task = self._authentication_task
-        if authentication_task is not None:
-            authentication_task.cancel()
-            await asyncio.gather(authentication_task, return_exceptions=True)
-            if self._authentication_task is authentication_task:
-                self._authentication_task = None
+        even when the HTTP session was injected. Authentication attempts that begin
+        while this method is awaiting cleanup fail with ``LuxpowerConnectionError``.
 
-        if self._session and not self._session.closed and self._owns_session:
-            await self._session.close()
+        Injected sessions remain open. The client remains reusable after this method
+        returns; a later login recreates an owned session or reuses an injected one.
+        """
+        async with self._authentication_close_lock:
+            self._authentication_closing = True
+            try:
+                authentication_task = self._authentication_task
+                if authentication_task is asyncio.current_task():
+                    raise RuntimeError("Cannot close client from its authentication task")
+                if authentication_task is not None:
+                    authentication_task.cancel()
+                    await asyncio.gather(authentication_task, return_exceptions=True)
+                    if self._authentication_task is authentication_task:
+                        self._authentication_task = None
+
+                if self._session and not self._session.closed and self._owns_session:
+                    await self._session.close()
+            finally:
+                self._authentication_closing = False
 
     # API Namespace (v0.2.0+)
 
@@ -650,16 +668,14 @@ class LuxpowerClient:
                 "Got HTML response instead of JSON (session expired), attempting to re-authenticate"
             )
             try:
-                await self._renew_authentication(authentication_generation)
-                _LOGGER.debug("Re-authentication successful, retrying request")
-                # Retry the request with the new session
-                return await self._request(
+                return await self._retry_request_after_authentication(
+                    authentication_generation,
                     method,
                     endpoint,
                     data=data,
                     cache_key=cache_key,
                     cache_endpoint=cache_endpoint,
-                    _retry_count=_retry_count,  # Preserve retry count
+                    retry_count=_retry_count,
                 )
             except LuxpowerAuthError:
                 # True authentication failure (wrong credentials, account locked)
@@ -685,16 +701,14 @@ class LuxpowerClient:
                 # Session expired - try to re-authenticate once
                 _LOGGER.warning("Got 401 Unauthorized, attempting to re-authenticate")
                 try:
-                    await self._renew_authentication(authentication_generation)
-                    _LOGGER.debug("Re-authentication successful, retrying request")
-                    # Retry the request with the new session
-                    return await self._request(
+                    return await self._retry_request_after_authentication(
+                        authentication_generation,
                         method,
                         endpoint,
                         data=data,
                         cache_key=cache_key,
                         cache_endpoint=cache_endpoint,
-                        _retry_count=_retry_count,  # Preserve retry count
+                        retry_count=_retry_count,
                     )
                 except LuxpowerAuthError:
                     # True authentication failure (wrong credentials, account locked)
@@ -729,10 +743,55 @@ class LuxpowerClient:
             self._handle_request_error(err)
             raise LuxpowerAPIError(f"Unexpected error: {err}") from err
 
+    async def _retry_request_after_authentication(
+        self,
+        observed_generation: int,
+        method: str,
+        endpoint: str,
+        *,
+        data: dict[str, Any] | None,
+        cache_key: str | None,
+        cache_endpoint: str | None,
+        retry_count: int,
+    ) -> dict[str, Any]:
+        """Renew once and replay one request without changing its public signature."""
+        if self._reactive_authentication_replay.get():
+            raise LuxpowerAuthError("Session remained unauthorized after re-authentication")
+
+        await self._renew_authentication(observed_generation)
+        _LOGGER.debug("Re-authentication successful, retrying request")
+        replay_token = self._reactive_authentication_replay.set(True)
+        try:
+            return await self._request(
+                method,
+                endpoint,
+                data=data,
+                cache_key=cache_key,
+                cache_endpoint=cache_endpoint,
+                _retry_count=retry_count,
+            )
+        finally:
+            self._reactive_authentication_replay.reset(replay_token)
+
     # Authentication
 
     async def login(self, _retry_count: int = 0) -> LoginResponse:
-        """Authenticate with the API and establish a session.
+        """Authenticate through the client-wide single-flight task.
+
+        Concurrent direct calls, proactive expiry checks, and reactive recovery all
+        share the same task and advance the authentication generation exactly once.
+        ``_retry_count`` remains accepted for backward compatibility as an internal
+        connection-retry offset.
+        """
+        if self._authentication_task is asyncio.current_task():
+            return await self._login_raw(_retry_count)
+
+        response = await self._renew_authentication(authentication_retry_count=_retry_count)
+        assert response is not None
+        return response
+
+    async def _login_raw(self, _retry_count: int = 0) -> LoginResponse:
+        """Perform authentication with bounded connection retries.
 
         This method includes automatic retry logic for transient failures
         (network issues, temporary server errors) with exponential backoff.
@@ -803,7 +862,7 @@ class LuxpowerClient:
                     delay,
                 )
                 await asyncio.sleep(delay)
-                return await self.login(_retry_count=_retry_count + 1)
+                return await self._login_raw(_retry_count=_retry_count + 1)
             # Max retries exceeded
             _LOGGER.error(
                 "Login failed after %d attempts due to connection errors: %s",
@@ -819,9 +878,15 @@ class LuxpowerClient:
             await self._renew_authentication()
 
     async def _renew_authentication(
-        self, observed_generation: int | None = None
+        self,
+        observed_generation: int | None = None,
+        *,
+        authentication_retry_count: int = 0,
     ) -> LoginResponse | None:
         """Force one shared renewal unless a stale response predates a completed one."""
+        if self._authentication_closing:
+            raise LuxpowerConnectionError("Cannot authenticate while client is closing")
+
         if (
             observed_generation is not None
             and observed_generation != self._authentication_generation
@@ -830,7 +895,9 @@ class LuxpowerClient:
 
         task = self._authentication_task
         if task is None:
-            task = asyncio.create_task(self._login_and_advance_authentication())
+            task = asyncio.create_task(
+                self._login_and_advance_authentication(authentication_retry_count)
+            )
             self._authentication_task = task
             task.add_done_callback(self._authentication_task_done)
         elif task is asyncio.current_task():
@@ -838,9 +905,11 @@ class LuxpowerClient:
 
         return await asyncio.shield(task)
 
-    async def _login_and_advance_authentication(self) -> LoginResponse:
+    async def _login_and_advance_authentication(
+        self, authentication_retry_count: int = 0
+    ) -> LoginResponse:
         """Run one owned login and advance the cookie generation on success."""
-        response = await self.login()
+        response = await self.login(_retry_count=authentication_retry_count)
         self._authentication_generation += 1
         return response
 
