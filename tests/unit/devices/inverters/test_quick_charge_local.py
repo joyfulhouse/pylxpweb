@@ -7,8 +7,9 @@ also reads as the live remaining-minutes countdown).
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -16,6 +17,7 @@ from pylxpweb import LuxpowerClient
 from pylxpweb.devices.inverters.base import BaseInverter
 from pylxpweb.models import QuickChargeStatus, SuccessResponse
 from pylxpweb.transports.exceptions import TransportReadError, TransportWriteError
+from pylxpweb.transports.modbus import ModbusTransport
 
 
 class _Inverter(BaseInverter):
@@ -44,6 +46,7 @@ def _inverter(mock_client: LuxpowerClient, *, with_transport: bool) -> _Inverter
         transport = AsyncMock()
         transport.read_parameters = AsyncMock(return_value={233: 0})
         transport.write_parameters = AsyncMock(return_value=True)
+        transport.write_named_parameters = AsyncMock(return_value=True)
         # Input reg 210 unavailable by default (older firmware / no value) so the
         # remaining time falls back to the holding-reg 234 derivation; tests that
         # exercise the seconds path override this.
@@ -65,21 +68,108 @@ async def test_enable_local_with_minute_writes_paired_frame(mock_client):
     ok = await inv.enable_quick_charge(minute=30)
 
     assert ok is True
-    inv._transport.write_parameters.assert_awaited_once_with({233: 1, 234: 30})
+    inv._transport.write_named_parameters.assert_awaited_once_with(
+        {
+            "FUNC_QUICK_CHG_START_EN": True,
+            "SNA_HOLD_QUICK_CHARGE_MINUTE": 30,
+        }
+    )
+    inv._transport.write_parameters.assert_not_awaited()
     mock_client.api.control.start_quick_charge.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_enable_local_paired_frame_preserves_sticky_upper_bits(mock_client):
+async def test_enable_local_paired_frame_uses_lock_held_named_rmw(mock_client):
     """The 0x1000 flag observed live is sticky config of unconfirmed meaning —
-    the activation must read-modify-write bit 0, never blind-write 0x0001."""
+    the activation must use the transport's named, lock-held RMW."""
     inv = _inverter(mock_client, with_transport=True)
-    inv._transport.read_parameters = AsyncMock(return_value={233: 0x1000})
 
     ok = await inv.enable_quick_charge(minute=30)
 
     assert ok is True
-    inv._transport.write_parameters.assert_awaited_once_with({233: 0x1001, 234: 30})
+    inv._transport.write_named_parameters.assert_awaited_once_with(
+        {
+            "FUNC_QUICK_CHG_START_EN": True,
+            "SNA_HOLD_QUICK_CHARGE_MINUTE": 30,
+        }
+    )
+    inv._transport.read_parameters.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param("start-paired", id="start-paired-h233-h234"),
+        pytest.param("start-bit-only", id="start-bit-only"),
+        pytest.param("stop", id="stop"),
+    ],
+)
+async def test_quick_charge_h233_rmw_is_atomic_with_concurrent_sibling_update(
+    operation: str,
+):
+    """Quick Charge must not erase a sibling H233 bit queued after its read."""
+    register_233 = 0x1001 if operation == "stop" else 0x1000
+    register_234 = 0
+    transport = ModbusTransport(host="192.0.2.1", serial="1234567890")
+    transport._connected = True
+    inv = _Inverter(
+        client=None,
+        serial_number="1234567890",
+        model="18kPV",
+        transport=transport,
+    )
+    first_read_started = asyncio.Event()
+    release_first_read = asyncio.Event()
+    sibling_update_started = asyncio.Event()
+    first_read = True
+
+    async def read_holding(address: int, count: int) -> list[int]:
+        nonlocal first_read
+        assert (address, count) == (233, 1)
+        snapshot = register_233
+        if first_read:
+            first_read = False
+            first_read_started.set()
+            await release_first_read.wait()
+        return [snapshot]
+
+    async def write_holding(address: int, values: list[int]) -> bool:
+        nonlocal register_233, register_234
+        assert address == 233
+        register_233 = values[0]
+        if len(values) == 2:
+            register_234 = values[1]
+        return True
+
+    async def update_sibling_bit() -> bool:
+        sibling_update_started.set()
+        return await transport.write_named_parameters({"FUNC_BATTERY_BACKUP_CTRL": True})
+
+    with (
+        patch.object(transport, "_read_holding_registers", side_effect=read_holding),
+        patch.object(transport, "_write_holding_registers", side_effect=write_holding),
+    ):
+        if operation == "start-paired":
+            quick_charge_task = asyncio.create_task(inv.enable_quick_charge(minute=30))
+        elif operation == "start-bit-only":
+            quick_charge_task = asyncio.create_task(inv.enable_quick_charge())
+        else:
+            quick_charge_task = asyncio.create_task(inv.disable_quick_charge())
+
+        await asyncio.wait_for(first_read_started.wait(), timeout=1)
+        sibling_task = asyncio.create_task(update_sibling_bit())
+        await asyncio.wait_for(sibling_update_started.wait(), timeout=1)
+        release_first_read.set()
+        results = await asyncio.wait_for(
+            asyncio.gather(quick_charge_task, sibling_task),
+            timeout=1,
+        )
+
+    assert results == [True, True]
+    expected_quick_charge_bit = 0 if operation == "stop" else 1
+    assert register_233 == 0x1002 | expected_quick_charge_bit
+    assert register_234 == (30 if operation == "start-paired" else 0)
 
 
 @pytest.mark.asyncio
@@ -99,15 +189,23 @@ async def test_enable_local_paired_frame_rejected_falls_back_bit_only_plus_live(
     proven bit-only start, then applies the duration live (reg 234 accepts
     writes while a charge runs)."""
     inv = _inverter(mock_client, with_transport=True)
-    inv._transport.write_parameters = AsyncMock(
-        side_effect=[TransportWriteError("NAK"), True, final_reg234_effect]
+    inv._transport.write_named_parameters = AsyncMock(
+        side_effect=[TransportWriteError("NAK"), True]
     )
+    inv._transport.write_parameters = AsyncMock(side_effect=[final_reg234_effect])
 
     ok = await inv.enable_quick_charge(minute=30)
 
     assert ok is True
-    writes = [c.args[0] for c in inv._transport.write_parameters.call_args_list]
-    assert writes == [{233: 1, 234: 30}, {233: 1}, {234: 30}]
+    named_writes = [c.args[0] for c in inv._transport.write_named_parameters.call_args_list]
+    assert named_writes == [
+        {
+            "FUNC_QUICK_CHG_START_EN": True,
+            "SNA_HOLD_QUICK_CHARGE_MINUTE": 30,
+        },
+        {"FUNC_QUICK_CHG_START_EN": True},
+    ]
+    inv._transport.write_parameters.assert_awaited_once_with({234: 30})
     mock_client.api.control.start_quick_charge.assert_not_called()
 
 
@@ -118,13 +216,22 @@ async def test_enable_local_reg233_read_failure_falls_back_bit_only_plus_live(
     """If reg 233 cannot be read for the RMW, the paired frame is skipped
     (never blind-write 0x0001) and the bit-only start path runs instead."""
     inv = _inverter(mock_client, with_transport=True)
-    inv._transport.read_parameters = AsyncMock(side_effect=[TransportReadError("boom"), {233: 0}])
+    inv._transport.write_named_parameters = AsyncMock(
+        side_effect=[TransportReadError("boom"), True]
+    )
 
     ok = await inv.enable_quick_charge(minute=30)
 
     assert ok is True
-    writes = [c.args[0] for c in inv._transport.write_parameters.call_args_list]
-    assert writes == [{233: 1}, {234: 30}]
+    named_writes = [c.args[0] for c in inv._transport.write_named_parameters.call_args_list]
+    assert named_writes == [
+        {
+            "FUNC_QUICK_CHG_START_EN": True,
+            "SNA_HOLD_QUICK_CHARGE_MINUTE": 30,
+        },
+        {"FUNC_QUICK_CHG_START_EN": True},
+    ]
+    inv._transport.write_parameters.assert_awaited_once_with({234: 30})
 
 
 @pytest.mark.asyncio
@@ -133,7 +240,7 @@ async def test_enable_hybrid_all_local_writes_raise_falls_back_to_cloud(mock_cli
     returning False — when the paired frame AND the bit-only start both raise,
     HYBRID must still reach the cloud start endpoint."""
     inv = _inverter(mock_client, with_transport=True)
-    inv._transport.write_parameters = AsyncMock(side_effect=TransportWriteError("NAK"))
+    inv._transport.write_named_parameters = AsyncMock(side_effect=TransportWriteError("NAK"))
 
     ok = await inv.enable_quick_charge(minute=20)
 
@@ -141,8 +248,15 @@ async def test_enable_hybrid_all_local_writes_raise_falls_back_to_cloud(mock_cli
     # Paired frame attempted, then the bit-only start (write_transport_bit
     # swallows the raise into False) — no live reg-234 attempt after a
     # failed start.
-    writes = [c.args[0] for c in inv._transport.write_parameters.call_args_list]
-    assert writes == [{233: 1, 234: 20}, {233: 1}]
+    named_writes = [c.args[0] for c in inv._transport.write_named_parameters.call_args_list]
+    assert named_writes == [
+        {
+            "FUNC_QUICK_CHG_START_EN": True,
+            "SNA_HOLD_QUICK_CHARGE_MINUTE": 20,
+        },
+        {"FUNC_QUICK_CHG_START_EN": True},
+    ]
+    inv._transport.write_parameters.assert_not_awaited()
     mock_client.api.control.start_quick_charge.assert_awaited_once_with("1234567890", minute=20)
 
 
@@ -151,7 +265,7 @@ async def test_enable_local_only_all_writes_raise_returns_false(mock_client):
     """LOCAL-only (no cloud client): raising transport writes fail honestly."""
     inv = _inverter(mock_client, with_transport=True)
     inv._client = None
-    inv._transport.write_parameters = AsyncMock(side_effect=TransportWriteError("NAK"))
+    inv._transport.write_named_parameters = AsyncMock(side_effect=TransportWriteError("NAK"))
 
     ok = await inv.enable_quick_charge(minute=20)
 
@@ -166,9 +280,10 @@ async def test_enable_local_without_minute_only_sets_bit(mock_client):
     ok = await inv.enable_quick_charge()
 
     assert ok is True
-    writes = [c.args[0] for c in inv._transport.write_parameters.call_args_list]
-    assert {233: 1} in writes
-    assert all(234 not in w for w in writes)  # no duration write
+    inv._transport.write_named_parameters.assert_awaited_once_with(
+        {"FUNC_QUICK_CHG_START_EN": True}
+    )
+    inv._transport.write_parameters.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -179,19 +294,21 @@ async def test_enable_local_rejects_bad_minute(mock_client, bad):
     with pytest.raises(ValueError, match="minute must be a positive integer"):
         await inv.enable_quick_charge(minute=bad)
 
+    inv._transport.write_named_parameters.assert_not_called()
     inv._transport.write_parameters.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_disable_local_clears_enable_bit(mock_client):
     inv = _inverter(mock_client, with_transport=True)
-    inv._transport.read_parameters = AsyncMock(return_value={233: 0x1})
 
     ok = await inv.disable_quick_charge()
 
     assert ok is True
-    writes = [c.args[0] for c in inv._transport.write_parameters.call_args_list]
-    assert {233: 0} in writes  # bit cleared
+    inv._transport.write_named_parameters.assert_awaited_once_with(
+        {"FUNC_QUICK_CHG_START_EN": False}
+    )
+    inv._transport.write_parameters.assert_not_awaited()
     mock_client.api.control.stop_quick_charge.assert_not_called()
 
 
@@ -201,7 +318,7 @@ async def test_disable_local_clears_enable_bit(mock_client):
 @pytest.mark.asyncio
 async def test_enable_hybrid_falls_back_to_cloud_on_local_failure(mock_client):
     inv = _inverter(mock_client, with_transport=True)
-    inv._transport.write_parameters = AsyncMock(return_value=False)  # local write fails
+    inv._transport.write_named_parameters = AsyncMock(return_value=False)
 
     ok = await inv.enable_quick_charge(minute=20)
 
@@ -212,8 +329,7 @@ async def test_enable_hybrid_falls_back_to_cloud_on_local_failure(mock_client):
 @pytest.mark.asyncio
 async def test_disable_hybrid_falls_back_to_cloud_on_local_failure(mock_client):
     inv = _inverter(mock_client, with_transport=True)
-    inv._transport.read_parameters = AsyncMock(return_value={233: 0x1})
-    inv._transport.write_parameters = AsyncMock(return_value=False)
+    inv._transport.write_named_parameters = AsyncMock(return_value=False)
 
     ok = await inv.disable_quick_charge()
 
@@ -226,7 +342,7 @@ async def test_enable_local_only_failure_returns_false_no_cloud(mock_client):
     """Local-only (client is None) fails honestly without a cloud attempt."""
     inv = _inverter(mock_client, with_transport=True)
     inv._client = None  # local-only: no cloud client
-    inv._transport.write_parameters = AsyncMock(return_value=False)
+    inv._transport.write_named_parameters = AsyncMock(return_value=False)
 
     ok = await inv.enable_quick_charge(minute=20)
 

@@ -1939,9 +1939,10 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     ) -> bool:
         """Write a single bit in a register using read-modify-write.
 
-        This method reads the current register value, modifies the specified bit,
-        and writes the new value back. Useful for FUNC_EN (register 21) and
-        SYS_FUNC (register 110) bit field operations.
+        This resolves the bit's named parameter and delegates to the transport's
+        operation-lock-held read-modify-write, so a concurrent sibling-bit update
+        cannot land between this operation's read and write. Useful for FUNC_EN
+        (register 21) and SYS_FUNC (register 110) bit field operations.
 
         Args:
             register: Register address (e.g., 21 for FUNC_EN)
@@ -1969,41 +1970,19 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             return False
 
         try:
-            # Read current register value
-            current_values = await self._transport.read_parameters(register, 1)
-            if register not in current_values:
-                _LOGGER.warning("Failed to read register %d for %s", register, self.serial_number)
-                return False
-
-            current_value = current_values[register]
-
-            # Modify the bit (set if value=True, clear if value=False)
-            new_value = current_value | (1 << bit) if value else current_value & ~(1 << bit)
-
-            # Write back if changed
-            if new_value != current_value:
-                success = await self._transport.write_parameters({register: new_value})
-                if success:
-                    _LOGGER.debug(
-                        "Set register %d bit %d to %s for %s (0x%04X -> 0x%04X)",
-                        register,
-                        bit,
-                        value,
-                        self.serial_number,
-                        current_value,
-                        new_value,
-                    )
-                    self._invalidate_parameters_cache()
-                return success
-            else:
+            param_key = self._cloud_param_key(register, bit)
+            success = await self._transport.write_named_parameters({param_key: value})
+            if success:
                 _LOGGER.debug(
-                    "Register %d bit %d already %s for %s",
+                    "Set register %d bit %d (%s) to %s for %s",
                     register,
                     bit,
+                    param_key,
                     value,
                     self.serial_number,
                 )
-                return True  # Already in desired state
+                self._invalidate_parameters_cache()
+            return success
 
         except Exception as err:
             _LOGGER.warning(
@@ -4048,11 +4027,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """Start quick charge over the local transport.
 
         With a requested duration the activation bit (reg 233 bit 0, upper
-        bits preserved via read-modify-write — the 0x1000 flag observed live
-        is sticky config of unconfirmed meaning) and the duration (reg 234)
-        are written as ONE contiguous frame; the firmware rejects reg 234
-        alone while idle (eg4_web_monitor#251). If the paired frame fails,
-        fall back to the bit-only start and then apply the duration live.
+        bits preserved via an operation-lock-held read-modify-write — the
+        0x1000 flag observed live is sticky config of unconfirmed meaning) and
+        the duration (reg 234) are written as ONE contiguous frame; the firmware
+        rejects reg 234 alone while idle (eg4_web_monitor#251). If the paired
+        frame fails, fall back to the bit-only start and then apply the duration
+        live.
         """
         transport = self._transport
         if transport is None:
@@ -4060,29 +4040,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if minute is None:
             return await self.write_transport_bit(233, 0, True)
 
-        reg: int | None = None
         try:
-            current = await transport.read_parameters(233, 1)
-            reg = current.get(233)
+            if await transport.write_named_parameters(
+                {
+                    self._cloud_param_key(233, 0): True,
+                    self._cloud_param_key(234): minute,
+                }
+            ):
+                self._invalidate_parameters_cache()
+                return True
         except Exception as err:
             _LOGGER.debug(
-                "Quick charge start: could not read register 233 for %s (%s); "
-                "trying the bit-only start",
+                "Paired quick-charge start frame (regs 233+234) rejected "
+                "for %s (%s); falling back to the bit-only start",
                 self.serial_number,
                 err,
             )
-        if reg is not None:
-            try:
-                if await transport.write_parameters({233: reg | 0x1, 234: minute}):
-                    self._invalidate_parameters_cache()
-                    return True
-            except Exception as err:
-                _LOGGER.debug(
-                    "Paired quick-charge start frame (regs 233+234) rejected "
-                    "for %s (%s); falling back to the bit-only start",
-                    self.serial_number,
-                    err,
-                )
 
         # Bit-only start (proven path), then apply the requested duration
         # live — reg 234 accepts writes while a charge is running.
