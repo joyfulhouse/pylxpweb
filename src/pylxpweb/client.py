@@ -120,6 +120,7 @@ class LuxpowerClient:
         # Account level: "guest", "viewer", "operator", "owner", "installer"
         self._account_level: str | None = None
         self._authentication_task: asyncio.Task[LoginResponse] | None = None
+        self._authentication_generation: int = 0
 
         # Response cache with TTL configuration
         self._response_cache: dict[str, dict[str, Any]] = {}
@@ -201,11 +202,18 @@ class LuxpowerClient:
         return self._session
 
     async def close(self) -> None:
-        """Close the session if we own it.
+        """Cancel owned authentication work and close an owned HTTP session.
 
-        Only closes the session if it was created by this client,
-        not if it was injected.
+        Authentication renewal tasks are always created and owned by this client,
+        even when the HTTP session was injected. Injected sessions remain open.
         """
+        authentication_task = self._authentication_task
+        if authentication_task is not None:
+            authentication_task.cancel()
+            await asyncio.gather(authentication_task, return_exceptions=True)
+            if self._authentication_task is authentication_task:
+                self._authentication_task = None
+
         if self._session and not self._session.closed and self._owns_session:
             await self._session.close()
 
@@ -590,6 +598,7 @@ class LuxpowerClient:
             self._daily_request_count = 0
             self._daily_reset_ymd = today
         self._daily_request_count += 1
+        authentication_generation = self._authentication_generation
 
         try:
             async with session.request(method, url, data=data, headers=headers) as response:
@@ -641,7 +650,7 @@ class LuxpowerClient:
                 "Got HTML response instead of JSON (session expired), attempting to re-authenticate"
             )
             try:
-                await self.login()
+                await self._renew_authentication(authentication_generation)
                 _LOGGER.debug("Re-authentication successful, retrying request")
                 # Retry the request with the new session
                 return await self._request(
@@ -676,7 +685,7 @@ class LuxpowerClient:
                 # Session expired - try to re-authenticate once
                 _LOGGER.warning("Got 401 Unauthorized, attempting to re-authenticate")
                 try:
-                    await self.login()
+                    await self._renew_authentication(authentication_generation)
                     _LOGGER.debug("Re-authentication successful, retrying request")
                     # Retry the request with the new session
                     return await self._request(
@@ -807,12 +816,33 @@ class LuxpowerClient:
         """Ensure we have a valid session, re-authenticating if needed."""
         if not self._session_expires or datetime.now() >= self._session_expires:
             _LOGGER.debug("Session expired or missing, re-authenticating")
-            task = self._authentication_task
-            if task is None:
-                task = asyncio.create_task(self.login())
-                self._authentication_task = task
-                task.add_done_callback(self._authentication_task_done)
-            await asyncio.shield(task)
+            await self._renew_authentication()
+
+    async def _renew_authentication(
+        self, observed_generation: int | None = None
+    ) -> LoginResponse | None:
+        """Force one shared renewal unless a stale response predates a completed one."""
+        if (
+            observed_generation is not None
+            and observed_generation != self._authentication_generation
+        ):
+            return None
+
+        task = self._authentication_task
+        if task is None:
+            task = asyncio.create_task(self._login_and_advance_authentication())
+            self._authentication_task = task
+            task.add_done_callback(self._authentication_task_done)
+        elif task is asyncio.current_task():
+            raise LuxpowerAuthError("Session was rejected while authentication was in progress")
+
+        return await asyncio.shield(task)
+
+    async def _login_and_advance_authentication(self) -> LoginResponse:
+        """Run one owned login and advance the cookie generation on success."""
+        response = await self.login()
+        self._authentication_generation += 1
+        return response
 
     def _authentication_task_done(self, task: asyncio.Task[LoginResponse]) -> None:
         """Clear a completed shared login and consume an unobserved failure."""

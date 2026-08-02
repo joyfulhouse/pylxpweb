@@ -8,8 +8,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
+import aiohttp
 import pytest
 from aioresponses import aioresponses
 
@@ -20,6 +22,99 @@ from pylxpweb.exceptions import LuxpowerConnectionError
 
 # Base URL for all tests
 BASE_URL = "https://monitor.eg4electronics.com"
+
+
+class _ReactiveAuthResponse:
+    """Minimal response context used to stage concurrent stale sessions."""
+
+    def __init__(
+        self,
+        session: _ConcurrentReactiveSession,
+        *,
+        stale: bool,
+        stale_index: int | None,
+    ) -> None:
+        self._session = session
+        self._stale = stale
+        self._stale_index = stale_index
+        self.status = 401 if stale and session.response_kind == "401" else 200
+
+    async def __aenter__(self) -> _ReactiveAuthResponse:
+        if self._stale:
+            self._session.stale_requests_started += 1
+            if self._session.stale_requests_started == self._session.expected_stale_requests:
+                self._session.all_stale_requests_started.set()
+
+            await self._session.all_stale_requests_started.wait()
+            if self._stale_index is not None and self._stale_index >= self._session.early_count:
+                await self._session.release_late_stale_responses.wait()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        return None
+
+    def raise_for_status(self) -> None:
+        if self._stale and self._session.response_kind == "401":
+            raise aiohttp.ClientResponseError(
+                SimpleNamespace(real_url="https://example.test/stale"),
+                (),
+                status=401,
+                message="expired session",
+            )
+
+    async def json(self) -> dict[str, Any]:
+        if self._stale:
+            if self._session.response_kind == "html":
+                raise aiohttp.ContentTypeError(
+                    SimpleNamespace(real_url="https://example.test/stale"),
+                    (),
+                    status=200,
+                    message="unexpected text/html response",
+                )
+            raise AssertionError("401 response should fail before JSON decoding")
+
+        return {
+            "success": True,
+            "cookie_generation": self._session.cookie_generation,
+        }
+
+
+class _ConcurrentReactiveSession:
+    """Injected session whose initial requests all use one stale cookie."""
+
+    def __init__(
+        self,
+        response_kind: str,
+        *,
+        expected_stale_requests: int,
+        early_count: int,
+    ) -> None:
+        self.response_kind = response_kind
+        self.expected_stale_requests = expected_stale_requests
+        self.early_count = early_count
+        self.closed = False
+        self.cookie_generation = 0
+        self.cookie_mutations = 0
+        self.stale_requests_started = 0
+        self.all_stale_requests_started = asyncio.Event()
+        self.release_late_stale_responses = asyncio.Event()
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        data: dict[str, Any] | None,
+        headers: dict[str, str],
+    ) -> _ReactiveAuthResponse:
+        stale = self.cookie_generation == 0
+        stale_index = self.stale_requests_started if stale else None
+        return _ReactiveAuthResponse(self, stale=stale, stale_index=stale_index)
 
 
 class TestAuthentication:
@@ -607,6 +702,175 @@ class TestSessionManagement:
         finally:
             release_login.set()
             await client.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("response_kind", ["401", "html"])
+    async def test_concurrent_reactive_expiry_uses_one_cookie_renewal(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        response_kind: str,
+    ) -> None:
+        """Stale responses share renewal, including responses observed after it."""
+        request_count = 10
+        session = _ConcurrentReactiveSession(
+            response_kind,
+            expected_stale_requests=request_count,
+            early_count=request_count // 2,
+        )
+        client = LuxpowerClient(
+            "testuser",
+            "testpass",
+            session=session,  # type: ignore[arg-type]
+        )
+        client._session_expires = datetime.now() + timedelta(hours=1)
+        client._backoff_config.update({"base_delay": 0.0, "max_delay": 0.0, "jitter": 0.0})
+        login_started = asyncio.Event()
+        release_login = asyncio.Event()
+        cookie_mutated = asyncio.Event()
+        login_calls = 0
+
+        async def fake_login(_retry_count: int = 0) -> None:
+            nonlocal login_calls
+            login_calls += 1
+            login_started.set()
+            await release_login.wait()
+            session.cookie_generation += 1
+            session.cookie_mutations += 1
+            client._session_expires = datetime.now() + timedelta(hours=2)
+            cookie_mutated.set()
+
+        monkeypatch.setattr(client, "login", fake_login)
+        requests = [
+            asyncio.create_task(client._request("POST", f"/test/{index}"))
+            for index in range(request_count)
+        ]
+
+        try:
+            await asyncio.wait_for(session.all_stale_requests_started.wait(), timeout=1)
+            await asyncio.wait_for(login_started.wait(), timeout=1)
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert login_calls == 1
+
+            release_login.set()
+            await asyncio.wait_for(cookie_mutated.wait(), timeout=1)
+            for _ in range(3):
+                await asyncio.sleep(0)
+            session.release_late_stale_responses.set()
+
+            results = await asyncio.wait_for(asyncio.gather(*requests), timeout=1)
+            assert all(result["success"] is True for result in results)
+            assert all(result["cookie_generation"] == 1 for result in results)
+            assert login_calls == 1
+            assert session.cookie_mutations == 1
+        finally:
+            release_login.set()
+            session.release_late_stale_responses.set()
+            for request in requests:
+                if not request.done():
+                    request.cancel()
+            await asyncio.gather(*requests, return_exceptions=True)
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_proactive_and_reactive_expiry_share_one_renewal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reactive 401 joins a proactive expired-session renewal."""
+        session = _ConcurrentReactiveSession(
+            "401",
+            expected_stale_requests=1,
+            early_count=1,
+        )
+        client = LuxpowerClient(
+            "testuser",
+            "testpass",
+            session=session,  # type: ignore[arg-type]
+        )
+        client._session_expires = datetime.now() - timedelta(seconds=1)
+        client._backoff_config.update({"base_delay": 0.0, "max_delay": 0.0, "jitter": 0.0})
+        login_started = asyncio.Event()
+        release_login = asyncio.Event()
+        login_calls = 0
+
+        async def fake_login(_retry_count: int = 0) -> None:
+            nonlocal login_calls
+            login_calls += 1
+            login_started.set()
+            await release_login.wait()
+            session.cookie_generation += 1
+            session.cookie_mutations += 1
+            client._session_expires = datetime.now() + timedelta(hours=2)
+
+        monkeypatch.setattr(client, "login", fake_login)
+        proactive = asyncio.create_task(client._ensure_authenticated())
+        await asyncio.wait_for(login_started.wait(), timeout=1)
+        reactive = asyncio.create_task(client._request("POST", "/test/reactive"))
+
+        try:
+            await asyncio.wait_for(session.all_stale_requests_started.wait(), timeout=1)
+            for _ in range(3):
+                await asyncio.sleep(0)
+            assert login_calls == 1
+
+            release_login.set()
+            await asyncio.wait_for(asyncio.gather(proactive, reactive), timeout=1)
+            assert login_calls == 1
+            assert session.cookie_mutations == 1
+        finally:
+            release_login.set()
+            session.release_late_stale_responses.set()
+            for task in (proactive, reactive):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(proactive, reactive, return_exceptions=True)
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_close_cancels_owned_auth_task_with_injected_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Closing always drains client-owned auth work, not the injected session."""
+        auth_started = asyncio.Event()
+        auth_finished = asyncio.Event()
+        never_release = asyncio.Event()
+
+        async with aiohttp.ClientSession() as injected_session:
+            client = LuxpowerClient(
+                "testuser",
+                "testpass",
+                session=injected_session,
+            )
+            client._session_expires = datetime.now() - timedelta(seconds=1)
+
+            async def fake_login(_retry_count: int = 0) -> None:
+                auth_started.set()
+                try:
+                    await never_release.wait()
+                finally:
+                    auth_finished.set()
+
+            monkeypatch.setattr(client, "login", fake_login)
+            waiter = asyncio.create_task(client._ensure_authenticated())
+            await asyncio.wait_for(auth_started.wait(), timeout=1)
+            owned_auth_task = client._authentication_task
+            assert owned_auth_task is not None
+
+            try:
+                await client.close()
+
+                assert auth_finished.is_set()
+                assert owned_auth_task.done()
+                assert owned_auth_task.cancelled()
+                assert client._authentication_task is None
+                assert not injected_session.closed
+            finally:
+                never_release.set()
+                if not owned_auth_task.done():
+                    owned_auth_task.cancel()
+                if not waiter.done():
+                    waiter.cancel()
+                await asyncio.gather(owned_auth_task, waiter, return_exceptions=True)
 
     @pytest.mark.asyncio
     async def test_session_creation(
