@@ -1191,3 +1191,100 @@ class TestBankCapacityPrefersBmsValues:
 
         assert bank.full_capacity == 840
         assert bank.remain_capacity == 0
+
+
+class TestCapacityPercentFakeZeroFallback:
+    """capacityPercent=0 with a live BMS pair is a fake zero (issue eg4#514).
+
+    The cloud computes ``capacityPercent`` (and ``remainCapacity``/
+    ``fullCapacity``) from the battery module array; units that report no
+    array (live 12000XP: ``batteryArray=[]``, ``totalNumber=0``) leave all
+    three frozen at 0 while ``maxBatteryCharge``/``currentBatteryCharge``
+    stay real (260/500 = 52% exactly matching soc=52 across three polled
+    cycles). A raw non-zero value stays authoritative — accounts that
+    populate the field (live 18kPV=79, FlexBOSS21=65) are untouched.
+    """
+
+    def test_fake_zero_derives_from_bms_pair(self, mock_client):
+        """The live 12000XP shape: 0 with a real pair derives 260/500=52."""
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=500,
+            currentBatteryCharge=260.0,
+            fullCapacity=0,
+            remainCapacity=0,
+            capacityPercent=0,
+            batteryArray=[],
+            totalNumber=0,
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="60534A0404",
+            battery_info=battery_info,
+        )
+
+        assert bank.capacity_percent == 52
+
+    def test_none_derives_from_bms_pair(self, mock_client):
+        """An absent capacityPercent also derives when the pair is live."""
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=500,
+            currentBatteryCharge=370.0,
+            capacityPercent=None,
+            batteryArray=[],
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="60534A0404",
+            battery_info=battery_info,
+        )
+
+        assert bank.capacity_percent == 74
+
+    def test_real_nonzero_value_stays_primary(self, mock_client):
+        """A populated capacityPercent wins even if the pair disagrees."""
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=840,
+            currentBatteryCharge=546.0,  # pair would derive 65
+            capacityPercent=64,
+            batteryArray=[],
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="52842P0581",
+            battery_info=battery_info,
+        )
+
+        assert bank.capacity_percent == 64
+
+    def test_zero_without_pair_is_unchanged(self, mock_client):
+        """No BMS pair (live GridBOSS shape): the raw 0 passes through."""
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=None,
+            currentBatteryCharge=None,
+            capacityPercent=0,
+            batteryArray=[],
+            totalNumber=0,
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="4524850115",
+            battery_info=battery_info,
+        )
+
+        assert bank.capacity_percent == 0
+
+    def test_genuinely_empty_bank_derives_zero(self, mock_client):
+        """A truly empty BMS-backed bank still reads ~0 via the pair."""
+        battery_info = BatteryInfo.model_construct(
+            maxBatteryCharge=500,
+            currentBatteryCharge=1.0,
+            capacityPercent=0,
+            batteryArray=[],
+        )
+        bank = BatteryBank(
+            client=mock_client,
+            inverter_serial="60534A0404",
+            battery_info=battery_info,
+        )
+
+        assert bank.capacity_percent == 0  # round(1/500*100)

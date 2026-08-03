@@ -563,10 +563,23 @@ class BatteryBank(BaseDevice):
     def capacity_percent(self) -> int | None:
         """Get capacity percentage.
 
+        A raw non-zero ``capacityPercent`` is authoritative.  The cloud
+        computes the field from the battery module array, so units that
+        report no array leave it frozen at 0 while the BMS pair stays real
+        (live 12000XP, issue eg4#514: ``capacityPercent=0`` with
+        ``currentBatteryCharge/maxBatteryCharge`` = 260/500 matching soc=52
+        exactly) — on a fake 0/None with the pair present, derive the
+        percentage from the pair instead.  A genuine 0% bank is unaffected:
+        its pair derives ~0 anyway.
+
         Returns:
             Capacity percentage (0-100), or None if not available.
         """
-        return self.data.capacityPercent
+        raw = self.data.capacityPercent
+        pair = self._bms_capacity_pair
+        if not raw and pair is not None:
+            return round(pair[1] / pair[0] * 100)
+        return raw
 
     # ========== Current Properties ==========
 
