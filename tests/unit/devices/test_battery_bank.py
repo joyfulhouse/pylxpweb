@@ -1218,7 +1218,7 @@ class TestCapacityPercentFakeZeroFallback:
         )
         bank = BatteryBank(
             client=mock_client,
-            inverter_serial="60534A0404",
+            inverter_serial="1234567890",
             battery_info=battery_info,
         )
 
@@ -1234,7 +1234,7 @@ class TestCapacityPercentFakeZeroFallback:
         )
         bank = BatteryBank(
             client=mock_client,
-            inverter_serial="60534A0404",
+            inverter_serial="1234567890",
             battery_info=battery_info,
         )
 
@@ -1250,7 +1250,7 @@ class TestCapacityPercentFakeZeroFallback:
         )
         bank = BatteryBank(
             client=mock_client,
-            inverter_serial="52842P0581",
+            inverter_serial="1234567890",
             battery_info=battery_info,
         )
 
@@ -1267,7 +1267,7 @@ class TestCapacityPercentFakeZeroFallback:
         )
         bank = BatteryBank(
             client=mock_client,
-            inverter_serial="4524850115",
+            inverter_serial="1234567890",
             battery_info=battery_info,
         )
 
@@ -1283,7 +1283,7 @@ class TestCapacityPercentFakeZeroFallback:
         )
         bank = BatteryBank(
             client=mock_client,
-            inverter_serial="60534A0404",
+            inverter_serial="1234567890",
             battery_info=battery_info,
         )
 
