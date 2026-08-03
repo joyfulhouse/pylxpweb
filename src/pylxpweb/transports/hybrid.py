@@ -217,6 +217,30 @@ class HybridTransport(BaseTransport):
         self._connected = False
         _LOGGER.debug("Hybrid transport disconnected for %s", self._serial)
 
+    async def async_shutdown(self) -> None:
+        """Terminally shut down both sides, preferring their fast paths.
+
+        ``DongleTransport.async_shutdown()`` interrupts in-flight
+        transactions instead of queueing behind the transaction lock (whose
+        worst case spans the whole retry loop). Without this forwarder a
+        hybrid caller could only reach the blocking ``disconnect()`` on the
+        local side. Sides without an ``async_shutdown`` fall back to their
+        ordinary ``disconnect()``. Like the dongle's, this is terminal —
+        discard the transport afterwards.
+        """
+        for side in (self._local, self._http):
+            shutdown = getattr(type(side), "async_shutdown", None)
+            try:
+                if shutdown is not None:
+                    await shutdown(side)
+                else:
+                    await side.disconnect()
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Error shutting down %s transport: %s", type(side).__name__, err)
+
+        self._connected = False
+        _LOGGER.debug("Hybrid transport shut down for %s", self._serial)
+
     async def read_runtime(self) -> InverterRuntimeData:
         """Read runtime data, preferring local transport.
 

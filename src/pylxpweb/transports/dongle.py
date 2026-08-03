@@ -466,6 +466,17 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         attempt + 1,
                         self._connection_retries,
                     )
+                except BaseException:
+                    # CancelledError (or any unexpected error) raised between
+                    # installing the reader/writer and setting _connected would
+                    # otherwise leave an orphaned open socket occupying the
+                    # dongle's single TCP slot — invisible to later cleanup
+                    # because _connected stays False. Close before propagating;
+                    # shutdown-triggered TransportConnectionError takes the
+                    # same path (an extra close on an already-closed socket is
+                    # a no-op).
+                    await self._close_connection()
+                    raise
 
             # All retries exhausted
             await self._close_connection()

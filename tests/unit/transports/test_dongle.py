@@ -173,6 +173,48 @@ class TestDongleConnection:
         assert transport.is_connected is False
 
     @pytest.mark.asyncio
+    async def test_connect_cancelled_during_initial_data_closes_socket(self) -> None:
+        """Cancellation between socket install and _connected=True must close.
+
+        The dongle has ONE TCP slot. If the caller's task is cancelled while
+        connect() is parked in the initial-data wait, the freshly installed
+        reader/writer would otherwise stay open with _connected False —
+        invisible to disconnect()-style cleanup and blocking every later
+        client until a retry's clean-slate close (codex review P2).
+        """
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="CE12345678",
+        )
+
+        read_started = asyncio.Event()
+        hang_forever = asyncio.Event()
+
+        async def hanging_read(_n: int) -> bytes:
+            read_started.set()
+            await hang_forever.wait()
+            return b""
+
+        mock_reader = MagicMock()
+        mock_reader.read = hanging_read
+        mock_writer = MagicMock()
+        mock_writer.close = MagicMock()
+        mock_writer.wait_closed = AsyncMock()
+
+        with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
+            task = asyncio.create_task(transport.connect())
+            await asyncio.wait_for(read_started.wait(), timeout=1.0)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        mock_writer.close.assert_called_once()
+        mock_writer.wait_closed.assert_awaited_once()
+        assert transport.is_connected is False
+        assert transport._writer is None
+
+    @pytest.mark.asyncio
     async def test_disconnect(self) -> None:
         """Test disconnection."""
         transport = DongleTransport(

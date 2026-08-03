@@ -408,3 +408,51 @@ class TestHybridTransportRecovery:
             transport._check_local_recovery()
             assert transport._local_failed_at is None
             assert transport._using_local is True
+
+
+class TestHybridAsyncShutdown:
+    """async_shutdown forwards to each side's fast path (Opus review P2).
+
+    Without this forwarder a hybrid caller could only reach the local side's
+    reusable disconnect(), which queues behind the transaction lock — worst
+    case the whole retry loop — while DongleTransport.async_shutdown()
+    interrupts in-flight transactions immediately.
+    """
+
+    @pytest.mark.asyncio
+    async def test_forwards_to_side_async_shutdown_when_present(
+        self, mock_http_transport: MagicMock
+    ) -> None:
+        class _LocalWithShutdown:
+            def __init__(self) -> None:
+                self.serial = "CE12345678"
+                self.capabilities = MagicMock()
+                self.shutdown_calls = 0
+                self.disconnect = AsyncMock()
+
+            async def async_shutdown(self) -> None:
+                self.shutdown_calls += 1
+
+        local = _LocalWithShutdown()
+        transport = HybridTransport(local, mock_http_transport)
+
+        await transport.async_shutdown()
+
+        assert local.shutdown_calls == 1
+        local.disconnect.assert_not_awaited()
+        # The plain-MagicMock HTTP side has no type-level async_shutdown,
+        # so it takes the ordinary disconnect fallback.
+        mock_http_transport.disconnect.assert_awaited_once()
+        assert transport.is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_side_failure_does_not_block_other_side(
+        self, mock_local_transport: MagicMock, mock_http_transport: MagicMock
+    ) -> None:
+        mock_local_transport.disconnect = AsyncMock(side_effect=OSError("stuck socket"))
+        transport = HybridTransport(mock_local_transport, mock_http_transport)
+
+        await transport.async_shutdown()
+
+        mock_http_transport.disconnect.assert_awaited_once()
+        assert transport.is_connected is False
