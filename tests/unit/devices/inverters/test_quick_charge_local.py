@@ -550,3 +550,142 @@ class TestReadQuickChargeRemainingSeconds:
 
         with patch.object(transport, "_read_input_registers", side_effect=boom):
             assert await transport.read_quick_charge_remaining_seconds() is None
+
+
+class TestWriteTransportBitGuards:
+    """write_transport_bit refuses targets the named path cannot bit-modify.
+
+    Review follow-ups on the #260 reroute (Opus findings 1-2): a single-key
+    VALUE register (e.g. holding 67) would be blind-overwritten with 0/1 by
+    the plain-value branch of write_named_parameters, and a placeholder or
+    disputed bit name is refused with ValueError inside the named path —
+    both must surface as LuxpowerDeviceError, never as a silent False or,
+    worse, a corrupted setpoint.
+    """
+
+    def _inverter(self, mock_client: LuxpowerClient) -> _Inverter:
+        transport = Mock()
+        transport.write_named_parameters = AsyncMock(return_value=True)
+        return _Inverter(
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=transport,
+        )
+
+    @pytest.mark.asyncio
+    async def test_value_register_is_refused_not_overwritten(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Holding 67 (AC charge SOC limit) must never be blind-written."""
+        from pylxpweb.exceptions import LuxpowerDeviceError
+
+        inverter = self._inverter(mock_client)
+
+        with pytest.raises(LuxpowerDeviceError, match="not a bit-field register"):
+            await inverter.write_transport_bit(67, 0, True)
+
+        inverter._transport.write_named_parameters.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_placeholder_bit_refusal_raises_not_false(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A named-path ValueError refusal surfaces as LuxpowerDeviceError."""
+        from pylxpweb.exceptions import LuxpowerDeviceError
+
+        inverter = self._inverter(mock_client)
+        inverter._transport.write_named_parameters = AsyncMock(
+            side_effect=ValueError("Refusing to write placeholder parameter 'FUNC_110_BIT5'")
+        )
+
+        with pytest.raises(LuxpowerDeviceError, match="Refused to write register 110 bit 5"):
+            await inverter.write_transport_bit(110, 5, True)
+
+    @pytest.mark.asyncio
+    async def test_bit_field_register_still_writes(self, mock_client: LuxpowerClient) -> None:
+        """Register 21 (16-key FUNC_ bit field) keeps the named write path."""
+        inverter = self._inverter(mock_client)
+
+        result = await inverter.write_transport_bit(21, 7, True)
+
+        assert result is True
+        assert inverter._transport.write_named_parameters.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_transport_failure_still_returns_false(self, mock_client: LuxpowerClient) -> None:
+        """Runtime transport errors keep the documented False contract."""
+        inverter = self._inverter(mock_client)
+        inverter._transport.write_named_parameters = AsyncMock(
+            side_effect=TransportWriteError("link down")
+        )
+
+        assert await inverter.write_transport_bit(21, 7, True) is False
+
+
+class TestHybridTransportDurationStart:
+    """Duration starts on a HybridTransport must pin the local leg (Fable P2).
+
+    HybridTransport's per-write HTTP fallback applies named keys as separate
+    cloud calls, so a local NAK of the paired H233/H234 frame could start the
+    charge via the function write while the reg-234 duration write fails —
+    success with the wrong duration, and the dedicated start_quick_charge
+    cloud endpoint (the correct recovery) never runs. The device must talk to
+    the local leg directly and let a local failure fall through to that
+    endpoint with the requested minute intact.
+    """
+
+    def _hybrid(self, local: Mock) -> Any:
+        from pylxpweb.transports.hybrid import HybridTransport
+
+        hybrid = HybridTransport(local, Mock())
+        # Instance-level shadows: the device must talk to the LOCAL leg
+        # directly; touching the hybrid wrapper's fallback-capable writers
+        # is exactly the regression under test.
+        hybrid.write_named_parameters = AsyncMock(  # type: ignore[method-assign]
+            side_effect=AssertionError("duration start must not use the hybrid fallback wrapper")
+        )
+        hybrid.write_parameters = AsyncMock(  # type: ignore[method-assign]
+            side_effect=AssertionError("duration write must not use the hybrid fallback wrapper")
+        )
+        return hybrid
+
+    @pytest.mark.asyncio
+    async def test_local_nak_falls_back_to_dedicated_cloud_endpoint(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """All-local NAK -> start_quick_charge(minute) with the right duration."""
+        local = Mock()
+        local.write_named_parameters = AsyncMock(side_effect=TransportWriteError("firmware NAK"))
+        local.write_parameters = AsyncMock(side_effect=TransportWriteError("firmware NAK"))
+        inverter = _Inverter(
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=self._hybrid(local),
+        )
+
+        result = await inverter.enable_quick_charge(minute=30)
+
+        assert result is True
+        mock_client.api.control.start_quick_charge.assert_awaited_once_with("1234567890", minute=30)
+        # Both local attempts happened on the LOCAL leg, not the wrapper.
+        assert local.write_named_parameters.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_local_success_never_touches_cloud(self, mock_client: LuxpowerClient) -> None:
+        """A successful local paired start stays entirely local."""
+        local = Mock()
+        local.write_named_parameters = AsyncMock(return_value=True)
+        inverter = _Inverter(
+            client=mock_client,
+            serial_number="1234567890",
+            model="FlexBOSS21",
+            transport=self._hybrid(local),
+        )
+
+        result = await inverter.enable_quick_charge(minute=30)
+
+        assert result is True
+        local.write_named_parameters.assert_awaited_once()
+        mock_client.api.control.start_quick_charge.assert_not_awaited()

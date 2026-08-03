@@ -1950,7 +1950,17 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             value: True to set bit, False to clear bit
 
         Returns:
-            True if successful
+            True if successful, False if the write failed at the transport
+            layer (link down, device rejected the frame)
+
+        Raises:
+            LuxpowerDeviceError: If ``register`` is not a mapped bit-field
+                register — a single-value register (e.g. holding 67) would be
+                blind-overwritten with 0/1 rather than bit-modified, and a
+                placeholder or disputed bit name is refused by the named
+                write path because its function is not hardware-verified.
+                These are caller errors, distinct from a runtime write
+                failure, and are raised rather than reported as False.
 
         Example:
             >>> # Enable AC charge (register 21, bit 7)
@@ -1962,6 +1972,8 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             Only available in transport mode (Modbus/Dongle).
             For HTTP mode, use the specific control methods like enable_ac_charge().
         """
+        from pylxpweb.constants.registers import REGISTER_TO_PARAM_KEYS
+
         if self._transport is None:
             _LOGGER.warning(
                 "write_transport_bit() only available in transport mode for %s",
@@ -1969,8 +1981,22 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             )
             return False
 
+        # A single-key entry names a VALUE register: the named write path
+        # would classify it as a plain value and overwrite the whole 16-bit
+        # setpoint with int(True/False). Refuse rather than corrupt (a
+        # pre-#260 caller got a raw bit RMW here, never a blind overwrite).
+        keys = REGISTER_TO_PARAM_KEYS.get(register)
+        if keys is not None and not (
+            len(keys) > 1 and all(k.startswith(("FUNC_", "BIT_")) for k in keys)
+        ):
+            raise LuxpowerDeviceError(
+                f"Register {register} is not a bit-field register; "
+                "write_transport_bit() would overwrite its value — use "
+                "write_transport_register() instead"
+            )
+
+        param_key = self._cloud_param_key(register, bit)
         try:
-            param_key = self._cloud_param_key(register, bit)
             success = await self._transport.write_named_parameters({param_key: value})
             if success:
                 _LOGGER.debug(
@@ -1984,6 +2010,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
                 self._invalidate_parameters_cache()
             return success
 
+        except ValueError as err:
+            # Named-path refusal (placeholder bit with unverified function,
+            # disputed bit position): a caller error, not a runtime write
+            # failure — surface it instead of an ambiguous False.
+            raise LuxpowerDeviceError(
+                f"Refused to write register {register} bit {bit} ({param_key}): {err}"
+            ) from err
         except Exception as err:
             _LOGGER.warning(
                 "Failed to write bit %d in register %d for %s: %s",
@@ -4040,8 +4073,23 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if minute is None:
             return await self.write_transport_bit(233, 0, True)
 
+        # A duration start must be all-local. On a HybridTransport the HTTP
+        # leg applies named keys as SEPARATE cloud calls, so a silent
+        # per-write fallback could start the charge (the enable-bit function
+        # write succeeds server-side) while the reg-234 duration write fails
+        # — reporting success with the wrong duration, and skipping the
+        # dedicated start_quick_charge(minute) cloud endpoint that our
+        # caller runs when this method returns False (review P2). Pin every
+        # write in this path to the local leg; any local failure surfaces
+        # here as False and the caller takes the correct cloud recovery.
+        from pylxpweb.transports.hybrid import HybridTransport
+
+        wire: InverterTransport = transport
+        if isinstance(transport, HybridTransport):
+            wire = transport.local_transport
+
         try:
-            if await transport.write_named_parameters(
+            if await wire.write_named_parameters(
                 {
                     self._cloud_param_key(233, 0): True,
                     self._cloud_param_key(234): minute,
@@ -4058,10 +4106,29 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             )
 
         # Bit-only start (proven path), then apply the requested duration
-        # live — reg 234 accepts writes while a charge is running.
-        if not await self.write_transport_bit(233, 0, True):
+        # live — reg 234 accepts writes while a charge is running. Same
+        # local-leg pinning as the paired frame, for the same reason.
+        try:
+            if not await wire.write_named_parameters({self._cloud_param_key(233, 0): True}):
+                return False
+        except Exception as err:
+            _LOGGER.debug(
+                "Bit-only quick-charge start rejected for %s: %s",
+                self.serial_number,
+                err,
+            )
             return False
-        if not await self.write_transport_register(234, minute):
+        self._invalidate_parameters_cache()
+        try:
+            duration_applied = await wire.write_parameters({234: minute})
+        except Exception as err:
+            _LOGGER.debug(
+                "Quick-charge duration write (reg 234) failed for %s: %s",
+                self.serial_number,
+                err,
+            )
+            duration_applied = False
+        if not duration_applied:
             _LOGGER.warning(
                 "Quick charge started for %s but the %d-minute duration could "
                 "not be applied; the firmware default length is running",
