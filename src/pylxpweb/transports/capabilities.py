@@ -100,8 +100,9 @@ MODBUS_CAPABILITIES = TransportCapabilities(
     is_local=True,
 )
 
-# Dongle capabilities are identical to Modbus (same register access)
-# The dongle is just a different transport mechanism for the same data
+# Dongle capabilities match Modbus for register access; the one divergence
+# is supports_concurrent_reads=False — the dongle serializes everything over
+# its single TCP slot (see below).
 DONGLE_CAPABILITIES = TransportCapabilities(
     # Core access - all supported (same as Modbus)
     can_read_runtime=True,

@@ -808,26 +808,33 @@ class TestACChargeTypeOperations:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_set_ac_charge_type_transport_preserves_bits(
+    async def test_set_ac_charge_type_transport_uses_lock_held_named_rmw(
         self, mock_client: LuxpowerClient
     ) -> None:
-        """Transport RMW sets the bits 1-3 field while preserving other bits."""
+        """Transport set routes through the named, lock-held H120 RMW.
+
+        A device-level read + raw write here would release the operation
+        lock between the two calls, so a concurrent sibling-field write
+        (e.g. BIT_GENERATOR_CHARGE_TYPE) could be silently reverted. The
+        named path performs the whole RMW under the transport lock; this
+        test pins that routing.
+        """
+        transport = Mock()
+        transport.write_named_parameters = AsyncMock(return_value=True)
         inverter = HybridInverter(
             client=mock_client,
             serial_number="1234567890",
             model="FlexBOSS21",
-            transport=Mock(),
+            transport=transport,
         )
-        # Bit 0 and bit 4 set (other features enabled) = 0b00010001 = 17
-        inverter.read_transport_register = AsyncMock(return_value=17)
-        inverter.write_transport_register = AsyncMock(return_value=True)
+        inverter.read_transport_register = AsyncMock()
+        inverter.write_transport_register = AsyncMock()
 
         result = await inverter.set_ac_charge_type(1)  # SOC/Volt
 
-        # Set bits 1-3 to value 1 (raw 2) while preserving bits 0 and 4:
-        # 17 & ~0x0E = 16 (bit 4) | 1 (bit 0) = 17 → | (1 << 1) = 19
-        inverter.read_transport_register.assert_awaited_once_with(120)
-        inverter.write_transport_register.assert_awaited_once_with(120, 19)
+        transport.write_named_parameters.assert_awaited_once_with({"BIT_AC_CHARGE_TYPE": 1})
+        inverter.read_transport_register.assert_not_awaited()
+        inverter.write_transport_register.assert_not_awaited()
         assert result is True
 
     @pytest.mark.asyncio
@@ -835,14 +842,14 @@ class TestACChargeTypeOperations:
         self, mock_client: LuxpowerClient
     ) -> None:
         """Transport-mode Modbus write failure raises (control-op convention)."""
+        transport = Mock()
+        transport.write_named_parameters = AsyncMock(return_value=False)
         inverter = HybridInverter(
             client=mock_client,
             serial_number="1234567890",
             model="FlexBOSS21",
-            transport=Mock(),
+            transport=transport,
         )
-        inverter.read_transport_register = AsyncMock(return_value=0)
-        inverter.write_transport_register = AsyncMock(return_value=False)
 
         with pytest.raises(LuxpowerDeviceError, match="requires a successful Modbus write"):
             await inverter.set_ac_charge_type(1)

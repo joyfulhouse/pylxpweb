@@ -775,20 +775,26 @@ class HybridInverter(GenericInverter):
             >>> await inverter.set_ac_charge_type(0)  # Time-based
             True
         """
-        from pylxpweb.constants import (
-            AC_CHARGE_TYPE_MASK,
-            AC_CHARGE_TYPE_SHIFT,
-            HOLD_AC_CHARGE_TYPE_REGISTER,
-        )
+        from pylxpweb.constants import HOLD_AC_CHARGE_TYPE_REGISTER
 
         if charge_type not in (0, 1, 2):
             raise ValueError(f"charge_type must be 0, 1, or 2, got {charge_type}")
 
         if self._transport is not None:
-            # Transport: atomic read-modify-write preserves the other reg-120 bits.
-            current = await self._read_modbus_register(HOLD_AC_CHARGE_TYPE_REGISTER)
-            new_value = (current & ~AC_CHARGE_TYPE_MASK) | (charge_type << AC_CHARGE_TYPE_SHIFT)
-            result = await self._write_modbus_register(HOLD_AC_CHARGE_TYPE_REGISTER, new_value)
+            # Named path: write_named_parameters performs the H120
+            # read-modify-write while holding the transport operation lock,
+            # so a concurrent sibling-field write (e.g.
+            # BIT_GENERATOR_CHARGE_TYPE) cannot land between this method's
+            # read and write and be silently reverted. A device-level
+            # read + raw write here would reintroduce exactly that race.
+            result = await self._transport.write_named_parameters(
+                {"BIT_AC_CHARGE_TYPE": charge_type}
+            )
+            if not result:
+                raise LuxpowerDeviceError(
+                    f"Register {HOLD_AC_CHARGE_TYPE_REGISTER} write requires "
+                    "a successful Modbus write"
+                )
         else:
             # Reg 120 is a bitfield (the raw cloud write is rejected); set the
             # named BIT_AC_CHARGE_TYPE multi-value bit param server-side, which

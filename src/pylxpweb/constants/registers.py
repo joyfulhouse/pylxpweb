@@ -1109,11 +1109,14 @@ BIT_FIELD_LAYOUT: dict[str, tuple[int, int]] = {
     **MIDBOX_BIT_FIELD_LAYOUT,
 }
 
-# Backward-compatible public subset for callers that need to identify fields
-# whose values are integers rather than booleans.
-MULTI_BIT_FIELDS: dict[str, tuple[int, int]] = {
-    name: layout for name, layout in BIT_FIELD_LAYOUT.items() if layout[1] > 1
-}
+# Backward-compatible public alias. Historically this table held ONLY the
+# GridBOSS/MIDBOX smart-port fields, and its one documented use-idiom was
+# "does this parameter need the MIDBOX register mapping?". Redefining it to
+# include the new H120 compound fields would silently break that idiom for
+# external callers (an H120 write would merge the MIDBOX mapping and shadow
+# inverter register 20 — review P3), so it stays an alias of the MIDBOX
+# table. Use BIT_FIELD_LAYOUT for the full "is this a wide field" question.
+MULTI_BIT_FIELDS: dict[str, tuple[int, int]] = MIDBOX_BIT_FIELD_LAYOUT
 
 # Named value parameters whose raw local register holds a deci-unit encoding
 # (raw = value * 10) that the cloud API surfaces already scaled to engineering
