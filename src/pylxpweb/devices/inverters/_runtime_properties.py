@@ -474,23 +474,58 @@ class InverterRuntimePropertiesMixin:
     # ===========================================
 
     @property
+    def _model_family(self) -> InverterFamily | None:
+        """This device's detected family, or None when unresolved.
+
+        ``UNKNOWN`` is reported as None: ``detect_features()`` returns the
+        default WITHOUT raising when its parameter fetch fails, so UNKNOWN is
+        what the pipeline emits for a device whose family could not be
+        determined — never evidence of what the hardware is.
+        """
+        features = getattr(self, "_features", None)
+        family = getattr(features, "model_family", None)
+        if family is None or family is InverterFamily.UNKNOWN:
+            return None
+        return family  # type: ignore[no-any-return]
+
+    @property
+    def _is_offgrid_family(self) -> bool:
+        """Whether this device is positively identified as EG4_OFFGRID."""
+        return self._model_family is InverterFamily.EG4_OFFGRID
+
+    @property
     def ac_couple_power(self) -> int:
         """Get AC coupled power in watts.
 
         Prefers register 153 (ac_couple_power) from local transport when
-        available.  Falls back to register 123 (generator_power) for
-        EG4_HYBRID devices where both registers carry equivalent AC
-        couple data.  Cloud path uses acCouplePower field.
+        available.  Cloud path uses the acCouplePower field.
 
-        On EG4_OFFGRID (12000XP/6000XP), register 123 is a seconds
-        counter — only register 153 is correct.
+        Falls back to register 123 ONLY for positively-identified EG4_HYBRID,
+        where the two registers carry equivalent AC couple data.  The gate is
+        POSITIVE rather than "not off-grid" because an unresolved family is not
+        evidence of anything: register 123 is a free-running 1 Hz counter on
+        EG4_OFFGRID (eg4_web_monitor#544, proven from a 12000XP's own firmware
+        — the FC04 handler returns a word of ARM RAM that a timer task
+        increments with no bound check), and regs 121/122/153 sit in a
+        different read block from 123, so a partial read that lost 153 while
+        keeping 123 would otherwise republish the counter as tens of kW of "AC
+        couple power" on any device whose detection had not settled.  Register
+        153 is confirmed present on the off-grid family anyway
+        (eg4_web_monitor#196 measured I153=1409 W tracking cloud
+        acCouplePower), so the fallback buys it nothing there.
+
+        Known ambiguity: a missing reading returns 0, indistinguishable from a
+        measured zero — pre-existing to this property's ``int`` contract.
+        Widening to ``int | None`` is deferred to the next minor version.
         """
         if self._transport_runtime is not None:
             # Prefer reg 153 (ac_couple_power) — correct for all families
             val = self._transport_runtime.ac_couple_power
             if val is not None:
                 return int(val)
-            # Fall back to reg 123 (generator_power) — valid on EG4_HYBRID
+            if self._model_family is not InverterFamily.EG4_HYBRID:
+                return 0
+            # Fall back to reg 123 — equivalent AC couple data on this family
             val = self._transport_runtime.generator_power
             return int(val) if val is not None else 0
         if self._runtime is None:
@@ -499,26 +534,74 @@ class InverterRuntimePropertiesMixin:
 
     @property
     def generator_voltage(self) -> float | None:
-        """Get generator voltage in volts."""
+        """Get generator voltage in volts (input register 121)."""
         return self._scaled_float("generator_voltage", "genVolt")
 
     @property
     def generator_frequency(self) -> float | None:
-        """Get generator frequency in Hz."""
+        """Get generator frequency in Hz (input register 122)."""
         return self._scaled_float("generator_frequency", "genFreq")
 
     @property
     def generator_power(self) -> int | None:
-        """Get generator power in watts."""
+        """Get generator power in watts (input register 123).
+
+        Returns None on EG4_OFFGRID, where this register is NOT a measurement:
+        it is a free-running 16-bit counter incremented once per second by the
+        ARM comms processor and wrapping at 65536 — seconds since boot, not
+        watts.  Proven from a 12000XP's own firmware (eg4_web_monitor#544): the
+        FC04 handler reads a word of ARM-local RAM that a timer task
+        increments with no bound check, and a whole-image writer audit found no
+        DSP measurement path to it.  The reporting user saw 28,646 W with
+        nothing connected to the GEN port.
+
+        No substitute exists on that family — registers 188/189 are
+        unimplemented and no dedicated generator-power register has been
+        identified.  Generator voltage/frequency (regs 121/122) ARE genuine
+        there and read 0 when nothing is attached.
+        """
+        if self._is_offgrid_family:
+            return None
         return self._raw_int("generator_power", "genPower")
 
     @property
     def is_using_generator(self) -> bool:
-        """Check if generator is currently in use."""
-        if self._transport_runtime is not None:
-            val = self._transport_runtime.generator_power
-            return val is not None and int(val) > 0
-        if self._runtime is None:
+        """Whether the generator input is currently energised.
+
+        Derived from the GEN terminal's own voltage and frequency (regs
+        121/122) — genuine measurements on every family that read 0 with
+        nothing attached.  Deliberately NOT from generator_power, which was the
+        previous implementation and is wrong on both families: on EG4_OFFGRID
+        reg 123 is a 1 Hz counter, so `> 0` latched True until the 16-bit wrap;
+        on EG4_HYBRID reg 123 reports whatever crosses the multiplexed GEN
+        terminal, including AC-coupled PV, so it read True with no generator
+        present (eg4_web_monitor#544).
+
+        Means "GEN input is energised", not "drawing power" — a generator that
+        is running but unloaded still answers True.
+
+        The portal's own ``_12KUsingGenerator`` flag is used only when there is
+        no local transport at all (pure CLOUD, where the measurements are
+        always present anyway since ``genVolt``/``genFreq`` are non-optional
+        ints defaulting to 0).  A transport-backed device whose regs 121/122
+        went missing on a partial read answers False rather than consulting it:
+        in HYBRID the cloud ``_runtime`` is refreshed only for EG4_OFFGRID
+        (see ``_wants_hybrid_supplemental_runtime``), so for other families it
+        is a setup-time snapshot and presenting it as current state would be
+        worse than reporting nothing.
+
+        CAVEAT: regs 121/122 are established as genuine on EG4_HYBRID and read
+        0 with nothing attached on EG4_OFFGRID, but no capture of an ACTIVE
+        generator on the off-grid family exists yet — so the True direction is
+        unverified there.  If they turn out to be stubs on that platform this
+        property would be permanently False for it; eg4_web_monitor#544 has an
+        open request to the reporter for a generator-running capture.
+        """
+        voltage = self.generator_voltage
+        frequency = self.generator_frequency
+        if voltage is not None and frequency is not None:
+            return bool(voltage > 0 and frequency > 0)
+        if self._transport_runtime is not None or self._runtime is None:
             return False
         return self._runtime._12KUsingGenerator
 

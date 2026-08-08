@@ -164,8 +164,11 @@ For systems with generator or AC coupling:
 ```python
 print(f"Generator Voltage: {inverter.generator_voltage}V")
 print(f"Generator Frequency: {inverter.generator_frequency}Hz")
-print(f"Generator Power: {inverter.generator_power}W")
-print(f"Using Generator: {inverter.is_using_generator}")
+# None on EG4_OFFGRID (register 123 is a 1 Hz counter there, not watts);
+# elsewhere it is the multiplexed GEN terminal, not generator-specific.
+print(f"GEN terminal Power: {inverter.generator_power}W")
+# True when the GEN input is energised (voltage AND frequency present).
+print(f"Generator input energised: {inverter.is_using_generator}")
 print(f"AC Couple Power: {inverter.ac_couple_power}W")
 ```
 

@@ -1110,7 +1110,26 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         ha_sensor_key="generator_power",
         unit="W",
         category=RegisterCategory.GENERATOR,
-        description="Generator power.",
+        models=frozenset({"EG4_HYBRID", "LXP"}),
+        description="Generator power — EXCLUDED from EG4_OFFGRID, where it is not a "
+        "measurement.  On that family (12000XP/6000XP) this register is a "
+        "free-running 16-bit counter incremented once per second by the ARM "
+        "comms processor and wrapping at 65536 (seconds since boot, not "
+        "watts), proven by decoding a 12000XP's own ceaa-0709 firmware in "
+        "eg4_web_monitor#544: the FC04 handler reads a word of ARM-local RAM "
+        "that a timer task increments with no bound check, and a whole-image "
+        "writer audit found no DSP path to it.  Because this definition is "
+        "family-scoped, registers_for_model/sensor_keys_for_model omit it and "
+        "InverterRuntimeData.generator_power decodes to None there; the cloud "
+        "genPower field is gated separately on the generator_power property.  "
+        "On EG4_HYBRID/LXP the register carries real power, but from the "
+        "MULTIPLEXED GEN terminal — generator, AC-coupled PV, or smart load — "
+        "so it is not generator-specific: measured on a FlexBOSS21 + 18kPV "
+        "GridBOSS parallel system with no generator on site, the two "
+        "inverters' values sum to the GridBOSS AC-Couple-1 total within "
+        "0.13%.  That hybrid reading is an empirical correlation — the only "
+        "firmware image decoded is the off-grid one.  Never infer 'generator "
+        "running' from this register; use regs 121/122.",
     ),
     RegisterDefinition(
         address=124,
@@ -1120,14 +1139,21 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_DAILY,
-        description="Generator energy today (Egen_day). EG4_OFFGRID caveat: "
-        "the withdrawn eg4_web_monitor PR #220 claimed regs 124-126 hold "
-        "AC-couple energy in raw Wh (DIV_1000) on the 12000XP, but the "
-        "reporter's own earlier sweep (#196) read I124 == holding 179 "
-        "exactly (0x0800, the AC-couple enable bit) and successive captures "
-        "moved by exact powers of two — bit-field behavior, not energy "
-        "accrual. Semantics on the SNA platform are UNVERIFIED; do not "
-        "surface as a sensor for that family without a fresh capture.",
+        models=frozenset({"EG4_HYBRID", "LXP"}),
+        description="Generator energy today (Egen_day).  EXCLUDED from EG4_OFFGRID, where "
+        "it is NOT energy — resolved from firmware in eg4_web_monitor#544.  "
+        "The FC04 handler assembles it from two separate bytes, "
+        "(RAM8[hi] << 8) | RAM8[lo]: the low byte is a locally-maintained "
+        "status bitmask whose bits are set/cleared by ordinary firmware "
+        "logic, and the high byte is copied from a DSP receive-frame "
+        "metadata field.  A reported 179.2 kWh is raw 1792 = 0x0700; the "
+        "0x07 high byte coincides with that firmware's own v1 version "
+        "number, which is suggestive of a version/metadata byte but is a "
+        "single observation, not a proven identity.  This supersedes the "
+        "earlier UNVERIFIED note — the bit-field reading #196's sweep "
+        "suspected, and the withdrawn PR #220 disputed, is confirmed.  "
+        "Family-scoped, so it decodes to None rather than reaching "
+        "InverterEnergyData on that family.",
     ),
     RegisterDefinition(
         address=125,
@@ -1138,9 +1164,17 @@ INVERTER_INPUT_REGISTERS: tuple[RegisterDefinition, ...] = (
         scale=ScaleFactor.DIV_10,
         unit="kWh",
         category=RegisterCategory.ENERGY_LIFETIME,
-        description="Generator cumulative energy (Egen_all, 32-bit). "
-        "EG4_OFFGRID caveat: unverified on the SNA platform — see the "
-        "register-124 note (PR #220 adjudication).",
+        models=frozenset({"EG4_HYBRID", "LXP"}),
+        description="Generator cumulative energy (Egen_all, 32-bit).  EXCLUDED from "
+        "EG4_OFFGRID, where it is NOT energy — resolved from firmware in "
+        "eg4_web_monitor#544.  Registers 125 and 126 are the low and high "
+        "halves of ONE 32-bit status word whose individual bits are set and "
+        "cleared throughout the firmware; there is no accumulator.  A "
+        "reported 'lifetime' of 135,494.5 kWh is the bit pattern 0x0014ACC1 "
+        "— and the same 0xACC1 low word was recorded on a DIFFERENT 12000XP "
+        "in #196 five months earlier, which is what a stable status field "
+        "looks like and what an energy total does not.  Family-scoped, so it "
+        "decodes to None rather than reaching InverterEnergyData there.",
     ),
     # =========================================================================
     # SPLIT-PHASE EPS L1/L2 (regs 127-138) — US models

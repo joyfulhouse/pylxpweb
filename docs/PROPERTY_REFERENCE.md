@@ -147,13 +147,17 @@ print(f"Bus 2: {inverter.bus2_voltage}V")
 | `ac_couple_power` | `int` | W | AC coupled power | 0 |
 | `generator_voltage` | `float` | V | Generator voltage | 0.0 |
 | `generator_frequency` | `float` | Hz | Generator frequency | 0.0 |
-| `generator_power` | `int` | W | Generator power | 0 |
-| `is_using_generator` | `bool` | - | Whether generator is in use | False |
+| `generator_power` | `int \| None` | W | GEN-terminal power. **`None` on EG4_OFFGRID**, where the register is a 1 Hz counter, not watts ([eg4_web_monitor#544](https://github.com/joyfulhouse/eg4_web_monitor/issues/544)). On EG4_HYBRID/LXP it measures the *multiplexed* GEN terminal, so it also carries AC-coupled PV and smart-load throughput — it is not generator-specific. | `None` |
+| `is_using_generator` | `bool` | - | Whether the GEN input is **energised** — derived from generator voltage AND frequency. Means "energised", not "drawing power": a running but unloaded generator is `True`. | False |
 
 **Example**:
 ```python
 if inverter.is_using_generator:
-    print(f"Generator: {inverter.generator_power}W @ {inverter.generator_frequency}Hz")
+    print(f"Generator input energised @ {inverter.generator_frequency}Hz")
+    # generator_power is None on EG4_OFFGRID, and elsewhere measures the
+    # multiplexed GEN terminal rather than the generator alone.
+    if inverter.generator_power is not None:
+        print(f"GEN terminal: {inverter.generator_power}W")
 if inverter.ac_couple_power > 0:
     print(f"AC Couple: {inverter.ac_couple_power}W")
 ```
@@ -622,9 +626,14 @@ Some properties (like PV3, generator) may not be available on all devices:
 if inverter.pv3_voltage > 0:
     print(f"PV3: {inverter.pv3_voltage}V @ {inverter.pv3_power}W")
 
-# Generator returns 0 if not active
-if inverter.generator_power > 0:
-    print(f"Generator: {inverter.generator_power}W")
+# generator_power is None on EG4_OFFGRID (the register is a counter there),
+# and on other families it measures the multiplexed GEN terminal rather than
+# the generator specifically -- so guard for None, and use is_using_generator
+# to ask whether a generator is actually running.
+if inverter.is_using_generator:
+    print("Generator input is energised")
+if inverter.generator_power is not None and inverter.generator_power > 0:
+    print(f"GEN terminal: {inverter.generator_power}W")
 ```
 
 ### Type Safety

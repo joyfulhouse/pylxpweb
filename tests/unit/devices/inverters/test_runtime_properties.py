@@ -294,8 +294,20 @@ class TestGeneratorProperties:
         assert inverter_with_runtime.generator_power == 0
 
     def test_generator_status(self, inverter_with_runtime):
-        """Verify generator status is boolean."""
-        assert inverter_with_runtime.is_using_generator is False
+        """Verify generator status reflects the GEN terminal's own V/Hz.
+
+        The fixture carries genVolt=240.0 V and genFreq=60.0 Hz, i.e. a live
+        generator input, so this is True.
+
+        It asserted False before eg4_web_monitor#544, when the property was
+        derived from ``generator_power > 0`` (the fixture's genPower is 0) and
+        fell through to the portal's ``_12KUsingGenerator`` flag.  That
+        predicate was wrong on both families — a 1 Hz counter on EG4_OFFGRID
+        and multiplexed GEN-terminal throughput on EG4_HYBRID — so the property
+        now reads the voltage/frequency measurements instead.  The fixture's
+        electrical state did not change; the question the property answers did.
+        """
+        assert inverter_with_runtime.is_using_generator is True
 
 
 class TestStatusProperties:
@@ -414,12 +426,33 @@ class TestACCouplePower:
         inverter._transport_runtime.generator_power = 9999.0  # seconds counter on OFFGRID
         assert inverter.ac_couple_power == 1500
 
-    def test_falls_back_to_transport_generator_power(self, inverter_with_transport):
-        """When transport has no ac_couple_power, fall back to generator_power."""
+    def test_falls_back_to_transport_generator_power_on_hybrid(self, inverter_with_transport):
+        """No ac_couple_power + POSITIVELY EG4_HYBRID → fall back to reg 123."""
+        from pylxpweb.devices.inverters._features import (
+            InverterFamily,
+            InverterFeatures,
+        )
+
         inverter = inverter_with_transport
+        inverter._features = InverterFeatures(model_family=InverterFamily.EG4_HYBRID)
         inverter._transport_runtime.ac_couple_power = None
         inverter._transport_runtime.generator_power = 750.0
         assert inverter.ac_couple_power == 750
+
+    def test_no_fallback_while_family_unresolved(self, inverter_with_transport):
+        """An UNRESOLVED family does NOT fall back to reg 123.
+
+        The gate is positive (EG4_HYBRID only) rather than "not off-grid":
+        register 123 is a 1 Hz counter on EG4_OFFGRID (eg4_web_monitor#544), and
+        an undetected family is not evidence the device isn't one — so a partial
+        read that lost reg 153 must not republish tens of kW of "AC couple
+        power".  This fixture's family is UNKNOWN, which is why it changed
+        behaviour here.
+        """
+        inverter = inverter_with_transport
+        inverter._transport_runtime.ac_couple_power = None
+        inverter._transport_runtime.generator_power = 28646.0
+        assert inverter.ac_couple_power == 0
 
     def test_falls_back_to_cloud_acCouplePower(self, inverter_with_runtime):
         """When no transport, use cloud acCouplePower."""

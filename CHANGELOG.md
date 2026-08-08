@@ -5,7 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.39b10] - 2026-08-08
+
+### Changed
+
+- **Input register 123 is no longer published as generator power on the
+  EG4_OFFGRID family, and "using generator" no longer derives from it**
+  ([eg4_web_monitor#544](https://github.com/joyfulhouse/eg4_web_monitor/issues/544)).
+  Decoding a 12000XP's own firmware (`ceaa-0709`) showed the Modbus FC04
+  handler for register 123 returns a word of the ARM comms processor's own RAM
+  that a timer task increments once per second with no bound check, so it wraps
+  at 65536 — seconds since boot, not watts. A whole-image writer audit found
+  only that increment and the power-on clear; no DSP measurement path reaches
+  it. The reporting user saw 28,646 W with nothing connected to the GEN port,
+  and their two samples fit the wrap with zero free parameters
+  (`(5610 − 28646) mod 65536 = 42,500 s`, within 33 seconds of the real
+  interval between captures).
+
+  - `generator_power` now returns `None` on positively-identified EG4_OFFGRID.
+    Other families — including an **unresolved** one — are unchanged, so a
+    transient feature-detection failure cannot blank a genuine measurement.
+  - `is_using_generator` is derived from the GEN terminal's own voltage and
+    frequency (registers 121/122, genuine measurements on every family that
+    read 0 with nothing attached) instead of `generator_power > 0`. That
+    predicate was wrong on **both** families: on EG4_OFFGRID the counter pinned
+    it True until the 16-bit wrap, and on EG4_HYBRID register 123 reports
+    whatever crosses the *multiplexed* GEN terminal — including AC-coupled PV,
+    measured at ~3 kW on a FlexBOSS21 with no generator anywhere on site. The
+    property now means "GEN input is energised", not "drawing power"; a running
+    but unloaded generator answers True. The portal's `_12KUsingGenerator` flag
+    is still used where the measurements are genuinely absent.
+  - `ac_couple_power`'s fallback to register 123 is gated off for EG4_OFFGRID.
+    Registers 121/122/153 and 123 sit in different read blocks, so a partial
+    local read could lose 153 while keeping 123 and republish the counter as
+    tens of kW of "AC couple power". Register 153 is confirmed present on that
+    family ([eg4_web_monitor#196](https://github.com/joyfulhouse/eg4_web_monitor/issues/196)
+    measured `I153 = 1409 W` tracking cloud `acCouplePower`), so the fallback
+    bought it nothing.
+
+  Register-map descriptions for 123–126 are updated with the firmware findings.
+  The long-standing UNVERIFIED note on 124/125/126 is **resolved**: 124 is
+  byte-assembled from a frame metadata byte plus a local status bitmask, and
+  125/126 are the two halves of one 32-bit status word — which is why a
+  reported "lifetime" of 135,494.5 kWh decodes to the bit pattern `0x0014ACC1`,
+  whose low word `0xACC1` also appeared on a *different* 12000XP in #196 five
+  months earlier.
 
 ### Fixed
 
