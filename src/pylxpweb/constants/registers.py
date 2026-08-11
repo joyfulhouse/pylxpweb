@@ -880,9 +880,11 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     #       eg4_web_monitor#472 for the outstanding capture.
     # EG4_OFFGRID receives this entry through a copy of the shared table, like
     # bit 3. Family overrides remain reserved for hardware-PROVEN divergence.
-    # FUNC_GEN_PEAK_SHAVING, FUNC_ON_GRID_ALWAYS_ON, FUNC_PV_ARC, FUNC_PV_ARC_FAULT_CLEAR,
-    # FUNC_PV_SELL_TO_GRID_EN, FUNC_RSD_DISABLE, FUNC_SMART_LOAD_ENABLE,
+    # FUNC_GEN_PEAK_SHAVING, FUNC_PV_ARC, FUNC_PV_ARC_FAULT_CLEAR,
+    # FUNC_RSD_DISABLE, FUNC_SMART_LOAD_ENABLE,
     # FUNC_TOTAL_LOAD_COMPENSATION_EN, FUNC_TRIP_TIME_UNIT, FUNC_WATT_VOLT_EN
+    # (FUNC_ON_GRID_ALWAYS_ON graduated to bit 15 — eg4_web_monitor #559;
+    # FUNC_PV_SELL_TO_GRID_EN graduated to bit 3 earlier.)
     #
     # FUNC_PV_SELL_TO_GRID_EN ("Export PV Only" in the EG4 web UI, GH
     # eg4_web_monitor#135): BIT 3, PINNED 2026-06-12 ~16:05-16:07 PT via
@@ -922,7 +924,12 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "FUNC_179_BIT12",  # Bit 12: unknown
         "FUNC_179_BIT13",  # Bit 13: unknown
         "FUNC_179_BIT14",  # Bit 14: unknown
-        "FUNC_179_BIT15",  # Bit 15: unknown
+        # Bit 15: Grid Always On (eg4_web_monitor #559). App-write-path-proven
+        # via EG4 mobile Local12KSetFragment.getBitByFunction name→bit
+        # resolver (smali); 4-for-4 against confirmed anchors bits 3/7/9/10.
+        # NOT hardware-toggle-proven — keep readback-verify on writes (#476
+        # wrong-bit ACK lesson). Cloud name FUNC_ON_GRID_ALWAYS_ON.
+        "FUNC_ON_GRID_ALWAYS_ON",
     ],
     # System charge limit (verified via live testing 2026-01-27)
     227: ["HOLD_SYSTEM_CHARGE_SOC_LIMIT"],

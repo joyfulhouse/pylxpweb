@@ -1429,3 +1429,75 @@ class TestRegister110UnifiedLayout:
 
         assert result["FUNC_GREEN_EN"] is False
         assert result["FUNC_110_BIT8"] is True
+
+
+class TestRegister179OnGridAlwaysOnLayout:
+    """Register 179 bit-15 pin for FUNC_ON_GRID_ALWAYS_ON (eg4_web_monitor #559).
+
+    Evidence grade: app-write-path-proven — EG4 mobile app
+    Local12KSetFragment.getBitByFunction name→bit resolver (smali decompile)
+    places FUNC_ON_GRID_ALWAYS_ON at holding register 179 bit 15. Decode
+    validated 4-for-4 against independently confirmed reg-179 anchors:
+    bit 3 PV_SELL_TO_GRID_EN (#135), bit 7 GRID_PEAK_SHAVING, bit 9/10
+    BAT_CHARGE/DISCHARGE_CONTROL (#48). NOT hardware-toggle-proven (one
+    notch below the #476 gold standard) — contract test + readback-verify
+    guard wrong-bit ACK risk.
+    """
+
+    def test_register_179_layout_pins_on_grid_always_on_and_anchors(self) -> None:
+        """Every family maps ON_GRID_ALWAYS_ON to bit 15; anchors stay put."""
+        from pylxpweb.constants.registers import get_register_to_param_mapping
+
+        for family in (None, "EG4_HYBRID", "EG4_OFFGRID", "LXP", "UNKNOWN"):
+            layout = get_register_to_param_mapping(family)[179]
+
+            assert len(layout) == 16
+            assert layout.index("FUNC_ON_GRID_ALWAYS_ON") == 15
+            # Independently confirmed anchors — pin while we're here so a
+            # future reshuffle cannot silently move them.
+            assert layout.index("FUNC_PV_SELL_TO_GRID_EN") == 3
+            assert layout.index("FUNC_GRID_PEAK_SHAVING") == 7
+            assert layout.index("FUNC_BAT_CHARGE_CONTROL") == 9
+            assert layout.index("FUNC_BAT_DISCHARGE_CONTROL") == 10
+            # Placeholder must not linger under the pinned cloud name.
+            assert "FUNC_179_BIT15" not in layout
+
+    def test_param_to_register_resolves_on_grid_always_on(self) -> None:
+        """Reverse mapping resolves the pinned bit to register 179."""
+        from pylxpweb.constants.registers import get_param_to_register_mapping
+
+        for family in (None, "EG4_HYBRID", "EG4_OFFGRID"):
+            mapping = get_param_to_register_mapping(family)
+            assert mapping["FUNC_ON_GRID_ALWAYS_ON"] == 179
+
+    @pytest.mark.asyncio
+    async def test_write_on_grid_always_on_sets_bit_15(self) -> None:
+        """Named write of FUNC_ON_GRID_ALWAYS_ON RMWs reg 179 bit 15."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+        )
+        transport._connected = True
+        transport.read_parameters = AsyncMock(return_value={179: 0x0000})
+        transport.write_parameters = AsyncMock(return_value=True)
+
+        result = await transport.write_named_parameters({"FUNC_ON_GRID_ALWAYS_ON": True})
+
+        assert result is True
+        transport.write_parameters.assert_called_once_with({179: 0x8000})
+
+    @pytest.mark.asyncio
+    async def test_read_decodes_bit_15_as_on_grid_always_on(self) -> None:
+        """Raw 0x8000 (bit 15 set) decodes FUNC_ON_GRID_ALWAYS_ON True."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+        )
+        transport._connected = True
+        transport.read_parameters = AsyncMock(return_value={179: 0x8000})
+
+        result = await transport.read_named_parameters(179, 1)
+
+        assert result["FUNC_ON_GRID_ALWAYS_ON"] is True
