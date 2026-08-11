@@ -1444,6 +1444,17 @@ class TestRegister179OnGridAlwaysOnLayout:
     guard wrong-bit ACK risk.
     """
 
+    @pytest.fixture
+    def hybrid_transport(self) -> ModbusTransport:
+        """ModbusTransport with EG4_HYBRID family."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            inverter_family=InverterFamily.EG4_HYBRID,
+        )
+        transport._connected = True
+        return transport
+
     def test_register_179_layout_pins_on_grid_always_on_and_anchors(self) -> None:
         """Every family maps ON_GRID_ALWAYS_ON to bit 15; anchors stay put."""
         from pylxpweb.constants.registers import get_register_to_param_mapping
@@ -1471,33 +1482,25 @@ class TestRegister179OnGridAlwaysOnLayout:
             assert mapping["FUNC_ON_GRID_ALWAYS_ON"] == 179
 
     @pytest.mark.asyncio
-    async def test_write_on_grid_always_on_sets_bit_15(self) -> None:
+    async def test_write_on_grid_always_on_sets_bit_15(
+        self, hybrid_transport: ModbusTransport
+    ) -> None:
         """Named write of FUNC_ON_GRID_ALWAYS_ON RMWs reg 179 bit 15."""
-        transport = ModbusTransport(
-            host="192.168.1.100",
-            serial="CE12345678",
-            inverter_family=InverterFamily.EG4_HYBRID,
-        )
-        transport._connected = True
-        transport.read_parameters = AsyncMock(return_value={179: 0x0000})
-        transport.write_parameters = AsyncMock(return_value=True)
+        hybrid_transport.read_parameters = AsyncMock(return_value={179: 0x0000})
+        hybrid_transport.write_parameters = AsyncMock(return_value=True)
 
-        result = await transport.write_named_parameters({"FUNC_ON_GRID_ALWAYS_ON": True})
+        result = await hybrid_transport.write_named_parameters({"FUNC_ON_GRID_ALWAYS_ON": True})
 
         assert result is True
-        transport.write_parameters.assert_called_once_with({179: 0x8000})
+        hybrid_transport.write_parameters.assert_called_once_with({179: 0x8000})
 
     @pytest.mark.asyncio
-    async def test_read_decodes_bit_15_as_on_grid_always_on(self) -> None:
+    async def test_read_decodes_bit_15_as_on_grid_always_on(
+        self, hybrid_transport: ModbusTransport
+    ) -> None:
         """Raw 0x8000 (bit 15 set) decodes FUNC_ON_GRID_ALWAYS_ON True."""
-        transport = ModbusTransport(
-            host="192.168.1.100",
-            serial="CE12345678",
-            inverter_family=InverterFamily.EG4_HYBRID,
-        )
-        transport._connected = True
-        transport.read_parameters = AsyncMock(return_value={179: 0x8000})
+        hybrid_transport.read_parameters = AsyncMock(return_value={179: 0x8000})
 
-        result = await transport.read_named_parameters(179, 1)
+        result = await hybrid_transport.read_named_parameters(179, 1)
 
         assert result["FUNC_ON_GRID_ALWAYS_ON"] is True
