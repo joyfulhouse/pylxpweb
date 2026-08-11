@@ -927,8 +927,11 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         # Bit 15: Grid Always On (eg4_web_monitor #559). App-write-path-proven
         # via EG4 mobile Local12KSetFragment.getBitByFunction name→bit
         # resolver (smali); 4-for-4 against confirmed anchors bits 3/7/9/10.
-        # NOT hardware-toggle-proven — keep readback-verify on writes (#476
-        # wrong-bit ACK lesson). Cloud name FUNC_ON_GRID_ALWAYS_ON.
+        # NOT hardware-toggle-proven. A wrong-bit write is ACKed by the
+        # firmware (#476), so readback can never catch a bad pin — it only
+        # confirms the intended bit's round-trip; the version gate and the
+        # per-family register-179 contract test are the mitigations. Cloud
+        # name FUNC_ON_GRID_ALWAYS_ON.
         "FUNC_ON_GRID_ALWAYS_ON",
     ],
     # System charge limit (verified via live testing 2026-01-27)
