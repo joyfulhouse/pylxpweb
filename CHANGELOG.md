@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.39] - 2026-08-13
+
+The first stable release of the 0.9.39 line, graduating the b1–b11 beta series
+out of beta. This is a compact roll-up; see the beta-series sections below and
+the per-release notes on
+[GitHub Releases](https://github.com/joyfulhouse/pylxpweb/releases) for the
+detailed changes.
+
+### Added
+
+- Cloud inverter AC-couple enable and SOC controls, local device helpers, and
+  hardware-verified function mappings, including Grid Always On.
+
+### Changed
+
+- Safer register mappings and generator reporting: EG4_OFFGRID input register
+  123 is no longer treated as generator power, and generator use is derived
+  from the GEN terminal's voltage and frequency.
+
+### Fixed
+
+- Multi-step firmware updates now handle already-current components, busy
+  portals, stale status rows, and evidence-based convergence more reliably.
+- Transport and state correctness across RS485, WiFi dongles, cloud sessions,
+  Quick Charge writes, battery caches and capacity, lifetime-energy catch-up,
+  and register-map isolation.
+- **Firmware-verified AC charge ranges**: H66 (AC charge power) now accepts raw
+  `0..100`, mapping to 0–10000 W, and H160 (AC charge start SOC) accepts 1–90%
+  ([#271](https://github.com/joyfulhouse/pylxpweb/issues/271),
+  [#272](https://github.com/joyfulhouse/pylxpweb/issues/272), PR
+  [#273](https://github.com/joyfulhouse/pylxpweb/pull/273)).
+
+### Known limitations / deferred
+
+- The `aioresponses` conftest compatibility shim is retained until upstream
+  ships support for aiohttp 3.14 or newer
+  ([#189](https://github.com/joyfulhouse/pylxpweb/issues/189)).
+- The pyserial → serialx migration is deferred until pymodbus v4
+  ([#180](https://github.com/joyfulhouse/pylxpweb/issues/180)).
+
 ## [0.9.39b11] - 2026-08-12
 
 ### Added
