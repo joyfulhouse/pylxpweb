@@ -524,8 +524,8 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
     # only the CLOUD named-write path divides by 10 to reach engineering units,
     # and that ÷10 is recorded once in constants.registers.CLOUD_WRITE_DIV10_
     # REGISTERS (keyed by address). min_value/max_value are the post-scaling
-    # engineering bounds (0-10000 W here). Do NOT fold the ÷10 into `scale` — it
-    # would wrongly divide local reads too.
+    # engineering bounds (0-10000 W for reg 66; other family members differ).
+    # Do NOT fold the ÷10 into `scale` — it would wrongly divide local reads too.
     HoldingRegisterDefinition(
         address=66,
         canonical_name="ac_charge_power",
@@ -623,7 +623,8 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         category=HoldingCategory.SCHEDULE,
         description=(
             "Forced/PV charge (ChgFirst) power command. Raw value in 100W units "
-            "(0-150 = 0-15kW), same encoding as AC charge power (reg 66)."
+            "(0-150 = 0-15kW); encoding matches AC charge power (reg 66), but "
+            "the valid ranges differ."
         ),
     ),
     HoldingRegisterDefinition(
