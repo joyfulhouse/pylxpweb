@@ -8,8 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.39] - 2026-08-13
 
 The first stable release of the 0.9.39 line, graduating the b1–b11 beta series
-out of beta. This is a compact roll-up; see the beta-series sections below for
-the detailed changes.
+out of beta. This is a compact roll-up; see the beta-series sections below and
+the per-release notes on
+[GitHub Releases](https://github.com/joyfulhouse/pylxpweb/releases) for the
+detailed changes.
 
 ### Added
 
