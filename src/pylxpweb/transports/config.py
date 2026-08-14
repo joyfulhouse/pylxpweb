@@ -30,10 +30,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from pylxpweb.transports.protocol import InverterTransport
-
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
+    from pylxpweb.transports.protocol import InverterTransport
 
 
 class TransportType(StrEnum):
@@ -277,7 +276,7 @@ class TransportConfig:
         return instance
 
 
-type TransportFactory = Callable[[TransportConfig], InverterTransport]
+type TransportFactory = Callable[[TransportConfig], "InverterTransport"]
 """Factory supplying a transport capability for a matched attachment config."""
 
 

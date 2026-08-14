@@ -1300,8 +1300,10 @@ class Station(BaseDevice):
             configs: List of TransportConfig objects specifying local transports.
                 Each config includes serial, host, port, and transport type.
             transport_factory: Optional caller-supplied factory invoked only for
-                matched configs. Its returned capability is connected, retained,
-                and cleaned up through the public transport lifecycle.
+                matched configs. Its returned capability must implement
+                ``TerminalTransport``; it is connected, retained, and terminally
+                closed through the public transport lifecycle. Pylxpweb-created
+                default transports retain legacy ``disconnect()`` compatibility.
 
         Lifecycle:
             Serial matching precedes factory invocation. For each match, the
@@ -1400,7 +1402,10 @@ class Station(BaseDevice):
                     continue
 
                 # Connect and retain through the public device lifecycle.
-                await device.attach_local_transport(transport)
+                await device.attach_local_transport(
+                    transport,
+                    require_terminal=transport_factory is not None,
+                )
                 result.matched += 1
                 device_type = "MID device" if isinstance(device, MIDDevice) else "inverter"
 

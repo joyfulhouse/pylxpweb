@@ -28,7 +28,7 @@ def make_inverter(client: MagicMock, serial: str) -> BaseInverter:
 
 def make_transport(serial: str) -> MagicMock:
     """Create a transport capability with explicit public lifecycle state."""
-    transport = MagicMock()
+    transport = MagicMock(spec=["serial", "is_connected", "connect", "disconnect"])
     transport.serial = serial
     transport.is_connected = False
     transport.connect = AsyncMock()
@@ -75,7 +75,9 @@ class TestIsHybridMode:
         self, station_with_inverter: Station, mock_inverter: BaseInverter
     ) -> None:
         """Test is_hybrid_mode is True when transport is attached."""
-        await mock_inverter.attach_local_transport(make_transport("CE12345678"))
+        await mock_inverter.attach_local_transport(
+            make_transport("CE12345678"), require_terminal=False
+        )
         assert station_with_inverter.is_hybrid_mode is True
 
     def test_empty_station(self, mock_client: MagicMock) -> None:
@@ -197,6 +199,7 @@ class TestAttachLocalTransports:
         assert result.failed == 1
         assert "CE12345678" in result.failed_serials
         assert mock_inverter.transport is None
+        mock_transport.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_attach_multiple_configs(self, mock_client: MagicMock) -> None:

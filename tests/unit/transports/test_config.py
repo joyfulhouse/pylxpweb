@@ -8,6 +8,13 @@ from pylxpweb.devices.inverters._features import InverterFamily
 from pylxpweb.transports.config import AttachResult, TransportConfig, TransportType
 
 
+def test_transport_factory_alias_does_not_eagerly_bind_protocol() -> None:
+    """The typing-only factory alias does not bind its return protocol eagerly."""
+    from pylxpweb.transports import config as config_module
+
+    assert "InverterTransport" not in vars(config_module)
+
+
 class TestTransportType:
     """Tests for TransportType enum."""
 

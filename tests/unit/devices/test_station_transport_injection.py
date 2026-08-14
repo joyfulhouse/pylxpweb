@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +23,7 @@ class RecordingTransport:
         serial: str,
         events: list[str],
         *,
+        label: str = "",
         connect_error: Exception | None = None,
         close_error: Exception | None = None,
     ) -> None:
@@ -30,13 +31,20 @@ class RecordingTransport:
         self.transport_type = "modbus_tcp"
         self.is_connected = False
         self.events = events
+        self.label = label
         self.connect_error = connect_error
         self.close_error = close_error
         self.connect_started: asyncio.Event | None = None
         self.connect_release: asyncio.Event | None = None
+        self.close_started: asyncio.Event | None = None
+        self.close_release: asyncio.Event | None = None
+
+    def _event(self, name: str) -> str:
+        """Prefix an event when a test needs to distinguish capabilities."""
+        return f"{self.label}:{name}" if self.label else name
 
     async def connect(self) -> None:
-        self.events.append("connect")
+        self.events.append(self._event("connect"))
         await asyncio.sleep(0)
         if self.connect_started is not None:
             self.connect_started.set()
@@ -47,11 +55,15 @@ class RecordingTransport:
         self.is_connected = True
 
     async def disconnect(self) -> None:
-        self.events.append("disconnect")
+        self.events.append(self._event("disconnect"))
         self.is_connected = False
 
     async def async_shutdown(self) -> None:
-        self.events.append("shutdown")
+        self.events.append(self._event("shutdown"))
+        if self.close_started is not None:
+            self.close_started.set()
+        if self.close_release is not None:
+            await self.close_release.wait()
         if self.close_error is not None:
             raise self.close_error
         self.is_connected = False
@@ -278,13 +290,290 @@ async def test_public_detach_falls_back_to_disconnect(station: Station) -> None:
     events: list[str] = []
     capability = DisconnectOnlyTransport("INV0000001", events)
     inverter = station.all_inverters[0]
-    await inverter.attach_local_transport(capability)
+    await inverter.attach_local_transport(capability, require_terminal=False)
 
     detached = await inverter.detach_local_transport()
 
     assert detached is capability
     assert inverter.transport is None
     assert events == ["connect", "disconnect"]
+
+
+@pytest.mark.asyncio
+async def test_injected_factory_rejects_disconnect_only_capability(station: Station) -> None:
+    """Caller-owned injection requires an explicit terminal-close capability."""
+    events: list[str] = []
+    capability = DisconnectOnlyTransport("INV0000001", events)
+
+    result = await station.attach_local_transports(
+        [config("INV0000001")], transport_factory=lambda _: capability
+    )
+
+    assert (result.matched, result.failed) == (0, 1)
+    assert station.all_inverters[0].transport is None
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_connect_and_cleanup_failures_are_combined(station: Station) -> None:
+    """Both failures remain visible when a failed connect cannot be cleaned up."""
+    events: list[str] = []
+    capability = RecordingTransport(
+        "INV0000001",
+        events,
+        connect_error=ConnectionError("connect failed"),
+        close_error=RuntimeError("cleanup failed"),
+    )
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await station.all_inverters[0].attach_local_transport(capability)
+
+    assert [type(error) for error in raised.value.exceptions] == [
+        ConnectionError,
+        RuntimeError,
+    ]
+    assert events == ["connect", "shutdown"]
+    assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
+async def test_cancellation_and_cleanup_failure_are_combined(station: Station) -> None:
+    """Cancellation and terminal-cleanup failure are reported deterministically."""
+    events: list[str] = []
+    capability = RecordingTransport(
+        "INV0000001", events, close_error=RuntimeError("cleanup failed")
+    )
+    capability.connect_started = asyncio.Event()
+    capability.connect_release = asyncio.Event()
+    task = asyncio.create_task(station.all_inverters[0].attach_local_transport(capability))
+    await capability.connect_started.wait()
+
+    task.cancel()
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await task
+
+    assert [type(error) for error in raised.value.exceptions] == [
+        asyncio.CancelledError,
+        RuntimeError,
+    ]
+    assert events == ["connect", "shutdown"]
+    assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_waits_for_terminal_cleanup(station: Station) -> None:
+    """Repeated cancellation cannot interrupt terminal cleanup or leak capability."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events)
+    capability.connect_started = asyncio.Event()
+    capability.connect_release = asyncio.Event()
+    capability.close_started = asyncio.Event()
+    capability.close_release = asyncio.Event()
+    task = asyncio.create_task(station.all_inverters[0].attach_local_transport(capability))
+    await capability.connect_started.wait()
+
+    task.cancel()
+    await capability.close_started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    capability.close_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert events == ["connect", "shutdown"]
+    assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
+async def test_detach_failure_retains_current_capability(station: Station) -> None:
+    """A failed terminal detach retains the current owner for a later retry."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events, close_error=RuntimeError("close failed"))
+    inverter = station.all_inverters[0]
+    await inverter.attach_local_transport(capability)
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        await inverter.detach_local_transport()
+
+    assert inverter.transport is capability
+    assert events == ["connect", "shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_detach_cancellation_and_cleanup_failure_are_combined(
+    station: Station,
+) -> None:
+    """Detach preserves cancellation when the completed close attempt also fails."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events)
+    inverter = station.all_inverters[0]
+    await inverter.attach_local_transport(capability)
+    capability.close_error = RuntimeError("close failed")
+    capability.close_started = asyncio.Event()
+    capability.close_release = asyncio.Event()
+    task = asyncio.create_task(inverter.detach_local_transport())
+    await capability.close_started.wait()
+
+    task.cancel()
+    capability.close_release.set()
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await task
+
+    assert [type(error) for error in raised.value.exceptions] == [
+        asyncio.CancelledError,
+        RuntimeError,
+    ]
+    assert inverter.transport is capability
+
+
+@pytest.mark.asyncio
+async def test_concurrent_attachments_are_serialized(station: Station) -> None:
+    """A second attachment cannot connect or publish during the first transition."""
+    events: list[str] = []
+    first = RecordingTransport("INV0000001", events, label="first")
+    second = RecordingTransport("INV0000001", events, label="second")
+    first.connect_started = asyncio.Event()
+    first.connect_release = asyncio.Event()
+    second.connect_started = asyncio.Event()
+    second.connect_release = asyncio.Event()
+    inverter = station.all_inverters[0]
+
+    first_task = asyncio.create_task(inverter.attach_local_transport(first))
+    await first.connect_started.wait()
+    second_task = asyncio.create_task(inverter.attach_local_transport(second))
+    await asyncio.sleep(0)
+    assert not second.connect_started.is_set()
+
+    first.connect_release.set()
+    await first_task
+    await second.connect_started.wait()
+    second.connect_release.set()
+    await second_task
+
+    assert events == ["first:connect", "second:connect", "first:shutdown"]
+    assert inverter.transport is second
+
+
+@pytest.mark.asyncio
+async def test_cancellation_while_waiting_for_lifecycle_closes_new_capability(
+    station: Station,
+) -> None:
+    """Cancellation while waiting for another transition cleans the unpublished input."""
+    events: list[str] = []
+    first = RecordingTransport("INV0000001", events, label="first")
+    waiting = RecordingTransport("INV0000001", events, label="waiting")
+    first.connect_started = asyncio.Event()
+    first.connect_release = asyncio.Event()
+    inverter = station.all_inverters[0]
+
+    first_task = asyncio.create_task(inverter.attach_local_transport(first))
+    await first.connect_started.wait()
+    waiting_task = asyncio.create_task(inverter.attach_local_transport(waiting))
+    await asyncio.sleep(0)
+    waiting_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting_task
+
+    first.connect_release.set()
+    await first_task
+
+    assert events == ["first:connect", "waiting:shutdown"]
+    assert inverter.transport is first
+
+
+@pytest.mark.asyncio
+async def test_concurrent_detach_and_replacement_close_once(station: Station) -> None:
+    """Detach owns the old close while a replacement waits for the transition."""
+    events: list[str] = []
+    old = RecordingTransport("INV0000001", events, label="old")
+    replacement = RecordingTransport("INV0000001", events, label="new")
+    inverter = station.all_inverters[0]
+    await inverter.attach_local_transport(old)
+    events.clear()
+    old.close_started = asyncio.Event()
+    old.close_release = asyncio.Event()
+    replacement.connect_started = asyncio.Event()
+
+    detach_task = asyncio.create_task(inverter.detach_local_transport())
+    await old.close_started.wait()
+    replacement_task = asyncio.create_task(inverter.attach_local_transport(replacement))
+    await asyncio.sleep(0)
+    assert not replacement.connect_started.is_set()
+
+    old.close_release.set()
+    await detach_task
+    await replacement_task
+
+    assert events == ["old:shutdown", "new:connect"]
+    assert inverter.transport is replacement
+
+
+@pytest.mark.asyncio
+async def test_cancelled_replacement_closes_both_without_publishing_new(
+    station: Station,
+) -> None:
+    """Cancellation during old-owner close cannot publish or leak the replacement."""
+    events: list[str] = []
+    old = RecordingTransport("INV0000001", events, label="old")
+    replacement = RecordingTransport("INV0000001", events, label="new")
+    inverter = station.all_inverters[0]
+    await inverter.attach_local_transport(old)
+    events.clear()
+    old.close_started = asyncio.Event()
+    old.close_release = asyncio.Event()
+
+    task = asyncio.create_task(inverter.attach_local_transport(replacement))
+    await old.close_started.wait()
+    task.cancel()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    old.close_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert events == ["new:connect", "old:shutdown", "new:shutdown"]
+    assert inverter.transport is None
+
+
+@pytest.mark.asyncio
+async def test_same_object_attachment_validates_serial_first(station: Station) -> None:
+    """Identity cannot bypass serial validation on an already-owned capability."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events)
+    inverter = station.all_inverters[0]
+    await inverter.attach_local_transport(capability)
+    capability.serial = "OTHER00001"
+
+    with pytest.raises(ValueError, match="does not match"):
+        await inverter.attach_local_transport(capability)
+
+    assert inverter.transport is capability
+
+
+@pytest.mark.asyncio
+async def test_same_object_attachment_applies_cache_ttl_hook(station: Station) -> None:
+    """Idempotent public attachment establishes transport cache invariants."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events)
+    capability.is_connected = True
+    client = MagicMock()
+    client.username = "test-user"
+    inverter = GenericInverter(
+        client,
+        "INV0000001",
+        "Test Inverter",
+        transport=capability,
+    )
+
+    await inverter.attach_local_transport(capability)
+
+    assert inverter._runtime_cache_ttl == timedelta(seconds=5)
+    assert inverter._energy_cache_ttl == timedelta(seconds=5)
+    assert inverter._battery_cache_ttl == timedelta(seconds=5)
 
 
 @pytest.mark.asyncio
