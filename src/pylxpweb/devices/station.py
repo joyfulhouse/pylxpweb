@@ -29,6 +29,7 @@ _LOGGER = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
     from pylxpweb.transports.config import AttachResult, TransportConfig, TransportFactory
+    from pylxpweb.transports.protocol import InverterTransport
 
     from .battery import Battery
     from .inverters.base import BaseInverter
@@ -1301,9 +1302,10 @@ class Station(BaseDevice):
                 Each config includes serial, host, port, and transport type.
             transport_factory: Optional caller-supplied factory invoked only for
                 matched configs. Its returned capability must implement
-                ``TerminalTransport``; it is connected, retained, and terminally
-                closed through the public transport lifecycle. Pylxpweb-created
-                default transports retain legacy ``disconnect()`` compatibility.
+                ``TerminalInverterTransport``; it is connected, retained, and
+                terminally closed through the public transport lifecycle.
+                Pylxpweb-created default transports retain legacy ``disconnect()``
+                compatibility.
 
         Lifecycle:
             Serial matching precedes factory invocation. For each match, the
@@ -1371,8 +1373,11 @@ class Station(BaseDevice):
 
             # Create and connect transport
             try:
+                transport: InverterTransport
                 if transport_factory is not None:
-                    transport = transport_factory(config)
+                    injected_transport = transport_factory(config)
+                    await device.attach_local_transport(injected_transport)
+                    transport = injected_transport
                 elif config.transport_type == TransportType.MODBUS_TCP:
                     transport = create_modbus_transport(
                         host=config.host,
@@ -1401,11 +1406,8 @@ class Station(BaseDevice):
                     result.failed_serials.append(serial)
                     continue
 
-                # Connect and retain through the public device lifecycle.
-                await device.attach_local_transport(
-                    transport,
-                    require_terminal=transport_factory is not None,
-                )
+                if transport_factory is None:
+                    await device._attach_legacy_local_transport(transport)
                 result.matched += 1
                 device_type = "MID device" if isinstance(device, MIDDevice) else "inverter"
 

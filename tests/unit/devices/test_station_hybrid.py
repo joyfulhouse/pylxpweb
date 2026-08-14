@@ -75,9 +75,18 @@ class TestIsHybridMode:
         self, station_with_inverter: Station, mock_inverter: BaseInverter
     ) -> None:
         """Test is_hybrid_mode is True when transport is attached."""
-        await mock_inverter.attach_local_transport(
-            make_transport("CE12345678"), require_terminal=False
+        transport = make_transport("CE12345678")
+        config = TransportConfig(
+            host="example.invalid",
+            port=502,
+            serial="CE12345678",
+            transport_type=TransportType.MODBUS_TCP,
         )
+        with patch(
+            "pylxpweb.transports.create_modbus_transport",
+            return_value=transport,
+        ):
+            await station_with_inverter.attach_local_transports([config])
         assert station_with_inverter.is_hybrid_mode is True
 
     def test_empty_station(self, mock_client: MagicMock) -> None:

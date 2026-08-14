@@ -243,13 +243,24 @@ class TerminalTransport(Protocol):
     """Optional capability for terminal transport shutdown.
 
     Terminal shutdown must drain or interrupt in-flight work and make the
-    capability unusable. Device detach and replacement prefer this operation
-    over reusable :meth:`InverterTransport.disconnect` when it is available.
+    capability unusable. Its implementation must be cancellation-safe and
+    complete within the implementation's documented finite upper bound. Device
+    detach and replacement wait for completion and may defer caller cancellation.
     """
 
     async def async_shutdown(self) -> None:
-        """Terminally close the transport capability."""
+        """Terminally close within the implementation's documented finite bound."""
         ...
+
+
+@runtime_checkable
+class TerminalInverterTransport(InverterTransport, TerminalTransport, Protocol):
+    """Public caller-owned inverter capability with terminal shutdown.
+
+    ``async_shutdown()`` is the ownership boundary: it must remain safe under
+    cancellation, make the capability permanently unusable, and finish within
+    the implementation's documented finite upper bound.
+    """
 
 
 class BaseTransport:

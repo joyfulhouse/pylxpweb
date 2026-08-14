@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -12,7 +14,12 @@ import pytest
 from pylxpweb.devices.inverters.generic import GenericInverter
 from pylxpweb.devices.mid_device import MIDDevice
 from pylxpweb.devices.station import Location, Station
-from pylxpweb.transports import TransportConfig, TransportFactory, TransportType
+from pylxpweb.transports import (
+    TerminalInverterTransport,
+    TransportConfig,
+    TransportFactory,
+    TransportType,
+)
 
 
 class RecordingTransport:
@@ -38,10 +45,17 @@ class RecordingTransport:
         self.connect_release: asyncio.Event | None = None
         self.close_started: asyncio.Event | None = None
         self.close_release: asyncio.Event | None = None
+        self.connect_callback: Callable[[], Awaitable[None]] | None = None
+        self.close_callback: Callable[[], Awaitable[None]] | None = None
 
     def _event(self, name: str) -> str:
         """Prefix an event when a test needs to distinguish capabilities."""
         return f"{self.label}:{name}" if self.label else name
+
+    @property
+    def capabilities(self) -> Any:
+        """Expose the typed capability member without invoking protocol I/O."""
+        return None
 
     async def connect(self) -> None:
         self.events.append(self._event("connect"))
@@ -50,6 +64,8 @@ class RecordingTransport:
             self.connect_started.set()
         if self.connect_release is not None:
             await self.connect_release.wait()
+        if self.connect_callback is not None:
+            await self.connect_callback()
         if self.connect_error is not None:
             raise self.connect_error
         self.is_connected = True
@@ -64,9 +80,32 @@ class RecordingTransport:
             self.close_started.set()
         if self.close_release is not None:
             await self.close_release.wait()
+        if self.close_callback is not None:
+            await self.close_callback()
         if self.close_error is not None:
             raise self.close_error
         self.is_connected = False
+
+    async def read_runtime(self) -> Any:
+        raise AssertionError("attachment invoked forbidden operation read_runtime")
+
+    async def read_energy(self) -> Any:
+        raise AssertionError("attachment invoked forbidden operation read_energy")
+
+    async def read_battery(self) -> Any:
+        raise AssertionError("attachment invoked forbidden operation read_battery")
+
+    async def read_parameters(self, start_address: int, count: int) -> dict[int, int]:
+        raise AssertionError("attachment invoked forbidden operation read_parameters")
+
+    async def write_parameters(self, parameters: dict[int, int]) -> bool:
+        raise AssertionError("attachment invoked forbidden operation write_parameters")
+
+    async def read_named_parameters(self, start_address: int, count: int) -> dict[str, Any]:
+        raise AssertionError("attachment invoked forbidden operation read_named_parameters")
+
+    async def write_named_parameters(self, parameters: dict[str, Any]) -> bool:
+        raise AssertionError("attachment invoked forbidden operation write_named_parameters")
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith(("read", "write", "reconnect")):
@@ -88,6 +127,14 @@ class DisconnectOnlyTransport:
 
     async def disconnect(self) -> None:
         self.events.append("disconnect")
+        self.is_connected = False
+
+
+class ShutdownOnlyTransport(DisconnectOnlyTransport):
+    """Terminal lifecycle without the required inverter-operation capability."""
+
+    async def async_shutdown(self) -> None:
+        self.events.append("shutdown")
         self.is_connected = False
 
 
@@ -117,6 +164,13 @@ def config(serial: str) -> TransportConfig:
         serial=serial,
         transport_type=TransportType.MODBUS_TCP,
     )
+
+
+def exception_leaves(error: BaseException) -> list[BaseException]:
+    """Return exception-group leaves in deterministic traversal order."""
+    if isinstance(error, BaseExceptionGroup):
+        return [leaf for child in error.exceptions for leaf in exception_leaves(child)]
+    return [error]
 
 
 @pytest.mark.asyncio
@@ -286,17 +340,45 @@ async def test_public_detach_uses_terminal_close(station: Station) -> None:
 
 @pytest.mark.asyncio
 async def test_public_detach_falls_back_to_disconnect(station: Station) -> None:
-    """Capabilities without terminal shutdown retain protocol-compatible cleanup."""
+    """The config-only Station path retains legacy disconnect compatibility."""
     events: list[str] = []
     capability = DisconnectOnlyTransport("INV0000001", events)
     inverter = station.all_inverters[0]
-    await inverter.attach_local_transport(capability, require_terminal=False)
+    with patch(
+        "pylxpweb.transports.create_modbus_transport",
+        return_value=capability,
+    ):
+        result = await station.attach_local_transports([config("INV0000001")])
 
     detached = await inverter.detach_local_transport()
 
+    assert result.matched == 1
     assert detached is capability
     assert inverter.transport is None
     assert events == ["connect", "disconnect"]
+
+
+def test_public_attachment_has_no_terminal_contract_downgrade() -> None:
+    """Caller-owned attachment exposes only the terminal capability contract."""
+    signature = inspect.signature(GenericInverter.attach_local_transport)
+    capability = RecordingTransport("INV0000001", [])
+
+    assert list(signature.parameters) == ["self", "transport"]
+    assert "TerminalInverterTransport" in str(signature.parameters["transport"].annotation)
+    assert isinstance(capability, TerminalInverterTransport)
+
+
+@pytest.mark.asyncio
+async def test_public_attachment_rejects_shutdown_only_capability(station: Station) -> None:
+    """Terminal shutdown alone cannot satisfy the inverter capability contract."""
+    events: list[str] = []
+    capability = ShutdownOnlyTransport("INV0000001", events)
+
+    with pytest.raises(TypeError, match="TerminalInverterTransport"):
+        await station.all_inverters[0].attach_local_transport(capability)
+
+    assert events == []
+    assert station.all_inverters[0].transport is None
 
 
 @pytest.mark.asyncio
@@ -379,11 +461,75 @@ async def test_repeated_cancellation_waits_for_terminal_cleanup(station: Station
     assert not task.done()
 
     capability.close_release.set()
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(BaseExceptionGroup) as raised:
         await task
 
+    assert [type(error) for error in exception_leaves(raised.value)] == [
+        asyncio.CancelledError,
+        asyncio.CancelledError,
+    ]
     assert events == ["connect", "shutdown"]
     assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
+async def test_later_cleanup_cancellation_is_combined_with_connect_failure(
+    station: Station,
+) -> None:
+    """Cancellation reported during cleanup remains visible with the primary failure."""
+    events: list[str] = []
+    capability = RecordingTransport(
+        "INV0000001", events, connect_error=ConnectionError("connect failed")
+    )
+    capability.close_started = asyncio.Event()
+    capability.close_release = asyncio.Event()
+    task = asyncio.create_task(station.all_inverters[0].attach_local_transport(capability))
+    await capability.close_started.wait()
+
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done()
+    capability.close_release.set()
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await task
+
+    assert [type(error) for error in exception_leaves(raised.value)] == [
+        ConnectionError,
+        asyncio.CancelledError,
+    ]
+    assert events == ["connect", "shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_primary_cleanup_failure_and_later_cancellation_are_all_preserved(
+    station: Station,
+) -> None:
+    """Primary failure, cleanup failure, and later cancellation all remain visible."""
+    events: list[str] = []
+    capability = RecordingTransport(
+        "INV0000001",
+        events,
+        connect_error=ConnectionError("connect failed"),
+        close_error=RuntimeError("cleanup failed"),
+    )
+    capability.close_started = asyncio.Event()
+    capability.close_release = asyncio.Event()
+    task = asyncio.create_task(station.all_inverters[0].attach_local_transport(capability))
+    await capability.close_started.wait()
+
+    task.cancel()
+    capability.close_release.set()
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await task
+
+    assert [type(error) for error in exception_leaves(raised.value)] == [
+        ConnectionError,
+        asyncio.CancelledError,
+        RuntimeError,
+    ]
+    assert events == ["connect", "shutdown"]
 
 
 @pytest.mark.asyncio
@@ -473,14 +619,96 @@ async def test_cancellation_while_waiting_for_lifecycle_closes_new_capability(
     waiting_task = asyncio.create_task(inverter.attach_local_transport(waiting))
     await asyncio.sleep(0)
     waiting_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await waiting_task
+    await asyncio.sleep(0)
+    assert not waiting_task.done()
 
     first.connect_release.set()
     await first_task
+    with pytest.raises(asyncio.CancelledError):
+        await waiting_task
 
     assert events == ["first:connect", "waiting:shutdown"]
     assert inverter.transport is first
+
+
+@pytest.mark.asyncio
+async def test_cancelled_same_capability_waiter_cannot_close_holder_input(
+    station: Station,
+) -> None:
+    """A cancelled waiter defers ownership cleanup until the holder publishes."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events)
+    capability.connect_started = asyncio.Event()
+    capability.connect_release = asyncio.Event()
+    inverter = station.all_inverters[0]
+
+    holder = asyncio.create_task(inverter.attach_local_transport(capability))
+    await capability.connect_started.wait()
+    waiter = asyncio.create_task(inverter.attach_local_transport(capability))
+    await asyncio.sleep(0)
+    waiter.cancel()
+    await asyncio.sleep(0)
+
+    assert not waiter.done()
+    assert events == ["connect"]
+    capability.connect_release.set()
+    await holder
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    assert events == ["connect"]
+    assert inverter.transport is capability
+
+
+@pytest.mark.asyncio
+async def test_connect_callback_lifecycle_reentry_fails_fast(station: Station) -> None:
+    """A connect callback cannot deadlock by nesting a lifecycle transition."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events)
+    inverter = station.all_inverters[0]
+    nested_errors: list[BaseException] = []
+
+    async def nested_detach() -> None:
+        try:
+            async with asyncio.timeout(0.1):
+                await inverter.detach_local_transport()
+        except BaseException as error:
+            nested_errors.append(error)
+
+    capability.connect_callback = nested_detach
+    await inverter.attach_local_transport(capability)
+
+    assert len(nested_errors) == 1
+    assert isinstance(nested_errors[0], RuntimeError)
+    assert "re-entry" in str(nested_errors[0])
+    assert inverter.transport is capability
+
+
+@pytest.mark.asyncio
+async def test_shutdown_callback_lifecycle_reentry_fails_fast(station: Station) -> None:
+    """A shutdown callback cannot deadlock by nesting a lifecycle transition."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events)
+    replacement = RecordingTransport("INV0000001", events, label="nested")
+    inverter = station.all_inverters[0]
+    await inverter.attach_local_transport(capability)
+    nested_errors: list[BaseException] = []
+
+    async def nested_attach() -> None:
+        try:
+            async with asyncio.timeout(0.1):
+                await inverter.attach_local_transport(replacement)
+        except BaseException as error:
+            nested_errors.append(error)
+
+    capability.close_callback = nested_attach
+    detached = await inverter.detach_local_transport()
+
+    assert detached is capability
+    assert len(nested_errors) == 1
+    assert isinstance(nested_errors[0], RuntimeError)
+    assert "re-entry" in str(nested_errors[0])
+    assert inverter.transport is None
 
 
 @pytest.mark.asyncio

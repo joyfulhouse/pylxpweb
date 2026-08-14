@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
 
     from pylxpweb import LuxpowerClient
-    from pylxpweb.transports.protocol import InverterTransport
+    from pylxpweb.transports.protocol import InverterTransport, TerminalInverterTransport
 
 
 class BaseDevice(ABC):
@@ -117,6 +117,8 @@ class BaseDevice(ABC):
         self._local_transport: InverterTransport | None = None
         self._local_transport_requires_terminal = False
         self._transport_lifecycle_lock = asyncio.Lock()
+        self._transport_lifecycle_owner: asyncio.Task[object] | None = None
+        self._transport_lifecycle_delegate: asyncio.Task[object] | None = None
 
         # Data validation: when True, corrupt transport reads are rejected
         # and the previous cached value is kept instead. Set by coordinator
@@ -236,26 +238,34 @@ class BaseDevice(ABC):
         transport: InverterTransport,
         *,
         require_terminal: bool,
-        propagate_cancellation: bool = True,
     ) -> asyncio.CancelledError | None:
         """Finish one close attempt despite cancellation, then report cancellation."""
         from pylxpweb.transports.protocol import TerminalTransport
 
-        if isinstance(transport, TerminalTransport):
-            close_awaitable = transport.async_shutdown()
-        elif not require_terminal:
-            close_awaitable = transport.disconnect()
-        else:
-            raise TypeError("Caller-owned transport capabilities must implement TerminalTransport")
+        async def close() -> None:
+            task = asyncio.current_task()
+            self._transport_lifecycle_delegate = task
+            try:
+                if isinstance(transport, TerminalTransport):
+                    await transport.async_shutdown()
+                elif not require_terminal:
+                    await transport.disconnect()
+                else:
+                    raise TypeError(
+                        "Caller-owned transport capabilities must implement TerminalTransport"
+                    )
+            finally:
+                if self._transport_lifecycle_delegate is task:
+                    self._transport_lifecycle_delegate = None
 
-        close_task = asyncio.create_task(close_awaitable)
+        close_task = asyncio.create_task(close())
         cancellation: asyncio.CancelledError | None = None
         while True:
             try:
                 await asyncio.shield(close_task)
             except asyncio.CancelledError as error:
                 if close_task.cancelled():
-                    if cancellation is not None and propagate_cancellation:
+                    if cancellation is not None:
                         raise BaseExceptionGroup(
                             "Local transport cleanup was cancelled and failed",
                             [cancellation, error],
@@ -264,7 +274,7 @@ class BaseDevice(ABC):
                 if cancellation is None:
                     cancellation = error
             except BaseException as cleanup_error:
-                if cancellation is not None and propagate_cancellation:
+                if cancellation is not None:
                     raise BaseExceptionGroup(
                         "Local transport cleanup was cancelled and failed",
                         [cancellation, cleanup_error],
@@ -273,11 +283,29 @@ class BaseDevice(ABC):
             else:
                 return cancellation
 
+    def _check_transport_lifecycle_reentry(self) -> None:
+        """Reject nested lifecycle calls made by the active transition."""
+        task = asyncio.current_task()
+        if task in (
+            self._transport_lifecycle_owner,
+            self._transport_lifecycle_delegate,
+        ):
+            raise RuntimeError("Local transport lifecycle re-entry is not supported")
+
+    async def _acquire_transport_lifecycle(self) -> None:
+        """Acquire lifecycle ownership after rejecting same-transition re-entry."""
+        self._check_transport_lifecycle_reentry()
+        await self._transport_lifecycle_lock.acquire()
+        self._transport_lifecycle_owner = asyncio.current_task()
+
+    def _release_transport_lifecycle(self) -> None:
+        """Release lifecycle ownership held by the current task."""
+        self._transport_lifecycle_owner = None
+        self._transport_lifecycle_lock.release()
+
     async def attach_local_transport(
         self,
-        transport: InverterTransport,
-        *,
-        require_terminal: bool = True,
+        transport: TerminalInverterTransport,
     ) -> None:
         """Connect and publicly retain a caller-supplied local capability.
 
@@ -287,33 +315,43 @@ class BaseDevice(ABC):
         Already-connected capabilities are retained without another connect.
 
         Args:
-            transport: Capability whose serial must match this device.
-            require_terminal: Require ``TerminalTransport.async_shutdown()`` for
-                caller-owned injection. Pass False only for pylxpweb's legacy/default
-                transports, which retain reusable ``disconnect()`` compatibility.
+            transport: Terminal capability whose serial must match this device.
 
         Raises:
             ValueError: If the capability serial does not match this device.
             BaseExceptionGroup: If attachment and cleanup both fail.
         """
-        if require_terminal:
-            from pylxpweb.transports.protocol import TerminalTransport
+        from pylxpweb.transports.protocol import TerminalInverterTransport
 
-            if not isinstance(transport, TerminalTransport):
-                raise TypeError(
-                    "Caller-owned transport capabilities must implement TerminalTransport"
-                )
+        if not isinstance(transport, TerminalInverterTransport):
+            raise TypeError(
+                "Caller-owned transport capabilities must implement TerminalInverterTransport"
+            )
+        await self._attach_transport_capability(transport, require_terminal=True)
 
+    async def _attach_legacy_local_transport(self, transport: InverterTransport) -> None:
+        """Attach a pylxpweb-created transport with disconnect compatibility."""
+        await self._attach_transport_capability(transport, require_terminal=False)
+
+    async def _attach_transport_capability(
+        self,
+        transport: InverterTransport,
+        *,
+        require_terminal: bool,
+    ) -> None:
+        """Serialize attachment for public terminal and private legacy paths."""
+
+        self._check_transport_lifecycle_reentry()
         try:
             await self._transport_lifecycle_lock.acquire()
         except BaseException as acquire_error:
-            if self._local_transport is not transport:
-                await self._cleanup_unretained_transport(
-                    transport,
-                    require_terminal=require_terminal,
-                    primary_error=acquire_error,
-                )
-            raise
+            await self._cleanup_cancelled_lifecycle_waiter(
+                transport,
+                require_terminal=require_terminal,
+                primary_error=acquire_error,
+            )
+            raise acquire_error
+        self._transport_lifecycle_owner = asyncio.current_task()
 
         try:
             await self._attach_local_transport_locked(
@@ -321,7 +359,55 @@ class BaseDevice(ABC):
                 require_terminal=require_terminal,
             )
         finally:
-            self._transport_lifecycle_lock.release()
+            self._release_transport_lifecycle()
+
+    async def _cleanup_cancelled_lifecycle_waiter(
+        self,
+        transport: InverterTransport,
+        *,
+        require_terminal: bool,
+        primary_error: BaseException,
+    ) -> None:
+        """Serialize ownership resolution for an input whose waiter was cancelled."""
+
+        async def cleanup() -> None:
+            await self._acquire_transport_lifecycle()
+            try:
+                if self._local_transport is not transport:
+                    cancellation = await self._close_transport_capability(
+                        transport,
+                        require_terminal=require_terminal,
+                    )
+                    if cancellation is not None:
+                        raise cancellation
+            finally:
+                self._release_transport_lifecycle()
+
+        cleanup_task = asyncio.create_task(cleanup())
+        later_cancellations: list[asyncio.CancelledError] = []
+        cleanup_error: BaseException | None = None
+        while True:
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError as error:
+                if cleanup_task.cancelled():
+                    cleanup_error = error
+                    break
+                later_cancellations.append(error)
+            except BaseException as error:
+                cleanup_error = error
+                break
+            else:
+                break
+
+        errors = [primary_error, *later_cancellations]
+        if cleanup_error is not None:
+            errors.append(cleanup_error)
+        if len(errors) > 1:
+            raise BaseExceptionGroup(
+                "Local transport lifecycle wait and cleanup failed",
+                errors,
+            ) from primary_error
 
     async def _cleanup_unretained_transport(
         self,
@@ -332,15 +418,19 @@ class BaseDevice(ABC):
     ) -> None:
         """Close an unpublished input and combine a cleanup failure."""
         try:
-            await self._close_transport_capability(
+            cancellation = await self._close_transport_capability(
                 transport,
                 require_terminal=require_terminal,
-                propagate_cancellation=False,
             )
         except BaseException as cleanup_error:
             raise BaseExceptionGroup(
                 "Local transport attachment and cleanup both failed",
                 [primary_error, cleanup_error],
+            ) from primary_error
+        if cancellation is not None:
+            raise BaseExceptionGroup(
+                "Local transport attachment and cleanup were interrupted",
+                [primary_error, cancellation],
             ) from primary_error
 
     async def _attach_local_transport_locked(
@@ -408,7 +498,8 @@ class BaseDevice(ABC):
         Returns:
             The detached capability, or None when no capability was attached.
         """
-        async with self._transport_lifecycle_lock:
+        await self._acquire_transport_lifecycle()
+        try:
             transport = self._local_transport
             if transport is None:
                 return None
@@ -422,6 +513,8 @@ class BaseDevice(ABC):
             if cancellation is not None:
                 raise cancellation
             return transport
+        finally:
+            self._release_transport_lifecycle()
 
     def _on_local_transport_attached(self) -> None:
         """Apply subclass state changes after a capability is published."""

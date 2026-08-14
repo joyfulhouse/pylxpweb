@@ -91,7 +91,12 @@ from .http import HTTPTransport
 from .hybrid import HybridTransport
 from .modbus import ModbusTransport
 from .modbus_serial import ModbusSerialTransport
-from .protocol import BaseTransport, InverterTransport, TerminalTransport
+from .protocol import (
+    BaseTransport,
+    InverterTransport,
+    TerminalInverterTransport,
+    TerminalTransport,
+)
 
 if TYPE_CHECKING:
     from .battery_modbus import BatteryModbusTransport
@@ -127,6 +132,7 @@ __all__ = [
     "AttachResult",
     # Protocol
     "InverterTransport",
+    "TerminalInverterTransport",
     "TerminalTransport",
     "BaseTransport",
     # Transport implementations

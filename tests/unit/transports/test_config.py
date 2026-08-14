@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 
 from pylxpweb.devices.inverters._features import InverterFamily
-from pylxpweb.transports.config import AttachResult, TransportConfig, TransportType
+from pylxpweb.transports.config import (
+    AttachResult,
+    TransportConfig,
+    TransportFactory,
+    TransportType,
+)
 
 
 def test_transport_factory_alias_does_not_eagerly_bind_protocol() -> None:
@@ -13,6 +18,8 @@ def test_transport_factory_alias_does_not_eagerly_bind_protocol() -> None:
     from pylxpweb.transports import config as config_module
 
     assert "InverterTransport" not in vars(config_module)
+    assert "TerminalInverterTransport" not in vars(config_module)
+    assert "TerminalInverterTransport" in str(TransportFactory.__value__)
 
 
 class TestTransportType:

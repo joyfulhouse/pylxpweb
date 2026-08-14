@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
-    from pylxpweb.transports.protocol import InverterTransport
+    from pylxpweb.transports.protocol import TerminalInverterTransport
 
 
 class TransportType(StrEnum):
@@ -276,7 +276,7 @@ class TransportConfig:
         return instance
 
 
-type TransportFactory = Callable[[TransportConfig], "InverterTransport"]
+type TransportFactory = Callable[[TransportConfig], "TerminalInverterTransport"]
 """Factory supplying a transport capability for a matched attachment config."""
 
 
