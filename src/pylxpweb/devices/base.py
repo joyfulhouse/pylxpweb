@@ -250,12 +250,17 @@ class BaseDevice(ABC):
 
         close_task = asyncio.create_task(close_awaitable)
         cancellation: asyncio.CancelledError | None = None
-        while not close_task.done():
+        while True:
             try:
                 await asyncio.shield(close_task)
             except asyncio.CancelledError as error:
                 if close_task.cancelled():
-                    break
+                    if cancellation is not None and propagate_cancellation:
+                        raise BaseExceptionGroup(
+                            "Local transport cleanup was cancelled and failed",
+                            [cancellation, error],
+                        ) from error
+                    raise
                 if cancellation is None:
                     cancellation = error
             except BaseException as cleanup_error:
@@ -265,17 +270,8 @@ class BaseDevice(ABC):
                         [cancellation, cleanup_error],
                     ) from cleanup_error
                 raise
-
-        try:
-            close_task.result()
-        except BaseException as cleanup_error:
-            if cancellation is not None and propagate_cancellation:
-                raise BaseExceptionGroup(
-                    "Local transport cleanup was cancelled and failed",
-                    [cancellation, cleanup_error],
-                ) from cleanup_error
-            raise
-        return cancellation
+            else:
+                return cancellation
 
     async def attach_local_transport(
         self,
