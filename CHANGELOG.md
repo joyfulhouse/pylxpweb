@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caller-supplied `TransportFactory` for matched inverter and MID-device
   configurations. The public lifecycle retains only the returned
   `TerminalInverterTransport` capability, connects it after serial matching,
-  and terminally drains it during detach, replacement, cancellation, and
+  and terminally closes it during detach, replacement, cancellation, and
   failure cleanup. The existing config-only API and `AttachResult` behavior
   remain compatible, while callers can keep exclusive ownership of the raw
   transport behind their injected capability.
