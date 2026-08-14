@@ -25,26 +25,15 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
+
+from pylxpweb.transports.protocol import InverterTransport
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
-    from pylxpweb.transports.protocol import InverterTransport
-
-
-class TransportFactory(Protocol):
-    """Callable that supplies a transport capability for an attachment config.
-
-    The factory is invoked only after a station device has matched the config's
-    serial number. It may return an ordinary pylxpweb transport or a caller-owned
-    capability that serializes access to a raw transport behind its public API.
-    """
-
-    def __call__(self, config: TransportConfig) -> InverterTransport:
-        """Return the transport capability associated with ``config``."""
-        ...
 
 
 class TransportType(StrEnum):
@@ -286,6 +275,10 @@ class TransportConfig:
         # Validate the restored config
         instance.validate()
         return instance
+
+
+type TransportFactory = Callable[[TransportConfig], InverterTransport]
+"""Factory supplying a transport capability for a matched attachment config."""
 
 
 @dataclass
