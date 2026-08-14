@@ -79,14 +79,6 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         # Initialize firmware update detection (from FirmwareUpdateMixin)
         self._init_firmware_update_cache()
 
-        # Local transport for hybrid/local-only mode (optional)
-        self._transport: InverterTransport | None = None
-
-    @property
-    def transport(self) -> InverterTransport | None:
-        """Attached local transport, or None in cloud-only mode."""
-        return self._transport
-
     @property
     def transport_runtime(self) -> MidboxRuntimeData | None:
         """Runtime data from the local transport, or None when not transport-backed."""
@@ -222,6 +214,11 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
             new_runtime.daily_energy_values(),
             prev_daily,
         )
+
+    def _on_local_transport_detached(self) -> None:
+        """Drop transport-derived MID data after detachment."""
+        self._transport_runtime = None
+        self._runtime_cache_time = None
 
     async def refresh(self) -> None:
         """Refresh MID device runtime data from API or transport.

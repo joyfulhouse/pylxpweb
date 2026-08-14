@@ -214,6 +214,101 @@ class BaseDevice(ABC):
         return self._local_transport is not None
 
     @property
+    def transport(self) -> InverterTransport | None:
+        """Return the attached local transport capability, if any."""
+        return self._local_transport
+
+    @property
+    def _transport(self) -> InverterTransport | None:
+        """Compatibility alias for internal transport-backed device code."""
+        return self._local_transport
+
+    @_transport.setter
+    def _transport(self, transport: InverterTransport | None) -> None:
+        self._local_transport = transport
+
+    async def _close_transport_capability(self, transport: InverterTransport) -> None:
+        """Close a capability terminally when it exposes that lifecycle."""
+        from pylxpweb.transports.protocol import TerminalTransport
+
+        if isinstance(transport, TerminalTransport):
+            await transport.async_shutdown()
+        else:
+            await transport.disconnect()
+
+    async def attach_local_transport(self, transport: InverterTransport) -> None:
+        """Connect and publicly retain a caller-supplied local capability.
+
+        A replacement is not published until the new capability is connected
+        and the old capability has reached terminal closure. Any failure or
+        cancellation closes the unretained new capability before propagating.
+        Already-connected capabilities are retained without another connect.
+
+        Args:
+            transport: Capability whose serial must match this device.
+
+        Raises:
+            ValueError: If the capability serial does not match this device.
+            BaseExceptionGroup: If attachment and cleanup both fail.
+        """
+        current = self._local_transport
+        if current is transport:
+            if not transport.is_connected:
+                await transport.connect()
+            return
+
+        try:
+            if transport.serial != self.serial_number:
+                raise ValueError(
+                    f"Transport serial {transport.serial!r} does not match "
+                    f"device {self.serial_number!r}"
+                )
+            if not transport.is_connected:
+                await transport.connect()
+            if current is not None:
+                await self._close_transport_capability(current)
+        except BaseException as attach_error:
+            try:
+                await self._close_transport_capability(transport)
+            except BaseException as cleanup_error:
+                raise BaseExceptionGroup(
+                    "Local transport attachment and cleanup both failed",
+                    [attach_error, cleanup_error],
+                ) from attach_error
+            raise
+
+        self._local_transport = transport
+        self._on_local_transport_attached()
+
+    async def detach_local_transport(self) -> InverterTransport | None:
+        """Terminally close and detach the current local capability.
+
+        Capabilities implementing ``TerminalTransport`` receive
+        ``async_shutdown()``; other capabilities receive ``disconnect()``.
+        The capability remains retained if closure raises or is cancelled, so a
+        replacement owner cannot be published ahead of terminal cleanup.
+
+        Returns:
+            The detached capability, or None when no capability was attached.
+        """
+        transport = self._local_transport
+        if transport is None:
+            return None
+        await self._close_transport_capability(transport)
+        if self._local_transport is transport:
+            self._local_transport = None
+            self._on_local_transport_detached()
+        return transport
+
+    def _on_local_transport_attached(self) -> None:
+        """Apply subclass state changes after a capability is published."""
+        return
+
+    def _on_local_transport_detached(self) -> None:
+        """Apply subclass state changes after a capability is detached."""
+        return
+
+    @property
     def is_local_only(self) -> bool:
         """Check if device is local-only (no HTTP client credentials).
 

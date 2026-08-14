@@ -238,6 +238,20 @@ class InverterTransport(Protocol):
         ...
 
 
+@runtime_checkable
+class TerminalTransport(Protocol):
+    """Optional capability for terminal transport shutdown.
+
+    Terminal shutdown must drain or interrupt in-flight work and make the
+    capability unusable. Device detach and replacement prefer this operation
+    over reusable :meth:`InverterTransport.disconnect` when it is available.
+    """
+
+    async def async_shutdown(self) -> None:
+        """Terminally close the transport capability."""
+        ...
+
+
 class BaseTransport:
     """Base class providing common transport functionality.
 

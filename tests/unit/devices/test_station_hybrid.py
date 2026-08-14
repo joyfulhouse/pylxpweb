@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pylxpweb.devices.inverters.base import BaseInverter
 from pylxpweb.devices.station import Station
 from pylxpweb.transports.config import TransportConfig, TransportType
 
@@ -18,17 +19,31 @@ def mock_client() -> MagicMock:
     return client
 
 
-@pytest.fixture
-def mock_inverter() -> MagicMock:
-    """Create a mock inverter."""
-    inverter = MagicMock()
-    inverter.serial_number = "CE12345678"
-    inverter._transport = None
-    return inverter
+def make_inverter(client: MagicMock, serial: str) -> BaseInverter:
+    """Create a real inverter so tests exercise its public transport lifecycle."""
+    from pylxpweb.devices.inverters.generic import GenericInverter
+
+    return GenericInverter(client, serial, "Test Inverter")
+
+
+def make_transport(serial: str) -> MagicMock:
+    """Create a transport capability with explicit public lifecycle state."""
+    transport = MagicMock()
+    transport.serial = serial
+    transport.is_connected = False
+    transport.connect = AsyncMock()
+    transport.disconnect = AsyncMock()
+    return transport
 
 
 @pytest.fixture
-def station_with_inverter(mock_client: MagicMock, mock_inverter: MagicMock) -> Station:
+def mock_inverter(mock_client: MagicMock) -> BaseInverter:
+    """Create an inverter backed by the public device implementation."""
+    return make_inverter(mock_client, "CE12345678")
+
+
+@pytest.fixture
+def station_with_inverter(mock_client: MagicMock, mock_inverter: BaseInverter) -> Station:
     """Create a Station with one inverter."""
     from datetime import datetime
 
@@ -50,17 +65,17 @@ class TestIsHybridMode:
     """Tests for Station.is_hybrid_mode property."""
 
     def test_no_transports_attached(
-        self, station_with_inverter: Station, mock_inverter: MagicMock
+        self, station_with_inverter: Station, mock_inverter: BaseInverter
     ) -> None:
         """Test is_hybrid_mode is False when no transports attached."""
-        mock_inverter._transport = None
         assert station_with_inverter.is_hybrid_mode is False
 
-    def test_with_transport_attached(
-        self, station_with_inverter: Station, mock_inverter: MagicMock
+    @pytest.mark.asyncio
+    async def test_with_transport_attached(
+        self, station_with_inverter: Station, mock_inverter: BaseInverter
     ) -> None:
         """Test is_hybrid_mode is True when transport is attached."""
-        mock_inverter._transport = MagicMock()
+        await mock_inverter.attach_local_transport(make_transport("CE12345678"))
         assert station_with_inverter.is_hybrid_mode is True
 
     def test_empty_station(self, mock_client: MagicMock) -> None:
@@ -85,11 +100,10 @@ class TestAttachLocalTransports:
 
     @pytest.mark.asyncio
     async def test_attach_modbus_transport_success(
-        self, station_with_inverter: Station, mock_inverter: MagicMock
+        self, station_with_inverter: Station, mock_inverter: BaseInverter
     ) -> None:
         """Test successfully attaching a Modbus transport."""
-        mock_transport = AsyncMock()
-        mock_transport.connect = AsyncMock()
+        mock_transport = make_transport("CE12345678")
 
         config = TransportConfig(
             host="192.168.1.100",
@@ -110,15 +124,14 @@ class TestAttachLocalTransports:
         assert result.failed == 0
         mock_create.assert_called_once()
         mock_transport.connect.assert_called_once()
-        assert mock_inverter._transport == mock_transport
+        assert mock_inverter.transport == mock_transport
 
     @pytest.mark.asyncio
     async def test_attach_dongle_transport_success(
-        self, station_with_inverter: Station, mock_inverter: MagicMock
+        self, station_with_inverter: Station, mock_inverter: BaseInverter
     ) -> None:
         """Test successfully attaching a WiFi dongle transport."""
-        mock_transport = AsyncMock()
-        mock_transport.connect = AsyncMock()
+        mock_transport = make_transport("CE12345678")
 
         config = TransportConfig(
             host="192.168.1.100",
@@ -139,7 +152,7 @@ class TestAttachLocalTransports:
         assert result.failed == 0
         mock_create.assert_called_once()
         mock_transport.connect.assert_called_once()
-        assert mock_inverter._transport == mock_transport
+        assert mock_inverter.transport == mock_transport
 
     @pytest.mark.asyncio
     async def test_attach_unmatched_serial(self, station_with_inverter: Station) -> None:
@@ -160,11 +173,11 @@ class TestAttachLocalTransports:
 
     @pytest.mark.asyncio
     async def test_attach_connection_failure(
-        self, station_with_inverter: Station, mock_inverter: MagicMock
+        self, station_with_inverter: Station, mock_inverter: BaseInverter
     ) -> None:
         """Test attaching transport that fails to connect."""
-        mock_transport = AsyncMock()
-        mock_transport.connect = AsyncMock(side_effect=Exception("Connection refused"))
+        mock_transport = make_transport("CE12345678")
+        mock_transport.connect.side_effect = Exception("Connection refused")
 
         config = TransportConfig(
             host="192.168.1.100",
@@ -183,7 +196,7 @@ class TestAttachLocalTransports:
         assert result.unmatched == 0
         assert result.failed == 1
         assert "CE12345678" in result.failed_serials
-        assert mock_inverter._transport is None
+        assert mock_inverter.transport is None
 
     @pytest.mark.asyncio
     async def test_attach_multiple_configs(self, mock_client: MagicMock) -> None:
@@ -193,13 +206,8 @@ class TestAttachLocalTransports:
         from pylxpweb.devices.station import Location
 
         # Create two inverters
-        inv1 = MagicMock()
-        inv1.serial_number = "CE11111111"
-        inv1._transport = None
-
-        inv2 = MagicMock()
-        inv2.serial_number = "CE22222222"
-        inv2._transport = None
+        inv1 = make_inverter(mock_client, "CE11111111")
+        inv2 = make_inverter(mock_client, "CE22222222")
 
         station = Station(
             client=mock_client,
@@ -226,10 +234,8 @@ class TestAttachLocalTransports:
             ),
         ]
 
-        mock_transport1 = AsyncMock()
-        mock_transport1.connect = AsyncMock()
-        mock_transport2 = AsyncMock()
-        mock_transport2.connect = AsyncMock()
+        mock_transport1 = make_transport("CE11111111")
+        mock_transport2 = make_transport("CE22222222")
 
         with patch(
             "pylxpweb.transports.create_modbus_transport",
@@ -240,8 +246,8 @@ class TestAttachLocalTransports:
         assert result.matched == 2
         assert result.unmatched == 0
         assert result.failed == 0
-        assert inv1._transport == mock_transport1
-        assert inv2._transport == mock_transport2
+        assert inv1.transport == mock_transport1
+        assert inv2.transport == mock_transport2
 
     @pytest.mark.asyncio
     async def test_attach_mixed_results(self, mock_client: MagicMock) -> None:
@@ -250,9 +256,7 @@ class TestAttachLocalTransports:
 
         from pylxpweb.devices.station import Location
 
-        inv1 = MagicMock()
-        inv1.serial_number = "CE11111111"
-        inv1._transport = None
+        inv1 = make_inverter(mock_client, "CE11111111")
 
         station = Station(
             client=mock_client,
@@ -279,8 +283,7 @@ class TestAttachLocalTransports:
             ),
         ]
 
-        mock_transport = AsyncMock()
-        mock_transport.connect = AsyncMock()
+        mock_transport = make_transport("CE11111111")
 
         with patch(
             "pylxpweb.transports.create_modbus_transport",
@@ -304,13 +307,12 @@ class TestAttachLocalTransports:
 
     @pytest.mark.asyncio
     async def test_attach_with_inverter_family(
-        self, station_with_inverter: Station, mock_inverter: MagicMock
+        self, station_with_inverter: Station, mock_inverter: BaseInverter
     ) -> None:
         """Test attaching transport with inverter family specified."""
         from pylxpweb.devices.inverters._features import InverterFamily
 
-        mock_transport = AsyncMock()
-        mock_transport.connect = AsyncMock()
+        mock_transport = make_transport("CE12345678")
 
         config = TransportConfig(
             host="192.168.1.100",

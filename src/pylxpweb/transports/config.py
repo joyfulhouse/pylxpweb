@@ -27,10 +27,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
+    from pylxpweb.transports.protocol import InverterTransport
+
+
+class TransportFactory(Protocol):
+    """Callable that supplies a transport capability for an attachment config.
+
+    The factory is invoked only after a station device has matched the config's
+    serial number. It may return an ordinary pylxpweb transport or a caller-owned
+    capability that serializes access to a raw transport behind its public API.
+    """
+
+    def __call__(self, config: TransportConfig) -> InverterTransport:
+        """Return the transport capability associated with ``config``."""
+        ...
 
 
 class TransportType(StrEnum):
@@ -280,7 +294,8 @@ class AttachResult:
 
     This class reports the outcome of Station.attach_local_transports(),
     indicating which transports were successfully connected, which had
-    no matching device, and which failed to connect.
+    no matching device, and which failed during creation, connection,
+    cleanup, or replacement.
 
     Attributes:
         matched: Number of transports successfully attached to devices.
@@ -320,5 +335,6 @@ class AttachResult:
 __all__ = [
     "TransportType",
     "TransportConfig",
+    "TransportFactory",
     "AttachResult",
 ]

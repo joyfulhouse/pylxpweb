@@ -47,6 +47,7 @@ from .capabilities import (
 from .config import (
     AttachResult,
     TransportConfig,
+    TransportFactory,
     TransportType,
 )
 from .data import (
@@ -90,7 +91,7 @@ from .http import HTTPTransport
 from .hybrid import HybridTransport
 from .modbus import ModbusTransport
 from .modbus_serial import ModbusSerialTransport
-from .protocol import BaseTransport, InverterTransport
+from .protocol import BaseTransport, InverterTransport, TerminalTransport
 
 if TYPE_CHECKING:
     from .battery_modbus import BatteryModbusTransport
@@ -121,10 +122,12 @@ __all__ = [
     "create_transport_from_config",
     # Configuration
     "TransportConfig",
+    "TransportFactory",
     "TransportType",
     "AttachResult",
     # Protocol
     "InverterTransport",
+    "TerminalTransport",
     "BaseTransport",
     # Transport implementations
     "HTTPTransport",

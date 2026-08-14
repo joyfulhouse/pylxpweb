@@ -115,7 +115,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         super().__init__(client, serial_number, model)
 
         # Optional transport for direct local communication
-        self._transport: InverterTransport | None = transport
+        self._local_transport = transport
 
         # Runtime data (refreshed frequently) - PRIVATE: use properties for access
         # HTTP API returns InverterRuntime, transport returns InverterRuntimeData
@@ -293,11 +293,6 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
     # ============================================================================
 
     @property
-    def transport(self) -> InverterTransport | None:
-        """Attached local transport, or None in cloud-only mode."""
-        return self._transport
-
-    @property
     def transport_runtime(self) -> InverterRuntimeData | None:
         """Runtime data from the local transport, or None when not transport-backed."""
         return self._transport_runtime
@@ -327,6 +322,17 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         self._transport_runtime = None
         self._transport_energy = None
         self._transport_battery = None
+
+    def _on_local_transport_attached(self) -> None:
+        """Apply transport-specific cache TTLs after public attachment."""
+        self.set_transport_cache_ttls()
+
+    def _on_local_transport_detached(self) -> None:
+        """Drop local data and restore cloud cache TTLs after detachment."""
+        self._on_transport_link_down()
+        self._runtime_cache_ttl = timedelta(seconds=30)
+        self._energy_cache_ttl = timedelta(minutes=5)
+        self._battery_cache_ttl = timedelta(seconds=30)
 
     # ============================================================================
     # Factory Methods
