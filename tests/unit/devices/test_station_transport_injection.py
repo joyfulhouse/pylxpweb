@@ -31,8 +31,8 @@ class RecordingTransport:
         events: list[str],
         *,
         label: str = "",
-        connect_error: Exception | None = None,
-        close_error: Exception | None = None,
+        connect_error: BaseException | None = None,
+        close_error: BaseException | None = None,
     ) -> None:
         self.serial = serial
         self.transport_type = "modbus_tcp"
@@ -171,6 +171,13 @@ def exception_leaves(error: BaseException) -> list[BaseException]:
     if isinstance(error, BaseExceptionGroup):
         return [leaf for child in error.exceptions for leaf in exception_leaves(child)]
     return [error]
+
+
+async def cancel_repeatedly(task: asyncio.Task[Any], count: int = 100) -> None:
+    """Deliver repeated cancellation at distinct event-loop opportunities."""
+    for _ in range(count):
+        task.cancel()
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -443,8 +450,10 @@ async def test_cancellation_and_cleanup_failure_are_combined(station: Station) -
 
 
 @pytest.mark.asyncio
-async def test_repeated_cancellation_waits_for_terminal_cleanup(station: Station) -> None:
-    """Repeated cancellation cannot interrupt terminal cleanup or leak capability."""
+async def test_many_repeated_cancellations_coalesce_to_native_cancellation(
+    station: Station,
+) -> None:
+    """Unretained cleanup keeps constant cancellation state and native semantics."""
     events: list[str] = []
     capability = RecordingTransport("INV0000001", events)
     capability.connect_started = asyncio.Event()
@@ -456,17 +465,124 @@ async def test_repeated_cancellation_waits_for_terminal_cleanup(station: Station
 
     task.cancel()
     await capability.close_started.wait()
-    task.cancel()
-    await asyncio.sleep(0)
+    await cancel_repeatedly(task)
     assert not task.done()
 
     capability.close_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert task.cancelled()
+    assert events == ["connect", "shutdown"]
+    assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
+async def test_wait_for_preserves_native_timeout_when_terminal_cleanup_cancels(
+    station: Station,
+) -> None:
+    """Cancellation-only cleanup remains a timeout through asyncio.wait_for()."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events, close_error=asyncio.CancelledError())
+    capability.connect_release = asyncio.Event()
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            station.all_inverters[0].attach_local_transport(capability),
+            timeout=0.05,
+        )
+
+    assert events == ["connect", "shutdown"]
+    assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
+async def test_timeout_context_preserves_native_timeout_when_cleanup_cancels(
+    station: Station,
+) -> None:
+    """Cancellation-only cleanup remains a timeout through asyncio.timeout()."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events, close_error=asyncio.CancelledError())
+    capability.connect_release = asyncio.Event()
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.05):
+            await station.all_inverters[0].attach_local_transport(capability)
+
+    assert events == ["connect", "shutdown"]
+    assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
+async def test_task_group_treats_cancellation_only_cleanup_as_cancelled(
+    station: Station,
+) -> None:
+    """A child with cancellation-only cleanup remains cancelled to TaskGroup."""
+    events: list[str] = []
+    capability = RecordingTransport("INV0000001", events, close_error=asyncio.CancelledError())
+    capability.connect_started = asyncio.Event()
+    capability.connect_release = asyncio.Event()
+
+    async with asyncio.TaskGroup() as group:
+        task = group.create_task(station.all_inverters[0].attach_local_transport(capability))
+        await capability.connect_started.wait()
+        task.cancel()
+
+    assert task.cancelled()
+    assert events == ["connect", "shutdown"]
+    assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
+async def test_nested_cancellation_only_cleanup_preserves_native_cancellation(
+    station: Station,
+) -> None:
+    """Nested cancellation-only cleanup errors collapse to one cancellation."""
+    events: list[str] = []
+    cleanup_error = BaseExceptionGroup(
+        "nested cancellation",
+        [
+            asyncio.CancelledError(),
+            BaseExceptionGroup("deeper cancellation", [asyncio.CancelledError()]),
+        ],
+    )
+    capability = RecordingTransport("INV0000001", events, close_error=cleanup_error)
+    capability.connect_started = asyncio.Event()
+    capability.connect_release = asyncio.Event()
+    task = asyncio.create_task(station.all_inverters[0].attach_local_transport(capability))
+    await capability.connect_started.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert task.cancelled()
+    assert events == ["connect", "shutdown"]
+    assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
+async def test_nested_mixed_cleanup_preserves_every_failure(station: Station) -> None:
+    """A nested non-cancellation leaf keeps the complete mixed failure group."""
+    events: list[str] = []
+    cleanup_error = BaseExceptionGroup(
+        "nested mixed cleanup",
+        [asyncio.CancelledError(), RuntimeError("cleanup failed")],
+    )
+    capability = RecordingTransport("INV0000001", events, close_error=cleanup_error)
+    capability.connect_started = asyncio.Event()
+    capability.connect_release = asyncio.Event()
+    task = asyncio.create_task(station.all_inverters[0].attach_local_transport(capability))
+    await capability.connect_started.wait()
+
+    task.cancel()
     with pytest.raises(BaseExceptionGroup) as raised:
         await task
 
     assert [type(error) for error in exception_leaves(raised.value)] == [
         asyncio.CancelledError,
         asyncio.CancelledError,
+        RuntimeError,
     ]
     assert events == ["connect", "shutdown"]
     assert station.all_inverters[0].transport is None
@@ -646,8 +762,7 @@ async def test_cancelled_same_capability_waiter_cannot_close_holder_input(
     await capability.connect_started.wait()
     waiter = asyncio.create_task(inverter.attach_local_transport(capability))
     await asyncio.sleep(0)
-    waiter.cancel()
-    await asyncio.sleep(0)
+    await cancel_repeatedly(waiter)
 
     assert not waiter.done()
     assert events == ["connect"]
@@ -656,8 +771,47 @@ async def test_cancelled_same_capability_waiter_cannot_close_holder_input(
     with pytest.raises(asyncio.CancelledError):
         await waiter
 
+    assert waiter.cancelled()
     assert events == ["connect"]
     assert inverter.transport is capability
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_coalesces_repeats_with_cleanup_failure(
+    station: Station,
+) -> None:
+    """A mixed waiter outcome keeps one primary and one later cancellation marker."""
+    events: list[str] = []
+    holder_capability = RecordingTransport("INV0000001", events, label="holder")
+    waiting_capability = RecordingTransport(
+        "INV0000001",
+        events,
+        label="waiting",
+        close_error=RuntimeError("cleanup failed"),
+    )
+    holder_capability.connect_started = asyncio.Event()
+    holder_capability.connect_release = asyncio.Event()
+    inverter = station.all_inverters[0]
+
+    holder = asyncio.create_task(inverter.attach_local_transport(holder_capability))
+    await holder_capability.connect_started.wait()
+    waiter = asyncio.create_task(inverter.attach_local_transport(waiting_capability))
+    await asyncio.sleep(0)
+    await cancel_repeatedly(waiter)
+    assert not waiter.done()
+
+    holder_capability.connect_release.set()
+    await holder
+    with pytest.raises(BaseExceptionGroup) as raised:
+        await waiter
+
+    assert [type(error) for error in exception_leaves(raised.value)] == [
+        asyncio.CancelledError,
+        asyncio.CancelledError,
+        RuntimeError,
+    ]
+    assert events == ["holder:connect", "waiting:shutdown"]
+    assert inverter.transport is holder_capability
 
 
 @pytest.mark.asyncio

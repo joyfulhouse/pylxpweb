@@ -245,7 +245,9 @@ class TerminalTransport(Protocol):
     Terminal shutdown must drain or interrupt in-flight work and make the
     capability unusable. Its implementation must be cancellation-safe and
     complete within the implementation's documented finite upper bound. Device
-    detach and replacement wait for completion and may defer caller cancellation.
+    detach and replacement invoke it while holding the per-device lifecycle lock,
+    wait for completion, and may defer caller cancellation. Exceeding the bound
+    therefore blocks subsequent lifecycle operations on that device.
     """
 
     async def async_shutdown(self) -> None:
@@ -259,7 +261,9 @@ class TerminalInverterTransport(InverterTransport, TerminalTransport, Protocol):
 
     ``async_shutdown()`` is the ownership boundary: it must remain safe under
     cancellation, make the capability permanently unusable, and finish within
-    the implementation's documented finite upper bound.
+    the implementation's documented finite upper bound. Pylxpweb invokes it while
+    holding the device lifecycle lock, so exceeding that bound blocks later
+    attachment, replacement, and detachment on the same device.
     """
 
 

@@ -12,7 +12,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Never, TypeVar
 
 from pylxpweb.validation import (
     MAX_ELAPSED_HOURS,
@@ -46,6 +46,40 @@ TRANSPORT_LINK_DOWN_THRESHOLD = 3
 LINK_PROBE_MIN_INTERVAL_SECONDS = 4.0
 
 _T = TypeVar("_T")
+
+
+def _cancellation_only(error: BaseException) -> asyncio.CancelledError | None:
+    """Return one cancellation when every leaf is cancellation-only."""
+    if isinstance(error, asyncio.CancelledError):
+        return error
+    if isinstance(error, BaseExceptionGroup):
+        cancellation: asyncio.CancelledError | None = None
+        for nested_error in error.exceptions:
+            nested_cancellation = _cancellation_only(nested_error)
+            if nested_cancellation is None:
+                return None
+            if cancellation is None:
+                cancellation = nested_cancellation
+        return cancellation
+    return None
+
+
+def _raise_transport_errors(
+    message: str,
+    errors: list[BaseException],
+    *,
+    cause: BaseException,
+) -> Never:
+    """Raise one native cancellation or a group containing mixed failures."""
+    cancellation = _cancellation_only(errors[0])
+    if cancellation is None:
+        raise BaseExceptionGroup(message, errors) from cause
+    for error in errors[1:]:
+        nested_cancellation = _cancellation_only(error)
+        if nested_cancellation is None:
+            raise BaseExceptionGroup(message, errors) from cause
+    raise cancellation
+
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -266,19 +300,24 @@ class BaseDevice(ABC):
             except asyncio.CancelledError as error:
                 if close_task.cancelled():
                     if cancellation is not None:
-                        raise BaseExceptionGroup(
+                        _raise_transport_errors(
                             "Local transport cleanup was cancelled and failed",
                             [cancellation, error],
-                        ) from error
+                            cause=error,
+                        )
                     raise
                 if cancellation is None:
                     cancellation = error
             except BaseException as cleanup_error:
                 if cancellation is not None:
-                    raise BaseExceptionGroup(
+                    _raise_transport_errors(
                         "Local transport cleanup was cancelled and failed",
                         [cancellation, cleanup_error],
-                    ) from cleanup_error
+                        cause=cleanup_error,
+                    )
+                cleanup_cancellation = _cancellation_only(cleanup_error)
+                if cleanup_cancellation is not None:
+                    raise cleanup_cancellation from cleanup_error
                 raise
             else:
                 return cancellation
@@ -384,7 +423,7 @@ class BaseDevice(ABC):
                 self._release_transport_lifecycle()
 
         cleanup_task = asyncio.create_task(cleanup())
-        later_cancellations: list[asyncio.CancelledError] = []
+        later_cancellation: asyncio.CancelledError | None = None
         cleanup_error: BaseException | None = None
         while True:
             try:
@@ -393,21 +432,25 @@ class BaseDevice(ABC):
                 if cleanup_task.cancelled():
                     cleanup_error = error
                     break
-                later_cancellations.append(error)
+                if later_cancellation is None:
+                    later_cancellation = error
             except BaseException as error:
                 cleanup_error = error
                 break
             else:
                 break
 
-        errors = [primary_error, *later_cancellations]
+        errors = [primary_error]
+        if later_cancellation is not None:
+            errors.append(later_cancellation)
         if cleanup_error is not None:
             errors.append(cleanup_error)
         if len(errors) > 1:
-            raise BaseExceptionGroup(
+            _raise_transport_errors(
                 "Local transport lifecycle wait and cleanup failed",
                 errors,
-            ) from primary_error
+                cause=primary_error,
+            )
 
     async def _cleanup_unretained_transport(
         self,
@@ -423,15 +466,17 @@ class BaseDevice(ABC):
                 require_terminal=require_terminal,
             )
         except BaseException as cleanup_error:
-            raise BaseExceptionGroup(
+            _raise_transport_errors(
                 "Local transport attachment and cleanup both failed",
                 [primary_error, cleanup_error],
-            ) from primary_error
+                cause=primary_error,
+            )
         if cancellation is not None:
-            raise BaseExceptionGroup(
+            _raise_transport_errors(
                 "Local transport attachment and cleanup were interrupted",
                 [primary_error, cancellation],
-            ) from primary_error
+                cause=primary_error,
+            )
 
     async def _attach_local_transport_locked(
         self,

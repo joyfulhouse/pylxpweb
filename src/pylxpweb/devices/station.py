@@ -1314,6 +1314,9 @@ class Station(BaseDevice):
             closes the new capability and is reported in ``AttachResult``;
             cancellation performs the same cleanup and propagates. Replacement
             terminally closes the old capability before publishing the new one.
+            Terminal shutdown runs under the matched device's lifecycle lock; an
+            implementation that exceeds its documented finite shutdown bound
+            blocks later lifecycle operations on that device.
             Inverter cache TTLs keep the existing transport-type defaults; an
             injected capability without ``transport_type`` keeps current TTLs,
             which callers may configure with ``inverter.set_cache_ttls()``.
