@@ -477,6 +477,9 @@ class BaseDevice(ABC):
                 [primary_error, cancellation],
                 cause=primary_error,
             )
+        primary_cancellation = _cancellation_only(primary_error)
+        if primary_cancellation is not None:
+            raise primary_cancellation
 
     async def _attach_local_transport_locked(
         self,

@@ -426,6 +426,30 @@ async def test_connect_and_cleanup_failures_are_combined(station: Station) -> No
 
 
 @pytest.mark.asyncio
+async def test_nested_cancellation_only_connect_preserves_native_cancellation(
+    station: Station,
+) -> None:
+    """A cancellation-only connect group becomes native after successful cleanup."""
+    events: list[str] = []
+    connect_error = BaseExceptionGroup(
+        "nested connect cancellation",
+        [
+            asyncio.CancelledError(),
+            BaseExceptionGroup("deeper cancellation", [asyncio.CancelledError()]),
+        ],
+    )
+    capability = RecordingTransport("INV0000001", events, connect_error=connect_error)
+    task = asyncio.create_task(station.all_inverters[0].attach_local_transport(capability))
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+
+    assert task.cancelled()
+    assert events == ["connect", "shutdown"]
+    assert station.all_inverters[0].transport is None
+
+
+@pytest.mark.asyncio
 async def test_cancellation_and_cleanup_failure_are_combined(station: Station) -> None:
     """Cancellation and terminal-cleanup failure are reported deterministically."""
     events: list[str] = []
