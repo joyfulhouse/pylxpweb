@@ -14,7 +14,7 @@ class RegisterSpace(StrEnum):
     HOLDING = "holding"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class RegisterSegment:
     """One immutable raw-register segment from a successful public read."""
 
@@ -24,8 +24,15 @@ class RegisterSegment:
     words: tuple[int, ...]
     """Exact raw 16-bit register words in observation order."""
 
+    def __repr__(self) -> str:
+        """Return provenance without exposing raw register words."""
+        return (
+            f"{type(self).__name__}(start_address={self.start_address!r}, "
+            f"word_count={len(self.words)}, words=<redacted>)"
+        )
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(frozen=True, slots=True, repr=False)
 class RegisterObservation:
     """Observed raw-register segments for one register space."""
 
@@ -34,6 +41,13 @@ class RegisterObservation:
 
     segments: tuple[RegisterSegment, ...]
     """Ordered, immutable, non-overlapping raw-register segments."""
+
+    def __repr__(self) -> str:
+        """Return register-space and redacted segment provenance."""
+        return (
+            f"{type(self).__name__}(register_space={self.register_space!r}, "
+            f"segments={self.segments!r})"
+        )
 
 
 type RegisterObserver = Callable[[tuple[RegisterObservation, ...]], None]

@@ -314,6 +314,11 @@ class BaseTransport:
         """Return the monotonic count of suppressed register-observer errors."""
         return self._register_observation_error_count
 
+    @property
+    def _register_observer_enabled(self) -> bool:
+        """Return whether construction enabled raw-register observation."""
+        return self._register_observer is not None
+
     def _notify_register_observer(
         self,
         observations: tuple[RegisterObservation, ...],
@@ -323,7 +328,11 @@ class BaseTransport:
             return
         try:
             self._register_observer(observations)
-        except Exception:
+        # This call is synchronous: no external task cancellation can be
+        # delivered inside it.  A CancelledError raised here therefore came
+        # from callback code and is isolated like its other failures.  Genuine
+        # cancellation at transport await points remains untouched.
+        except (Exception, asyncio.CancelledError):
             self._register_observation_error_count += 1
 
     async def __aenter__(self) -> Self:
