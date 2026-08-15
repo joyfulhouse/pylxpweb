@@ -2909,7 +2909,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters support AC charging.
 
         Args:
-            power_kw: Power limit in kilowatts (0.0 to 15.0)
+            power_kw: Power limit in kilowatts (0.0 to 10.0)
 
         Returns:
             True if successful
@@ -2921,8 +2921,8 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> await inverter.set_ac_charge_power(5.0)
             True
         """
-        if not 0.0 <= power_kw <= 15.0:
-            raise ValueError(f"AC charge power must be between 0.0 and 15.0 kW, got {power_kw}")
+        if not 0.0 <= power_kw <= 10.0:
+            raise ValueError(f"AC charge power must be between 0.0 and 10.0 kW, got {power_kw}")
 
         # API accepts kW values directly
         return await self._write_named_parameter("HOLD_AC_CHARGE_POWER_CMD", power_kw)

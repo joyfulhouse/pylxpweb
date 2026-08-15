@@ -942,7 +942,7 @@ class TestACChargeSocLimitOperations:
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        with pytest.raises(ValueError, match="start_soc must be 0-90"):
+        with pytest.raises(ValueError, match="start_soc must be 1-90"):
             await inverter.set_ac_charge_soc_limits(start_soc=91, end_soc=100)
 
     @pytest.mark.asyncio
@@ -954,7 +954,7 @@ class TestACChargeSocLimitOperations:
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"
         )
 
-        with pytest.raises(ValueError, match="start_soc must be 0-90"):
+        with pytest.raises(ValueError, match="start_soc must be 1-90"):
             await inverter.set_ac_charge_soc_limits(start_soc=-1, end_soc=100)
 
     @pytest.mark.asyncio
@@ -984,7 +984,7 @@ class TestACChargeSocLimitOperations:
         """end_soc=101 is accepted and writes reg 67 = 101 (GH eg4_web_monitor#158).
 
         101 = never stop AC charging (cell balancing); only the stop SOC (reg 67)
-        is widened, the start SOC stays 0-90.
+        is widened, the start SOC stays 1-90.
         """
         inverter = HybridInverter(
             client=mock_client, serial_number="1234567890", model="FlexBOSS21"

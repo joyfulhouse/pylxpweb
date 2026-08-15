@@ -823,7 +823,7 @@ class HybridInverter(GenericInverter):
 
         Returns:
             Dictionary with:
-            - start_soc: Battery SOC (%) to start AC charging (0-90)
+            - start_soc: Battery SOC (%) to start AC charging (1-90)
             - end_soc: Battery SOC (%) to stop AC charging (0-101; 101 = never
               stop), reg 67
 
@@ -847,7 +847,7 @@ class HybridInverter(GenericInverter):
         """Set AC charge start/stop SOC thresholds.
 
         Args:
-            start_soc: Battery SOC (%) to start AC charging (0-90)
+            start_soc: Battery SOC (%) to start AC charging (1-90)
             end_soc: Battery SOC (%) to stop AC charging (0-101), reg 67.
                 101 = never stop AC charging (used for cell balancing).
 
@@ -863,8 +863,8 @@ class HybridInverter(GenericInverter):
         """
         from pylxpweb.constants import HOLD_AC_CHARGE_SOC_LIMIT, HOLD_AC_CHARGE_START_SOC
 
-        if not 0 <= start_soc <= 90:
-            raise ValueError(f"start_soc must be 0-90, got {start_soc}")
+        if not 1 <= start_soc <= 90:
+            raise ValueError(f"start_soc must be 1-90, got {start_soc}")
         if not 0 <= end_soc <= 101:
             raise ValueError(f"end_soc must be 0-101, got {end_soc}")
 

@@ -32,10 +32,11 @@ detailed changes.
   Quick Charge writes, battery caches and capacity, lifetime-energy catch-up,
   and register-map isolation.
 - **Firmware-verified AC charge ranges**: H66 (AC charge power) now accepts raw
-  `0..100`, mapping to 0–10000 W, and H160 (AC charge start SOC) accepts 1–90%
-  ([#271](https://github.com/joyfulhouse/pylxpweb/issues/271),
-  [#272](https://github.com/joyfulhouse/pylxpweb/issues/272), PR
-  [#273](https://github.com/joyfulhouse/pylxpweb/pull/273)).
+  `0..100`, mapping to 0–10000 W
+  ([#272](https://github.com/joyfulhouse/pylxpweb/issues/272)), and H160
+  (AC charge start SOC) accepts 1–90%
+  ([#271](https://github.com/joyfulhouse/pylxpweb/issues/271)); PR
+  [#273](https://github.com/joyfulhouse/pylxpweb/pull/273).
 
 ### Known limitations / deferred
 

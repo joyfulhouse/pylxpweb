@@ -725,7 +725,7 @@ class TestACChargeSocLimitsCloud:
     @pytest.mark.asyncio
     async def test_set_ac_charge_soc_limits_invalid_start(self, control: ControlEndpoints) -> None:
         """Test that invalid start_soc raises ValueError."""
-        with pytest.raises(ValueError, match="start_soc must be 0-90"):
+        with pytest.raises(ValueError, match="start_soc must be 1-90"):
             await control.set_ac_charge_soc_limits(SERIAL, 95, 100)
 
     @pytest.mark.asyncio
