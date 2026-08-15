@@ -132,6 +132,32 @@ PUBLIC_OBSERVATION_READS: tuple[object, ...] = (
     pytest.param(lambda transport: transport.validate_serial(""), id="validate-serial"),
 )
 
+TERMINAL_GROUP_OBSERVATION: ObservationBatch = (
+    RegisterObservation(
+        RegisterSpace.INPUT,
+        (
+            RegisterSegment(0, (0,) * 32),
+            RegisterSegment(32, (0,) * 32),
+            RegisterSegment(64, (0,) * 16),
+            RegisterSegment(80, (0,) * 33),
+            RegisterSegment(113, (0,) * 27),
+            RegisterSegment(140, (7,) * 3),
+            RegisterSegment(143, (0,) * 11),
+            RegisterSegment(170, (0,) * 4),
+            RegisterSegment(193, (0,) * 12),
+        ),
+    ),
+)
+
+
+def _observed_addresses(observed: list[ObservationBatch]) -> list[int]:
+    return [
+        address
+        for observation in observed[0]
+        for segment in observation.segments
+        for address in range(segment.start_address, segment.start_address + len(segment.words))
+    ]
+
 
 def test_register_observation_repr_redacts_raw_words_from_diagnostics(
     caplog: pytest.LogCaptureFixture,
@@ -175,30 +201,8 @@ async def test_coalesced_fallback_observes_only_terminal_winning_segments() -> N
         (RegisterSpace.INPUT, start, count) for start, count in INPUT_REGISTER_GROUPS.values()
     ]
     assert transport.reads == [successful_discarded_probe, failed_probe, *grouped_reads]
-    assert observed == [
-        (
-            RegisterObservation(
-                RegisterSpace.INPUT,
-                (
-                    RegisterSegment(0, (0,) * 32),
-                    RegisterSegment(32, (0,) * 32),
-                    RegisterSegment(64, (0,) * 16),
-                    RegisterSegment(80, (0,) * 33),
-                    RegisterSegment(113, (0,) * 27),
-                    RegisterSegment(140, (7,) * 3),
-                    RegisterSegment(143, (0,) * 11),
-                    RegisterSegment(170, (0,) * 4),
-                    RegisterSegment(193, (0,) * 12),
-                ),
-            ),
-        )
-    ]
-    addresses = [
-        address
-        for observation in observed[0]
-        for segment in observation.segments
-        for address in range(segment.start_address, segment.start_address + len(segment.words))
-    ]
+    assert observed == [TERMINAL_GROUP_OBSERVATION]
+    addresses = _observed_addresses(observed)
     assert len(addresses) == len(set(addresses))
 
 
@@ -295,30 +299,8 @@ async def test_runtime_group_fallback_discards_failed_attempt_segments() -> None
     ]
     assert transport.reads == [successful_discarded_probe, failed_probe, *grouped_reads]
     assert transport.attempt_segment_counts == [0, 0]
-    assert observed == [
-        (
-            RegisterObservation(
-                RegisterSpace.INPUT,
-                (
-                    RegisterSegment(0, (0,) * 32),
-                    RegisterSegment(32, (0,) * 32),
-                    RegisterSegment(64, (0,) * 16),
-                    RegisterSegment(80, (0,) * 33),
-                    RegisterSegment(113, (0,) * 27),
-                    RegisterSegment(140, (7,) * 3),
-                    RegisterSegment(143, (0,) * 11),
-                    RegisterSegment(170, (0,) * 4),
-                    RegisterSegment(193, (0,) * 12),
-                ),
-            ),
-        )
-    ]
-    addresses = [
-        address
-        for observation in observed[0]
-        for segment in observation.segments
-        for address in range(segment.start_address, segment.start_address + len(segment.words))
-    ]
+    assert observed == [TERMINAL_GROUP_OBSERVATION]
+    addresses = _observed_addresses(observed)
     assert len(addresses) == len(set(addresses))
 
 

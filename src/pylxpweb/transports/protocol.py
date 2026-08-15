@@ -323,21 +323,17 @@ class BaseTransport:
         if observer is None or not observations:
             return
 
-        async def invoke_observer() -> bool:
-            try:
-                observer(observations)
-            except (Exception, asyncio.CancelledError):
-                return False
-            return True
+        async def invoke_observer() -> None:
+            observer(observations)
 
         try:
-            succeeded = await asyncio.create_task(invoke_observer())
+            await asyncio.create_task(invoke_observer())
         except asyncio.CancelledError:
             polling_task = asyncio.current_task()
             if polling_task is not None and polling_task.cancelling():
                 raise
-            succeeded = False
-        if not succeeded:
+            self._register_observation_error_count += 1
+        except Exception:
             self._register_observation_error_count += 1
 
     async def __aenter__(self) -> Self:

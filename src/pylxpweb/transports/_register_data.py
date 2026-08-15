@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -236,6 +236,22 @@ def _append_observed_segment(
     retained.append(new_segment)
     retained.sort(key=lambda segment: segment.start_address)
     segments[:] = retained
+
+
+def _capture_register_reads(
+    reader: Callable[[int, int], Coroutine[None, None, list[int]]],
+    segments: list[RegisterSegment] | None,
+) -> Callable[[int, int], Coroutine[None, None, list[int]]]:
+    """Wrap a register reader only when observation capture is enabled."""
+    if segments is None:
+        return reader
+
+    async def observed_reader(start: int, count: int) -> list[int]:
+        values = await reader(start, count)
+        _append_observed_segment(segments, start, values)
+        return values
+
+    return observed_reader
 
 
 def coalesce_register_groups(
@@ -1764,16 +1780,8 @@ class RegisterDataMixin(_DataMixinBase):
     async def read_serial_number(self) -> str:
         """Read inverter serial number from input registers 115-119."""
         segments = self._new_observed_segments()
-
-        if segments is None:
-            return await read_serial_number_async(self._read_input_registers, self._serial)
-
-        async def read_input(start: int, count: int) -> list[int]:
-            values = await self._read_input_registers(start, count)
-            _append_observed_segment(segments, start, values)
-            return values
-
-        result = await read_serial_number_async(read_input, self._serial)
+        reader = _capture_register_reads(self._read_input_registers, segments)
+        result = await read_serial_number_async(reader, self._serial)
         if segments:
             await self._notify_observed_segments((RegisterSpace.INPUT, segments))
         return result
@@ -1781,16 +1789,8 @@ class RegisterDataMixin(_DataMixinBase):
     async def read_firmware_version(self) -> str:
         """Read firmware version from holding registers 7-10."""
         segments = self._new_observed_segments()
-
-        if segments is None:
-            return await read_firmware_version_async(self._read_holding_registers)
-
-        async def read_holding(start: int, count: int) -> list[int]:
-            values = await self._read_holding_registers(start, count)
-            _append_observed_segment(segments, start, values)
-            return values
-
-        result = await read_firmware_version_async(read_holding)
+        reader = _capture_register_reads(self._read_holding_registers, segments)
+        result = await read_firmware_version_async(reader)
         if segments:
             await self._notify_observed_segments((RegisterSpace.HOLDING, segments))
         return result
@@ -1798,16 +1798,8 @@ class RegisterDataMixin(_DataMixinBase):
     async def read_device_type(self) -> int:
         """Read device type code from holding register 19."""
         segments = self._new_observed_segments()
-
-        if segments is None:
-            return await read_device_type_async(self._read_holding_registers)
-
-        async def read_holding(start: int, count: int) -> list[int]:
-            values = await self._read_holding_registers(start, count)
-            _append_observed_segment(segments, start, values)
-            return values
-
-        result = await read_device_type_async(read_holding)
+        reader = _capture_register_reads(self._read_holding_registers, segments)
+        result = await read_device_type_async(reader)
         if segments:
             await self._notify_observed_segments((RegisterSpace.HOLDING, segments))
         return result
@@ -1819,16 +1811,8 @@ class RegisterDataMixin(_DataMixinBase):
     async def read_parallel_config(self) -> int:
         """Read parallel configuration from input register 113."""
         segments = self._new_observed_segments()
-
-        if segments is None:
-            return await read_parallel_config_async(self._read_input_registers, self._serial)
-
-        async def read_input(start: int, count: int) -> list[int]:
-            values = await self._read_input_registers(start, count)
-            _append_observed_segment(segments, start, values)
-            return values
-
-        result = await read_parallel_config_async(read_input, self._serial)
+        reader = _capture_register_reads(self._read_input_registers, segments)
+        result = await read_parallel_config_async(reader, self._serial)
         if segments:
             await self._notify_observed_segments((RegisterSpace.INPUT, segments))
         return result
