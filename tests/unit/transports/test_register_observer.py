@@ -194,9 +194,6 @@ def _without_timestamps(value: object) -> object:
         payload = asdict(value)
         payload.pop("timestamp", None)
         return payload
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        return model_dump(exclude={"timestamp"})
     return value
 
 
@@ -423,12 +420,18 @@ async def test_canonical_readers_observe_enabled_terminal_segment_without_extra_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("public_read", PUBLIC_OBSERVATION_READS)
-async def test_default_observer_skips_capture_on_every_public_read(
+@pytest.mark.parametrize("detach_after_init", [False, True], ids=["default", "detached"])
+async def test_disabled_observer_skips_capture_on_every_public_read(
     monkeypatch: pytest.MonkeyPatch,
     public_read: PublicRead,
+    detach_after_init: bool,
 ) -> None:
     baseline = _FakeRegisterTransport()
-    await public_read(baseline)
+    baseline_result = await public_read(baseline)
+    observed: list[ObservationBatch] = []
+    disabled = _FakeRegisterTransport(observer=observed.append if detach_after_init else None)
+    if detach_after_init:
+        disabled.set_register_observer(None)
     capture_calls = 0
     publication_calls = 0
     capture_states: list[list[RegisterSegment] | None] = []
@@ -461,14 +464,15 @@ async def test_default_observer_skips_capture_on_every_public_read(
     monkeypatch.setattr(register_data_module, "_append_observed_segment", count_capture_calls)
     monkeypatch.setattr(RegisterDataMixin, "_new_observed_segments", record_capture_state)
     monkeypatch.setattr(RegisterDataMixin, "_notify_observed_segments", count_publication_calls)
-    disabled = _FakeRegisterTransport()
 
-    await public_read(disabled)
+    disabled_result = await public_read(disabled)
 
+    assert _without_timestamps(disabled_result) == _without_timestamps(baseline_result)
     assert disabled.reads == baseline.reads
     assert capture_states and all(state is None for state in capture_states)
     assert capture_calls == 0
     assert publication_calls == 0
+    assert observed == []
 
 
 @pytest.mark.asyncio
@@ -543,61 +547,7 @@ def test_detach_revokes_clears_and_rejects_late_capture_appends() -> None:
     _append_observed_segment(capture, 11, [2])
 
     assert capture == []
-    assert capture.is_active is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("public_read", PUBLIC_OBSERVATION_READS)
-async def test_detached_observer_uses_zero_overhead_path_on_every_public_read(
-    monkeypatch: pytest.MonkeyPatch,
-    public_read: PublicRead,
-) -> None:
-    baseline = _FakeRegisterTransport()
-    baseline_result = await public_read(baseline)
-    observed: list[ObservationBatch] = []
-    detached = _FakeRegisterTransport(observer=observed.append)
-    detached.set_register_observer(None)
-    capture_calls = 0
-    publication_calls = 0
-    capture_states: list[_RegisterCapture | None] = []
-    original_append = register_data_module._append_observed_segment
-    original_new = RegisterDataMixin._new_observed_segments
-    original_notify = RegisterDataMixin._notify_observed_segments
-
-    def count_capture_calls(
-        segments: _RegisterCapture,
-        start: int,
-        values: Sequence[int],
-    ) -> None:
-        nonlocal capture_calls
-        capture_calls += 1
-        original_append(segments, start, values)
-
-    def record_capture_state(self: RegisterDataMixin) -> _RegisterCapture | None:
-        state = original_new(self)
-        capture_states.append(state)
-        return state
-
-    async def count_publication_calls(
-        self: RegisterDataMixin,
-        *captured: tuple[RegisterSpace, Sequence[RegisterSegment] | None],
-    ) -> None:
-        nonlocal publication_calls
-        publication_calls += 1
-        await original_notify(self, *captured)
-
-    monkeypatch.setattr(register_data_module, "_append_observed_segment", count_capture_calls)
-    monkeypatch.setattr(RegisterDataMixin, "_new_observed_segments", record_capture_state)
-    monkeypatch.setattr(RegisterDataMixin, "_notify_observed_segments", count_publication_calls)
-
-    detached_result = await public_read(detached)
-
-    assert _without_timestamps(detached_result) == _without_timestamps(baseline_result)
-    assert detached.reads == baseline.reads
-    assert capture_states and all(state is None for state in capture_states)
-    assert capture_calls == 0
-    assert publication_calls == 0
-    assert observed == []
+    assert capture.active is False
 
 
 @pytest.mark.asyncio

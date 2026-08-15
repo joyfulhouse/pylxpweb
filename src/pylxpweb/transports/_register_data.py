@@ -213,7 +213,7 @@ def _append_observed_segment(
     values: Sequence[int],
 ) -> None:
     """Merge a terminal segment, making later overlapping reads authoritative."""
-    if (isinstance(segments, _RegisterCapture) and not segments.is_active) or not values:
+    if (isinstance(segments, _RegisterCapture) and not segments.active) or not values:
         return
 
     new_segment = RegisterSegment(start, tuple(values))
