@@ -152,16 +152,15 @@ class TestEG4SlaveProtocol:
         data = self.protocol.decode(raw, battery_index=0)
         assert "EG4-LL" in data.model
 
-    def test_decode_device_info_firmware(self) -> None:
-        """Firmware at regs 117-119 decoded as ASCII."""
-        raw: dict[int, int] = dict.fromkeys(range(39), 0)
-        # "217" -> 0x3231 ("21"), 0x3700 ("7\x00")
-        raw[117] = 0x3231  # "21"
-        raw[118] = 0x3700  # "7\0"
-        raw[119] = 0
+    def test_decode_z02t11_firmware_with_empty_serial(self) -> None:
+        """Z02T11 firmware occupies regs 117-119 while serial regs are empty."""
+        raw: dict[int, int] = dict.fromkeys(range(128), 0)
+        raw[117] = 0x5A30  # "Z0"
+        raw[118] = 0x3254  # "2T"
+        raw[119] = 0x3131  # "11"
         data = self.protocol.decode(raw, battery_index=0)
-        assert data.firmware_version != ""
-        assert "217" in data.firmware_version
+        assert data.firmware_version == "Z02T11"
+        assert data.serial_number == ""
 
     def test_decode_device_info_serial(self) -> None:
         """Serial number at regs 120-127 decoded as ASCII."""
