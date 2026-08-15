@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0b2] - 2026-08-15
+
+### Added
+
+- **Opt-in raw-register observation for local transports**
+  ([#279](https://github.com/joyfulhouse/pylxpweb/issues/279), PR
+  [#280](https://github.com/joyfulhouse/pylxpweb/pull/280), release issue
+  [#281](https://github.com/joyfulhouse/pylxpweb/issues/281)):
+  local transport constructors and public factories now accept an optional
+  construction-time `register_observer`. After a public read succeeds, the
+  observer receives immutable `RegisterObservation` and `RegisterSegment`
+  values containing only the terminal winning segments from that read's
+  coalesced or fallback plan; failed and discarded partial attempts are not
+  published. Observer failures are isolated from transport behavior and
+  reflected only by the redacted, monotonic
+  `register_observation_error_count`. Observation reuses the Modbus reads
+  already performed by the public operation and issues no additional Modbus
+  reads. The API does not retain or publish downstream snapshots.
+
 ## [0.10.0b1] - 2026-08-14
 
 ### Added
@@ -2641,7 +2660,8 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
-[Unreleased]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b1...HEAD
+[Unreleased]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b2...HEAD
+[0.10.0b2]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b1...v0.10.0b2
 [0.10.0b1]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.39b11...v0.10.0b1
 [0.9.32]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.29...v0.9.32
 [0.9.29]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.26...v0.9.29
