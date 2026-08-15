@@ -633,7 +633,7 @@ class InverterRuntimeData:
                         soc = raw & 0xFF
                         soh = (raw >> 8) & 0xFF
                         if soh == 0:
-                            soh = 100  # Default to 100% if not reported
+                            soh = None  # not reported; absent, not perfect health
                         kwargs["battery_soc"] = soc
                         kwargs["battery_soh"] = soh
                 elif reg.canonical_name == "parallel_config":
@@ -1318,7 +1318,7 @@ class BatteryData:
             voltage=float(kwargs.get("voltage", 0.0)),
             current=float(kwargs.get("current", 0.0)),
             soc=soc,
-            soh=soh if soh > 0 else 100,
+            soh=soh if soh > 0 else None,
             temperature=max_cell_temp,
             max_capacity=max_capacity,
             current_capacity=current_capacity,
@@ -1735,7 +1735,7 @@ class BatteryBankData:
 
         actual_soh: int | None = battery_soh
         if battery_soh is not None and battery_soh == 0:
-            actual_soh = 100  # 0 is invalid, assume healthy
+            actual_soh = None  # not reported; absent, not perfect health
 
         return cls(
             timestamp=datetime.now(),
