@@ -200,6 +200,29 @@ def _without_timestamps(value: object) -> object:
     return value
 
 
+def _gate_observer_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    transport: _FakeRegisterTransport,
+    observations: ObservationBatch,
+) -> tuple[asyncio.Task[None], asyncio.Event, asyncio.Event]:
+    """Delay the observer task while leaving its caller runnable."""
+    scheduled = asyncio.Event()
+    release = asyncio.Event()
+    original_create_task = asyncio.create_task
+
+    def gated_create_task(coro: Awaitable[None]) -> asyncio.Task[None]:
+        async def gated() -> None:
+            scheduled.set()
+            await release.wait()
+            await coro
+
+        return original_create_task(gated())
+
+    monkeypatch.setattr(asyncio, "create_task", gated_create_task)
+    dispatch = original_create_task(transport._notify_register_observer(observations))
+    return dispatch, scheduled, release
+
+
 def test_register_observation_repr_redacts_raw_words_from_diagnostics(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -516,20 +539,7 @@ async def test_scheduled_dispatch_rereads_observer_after_detach(
     observed: list[ObservationBatch] = []
     transport = _FakeRegisterTransport(observer=observed.append)
     observation = (RegisterObservation(RegisterSpace.HOLDING, (RegisterSegment(10, (0,)),)),)
-    scheduled = asyncio.Event()
-    release = asyncio.Event()
-    original_create_task = asyncio.create_task
-
-    def gated_create_task(coro: Awaitable[None]) -> asyncio.Task[None]:
-        async def gated() -> None:
-            scheduled.set()
-            await release.wait()
-            await coro
-
-        return original_create_task(gated())
-
-    monkeypatch.setattr(asyncio, "create_task", gated_create_task)
-    dispatch = original_create_task(transport._notify_register_observer(observation))
+    dispatch, scheduled, release = _gate_observer_dispatch(monkeypatch, transport, observation)
     await scheduled.wait()
 
     transport.set_register_observer(None)
@@ -549,20 +559,7 @@ async def test_scheduled_dispatch_rejects_detach_reattach_aba(
     new_observer = old_observer if reuse_observer else MagicMock()
     transport = _FakeRegisterTransport(observer=old_observer)
     observation = (RegisterObservation(RegisterSpace.HOLDING, (RegisterSegment(10, (0,)),)),)
-    scheduled = asyncio.Event()
-    release = asyncio.Event()
-    original_create_task = asyncio.create_task
-
-    def gated_create_task(coro: Awaitable[None]) -> asyncio.Task[None]:
-        async def gated() -> None:
-            scheduled.set()
-            await release.wait()
-            await coro
-
-        return original_create_task(gated())
-
-    monkeypatch.setattr(asyncio, "create_task", gated_create_task)
-    dispatch = original_create_task(transport._notify_register_observer(observation))
+    dispatch, scheduled, release = _gate_observer_dispatch(monkeypatch, transport, observation)
     await scheduled.wait()
 
     transport.set_register_observer(None)
@@ -589,20 +586,7 @@ async def test_detach_releases_callback_while_dispatch_is_gated(
     observer_ref = weakref.ref(observer)
     transport = _FakeRegisterTransport(observer=observer)
     observation = (RegisterObservation(RegisterSpace.HOLDING, (RegisterSegment(10, (0,)),)),)
-    scheduled = asyncio.Event()
-    release = asyncio.Event()
-    original_create_task = asyncio.create_task
-
-    def gated_create_task(coro: Awaitable[None]) -> asyncio.Task[None]:
-        async def gated() -> None:
-            scheduled.set()
-            await release.wait()
-            await coro
-
-        return original_create_task(gated())
-
-    monkeypatch.setattr(asyncio, "create_task", gated_create_task)
-    dispatch = original_create_task(transport._notify_register_observer(observation))
+    dispatch, scheduled, release = _gate_observer_dispatch(monkeypatch, transport, observation)
     await scheduled.wait()
 
     transport.set_register_observer(None)
