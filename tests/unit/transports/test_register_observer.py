@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import asdict, is_dataclass
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -14,7 +16,9 @@ from pylxpweb.transports._register_data import (
     DEFAULT_INPUT_BLOCK_SIZE,
     INPUT_REGISTER_GROUPS,
     RegisterDataMixin,
+    _append_observed_segment,
     _ReadBlock,
+    _RegisterCapture,
 )
 from pylxpweb.transports.exceptions import TransportReadError
 from pylxpweb.transports.protocol import BaseTransport
@@ -180,6 +184,20 @@ def _observed_addresses(observed: list[ObservationBatch]) -> list[int]:
         for segment in observation.segments
         for address in range(segment.start_address, segment.start_address + len(segment.words))
     ]
+
+
+def _without_timestamps(value: object) -> object:
+    """Normalize generated model timestamps while preserving parsed payloads."""
+    if isinstance(value, tuple):
+        return tuple(_without_timestamps(item) for item in value)
+    if is_dataclass(value) and not isinstance(value, type):
+        payload = asdict(value)
+        payload.pop("timestamp", None)
+        return payload
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(exclude={"timestamp"})
+    return value
 
 
 def test_register_observation_repr_redacts_raw_words_from_diagnostics(
@@ -466,3 +484,154 @@ async def test_large_sequential_parameter_capture_is_linear() -> None:
     assert len(transport.reads) == chunk_count
     assert len(observed[0][0].segments) == chunk_count
     assert _CountingAddress.additions_of_chunk_size <= chunk_count * 3
+
+
+@pytest.mark.asyncio
+async def test_detach_during_unlocked_modbus_read_revokes_capture_before_append() -> None:
+    """A direct mixin read can finish, but its detached capture cannot publish."""
+    observed: list[ObservationBatch] = []
+    transport = _BlockingRegisterTransport(observer=observed.append)
+    task = asyncio.create_task(RegisterDataMixin.read_parameters(transport, 10, 1))
+    await transport.read_started.wait()
+
+    transport.set_register_observer(None)
+    transport.release_read.set()
+
+    assert await task == {10: 0}
+    assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_scheduled_dispatch_rereads_observer_after_detach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A callback task queued before detach must consult the slot when it runs."""
+    observed: list[ObservationBatch] = []
+    transport = _FakeRegisterTransport(observer=observed.append)
+    observation = (RegisterObservation(RegisterSpace.HOLDING, (RegisterSegment(10, (0,)),)),)
+    scheduled = asyncio.Event()
+    release = asyncio.Event()
+    original_create_task = asyncio.create_task
+
+    def gated_create_task(coro: Awaitable[None]) -> asyncio.Task[None]:
+        async def gated() -> None:
+            scheduled.set()
+            await release.wait()
+            await coro
+
+        return original_create_task(gated())
+
+    monkeypatch.setattr(asyncio, "create_task", gated_create_task)
+    dispatch = original_create_task(transport._notify_register_observer(observation))
+    await scheduled.wait()
+
+    transport.set_register_observer(None)
+    release.set()
+    await dispatch
+
+    assert observed == []
+
+
+def test_detach_revokes_clears_and_rejects_late_capture_appends() -> None:
+    observed: list[ObservationBatch] = []
+    transport = _FakeRegisterTransport(observer=observed.append)
+    capture = transport._new_observed_segments()
+    assert isinstance(capture, _RegisterCapture)
+    _append_observed_segment(capture, 10, [1])
+
+    transport.set_register_observer(None)
+    _append_observed_segment(capture, 11, [2])
+
+    assert capture == []
+    assert capture.is_active is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("public_read", PUBLIC_OBSERVATION_READS)
+async def test_detached_observer_uses_zero_overhead_path_on_every_public_read(
+    monkeypatch: pytest.MonkeyPatch,
+    public_read: PublicRead,
+) -> None:
+    baseline = _FakeRegisterTransport()
+    baseline_result = await public_read(baseline)
+    observed: list[ObservationBatch] = []
+    detached = _FakeRegisterTransport(observer=observed.append)
+    detached.set_register_observer(None)
+    capture_calls = 0
+    publication_calls = 0
+    capture_states: list[_RegisterCapture | None] = []
+    original_append = register_data_module._append_observed_segment
+    original_new = RegisterDataMixin._new_observed_segments
+    original_notify = RegisterDataMixin._notify_observed_segments
+
+    def count_capture_calls(
+        segments: _RegisterCapture,
+        start: int,
+        values: Sequence[int],
+    ) -> None:
+        nonlocal capture_calls
+        capture_calls += 1
+        original_append(segments, start, values)
+
+    def record_capture_state(self: RegisterDataMixin) -> _RegisterCapture | None:
+        state = original_new(self)
+        capture_states.append(state)
+        return state
+
+    async def count_publication_calls(
+        self: RegisterDataMixin,
+        *captured: tuple[RegisterSpace, Sequence[RegisterSegment] | None],
+    ) -> None:
+        nonlocal publication_calls
+        publication_calls += 1
+        await original_notify(self, *captured)
+
+    monkeypatch.setattr(register_data_module, "_append_observed_segment", count_capture_calls)
+    monkeypatch.setattr(RegisterDataMixin, "_new_observed_segments", record_capture_state)
+    monkeypatch.setattr(RegisterDataMixin, "_notify_observed_segments", count_publication_calls)
+
+    detached_result = await public_read(detached)
+
+    assert _without_timestamps(detached_result) == _without_timestamps(baseline_result)
+    assert detached.reads == baseline.reads
+    assert capture_states and all(state is None for state in capture_states)
+    assert capture_calls == 0
+    assert publication_calls == 0
+    assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_detach_reattach_is_idempotent_preserves_counter_and_does_not_reconnect() -> None:
+    old_observer = MagicMock(side_effect=RuntimeError("old observer"))
+    new_observer = MagicMock()
+    transport = _FakeRegisterTransport(observer=old_observer)
+    transport.connect = AsyncMock()
+    transport.disconnect = AsyncMock()
+    await transport.read_parameters(10, 1)
+    assert transport.register_observation_error_count == 1
+
+    transport.set_register_observer(None)
+    transport.set_register_observer(None)
+    transport.set_register_observer(new_observer)
+    transport.set_register_observer(new_observer)
+    await transport.read_parameters(11, 1)
+
+    assert transport.register_observation_error_count == 1
+    old_observer.assert_called_once()
+    new_observer.assert_called_once()
+    transport.connect.assert_not_awaited()
+    transport.disconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reattach_dispatches_only_to_replacement_observer() -> None:
+    old_observer = MagicMock()
+    new_observer = MagicMock()
+    transport = _FakeRegisterTransport(observer=old_observer)
+
+    transport.set_register_observer(None)
+    transport.set_register_observer(new_observer)
+    await transport.read_parameters(10, 1)
+
+    old_observer.assert_not_called()
+    new_observer.assert_called_once()

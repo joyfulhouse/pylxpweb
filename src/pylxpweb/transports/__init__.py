@@ -95,6 +95,7 @@ from .observation import RegisterObservation, RegisterObserver, RegisterSegment,
 from .protocol import (
     BaseTransport,
     InverterTransport,
+    RegisterObserverControl,
     TerminalInverterTransport,
     TerminalTransport,
 )
@@ -133,6 +134,7 @@ __all__ = [
     "AttachResult",
     # Protocol
     "InverterTransport",
+    "RegisterObserverControl",
     "TerminalInverterTransport",
     "TerminalTransport",
     "BaseTransport",

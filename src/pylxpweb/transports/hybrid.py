@@ -19,6 +19,7 @@ from .exceptions import (
     TransportTimeoutError,
     TransportWriteError,
 )
+from .observation import RegisterObserver
 from .protocol import BaseTransport
 
 if TYPE_CHECKING:
@@ -123,6 +124,10 @@ class HybridTransport(BaseTransport):
     def register_observation_error_count(self) -> int:
         """Return the local transport's redacted observer-error count."""
         return self._local.register_observation_error_count
+
+    def set_register_observer(self, observer: RegisterObserver | None) -> None:
+        """Delegate runtime observer replacement to the local transport only."""
+        self._local.set_register_observer(observer)
 
     def _mark_local_failed(self) -> None:
         """Mark local transport as failed, enabling HTTP fallback."""

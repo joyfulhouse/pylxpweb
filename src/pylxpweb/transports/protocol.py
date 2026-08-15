@@ -10,9 +10,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import weakref
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
-from .observation import RegisterObservation, RegisterObserver
+from .observation import RegisterObservation, RegisterObserver, _RegisterCapture
 
 if TYPE_CHECKING:
     from .capabilities import TransportCapabilities
@@ -25,6 +26,15 @@ _LOGGER = logging.getLogger(__name__)
 # rather than mislabelling unknown bits — writing one would flip an unknown
 # device setting, which is the failure mode of eg4_web_monitor #476.
 _PLACEHOLDER_PARAM_RE = re.compile(r"FUNC_\d+_BIT\d+")
+
+
+@runtime_checkable
+class RegisterObserverControl(Protocol):
+    """Optional capability for synchronous runtime observer replacement."""
+
+    def set_register_observer(self, observer: RegisterObserver | None) -> None:
+        """Replace or detach the synchronous, non-blocking observer callback."""
+        ...
 
 
 class _ReentrantAsyncLock:
@@ -297,6 +307,9 @@ class BaseTransport:
         self._connected = False
         self._op_lock = _ReentrantAsyncLock()
         self._register_observer = register_observer
+        self._register_observer_captures: weakref.WeakValueDictionary[int, _RegisterCapture] = (
+            weakref.WeakValueDictionary()
+        )
         self._register_observation_error_count = 0
 
     @property
@@ -314,17 +327,38 @@ class BaseTransport:
         """Return the monotonic count of suppressed register-observer errors."""
         return self._register_observation_error_count
 
+    def set_register_observer(self, observer: RegisterObserver | None) -> None:
+        """Synchronously replace or detach the non-blocking register observer.
+
+        The callback must complete synchronously and must not return awaitable
+        work. Passing ``None`` detaches observation without reconnecting or
+        otherwise changing transport operation.
+        """
+        if observer is self._register_observer:
+            return
+        for capture in tuple(self._register_observer_captures.values()):
+            capture.revoke()
+        self._register_observer_captures.clear()
+        self._register_observer = observer
+
+    def _new_register_capture(self) -> _RegisterCapture:
+        """Create and track an enabled capture for synchronous revocation."""
+        capture = _RegisterCapture()
+        self._register_observer_captures[id(capture)] = capture
+        return capture
+
     async def _notify_register_observer(
         self,
         observations: tuple[RegisterObservation, ...],
     ) -> None:
         """Notify the observer without affecting transport behavior."""
-        observer = self._register_observer
-        if observer is None or not observations:
+        if self._register_observer is None or not observations:
             return
 
         async def invoke_observer() -> None:
-            observer(observations)
+            observer = self._register_observer
+            if observer is not None:
+                observer(observations)
 
         try:
             await asyncio.create_task(invoke_observer())

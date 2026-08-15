@@ -52,7 +52,13 @@ from .exceptions import (
     TransportResponseMismatchError,
     TransportTimeoutError,
 )
-from .observation import RegisterObservation, RegisterObserver, RegisterSegment, RegisterSpace
+from .observation import (
+    RegisterObservation,
+    RegisterObserver,
+    RegisterSegment,
+    RegisterSpace,
+    _RegisterCapture,
+)
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
@@ -207,7 +213,7 @@ def _append_observed_segment(
     values: Sequence[int],
 ) -> None:
     """Merge a terminal segment, making later overlapping reads authoritative."""
-    if not values:
+    if (isinstance(segments, _RegisterCapture) and not segments.is_active) or not values:
         return
 
     new_segment = RegisterSegment(start, tuple(values))
@@ -310,6 +316,8 @@ if TYPE_CHECKING:
         _input_coalescing_latched_off: bool
         _register_observer: RegisterObserver | None
 
+        def _new_register_capture(self) -> _RegisterCapture: ...
+
         async def _read_input_registers(self, start: int, count: int) -> list[int]: ...
 
         async def _read_holding_registers(self, start: int, count: int) -> list[int]: ...
@@ -391,9 +399,9 @@ class RegisterDataMixin(_DataMixinBase):
         )
         await self._notify_register_observer(observations)
 
-    def _new_observed_segments(self) -> list[RegisterSegment] | None:
+    def _new_observed_segments(self) -> _RegisterCapture | None:
         """Allocate capture state only when an observer was configured."""
-        return [] if self._register_observer is not None else None
+        return self._new_register_capture() if self._register_observer is not None else None
 
     async def _read_individual_battery_registers(
         self,

@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
+from pylxpweb.transports import (
+    DongleTransport,
+    HTTPTransport,
+    HybridTransport,
+    InverterTransport,
+    ModbusSerialTransport,
+    ModbusTransport,
+    RegisterObserverControl,
+)
 from pylxpweb.transports.capabilities import (
     HTTP_CAPABILITIES,
     MODBUS_CAPABILITIES,
@@ -73,6 +84,36 @@ class ConcreteTransport(BaseTransport):
         self._connected = False
 
 
+class MinimalStructuralTransport:
+    """Third-party-shaped transport intentionally lacking observer control."""
+
+    serial = "CE12345678"
+    is_connected = True
+    capabilities = HTTP_CAPABILITIES
+
+    async def connect(self) -> None: ...
+
+    async def disconnect(self) -> None: ...
+
+    async def read_runtime(self) -> None: ...
+
+    async def read_energy(self) -> None: ...
+
+    async def read_battery(self) -> None: ...
+
+    async def read_parameters(self, start_address: int, count: int) -> dict[int, int]:
+        return {}
+
+    async def write_parameters(self, parameters: dict[int, int]) -> bool:
+        return True
+
+    async def read_named_parameters(self, start_address: int, count: int) -> dict[str, object]:
+        return {}
+
+    async def write_named_parameters(self, parameters: dict[str, object]) -> bool:
+        return True
+
+
 class TestBaseTransport:
     """Tests for BaseTransport abstract class."""
 
@@ -110,3 +151,25 @@ class TestBaseTransport:
 
         # Should not raise
         transport._ensure_connected()
+
+
+def test_observer_control_is_narrow_and_does_not_widen_existing_protocol() -> None:
+    transport = MinimalStructuralTransport()
+
+    assert isinstance(transport, InverterTransport)
+    assert not isinstance(transport, RegisterObserverControl)
+
+
+def test_concrete_transports_conform_to_observer_control_protocol() -> None:
+    client = MagicMock()
+    local = ModbusTransport("127.0.0.1", serial="CE12345678")
+    http = HTTPTransport(client, "CE12345678")
+    transports = (
+        local,
+        ModbusSerialTransport("loop://", serial="CE12345678"),
+        DongleTransport("127.0.0.1", "BA12345678", "CE12345678"),
+        http,
+        HybridTransport(local, http),
+    )
+
+    assert all(isinstance(transport, RegisterObserverControl) for transport in transports)
