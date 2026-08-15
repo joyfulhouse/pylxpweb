@@ -8,11 +8,12 @@ implementations must follow. Using Protocol allows for structural subtyping
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import re
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, Protocol, Self, cast, runtime_checkable
 
 from .observation import RegisterObservation, RegisterObserver, _RegisterCapture
@@ -359,25 +360,32 @@ class BaseTransport:
         """Notify the observer without affecting transport behavior."""
         if self._register_observer is None or not observations:
             return
-        observer = self._register_observer
         generation = self._register_observer_generation
 
         async def invoke_observer() -> None:
-            if (
-                observer is self._register_observer
-                and generation == self._register_observer_generation
+            observer = self._register_observer
+            if observer is None or generation != self._register_observer_generation:
+                return
+            runtime_observer = cast(Callable[[tuple[RegisterObservation, ...]], object], observer)
+            result = runtime_observer(observations)
+            if result is None:
+                return
+            if inspect.iscoroutine(result):
+                result.close()
+            elif isinstance(result, asyncio.Future):
+                if result.done():
+                    if result.cancelled():
+                        with contextlib.suppress(asyncio.CancelledError):
+                            result.result()
+                    elif result.exception() is None:
+                        result.result()
+                else:
+                    result.cancel()
+            elif isinstance(result, Coroutine) or (
+                inspect.isawaitable(result) and inspect.isgenerator(result)
             ):
-                runtime_observer = cast(
-                    Callable[[tuple[RegisterObservation, ...]], object], observer
-                )
-                result = runtime_observer(observations)
-                if inspect.iscoroutine(result):
-                    result.close()
-                    raise TypeError("register observer must return None")
-                if isinstance(result, asyncio.Future):
-                    if not result.done():
-                        result.cancel()
-                    raise TypeError("register observer must return None")
+                result.close()
+            raise TypeError("register observer must return None")
 
         try:
             await asyncio.create_task(invoke_observer())

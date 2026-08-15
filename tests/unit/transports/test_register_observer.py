@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
+import types
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, is_dataclass
 from unittest.mock import AsyncMock, MagicMock
@@ -574,6 +576,48 @@ async def test_scheduled_dispatch_rejects_detach_reattach_aba(
 
 
 @pytest.mark.asyncio
+async def test_detach_releases_callback_while_dispatch_is_gated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[ObservationBatch] = []
+
+    class Observer:
+        def __call__(self, observations: ObservationBatch) -> None:
+            observed.append(observations)
+
+    observer = Observer()
+    observer_ref = weakref.ref(observer)
+    transport = _FakeRegisterTransport(observer=observer)
+    observation = (RegisterObservation(RegisterSpace.HOLDING, (RegisterSegment(10, (0,)),)),)
+    scheduled = asyncio.Event()
+    release = asyncio.Event()
+    original_create_task = asyncio.create_task
+
+    def gated_create_task(coro: Awaitable[None]) -> asyncio.Task[None]:
+        async def gated() -> None:
+            scheduled.set()
+            await release.wait()
+            await coro
+
+        return original_create_task(gated())
+
+    monkeypatch.setattr(asyncio, "create_task", gated_create_task)
+    dispatch = original_create_task(transport._notify_register_observer(observation))
+    await scheduled.wait()
+
+    transport.set_register_observer(None)
+    del observer
+    try:
+        gc.collect()
+        assert observer_ref() is None
+    finally:
+        release.set()
+        await dispatch
+
+    assert observed == []
+
+
+@pytest.mark.asyncio
 async def test_coroutine_return_is_closed_and_counted_once(
     recwarn: pytest.WarningsRecorder,
 ) -> None:
@@ -589,7 +633,9 @@ async def test_coroutine_return_is_closed_and_counted_once(
     transport = _FakeRegisterTransport(observer=observer)
 
     result = await transport.read_parameters(10, 1)
+    await asyncio.sleep(0)
     gc.collect()
+    await asyncio.sleep(0)
 
     assert result == {10: 0}
     assert ran is False
@@ -601,6 +647,7 @@ async def test_coroutine_return_is_closed_and_counted_once(
 @pytest.mark.asyncio
 async def test_future_return_is_cancelled_and_counted_once(return_task: bool) -> None:
     returned: list[asyncio.Future[None]] = []
+    baseline_tasks = asyncio.all_tasks()
 
     async def wait_forever() -> None:
         await asyncio.Event().wait()
@@ -622,6 +669,125 @@ async def test_future_return_is_cancelled_and_counted_once(return_task: bool) ->
     assert result == {10: 0}
     assert transport.register_observation_error_count == 1
     assert returned[0].cancelled()
+    assert asyncio.all_tasks() == baseline_tasks
+
+
+@pytest.mark.parametrize("return_task", [False, True], ids=["future", "task"])
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancelled"])
+@pytest.mark.asyncio
+async def test_completed_future_return_is_retrieved_and_counted_once(
+    return_task: bool,
+    outcome: str,
+) -> None:
+    loop = asyncio.get_running_loop()
+    loop_errors: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda loop, context: loop_errors.append(context))
+    baseline_tasks = asyncio.all_tasks()
+
+    async def complete() -> None:
+        if outcome == "failure":
+            raise RuntimeError("malformed callback result")
+
+    if return_task:
+        returned: asyncio.Future[None] = asyncio.create_task(complete())
+        if outcome == "cancelled":
+            returned.cancel()
+        await asyncio.sleep(0)
+    else:
+        returned = loop.create_future()
+        if outcome == "success":
+            returned.set_result(None)
+        elif outcome == "failure":
+            returned.set_exception(RuntimeError("malformed callback result"))
+        else:
+            returned.cancel()
+    holder = [returned]
+
+    def observer(observations: ObservationBatch) -> object:
+        return holder.pop()
+
+    transport = _FakeRegisterTransport(observer=observer)
+    try:
+        result = await transport.read_parameters(10, 1)
+
+        assert result == {10: 0}
+        assert transport.register_observation_error_count == 1
+        assert returned.done()
+
+        del returned
+        gc.collect()
+        await asyncio.sleep(0)
+        assert loop_errors == []
+        assert asyncio.all_tasks() == baseline_tasks
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
+@pytest.mark.asyncio
+async def test_generic_awaitable_return_is_discarded_without_execution() -> None:
+    started = False
+
+    class GenericAwaitable:
+        def __await__(self):
+            nonlocal started
+            started = True
+            yield
+
+    awaitable = GenericAwaitable()
+    awaitable_ref = weakref.ref(awaitable)
+    holder = [awaitable]
+    baseline_tasks = asyncio.all_tasks()
+
+    def observer(observations: ObservationBatch) -> object:
+        return holder.pop()
+
+    transport = _FakeRegisterTransport(observer=observer)
+
+    result = await transport.read_parameters(10, 1)
+    await asyncio.sleep(0)
+    del awaitable
+    gc.collect()
+
+    assert result == {10: 0}
+    assert started is False
+    assert awaitable_ref() is None
+    assert transport.register_observation_error_count == 1
+    assert asyncio.all_tasks() == baseline_tasks
+
+
+@pytest.mark.asyncio
+async def test_generator_awaitable_return_uses_standard_close_hook() -> None:
+    closed = False
+
+    @types.coroutine
+    def generator_awaitable():
+        nonlocal closed
+        try:
+            yield
+        finally:
+            closed = True
+
+    awaitable = generator_awaitable()
+    next(awaitable)
+    transport = _FakeRegisterTransport(observer=lambda observations: awaitable)
+
+    result = await transport.read_parameters(10, 1)
+
+    assert result == {10: 0}
+    assert closed is True
+    assert transport.register_observation_error_count == 1
+
+
+@pytest.mark.parametrize("malformed", [0, "value", object()], ids=["zero", "string", "object"])
+@pytest.mark.asyncio
+async def test_non_none_return_is_counted_once(malformed: object) -> None:
+    transport = _FakeRegisterTransport(observer=lambda observations: malformed)
+
+    result = await transport.read_parameters(10, 1)
+
+    assert result == {10: 0}
+    assert transport.register_observation_error_count == 1
 
 
 def test_detach_revokes_clears_and_rejects_late_capture_appends() -> None:
@@ -641,7 +807,7 @@ def test_detach_revokes_clears_and_rejects_late_capture_appends() -> None:
 @pytest.mark.asyncio
 async def test_detach_reattach_is_idempotent_preserves_counter_and_does_not_reconnect() -> None:
     old_observer = MagicMock(side_effect=RuntimeError("old observer"))
-    new_observer = MagicMock()
+    new_observer = MagicMock(return_value=None)
     transport = _FakeRegisterTransport(observer=old_observer)
     transport.connect = AsyncMock()
     transport.disconnect = AsyncMock()
@@ -663,8 +829,8 @@ async def test_detach_reattach_is_idempotent_preserves_counter_and_does_not_reco
 
 @pytest.mark.asyncio
 async def test_reattach_dispatches_only_to_replacement_observer() -> None:
-    old_observer = MagicMock()
-    new_observer = MagicMock()
+    old_observer = MagicMock(return_value=None)
+    new_observer = MagicMock(return_value=None)
     transport = _FakeRegisterTransport(observer=old_observer)
 
     transport.set_register_observer(None)
