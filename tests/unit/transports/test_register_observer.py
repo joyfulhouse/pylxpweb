@@ -14,6 +14,7 @@ from pylxpweb.transports._register_data import (
     DEFAULT_INPUT_BLOCK_SIZE,
     INPUT_REGISTER_GROUPS,
     RegisterDataMixin,
+    _ReadBlock,
 )
 from pylxpweb.transports.exceptions import TransportReadError
 from pylxpweb.transports.protocol import BaseTransport
@@ -74,6 +75,32 @@ class _BlockingRegisterTransport(_FakeRegisterTransport):
         self.read_started.set()
         await self.release_read.wait()
         return [0] * count
+
+
+class _PreCancelledRegisterTransport(_FakeRegisterTransport):
+    """Transport with cancellation already pending before observer dispatch."""
+
+    async def _read_holding_registers(self, start: int, count: int) -> list[int]:
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        return await super()._read_holding_registers(start, count)
+
+
+class _GroupFallbackProbeTransport(_FakeRegisterTransport):
+    """Transport recording capture state at each real group-plan attempt."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.attempt_segment_counts: list[int | None] = []
+
+    async def _read_group_plan(
+        self,
+        plan: list[_ReadBlock],
+        segments: list[RegisterSegment] | None = None,
+    ) -> dict[int, int]:
+        self.attempt_segment_counts.append(None if segments is None else len(segments))
+        return await super()._read_group_plan(plan, segments)
 
 
 class _CountingAddress(int):
@@ -202,6 +229,27 @@ async def test_callback_cancelled_error_preserves_read_and_advances_error_count(
     assert transport.register_observation_error_count == 1
 
 
+@pytest.mark.parametrize("raise_after_cancel", [False, True])
+@pytest.mark.asyncio
+async def test_callback_task_cancellation_is_isolated(
+    raise_after_cancel: bool,
+) -> None:
+    def cancel_from_observer(observations: ObservationBatch) -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        task.cancel()
+        if raise_after_cancel:
+            raise RuntimeError("synthetic callback detail")
+
+    transport = _FakeRegisterTransport(observer=cancel_from_observer)
+
+    result = await transport.read_parameters(10, 1)
+    await asyncio.sleep(0)
+
+    assert result == {10: 0}
+    assert transport.register_observation_error_count == 1
+
+
 @pytest.mark.asyncio
 async def test_external_task_cancellation_remains_cancelled() -> None:
     observed: list[ObservationBatch] = []
@@ -215,6 +263,63 @@ async def test_external_task_cancellation_remains_cancelled() -> None:
         await task
     assert observed == []
     assert transport.register_observation_error_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancellation_pending_before_callback_remains_cancelled() -> None:
+    observed: list[ObservationBatch] = []
+    transport = _PreCancelledRegisterTransport(observer=observed.append)
+
+    with pytest.raises(asyncio.CancelledError):
+        await transport.read_parameters(10, 1)
+
+    assert observed == []
+    assert transport.register_observation_error_count == 0
+
+
+@pytest.mark.asyncio
+async def test_runtime_group_fallback_discards_failed_attempt_segments() -> None:
+    observed: list[ObservationBatch] = []
+    successful_discarded_probe = (RegisterSpace.INPUT, 0, 113)
+    failed_probe = (RegisterSpace.INPUT, 113, 41)
+    transport = _GroupFallbackProbeTransport(
+        observer=observed.append,
+        max_input_block_size=120,
+        fail_reads={failed_probe},
+    )
+
+    await transport.read_runtime()
+
+    grouped_reads = [
+        (RegisterSpace.INPUT, start, count) for start, count in INPUT_REGISTER_GROUPS.values()
+    ]
+    assert transport.reads == [successful_discarded_probe, failed_probe, *grouped_reads]
+    assert transport.attempt_segment_counts == [0, 0]
+    assert observed == [
+        (
+            RegisterObservation(
+                RegisterSpace.INPUT,
+                (
+                    RegisterSegment(0, (0,) * 32),
+                    RegisterSegment(32, (0,) * 32),
+                    RegisterSegment(64, (0,) * 16),
+                    RegisterSegment(80, (0,) * 33),
+                    RegisterSegment(113, (0,) * 27),
+                    RegisterSegment(140, (7,) * 3),
+                    RegisterSegment(143, (0,) * 11),
+                    RegisterSegment(170, (0,) * 4),
+                    RegisterSegment(193, (0,) * 12),
+                ),
+            ),
+        )
+    ]
+    addresses = [
+        address
+        for observation in observed[0]
+        for segment in observation.segments
+        for address in range(segment.start_address, segment.start_address + len(segment.words))
+    ]
+    assert len(addresses) == len(set(addresses))
 
 
 @pytest.mark.asyncio

@@ -300,7 +300,7 @@ if TYPE_CHECKING:
 
         async def _write_holding_registers(self, start: int, values: list[int]) -> bool: ...
 
-        def _notify_register_observer(
+        async def _notify_register_observer(
             self,
             observations: tuple[RegisterObservation, ...],
         ) -> None: ...
@@ -363,7 +363,7 @@ class RegisterDataMixin(_DataMixinBase):
             return " (shared-battery secondary — reg96=0 expected)"
         return ""
 
-    def _notify_observed_segments(
+    async def _notify_observed_segments(
         self,
         *observed: tuple[RegisterSpace, Sequence[RegisterSegment] | None],
     ) -> None:
@@ -373,7 +373,7 @@ class RegisterDataMixin(_DataMixinBase):
         observations = tuple(
             RegisterObservation(space, tuple(segments)) for space, segments in observed if segments
         )
-        self._notify_register_observer(observations)
+        await self._notify_register_observer(observations)
 
     def _new_observed_segments(self) -> list[RegisterSegment] | None:
         """Allocate capture state only when an observer was configured."""
@@ -1269,7 +1269,7 @@ class RegisterDataMixin(_DataMixinBase):
         if segments is not None:
             _append_observed_segment(segments, 210, values)
         if segments:
-            self._notify_observed_segments((RegisterSpace.INPUT, segments))
+            await self._notify_observed_segments((RegisterSpace.INPUT, segments))
         return seconds if seconds > 0 else None
 
     # ------------------------------------------------------------------
@@ -1296,7 +1296,7 @@ class RegisterDataMixin(_DataMixinBase):
             pv_string_count=self._pv_string_count,
         )
         if segments:
-            self._notify_observed_segments((RegisterSpace.INPUT, segments))
+            await self._notify_observed_segments((RegisterSpace.INPUT, segments))
         return result
 
     async def read_energy(self) -> InverterEnergyData:
@@ -1335,7 +1335,7 @@ class RegisterDataMixin(_DataMixinBase):
             pv_string_count=self._pv_string_count,
         )
         if segments:
-            self._notify_observed_segments((RegisterSpace.INPUT, segments))
+            await self._notify_observed_segments((RegisterSpace.INPUT, segments))
         return result
 
     async def read_battery(
@@ -1450,7 +1450,7 @@ class RegisterDataMixin(_DataMixinBase):
             )
 
         if segments:
-            self._notify_observed_segments((RegisterSpace.INPUT, segments))
+            await self._notify_observed_segments((RegisterSpace.INPUT, segments))
         return result
 
     async def _read_all_input_groups(
@@ -1572,7 +1572,7 @@ class RegisterDataMixin(_DataMixinBase):
         # genuine reg 96 = 0 is unaffected and still builds a bank.
         if not bms_ok:
             if winning_segments:
-                self._notify_observed_segments((RegisterSpace.INPUT, winning_segments))
+                await self._notify_observed_segments((RegisterSpace.INPUT, winning_segments))
             return runtime, energy, None
 
         # Read individual battery registers (5000+) if present
@@ -1611,7 +1611,7 @@ class RegisterDataMixin(_DataMixinBase):
         self._stamp_battery_last_seen(battery)
 
         if winning_segments:
-            self._notify_observed_segments((RegisterSpace.INPUT, winning_segments))
+            await self._notify_observed_segments((RegisterSpace.INPUT, winning_segments))
         return runtime, energy, battery
 
     async def read_midbox_runtime(self) -> MidboxRuntimeData:
@@ -1664,7 +1664,7 @@ class RegisterDataMixin(_DataMixinBase):
             input_registers, smart_port_mode_reg=smart_port_mode_reg
         )
         if input_segments:
-            self._notify_observed_segments(
+            await self._notify_observed_segments(
                 (RegisterSpace.INPUT, input_segments),
                 (RegisterSpace.HOLDING, holding_segments),
             )
@@ -1706,7 +1706,7 @@ class RegisterDataMixin(_DataMixinBase):
             self._last_hold_110 = result[110]
 
         if segments:
-            self._notify_observed_segments((RegisterSpace.HOLDING, segments))
+            await self._notify_observed_segments((RegisterSpace.HOLDING, segments))
         return result
 
     async def write_parameters(
@@ -1775,7 +1775,7 @@ class RegisterDataMixin(_DataMixinBase):
 
         result = await read_serial_number_async(read_input, self._serial)
         if segments:
-            self._notify_observed_segments((RegisterSpace.INPUT, segments))
+            await self._notify_observed_segments((RegisterSpace.INPUT, segments))
         return result
 
     async def read_firmware_version(self) -> str:
@@ -1792,7 +1792,7 @@ class RegisterDataMixin(_DataMixinBase):
 
         result = await read_firmware_version_async(read_holding)
         if segments:
-            self._notify_observed_segments((RegisterSpace.HOLDING, segments))
+            await self._notify_observed_segments((RegisterSpace.HOLDING, segments))
         return result
 
     async def read_device_type(self) -> int:
@@ -1809,7 +1809,7 @@ class RegisterDataMixin(_DataMixinBase):
 
         result = await read_device_type_async(read_holding)
         if segments:
-            self._notify_observed_segments((RegisterSpace.HOLDING, segments))
+            await self._notify_observed_segments((RegisterSpace.HOLDING, segments))
         return result
 
     def is_midbox_device(self, device_type_code: int) -> bool:
@@ -1830,7 +1830,7 @@ class RegisterDataMixin(_DataMixinBase):
 
         result = await read_parallel_config_async(read_input, self._serial)
         if segments:
-            self._notify_observed_segments((RegisterSpace.INPUT, segments))
+            await self._notify_observed_segments((RegisterSpace.INPUT, segments))
         return result
 
     async def validate_serial(self, expected_serial: str) -> bool:

@@ -314,20 +314,30 @@ class BaseTransport:
         """Return the monotonic count of suppressed register-observer errors."""
         return self._register_observation_error_count
 
-    def _notify_register_observer(
+    async def _notify_register_observer(
         self,
         observations: tuple[RegisterObservation, ...],
     ) -> None:
         """Notify the observer without affecting transport behavior."""
-        if self._register_observer is None or not observations:
+        observer = self._register_observer
+        if observer is None or not observations:
             return
+
+        async def invoke_observer() -> bool:
+            try:
+                observer(observations)
+            except (Exception, asyncio.CancelledError):
+                return False
+            return True
+
         try:
-            self._register_observer(observations)
-        # This call is synchronous: no external task cancellation can be
-        # delivered inside it.  A CancelledError raised here therefore came
-        # from callback code and is isolated like its other failures.  Genuine
-        # cancellation at transport await points remains untouched.
-        except (Exception, asyncio.CancelledError):
+            succeeded = await asyncio.create_task(invoke_observer())
+        except asyncio.CancelledError:
+            polling_task = asyncio.current_task()
+            if polling_task is not None and polling_task.cancelling():
+                raise
+            succeeded = False
+        if not succeeded:
             self._register_observation_error_count += 1
 
     async def __aenter__(self) -> Self:
