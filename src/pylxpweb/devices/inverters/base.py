@@ -2924,7 +2924,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if not 0.0 <= power_kw <= 10.0:
             raise ValueError(f"AC charge power must be between 0.0 and 10.0 kW, got {power_kw}")
 
-        # API accepts kW values directly
+        if self._transport is not None:
+            from pylxpweb.constants import HOLD_AC_CHARGE_POWER_CMD
+
+            return await self.write_transport_register(
+                HOLD_AC_CHARGE_POWER_CMD, round(power_kw * 10)
+            )
+
         return await self._write_named_parameter("HOLD_AC_CHARGE_POWER_CMD", power_kw)
 
     @property

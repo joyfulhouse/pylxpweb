@@ -84,6 +84,38 @@ async def test_h66_engineering_boundaries_reach_named_cloud_write() -> None:
 
 
 @pytest.mark.asyncio
+async def test_h66_engineering_boundaries_use_local_write_conversion() -> None:
+    """H66 converts 0.0 and 10.0 kW to raw 0 and 100 before local writes (#272)."""
+    transport = Mock()
+    transport.write_parameters = AsyncMock(return_value=True)
+    client = Mock(spec=LuxpowerClient)
+    client.api = Mock()
+    client.api.control = Mock()
+    client.api.control.write_parameter = AsyncMock(return_value=Mock(success=True))
+    inverter = HybridInverter(
+        client=client,
+        serial_number=SERIAL,
+        model="FlexBOSS21",
+        transport=transport,
+    )
+
+    for value in (0.0, 10.0):
+        assert await inverter.set_ac_charge_power(value) is True
+    assert [call.args[0] for call in transport.write_parameters.await_args_list] == [
+        {66: 0},
+        {66: 100},
+    ]
+    client.api.control.write_parameter.assert_not_awaited()
+
+    writes_before = transport.write_parameters.await_count
+    for value in (10.1, -0.1):
+        with pytest.raises(ValueError, match="between 0.0 and 10.0 kW"):
+            await inverter.set_ac_charge_power(value)
+    assert transport.write_parameters.await_count == writes_before
+    client.api.control.write_parameter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_h160_boundaries_use_local_and_cloud_write_paths() -> None:
     """H160 writes 1 and 90; 0 and 91 fail before local or cloud I/O (#271)."""
     transport = Mock()
