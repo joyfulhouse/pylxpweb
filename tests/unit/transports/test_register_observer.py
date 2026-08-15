@@ -132,6 +132,37 @@ PUBLIC_OBSERVATION_READS: tuple[object, ...] = (
     pytest.param(lambda transport: transport.validate_serial(""), id="validate-serial"),
 )
 
+CANONICAL_OBSERVATION_READS: tuple[object, ...] = (
+    pytest.param(
+        lambda transport: transport.read_serial_number(),
+        RegisterSpace.INPUT,
+        115,
+        5,
+        id="serial",
+    ),
+    pytest.param(
+        lambda transport: transport.read_firmware_version(),
+        RegisterSpace.HOLDING,
+        7,
+        4,
+        id="firmware",
+    ),
+    pytest.param(
+        lambda transport: transport.read_device_type(),
+        RegisterSpace.HOLDING,
+        19,
+        1,
+        id="device-type",
+    ),
+    pytest.param(
+        lambda transport: transport.read_parallel_config(),
+        RegisterSpace.INPUT,
+        113,
+        1,
+        id="parallel",
+    ),
+)
+
 TERMINAL_GROUP_OBSERVATION: ObservationBatch = (
     RegisterObservation(
         RegisterSpace.INPUT,
@@ -351,6 +382,38 @@ async def test_observer_adds_zero_reads_and_preserves_request_order() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("public_read", "space", "start", "count"),
+    CANONICAL_OBSERVATION_READS,
+)
+async def test_canonical_readers_observe_enabled_terminal_segment_without_extra_reads(
+    public_read: PublicRead,
+    space: RegisterSpace,
+    start: int,
+    count: int,
+) -> None:
+    baseline = _FakeRegisterTransport()
+    observed: list[ObservationBatch] = []
+    enabled = _FakeRegisterTransport(observer=observed.append)
+
+    baseline_result = await public_read(baseline)
+    enabled_result = await public_read(enabled)
+
+    expected_read = (space, start, count)
+    assert enabled_result == baseline_result
+    assert baseline.reads == [expected_read]
+    assert enabled.reads == [expected_read]
+    assert observed == [
+        (
+            RegisterObservation(
+                space,
+                (RegisterSegment(start, (0,) * count),),
+            ),
+        )
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("public_read", PUBLIC_OBSERVATION_READS)
 async def test_default_observer_skips_capture_on_every_public_read(
     monkeypatch: pytest.MonkeyPatch,
@@ -379,13 +442,13 @@ async def test_default_observer_skips_capture_on_every_public_read(
         capture_states.append(state)
         return state
 
-    def count_publication_calls(
+    async def count_publication_calls(
         self: RegisterDataMixin,
         *observed: tuple[RegisterSpace, Sequence[RegisterSegment] | None],
     ) -> None:
         nonlocal publication_calls
         publication_calls += 1
-        original_notify(self, *observed)
+        await original_notify(self, *observed)
 
     monkeypatch.setattr(register_data_module, "_append_observed_segment", count_capture_calls)
     monkeypatch.setattr(RegisterDataMixin, "_new_observed_segments", record_capture_state)
