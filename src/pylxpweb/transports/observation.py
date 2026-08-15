@@ -32,7 +32,7 @@ class RegisterSegment:
         )
 
 
-@dataclass(frozen=True, slots=True, repr=False)
+@dataclass(frozen=True, slots=True)
 class RegisterObservation:
     """Observed raw-register segments for one register space."""
 
@@ -41,13 +41,6 @@ class RegisterObservation:
 
     segments: tuple[RegisterSegment, ...]
     """Ordered, immutable, non-overlapping raw-register segments."""
-
-    def __repr__(self) -> str:
-        """Return register-space and redacted segment provenance."""
-        return (
-            f"{type(self).__name__}(register_space={self.register_space!r}, "
-            f"segments={self.segments!r})"
-        )
 
 
 type RegisterObserver = Callable[[tuple[RegisterObservation, ...]], None]

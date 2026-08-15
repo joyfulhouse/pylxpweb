@@ -52,7 +52,7 @@ from .exceptions import (
     TransportResponseMismatchError,
     TransportTimeoutError,
 )
-from .observation import RegisterObservation, RegisterSegment, RegisterSpace
+from .observation import RegisterObservation, RegisterObserver, RegisterSegment, RegisterSpace
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
@@ -292,9 +292,7 @@ if TYPE_CHECKING:
         _pv_string_count: int
         _max_input_block_size: int
         _input_coalescing_latched_off: bool
-
-        @property
-        def _register_observer_enabled(self) -> bool: ...
+        _register_observer: RegisterObserver | None
 
         async def _read_input_registers(self, start: int, count: int) -> list[int]: ...
 
@@ -370,7 +368,7 @@ class RegisterDataMixin(_DataMixinBase):
         *observed: tuple[RegisterSpace, Sequence[RegisterSegment] | None],
     ) -> None:
         """Publish one method-level callback containing each non-empty space."""
-        if not self._register_observer_enabled:
+        if self._register_observer is None:
             return
         observations = tuple(
             RegisterObservation(space, tuple(segments)) for space, segments in observed if segments
@@ -379,7 +377,7 @@ class RegisterDataMixin(_DataMixinBase):
 
     def _new_observed_segments(self) -> list[RegisterSegment] | None:
         """Allocate capture state only when an observer was configured."""
-        return [] if self._register_observer_enabled else None
+        return [] if self._register_observer is not None else None
 
     async def _read_individual_battery_registers(
         self,
