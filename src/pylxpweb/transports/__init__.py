@@ -91,6 +91,7 @@ from .http import HTTPTransport
 from .hybrid import HybridTransport
 from .modbus import ModbusTransport
 from .modbus_serial import ModbusSerialTransport
+from .observation import RegisterObservation, RegisterObserver, RegisterSegment, RegisterSpace
 from .protocol import (
     BaseTransport,
     InverterTransport,
@@ -135,6 +136,11 @@ __all__ = [
     "TerminalInverterTransport",
     "TerminalTransport",
     "BaseTransport",
+    # Raw-register observation API
+    "RegisterObservation",
+    "RegisterObserver",
+    "RegisterSegment",
+    "RegisterSpace",
     # Transport implementations
     "HTTPTransport",
     "ModbusTransport",

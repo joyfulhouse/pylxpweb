@@ -44,6 +44,7 @@ from .exceptions import (
     TransportTimeoutError,
     TransportWriteError,
 )
+from .observation import RegisterObserver
 from .protocol import BaseTransport
 
 if TYPE_CHECKING:
@@ -198,6 +199,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         write_step_delay: float = DEFAULT_WRITE_STEP_DELAY,
         verify_writes: bool = True,
         max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
+        register_observer: RegisterObserver | None = None,
     ) -> None:
         """Initialize WiFi Dongle transport.
 
@@ -226,8 +228,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 adjacent register groups into fewer reads; dongles that reject
                 large reads automatically fall back to the plain grouped reads
                 (eg4_web_monitor#254).
+            register_observer: Optional callback for terminal raw-register segments.
         """
-        super().__init__(inverter_serial)
+        super().__init__(inverter_serial, register_observer=register_observer)
         self._host = host
         self._port = port
         self._dongle_serial = dongle_serial

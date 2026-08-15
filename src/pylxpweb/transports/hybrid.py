@@ -119,6 +119,11 @@ class HybridTransport(BaseTransport):
         """Get the underlying HTTP transport."""
         return self._http
 
+    @property
+    def register_observation_error_count(self) -> int:
+        """Return the local transport's redacted observer-error count."""
+        return self._local.register_observation_error_count
+
     def _mark_local_failed(self) -> None:
         """Mark local transport as failed, enabling HTTP fallback."""
         self._local_failed_at = time.monotonic()

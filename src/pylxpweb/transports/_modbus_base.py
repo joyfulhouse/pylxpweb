@@ -34,6 +34,7 @@ from .exceptions import (
     TransportTimeoutError,
     TransportWriteError,
 )
+from .observation import RegisterObserver, RegisterSegment
 from .protocol import BaseTransport
 
 if TYPE_CHECKING:
@@ -74,6 +75,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         inter_register_delay: float = 0.05,
         pymodbus_retries: int = 3,
         max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
+        register_observer: RegisterObserver | None = None,
     ) -> None:
         """Initialize base Modbus transport.
 
@@ -96,8 +98,9 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 groups into fewer reads for faster polling; hardware that
                 rejects large reads automatically falls back to the plain
                 grouped reads (eg4_web_monitor#254).
+            register_observer: Optional callback for terminal raw-register segments.
         """
-        super().__init__(serial)
+        super().__init__(serial, register_observer=register_observer)
         self._unit_id = unit_id
         self._timeout = timeout
         self._inverter_family = inverter_family
@@ -421,6 +424,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     async def _read_register_groups(
         self,
         group_names: list[str] | None = None,
+        segments: list[RegisterSegment] | None = None,
     ) -> dict[int, int]:
         """Read register groups with adaptive delay and auto-reconnect.
 
@@ -432,7 +436,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         if self._consecutive_errors >= self._max_consecutive_errors:
             await self._reconnect()
 
-        return await super()._read_register_groups(group_names)
+        return await super()._read_register_groups(group_names, segments)
 
     # ------------------------------------------------------------------
     # Overrides: combined read + read_battery with reconnect check

@@ -12,6 +12,8 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
+from .observation import RegisterObservation, RegisterObserver
+
 if TYPE_CHECKING:
     from .capabilities import TransportCapabilities
     from .data import BatteryBankData, InverterEnergyData, InverterRuntimeData
@@ -278,15 +280,24 @@ class BaseTransport:
             data = await transport.read_runtime()
     """
 
-    def __init__(self, serial: str) -> None:
+    def __init__(
+        self,
+        serial: str,
+        *,
+        register_observer: RegisterObserver | None = None,
+    ) -> None:
         """Initialize base transport.
 
         Args:
             serial: Inverter serial number
+            register_observer: Optional callback for immutable terminal raw-register
+                segments from successful public reads.
         """
         self._serial = serial
         self._connected = False
         self._op_lock = _ReentrantAsyncLock()
+        self._register_observer = register_observer
+        self._register_observation_error_count = 0
 
     @property
     def serial(self) -> str:
@@ -297,6 +308,23 @@ class BaseTransport:
     def is_connected(self) -> bool:
         """Check if transport is connected."""
         return self._connected
+
+    @property
+    def register_observation_error_count(self) -> int:
+        """Return the monotonic count of suppressed register-observer errors."""
+        return self._register_observation_error_count
+
+    def _notify_register_observer(
+        self,
+        observations: tuple[RegisterObservation, ...],
+    ) -> None:
+        """Notify the observer without affecting transport behavior."""
+        if self._register_observer is None or not observations:
+            return
+        try:
+            self._register_observer(observations)
+        except Exception:
+            self._register_observation_error_count += 1
 
     async def __aenter__(self) -> Self:
         """Enter async context manager, connecting the transport.

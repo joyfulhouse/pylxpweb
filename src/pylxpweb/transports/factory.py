@@ -45,6 +45,7 @@ from .http import HTTPTransport
 from .hybrid import HybridTransport
 from .modbus import ModbusTransport
 from .modbus_serial import ModbusSerialTransport
+from .observation import RegisterObserver
 from .protocol import BaseTransport, InverterTransport
 
 if TYPE_CHECKING:
@@ -80,6 +81,7 @@ def create_transport(
     timeout: float = ...,
     inverter_family: InverterFamily | None = ...,
     max_input_block_size: int = ...,
+    register_observer: RegisterObserver | None = ...,
 ) -> ModbusTransport: ...
 
 
@@ -96,6 +98,7 @@ def create_transport(
     timeout: float = ...,
     inverter_family: InverterFamily | None = ...,
     max_input_block_size: int = ...,
+    register_observer: RegisterObserver | None = ...,
 ) -> ModbusSerialTransport: ...
 
 
@@ -110,6 +113,7 @@ def create_transport(
     timeout: float = ...,
     inverter_family: InverterFamily | None = ...,
     max_input_block_size: int = ...,
+    register_observer: RegisterObserver | None = ...,
 ) -> DongleTransport: ...
 
 
@@ -128,6 +132,7 @@ def create_transport(
     inverter_family: InverterFamily | None = ...,
     local_retry_interval: float = ...,
     max_input_block_size: int = ...,
+    register_observer: RegisterObserver | None = ...,
 ) -> HybridTransport: ...
 
 
@@ -224,6 +229,7 @@ def create_transport(
             timeout=config.get("timeout", 10.0),
             inverter_family=config.get("inverter_family"),
             max_input_block_size=config.get("max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE),
+            register_observer=config.get("register_observer"),
         )
 
     if connection_type == "serial":
@@ -243,6 +249,7 @@ def create_transport(
             timeout=config.get("timeout", 10.0),
             inverter_family=config.get("inverter_family"),
             max_input_block_size=config.get("max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE),
+            register_observer=config.get("register_observer"),
         )
 
     if connection_type == "dongle":
@@ -263,6 +270,7 @@ def create_transport(
             timeout=config.get("timeout", 10.0),
             inverter_family=config.get("inverter_family"),
             max_input_block_size=config.get("max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE),
+            register_observer=config.get("register_observer"),
         )
 
     if connection_type == "hybrid":
@@ -281,6 +289,7 @@ def create_transport(
         timeout = config.get("timeout", 10.0)
         local_retry_interval = config.get("local_retry_interval", 60.0)
         max_input_block_size = config.get("max_input_block_size", DEFAULT_INPUT_BLOCK_SIZE)
+        register_observer = config.get("register_observer")
 
         # Create HTTP transport
         http_transport = HTTPTransport(client, serial)
@@ -295,6 +304,7 @@ def create_transport(
                 timeout=timeout,
                 inverter_family=inverter_family,
                 max_input_block_size=max_input_block_size,
+                register_observer=register_observer,
             )
         elif local_type == "dongle":
             dongle_serial = config.get("dongle_serial")
@@ -308,6 +318,7 @@ def create_transport(
                 timeout=timeout,
                 inverter_family=inverter_family,
                 max_input_block_size=max_input_block_size,
+                register_observer=register_observer,
             )
         else:
             raise ValueError(f"Invalid local_type: {local_type}")
@@ -363,6 +374,7 @@ def create_modbus_transport(
     timeout: float = 10.0,
     inverter_family: InverterFamily | None = None,
     max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
+    register_observer: RegisterObserver | None = None,
 ) -> ModbusTransport:
     """Create a Modbus TCP transport for local network communication.
 
@@ -389,6 +401,7 @@ def create_modbus_transport(
             If None, defaults to EG4_HYBRID (18kPV, FlexBOSS) for backward
             compatibility. Use InverterFamily.LXP for Luxpower models
             (LXP-EU, LXP-LB-BR, LXP-LV) which have different register layouts.
+        register_observer: Optional callback for terminal raw-register segments.
 
     Returns:
         ModbusTransport instance ready for use
@@ -430,6 +443,7 @@ def create_modbus_transport(
         timeout=timeout,
         inverter_family=inverter_family,
         max_input_block_size=max_input_block_size,
+        register_observer=register_observer,
     )
 
 
@@ -442,6 +456,7 @@ def create_dongle_transport(
     timeout: float = 10.0,
     inverter_family: InverterFamily | None = None,
     max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
+    register_observer: RegisterObserver | None = None,
 ) -> DongleTransport:
     """Create a WiFi dongle transport for local network communication.
 
@@ -475,6 +490,7 @@ def create_dongle_transport(
         inverter_family: Inverter model family for correct register mapping.
             If None, defaults to PV_SERIES (EG4-18KPV) for backward
             compatibility.
+        register_observer: Optional callback for terminal raw-register segments.
 
     Returns:
         DongleTransport instance ready for use
@@ -505,6 +521,7 @@ def create_dongle_transport(
         timeout=timeout,
         inverter_family=inverter_family,
         max_input_block_size=max_input_block_size,
+        register_observer=register_observer,
     )
 
 
@@ -519,6 +536,7 @@ def create_serial_transport(
     timeout: float = 10.0,
     inverter_family: InverterFamily | None = None,
     max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
+    register_observer: RegisterObserver | None = None,
 ) -> ModbusSerialTransport:
     """Create a Modbus RTU serial transport for local communication.
 
@@ -544,6 +562,7 @@ def create_serial_transport(
         inverter_family: Inverter model family for correct register mapping.
             If None, defaults to PV_SERIES (EG4-18KPV) for backward
             compatibility.
+        register_observer: Optional callback for terminal raw-register segments.
 
     Returns:
         ModbusSerialTransport instance ready for use
@@ -575,10 +594,15 @@ def create_serial_transport(
         timeout=timeout,
         inverter_family=inverter_family,
         max_input_block_size=max_input_block_size,
+        register_observer=register_observer,
     )
 
 
-def create_transport_from_config(config: TransportConfig) -> BaseTransport:
+def create_transport_from_config(
+    config: TransportConfig,
+    *,
+    register_observer: RegisterObserver | None = None,
+) -> BaseTransport:
     """Create transport instance from configuration object.
 
     This factory function creates the appropriate transport instance based
@@ -586,7 +610,8 @@ def create_transport_from_config(config: TransportConfig) -> BaseTransport:
     before creating the transport.
 
     Args:
-        config: Transport configuration specifying connection parameters
+        config: Transport configuration specifying connection parameters.
+        register_observer: Optional callback for terminal raw-register segments.
 
     Returns:
         Configured transport instance (ModbusTransport or DongleTransport)
@@ -622,6 +647,7 @@ def create_transport_from_config(config: TransportConfig) -> BaseTransport:
             retry_delay=config.retry_delay,
             inter_register_delay=config.inter_register_delay,
             max_input_block_size=config.max_input_block_size,
+            register_observer=register_observer,
         )
     elif config.transport_type == TransportType.MODBUS_SERIAL:
         # serial_port is guaranteed to be set after validate() for MODBUS_SERIAL
@@ -639,6 +665,7 @@ def create_transport_from_config(config: TransportConfig) -> BaseTransport:
             retry_delay=config.retry_delay,
             inter_register_delay=config.inter_register_delay,
             max_input_block_size=config.max_input_block_size,
+            register_observer=register_observer,
         )
     elif config.transport_type == TransportType.WIFI_DONGLE:
         # dongle_serial is guaranteed to be set after validate() for WIFI_DONGLE
@@ -651,6 +678,7 @@ def create_transport_from_config(config: TransportConfig) -> BaseTransport:
             timeout=config.timeout,
             inverter_family=config.inverter_family,
             max_input_block_size=config.max_input_block_size,
+            register_observer=register_observer,
         )
     elif config.transport_type == TransportType.HTTP:
         raise ValueError(
