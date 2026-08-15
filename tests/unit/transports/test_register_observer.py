@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, is_dataclass
@@ -534,6 +535,93 @@ async def test_scheduled_dispatch_rereads_observer_after_detach(
     await dispatch
 
     assert observed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reuse_observer", [False, True], ids=["replacement", "same-identity"])
+async def test_scheduled_dispatch_rejects_detach_reattach_aba(
+    monkeypatch: pytest.MonkeyPatch,
+    reuse_observer: bool,
+) -> None:
+    old_observer = MagicMock()
+    new_observer = old_observer if reuse_observer else MagicMock()
+    transport = _FakeRegisterTransport(observer=old_observer)
+    observation = (RegisterObservation(RegisterSpace.HOLDING, (RegisterSegment(10, (0,)),)),)
+    scheduled = asyncio.Event()
+    release = asyncio.Event()
+    original_create_task = asyncio.create_task
+
+    def gated_create_task(coro: Awaitable[None]) -> asyncio.Task[None]:
+        async def gated() -> None:
+            scheduled.set()
+            await release.wait()
+            await coro
+
+        return original_create_task(gated())
+
+    monkeypatch.setattr(asyncio, "create_task", gated_create_task)
+    dispatch = original_create_task(transport._notify_register_observer(observation))
+    await scheduled.wait()
+
+    transport.set_register_observer(None)
+    transport.set_register_observer(new_observer)
+    release.set()
+    await dispatch
+
+    old_observer.assert_not_called()
+    if not reuse_observer:
+        new_observer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_coroutine_return_is_closed_and_counted_once(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    ran = False
+
+    async def malformed_return() -> None:
+        nonlocal ran
+        ran = True
+
+    def observer(observations: ObservationBatch) -> object:
+        return malformed_return()
+
+    transport = _FakeRegisterTransport(observer=observer)
+
+    result = await transport.read_parameters(10, 1)
+    gc.collect()
+
+    assert result == {10: 0}
+    assert ran is False
+    assert transport.register_observation_error_count == 1
+    assert not [warning for warning in recwarn if issubclass(warning.category, RuntimeWarning)]
+
+
+@pytest.mark.parametrize("return_task", [False, True], ids=["future", "task"])
+@pytest.mark.asyncio
+async def test_future_return_is_cancelled_and_counted_once(return_task: bool) -> None:
+    returned: list[asyncio.Future[None]] = []
+
+    async def wait_forever() -> None:
+        await asyncio.Event().wait()
+
+    def malformed_return(observations: ObservationBatch) -> object:
+        value: asyncio.Future[None]
+        if return_task:
+            value = asyncio.create_task(wait_forever())
+        else:
+            value = asyncio.get_running_loop().create_future()
+        returned.append(value)
+        return value
+
+    transport = _FakeRegisterTransport(observer=malformed_return)
+
+    result = await transport.read_parameters(10, 1)
+    await asyncio.sleep(0)
+
+    assert result == {10: 0}
+    assert transport.register_observation_error_count == 1
+    assert returned[0].cancelled()
 
 
 def test_detach_revokes_clears_and_rejects_late_capture_appends() -> None:

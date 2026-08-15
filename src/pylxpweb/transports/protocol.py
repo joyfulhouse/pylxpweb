@@ -8,10 +8,12 @@ implementations must follow. Using Protocol allows for structural subtyping
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import re
 import weakref
-from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast, runtime_checkable
 
 from .observation import RegisterObservation, RegisterObserver, _RegisterCapture
 
@@ -307,6 +309,8 @@ class BaseTransport:
         self._connected = False
         self._op_lock = _ReentrantAsyncLock()
         self._register_observer = register_observer
+        self._register_observer_generation = 0
+        # Captures inherit list and are unhashable, so WeakSet cannot track them.
         self._register_observer_captures: weakref.WeakValueDictionary[int, _RegisterCapture] = (
             weakref.WeakValueDictionary()
         )
@@ -340,6 +344,7 @@ class BaseTransport:
             capture.revoke()
         self._register_observer_captures.clear()
         self._register_observer = observer
+        self._register_observer_generation += 1
 
     def _new_register_capture(self) -> _RegisterCapture:
         """Create and track an enabled capture for synchronous revocation."""
@@ -354,11 +359,25 @@ class BaseTransport:
         """Notify the observer without affecting transport behavior."""
         if self._register_observer is None or not observations:
             return
+        observer = self._register_observer
+        generation = self._register_observer_generation
 
         async def invoke_observer() -> None:
-            observer = self._register_observer
-            if observer is not None:
-                observer(observations)
+            if (
+                observer is self._register_observer
+                and generation == self._register_observer_generation
+            ):
+                runtime_observer = cast(
+                    Callable[[tuple[RegisterObservation, ...]], object], observer
+                )
+                result = runtime_observer(observations)
+                if inspect.iscoroutine(result):
+                    result.close()
+                    raise TypeError("register observer must return None")
+                if isinstance(result, asyncio.Future):
+                    if not result.done():
+                        result.cancel()
+                    raise TypeError("register observer must return None")
 
         try:
             await asyncio.create_task(invoke_observer())
