@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1257,7 +1258,7 @@ class TestModbusSessionMaxAge:
 
         # Energy crosses max-age during its first internal group read. The
         # supplementary BMS group must remain on the same generation.
-        energy_clock, energy_factory, energy_transport = _session_setup(session_max_age=0.02)
+        energy_clock, energy_factory, energy_transport = _session_setup(session_max_age=0.005)
         with (
             patch("pymodbus.client.AsyncModbusTcpClient", energy_factory),
             patch(
@@ -1353,7 +1354,8 @@ class TestModbusSessionMaxAge:
     async def test_fake_session_clock_does_not_replace_event_loop_clock(self) -> None:
         """Session clock patches stay local and cannot freeze asyncio timeouts."""
         clock = _FakeMonotonicClock()
-        loop = asyncio.get_running_loop()
+        never_complete: asyncio.Future[None] = asyncio.Future()
+        started = time.monotonic()
 
         with (
             patch(
@@ -1364,11 +1366,11 @@ class TestModbusSessionMaxAge:
                 "pylxpweb.transports.hybrid._monotonic",
                 side_effect=clock.monotonic,
             ),
+            pytest.raises(TimeoutError),
         ):
-            await asyncio.sleep(0)
-            loop_timestamp = loop.time()
+            await asyncio.wait_for(never_complete, timeout=0.05)
 
-        assert loop_timestamp != clock.monotonic()
+        assert time.monotonic() - started < 1.0
 
     @pytest.mark.asyncio
     async def test_failed_age_recycle_logs_warning(
@@ -1426,16 +1428,59 @@ class TestModbusSessionMaxAge:
 
     @pytest.mark.asyncio
     async def test_cancelled_connect_drops_partial_session(self) -> None:
-        """Cancelling a dial closes and forgets the partially-created client."""
+        """A cancelled dial is cleaned up and the next operation reconnects."""
         connect_started = asyncio.Event()
         never_release = asyncio.Event()
+        cancelled_client = MagicMock()
+        cancelled_client.ctx = None
+        cancelled_client.close = MagicMock()
+
+        async def blocking_connect() -> bool:
+            connect_started.set()
+            await never_release.wait()
+            return True
+
+        cancelled_client.connect = blocking_connect
+        recovered_client = MagicMock()
+        recovered_client.ctx = None
+        recovered_client.connect = AsyncMock(return_value=True)
+        recovered_client.close = MagicMock()
+        recovered_response = MagicMock()
+        recovered_response.isError.return_value = False
+        recovered_response.registers = [42]
+        recovered_client.read_holding_registers = AsyncMock(return_value=recovered_response)
+        transport = ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+        with patch(
+            "pymodbus.client.AsyncModbusTcpClient",
+            side_effect=[cancelled_client, recovered_client],
+        ) as client_factory:
+            connect_task = asyncio.create_task(transport.connect())
+            await connect_started.wait()
+            connect_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await connect_task
+
+            result = await transport.read_parameters(0, 1)
+
+        assert transport.is_connected is True
+        assert transport._client is recovered_client
+        assert result == {0: 42}
+        assert client_factory.call_count == 2
+        cancelled_client.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_async_shutdown_bypasses_inflight_connect(self) -> None:
+        """Terminal shutdown closes a dialing client without waiting for its lock."""
+        connect_started = asyncio.Event()
+        release_connect = asyncio.Event()
         client = MagicMock()
         client.ctx = None
         client.close = MagicMock()
 
         async def blocking_connect() -> bool:
             connect_started.set()
-            await never_release.wait()
+            await release_connect.wait()
             return True
 
         client.connect = blocking_connect
@@ -1443,14 +1488,17 @@ class TestModbusSessionMaxAge:
 
         with patch("pymodbus.client.AsyncModbusTcpClient", return_value=client):
             connect_task = asyncio.create_task(transport.connect())
-            await connect_started.wait()
-            connect_task.cancel()
-            with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(connect_started.wait(), timeout=1.0)
+            await asyncio.wait_for(transport.async_shutdown(), timeout=0.1)
+            assert connect_task.done() is False
+            assert transport.is_connected is False
+            client.close.assert_called_once()
+
+            release_connect.set()
+            with pytest.raises(TransportConnectionError, match="shut down"):
                 await connect_task
 
-        assert transport.is_connected is False
         assert transport._client is None
-        client.close.assert_called_once()
 
 
 class TestAdaptiveBatterySlotCeiling:

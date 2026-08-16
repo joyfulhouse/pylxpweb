@@ -170,6 +170,7 @@ class ModbusTransport(BaseModbusTransport):
         self._session_started_at: float | None = None
         self._reconnect_retry_after: float | None = None
         self._session_reconnect_count = 0
+        self._shutdown_requested = False
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -187,7 +188,11 @@ class ModbusTransport(BaseModbusTransport):
         return self._port
 
     async def connect(self) -> None:
-        """Establish a Modbus TCP connection under the operation lock."""
+        """Establish a Modbus TCP connection under the operation lock.
+
+        This is a no-op when already connected. Call :meth:`disconnect` first
+        to force a fresh session.
+        """
         async with self._op_lock:
             await self._connect_locked()
 
@@ -197,6 +202,7 @@ class ModbusTransport(BaseModbusTransport):
         Raises:
             TransportConnectionError: If connection fails
         """
+        self._raise_if_shutdown()
         if self._connected:
             return
         self._drop_session()
@@ -213,6 +219,7 @@ class ModbusTransport(BaseModbusTransport):
             )
 
             connected = await self._client.connect()
+            self._raise_if_shutdown()
             if not connected:
                 self._drop_session()
                 self._reconnect_retry_after = _monotonic() + _FAILED_RECONNECT_COOLDOWN
@@ -241,6 +248,7 @@ class ModbusTransport(BaseModbusTransport):
 
         except asyncio.CancelledError:
             self._drop_session()
+            self._reconnect_retry_after = _monotonic()
             raise
         except ImportError as err:
             raise TransportConnectionError(
@@ -323,6 +331,19 @@ class ModbusTransport(BaseModbusTransport):
         async with self._op_lock:
             self._drop_session()
             _LOGGER.debug("Modbus transport disconnected for %s", self._serial)
+
+    async def async_shutdown(self) -> None:
+        """Terminally close the session without waiting for the operation lock."""
+        self._shutdown_requested = True
+        self._drop_session()
+        _LOGGER.debug("Modbus transport shut down for %s", self._serial)
+
+    def _raise_if_shutdown(self) -> None:
+        """Reject connection creation after terminal shutdown."""
+        if self._shutdown_requested:
+            raise TransportConnectionError(
+                f"Modbus transport for {self._serial} has been shut down"
+            )
 
     async def _reconnect(self) -> None:
         """Reconnect Modbus client to reset transaction ID state.

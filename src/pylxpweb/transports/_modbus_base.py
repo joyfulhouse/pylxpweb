@@ -441,15 +441,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     async def read_all_input_data(
         self,
     ) -> tuple[InverterRuntimeData, InverterEnergyData, BatteryBankData | None]:
-        """Read all input registers with reconnect on consecutive errors.
-
-        Overrides ``RegisterDataMixin.read_all_input_data`` to add the same
-        auto-reconnect check that ``_read_register_groups`` has.  Without this
-        override, a dropped TCP connection is never healed in HYBRID mode
-        because the combined read path bypasses ``_read_register_groups``
-        entirely, so ``_consecutive_errors`` accumulates but the reconnect
-        gate never fires.
-        """
+        """Read all input registers under one guarded public operation boundary."""
         async with self._op_guard():
             return await super().read_all_input_data()
 
