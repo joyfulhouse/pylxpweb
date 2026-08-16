@@ -629,31 +629,52 @@ async def test_coroutine_return_is_closed_and_counted_once(
 
 @pytest.mark.parametrize("return_task", [False, True], ids=["future", "task"])
 @pytest.mark.asyncio
-async def test_future_return_is_cancelled_and_counted_once(return_task: bool) -> None:
-    returned: list[asyncio.Future[None]] = []
-    baseline_tasks = asyncio.all_tasks()
-
+async def test_pending_borrowed_future_return_is_not_cancelled(return_task: bool) -> None:
     async def wait_forever() -> None:
         await asyncio.Event().wait()
 
-    def malformed_return(observations: ObservationBatch) -> object:
-        value: asyncio.Future[None]
+    borrowed: asyncio.Future[None]
+    if return_task:
+        borrowed = asyncio.create_task(wait_forever())
+    else:
+        borrowed = asyncio.get_running_loop().create_future()
+    transport = _FakeRegisterTransport(observer=lambda observations: borrowed)
+
+    try:
+        result = await transport.read_parameters(10, 1)
+
+        assert result == {10: 0}
+        assert transport.register_observation_error_count == 1
+        assert not borrowed.done()
+    finally:
+        borrowed.cancel()
         if return_task:
-            value = asyncio.create_task(wait_forever())
-        else:
-            value = asyncio.get_running_loop().create_future()
-        returned.append(value)
-        return value
+            with pytest.raises(asyncio.CancelledError):
+                await borrowed
 
-    transport = _FakeRegisterTransport(observer=malformed_return)
 
-    result = await transport.read_parameters(10, 1)
-    await asyncio.sleep(0)
+@pytest.mark.asyncio
+async def test_pending_public_read_task_return_is_not_cancelled() -> None:
+    polling_task: asyncio.Task[dict[int, int]] | None = None
 
-    assert result == {10: 0}
+    def return_polling_task(observations: ObservationBatch) -> object:
+        assert polling_task is not None
+        return polling_task
+
+    transport = _FakeRegisterTransport(observer=return_polling_task)
+
+    async def public_read() -> dict[int, int]:
+        nonlocal polling_task
+        polling_task = asyncio.current_task()
+        assert polling_task is not None
+        return await transport.read_parameters(10, 1)
+
+    task = asyncio.create_task(public_read())
+
+    assert await task == {10: 0}
+    assert not task.cancelled()
+    assert task.cancelling() == 0
     assert transport.register_observation_error_count == 1
-    assert returned[0].cancelled()
-    assert asyncio.all_tasks() == baseline_tasks
 
 
 @pytest.mark.parametrize("return_task", [False, True], ids=["future", "task"])

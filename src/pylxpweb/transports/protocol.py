@@ -379,8 +379,6 @@ class BaseTransport:
                             result.result()
                     elif result.exception() is None:
                         result.result()
-                else:
-                    result.cancel()
             elif isinstance(result, Coroutine) or (
                 inspect.isawaitable(result) and inspect.isgenerator(result)
             ):
