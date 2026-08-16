@@ -1493,12 +1493,87 @@ class TestModbusSessionMaxAge:
             assert connect_task.done() is False
             assert transport.is_connected is False
             client.close.assert_called_once()
+            client.close.reset_mock()
 
             release_connect.set()
             with pytest.raises(TransportConnectionError, match="shut down"):
                 await connect_task
 
         assert transport._client is None
+        client.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_between_read_attempts_raises_typed_error(self) -> None:
+        """A dropped retry client fails typed instead of dereferencing None."""
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            retry_delay=0,
+        )
+        client = MagicMock()
+        client.ctx = None
+        client.connect = AsyncMock(return_value=True)
+        client.close = MagicMock()
+        read_calls = 0
+
+        async def fail_after_shutdown(**_kwargs: int) -> MagicMock:
+            nonlocal read_calls
+            read_calls += 1
+            await transport.async_shutdown()
+            raise ConnectionException("closed during retry")
+
+        client.read_input_registers = fail_after_shutdown
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=client):
+            await transport.connect()
+            with pytest.raises(TransportConnectionError, match="Transport not connected"):
+                await transport._read_input_registers(0, 1)
+
+        assert read_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_late_read_response_after_shutdown_is_rejected(self) -> None:
+        """A successful response arriving after terminal shutdown is discarded."""
+        transport = ModbusTransport(host="192.168.1.100", serial="CE12345678")
+        client = MagicMock()
+        client.ctx = None
+        client.connect = AsyncMock(return_value=True)
+        client.close = MagicMock()
+        response = MagicMock()
+        response.isError.return_value = False
+        response.registers = [42]
+
+        async def return_after_shutdown(**_kwargs: int) -> MagicMock:
+            await transport.async_shutdown()
+            return response
+
+        client.read_input_registers = return_after_shutdown
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=client):
+            await transport.connect()
+            with pytest.raises(TransportConnectionError, match="Transport not connected"):
+                await transport._read_input_registers(0, 1)
+
+    @pytest.mark.asyncio
+    async def test_poll_after_explicit_disconnect_does_not_reconnect(self) -> None:
+        """An explicit disconnect clears stale retry state and cannot resurrect."""
+        clock, factory, transport = _session_setup(connect_results=[True, True])
+
+        with (
+            patch("pymodbus.client.AsyncModbusTcpClient", factory),
+            patch(
+                "pylxpweb.transports.modbus._monotonic",
+                side_effect=clock.monotonic,
+            ),
+        ):
+            await transport.connect()
+            transport._reconnect_retry_after = clock.monotonic()
+            await transport.disconnect()
+
+            with pytest.raises(TransportConnectionError, match="Transport not connected"):
+                await transport.read_parameters(0, 1)
+
+        assert len(factory.clients) == 1
 
 
 class TestAdaptiveBatterySlotCeiling:

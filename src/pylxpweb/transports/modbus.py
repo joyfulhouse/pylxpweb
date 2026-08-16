@@ -170,7 +170,6 @@ class ModbusTransport(BaseModbusTransport):
         self._session_started_at: float | None = None
         self._reconnect_retry_after: float | None = None
         self._session_reconnect_count = 0
-        self._shutdown_requested = False
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -211,14 +210,17 @@ class ModbusTransport(BaseModbusTransport):
             # Import pymodbus here to make it optional
             from pymodbus.client import AsyncModbusTcpClient
 
-            self._client = AsyncModbusTcpClient(
+            client = AsyncModbusTcpClient(
                 host=self._host,
                 port=self._port,
                 timeout=self._timeout,
                 retries=self._pymodbus_retries,
             )
+            self._client = client
 
-            connected = await self._client.connect()
+            connected = await client.connect()
+            if self._shutdown_requested:
+                client.close()
             self._raise_if_shutdown()
             if not connected:
                 self._drop_session()
@@ -330,6 +332,7 @@ class ModbusTransport(BaseModbusTransport):
         """Close the Modbus TCP connection under the operation lock."""
         async with self._op_lock:
             self._drop_session()
+            self._reconnect_retry_after = None
             _LOGGER.debug("Modbus transport disconnected for %s", self._serial)
 
     async def async_shutdown(self) -> None:

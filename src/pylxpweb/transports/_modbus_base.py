@@ -119,6 +119,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._max_consecutive_errors: int = 3
         self._last_read_retried: bool = False
         self._op_guard_depth: int = 0
+        self._shutdown_requested = False
 
     # ------------------------------------------------------------------
     # Properties
@@ -170,6 +171,12 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     # Register Read/Write (with retry and error tracking)
     # ------------------------------------------------------------------
 
+    def _require_active_client(self) -> Any:
+        """Return the active client or raise a typed connection error."""
+        if self._client is None or self._shutdown_requested:
+            raise TransportConnectionError(f"Transport not connected for {self._serial}")
+        return self._client
+
     async def _read_registers(
         self,
         address: int,
@@ -203,16 +210,18 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         for attempt in range(self._retries + 1):
             async with self._lock:
                 try:
+                    client = self._require_active_client()
                     read_fn = (
-                        self._client.read_input_registers
+                        client.read_input_registers
                         if input_registers
-                        else self._client.read_holding_registers
+                        else client.read_holding_registers
                     )
                     result = await read_fn(
                         address=address,
                         count=count,
                         device_id=self._unit_id,
                     )
+                    self._require_active_client()
 
                     if result.isError():
                         raise TransportReadError(
@@ -344,18 +353,20 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
 
         async with self._lock:
             try:
+                client = self._require_active_client()
                 if len(values) == 1:
-                    result = await self._client.write_register(
+                    result = await client.write_register(
                         address=address,
                         value=values[0],
                         device_id=self._unit_id,
                     )
                 else:
-                    result = await self._client.write_registers(
+                    result = await client.write_registers(
                         address=address,
                         values=values,
                         device_id=self._unit_id,
                     )
+                self._require_active_client()
 
                 if result.isError():
                     # Functional exception response: the device answered, so
