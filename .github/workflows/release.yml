@@ -515,9 +515,12 @@ jobs:
         env:
           EXPECTED_PROJECT_NAME: ${{ needs.build.outputs.project-name }}
           EXPECTED_VERSION: ${{ needs.build.outputs.version }}
-          MAX_ATTEMPTS: '1'
+          BACKOFF_SECONDS: '2'
+          MAX_ATTEMPTS: '3'
+          MAX_BACKOFF_SECONDS: '5'
           MODE: prepare
           PYPI_JSON_BASE_URL: https://pypi.org/pypi
+          REQUEST_TIMEOUT_SECONDS: '10'
           UPLOAD_DIR: pypi-upload
         run: &verify-pypi-state |
           python3 - <<'PY'
@@ -553,13 +556,18 @@ jobs:
           mode = os.environ["MODE"]
           assert mode in {"prepare", "verify"}, "invalid PyPI verification mode"
           attempts = int(os.environ["MAX_ATTEMPTS"])
+          backoff_seconds = int(os.environ["BACKOFF_SECONDS"])
+          max_backoff_seconds = int(os.environ["MAX_BACKOFF_SECONDS"])
+          request_timeout_seconds = int(os.environ["REQUEST_TIMEOUT_SECONDS"])
           url = f'{os.environ["PYPI_JSON_BASE_URL"]}/{project}/{version}/json'
           request = urllib.request.Request(url, headers={"User-Agent": "pylxpweb-release-verifier"})
 
           for attempt in range(1, attempts + 1):
               try:
                   try:
-                      with urllib.request.urlopen(request, timeout=30) as response:
+                      with urllib.request.urlopen(
+                          request, timeout=request_timeout_seconds
+                      ) as response:
                           payload = json.load(response)
                   except urllib.error.HTTPError as error:
                       if error.code != 404:
@@ -589,7 +597,7 @@ jobs:
               except (AssertionError, KeyError, OSError, TypeError, ValueError):
                   if attempt == attempts:
                       raise
-                  time.sleep(min(5 * attempt, 30))
+                  time.sleep(min(backoff_seconds * attempt, max_backoff_seconds))
 
           if mode == "prepare":
               upload_dir = pathlib.Path(os.environ["UPLOAD_DIR"])
@@ -603,7 +611,7 @@ jobs:
 
       - id: publish-pypi
         name: Publish to PyPI with trusted publishing
-        if: steps.prepare-pypi.outputs.upload-needed == 'true'
+        if: success() && steps.prepare-pypi.outputs.upload-needed == 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: pypi-upload/
@@ -613,8 +621,11 @@ jobs:
         env:
           EXPECTED_PROJECT_NAME: ${{ needs.build.outputs.project-name }}
           EXPECTED_VERSION: ${{ needs.build.outputs.version }}
-          MAX_ATTEMPTS: '12'
+          BACKOFF_SECONDS: '5'
+          MAX_ATTEMPTS: '8'
+          MAX_BACKOFF_SECONDS: '20'
           MODE: verify
           PYPI_JSON_BASE_URL: https://pypi.org/pypi
+          REQUEST_TIMEOUT_SECONDS: '15'
           UPLOAD_DIR: pypi-upload
         run: *verify-pypi-state

@@ -10,14 +10,21 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 import yaml
 
 _WORKFLOW_PATH = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
+_WORKFLOWS_PATH = _WORKFLOW_PATH.parent
 _WORKFLOW_DOCS_PATH = Path(__file__).resolve().parents[2] / ".github" / "WORKFLOWS.md"
 _FULL_SHA_ACTION = re.compile(r"^[^\s@]+@[0-9a-f]{40}$")
+_PACKAGE_INDEX_PUBLISHER = re.compile(
+    r"pypa/gh-action-pypi-publish@|"
+    r"https://(?:(?:test|upload)\.)?pypi\.org/legacy/|"
+    r"\b(?:twine\s+upload|uv\s+publish)\b",
+    re.IGNORECASE,
+)
 _WHEEL_NAME = "pylxpweb-1.2.3-py3-none-any.whl"
 _SDIST_NAME = "pylxpweb-1.2.3.tar.gz"
 _DISTRIBUTIONS = {_WHEEL_NAME: b"wheel bytes", _SDIST_NAME: b"sdist bytes"}
@@ -45,6 +52,25 @@ def _steps_by_id(job: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def _action_steps(workflow: dict[str, Any]) -> list[dict[str, Any]]:
     return [step for job in workflow["jobs"].values() for step in job["steps"] if "uses" in step]
+
+
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _strings(item)]
+    return []
+
+
+def _package_index_publisher_workflows(workflows_path: Path) -> set[str]:
+    publishers = set()
+    for path in sorted([*workflows_path.glob("*.yml"), *workflows_path.glob("*.yaml")]):
+        document = yaml.safe_load(path.read_text())
+        if any(_PACKAGE_INDEX_PUBLISHER.search(text) for text in _strings(document)):
+            publishers.add(path.name)
+    return publishers
 
 
 def _step(workflow: dict[str, Any], job_id: str, step_id: str) -> dict[str, Any]:
@@ -284,7 +310,7 @@ def _run_pypi_state_step(
     *,
     step_id: str,
     mode: str,
-    responses: list[dict[str, Any] | None],
+    responses: list[dict[str, Any] | Exception | None],
 ) -> tuple[set[str], str, int]:
     _write_release_bundle(tmp_path)
     output = tmp_path / "github-output"
@@ -293,7 +319,11 @@ def _run_pypi_state_step(
     monkeypatch.setenv("EXPECTED_PROJECT_NAME", "pylxpweb")
     monkeypatch.setenv("EXPECTED_VERSION", "1.2.3")
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    monkeypatch.setenv("MAX_ATTEMPTS", str(len(responses)))
+    step_env = _step(_workflow(), "publish-pypi", step_id)["env"]
+    monkeypatch.setenv("MAX_ATTEMPTS", step_env["MAX_ATTEMPTS"])
+    for name in ("BACKOFF_SECONDS", "MAX_BACKOFF_SECONDS", "REQUEST_TIMEOUT_SECONDS"):
+        if name in step_env:
+            monkeypatch.setenv(name, step_env[name])
     monkeypatch.setenv("MODE", mode)
     monkeypatch.setenv("PYPI_JSON_BASE_URL", "https://index.test/pypi")
     monkeypatch.setenv("UPLOAD_DIR", str(upload))
@@ -305,7 +335,9 @@ def _run_pypi_state_step(
         nonlocal calls
         del timeout
         calls += 1
-        payload = pending.pop(0)
+        payload = pending.pop(0) if pending else responses[-1]
+        if isinstance(payload, Exception):
+            raise payload
         if payload is None:
             raise HTTPError(request.full_url, 404, "Not Found", {}, None)
         return _Response(json.dumps(payload).encode(), request.full_url)
@@ -335,6 +367,41 @@ def test_pypi_preflight_stages_only_absent_distributions(
     assert staged == set(filenames[existing_count:])
     assert output == f"upload-needed={'true' if staged else 'false'}\n"
     assert calls == 1
+
+
+def test_pypi_preflight_retries_transient_failure_then_accepts_absent_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient index failure is retried before a genuine 404 is accepted."""
+    staged, output, calls = _run_pypi_state_step(
+        tmp_path,
+        monkeypatch,
+        step_id="prepare-pypi",
+        mode="prepare",
+        responses=[URLError("temporary failure"), None],
+    )
+
+    assert staged == set(_DISTRIBUTIONS)
+    assert output == "upload-needed=true\n"
+    assert calls == 2
+
+
+def test_pypi_preflight_exhausts_bounded_transient_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preflight fails closed after its small retry allowance is exhausted."""
+    with pytest.raises(URLError, match="third failure"):
+        _run_pypi_state_step(
+            tmp_path,
+            monkeypatch,
+            step_id="prepare-pypi",
+            mode="prepare",
+            responses=[
+                URLError("first failure"),
+                URLError("second failure"),
+                URLError("third failure"),
+            ],
+        )
 
 
 @pytest.mark.parametrize(
@@ -788,22 +855,30 @@ def test_publishers_use_trusted_publishing_with_skip_only_on_testpypi() -> None:
         "skip-existing": True,
     }
     assert production_steps["prepare-pypi"]["env"] == {
+        "BACKOFF_SECONDS": "2",
         "EXPECTED_PROJECT_NAME": "${{ needs.build.outputs.project-name }}",
         "EXPECTED_VERSION": "${{ needs.build.outputs.version }}",
-        "MAX_ATTEMPTS": "1",
+        "MAX_ATTEMPTS": "3",
+        "MAX_BACKOFF_SECONDS": "5",
         "MODE": "prepare",
         "PYPI_JSON_BASE_URL": "https://pypi.org/pypi",
+        "REQUEST_TIMEOUT_SECONDS": "10",
         "UPLOAD_DIR": "pypi-upload",
     }
-    assert production_publish["if"] == ("steps.prepare-pypi.outputs.upload-needed == 'true'")
+    assert production_publish["if"] == (
+        "success() && steps.prepare-pypi.outputs.upload-needed == 'true'"
+    )
     assert production_publish["with"] == {"packages-dir": "pypi-upload/"}
     assert "skip-existing" not in production_publish["with"]
     assert production_steps["verify-pypi"]["env"] == {
+        "BACKOFF_SECONDS": "5",
         "EXPECTED_PROJECT_NAME": "${{ needs.build.outputs.project-name }}",
         "EXPECTED_VERSION": "${{ needs.build.outputs.version }}",
-        "MAX_ATTEMPTS": "12",
+        "MAX_ATTEMPTS": "8",
+        "MAX_BACKOFF_SECONDS": "20",
         "MODE": "verify",
         "PYPI_JSON_BASE_URL": "https://pypi.org/pypi",
+        "REQUEST_TIMEOUT_SECONDS": "15",
         "UPLOAD_DIR": "pypi-upload",
     }
     order = [
@@ -816,6 +891,35 @@ def test_publishers_use_trusted_publishing_with_skip_only_on_testpypi() -> None:
     assert [list(production_steps).index(step_id) for step_id in order] == sorted(
         list(production_steps).index(step_id) for step_id in order
     )
+
+
+def test_pypi_final_retry_budget_leaves_five_minutes_for_setup_and_upload() -> None:
+    """Worst-case request and backoff time must fit with meaningful job headroom."""
+    job = _job(_workflow(), "publish-pypi")
+    env = _step(_workflow(), "publish-pypi", "verify-pypi")["env"]
+    attempts = int(env["MAX_ATTEMPTS"])
+    request_timeout = int(env["REQUEST_TIMEOUT_SECONDS"])
+    backoff = int(env["BACKOFF_SECONDS"])
+    backoff_cap = int(env["MAX_BACKOFF_SECONDS"])
+    request_budget = attempts * request_timeout
+    backoff_budget = sum(min(backoff * attempt, backoff_cap) for attempt in range(1, attempts))
+
+    assert attempts >= 2
+    assert request_budget + backoff_budget <= job["timeout-minutes"] * 60 - 5 * 60
+
+
+def test_release_is_the_only_package_index_publisher_workflow() -> None:
+    """No release or tag workflow may compete with the package promotion chain."""
+    assert _package_index_publisher_workflows(_WORKFLOWS_PATH) == {"release.yml"}
+
+
+def test_package_index_workflow_audit_detects_a_competing_publisher(tmp_path: Path) -> None:
+    """The repository audit recognizes a publisher action outside release.yml."""
+    tmp_path.joinpath("build-executables.yml").write_text(
+        "jobs:\n  build:\n    steps:\n      - uses: pypa/gh-action-pypi-publish@" + "a" * 40 + "\n"
+    )
+
+    assert _package_index_publisher_workflows(tmp_path) == {"build-executables.yml"}
 
 
 def test_workflow_docs_define_compromise_response_and_keep_settings_gate() -> None:

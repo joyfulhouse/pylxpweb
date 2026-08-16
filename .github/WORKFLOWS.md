@@ -46,12 +46,15 @@ Publishing is a four-job promotion chain:
 4. `publish-pypi` runs only after verification succeeds. It again downloads and
    revalidates the original artifact, checks any files already present for the
    version on PyPI, and accepts only a non-yanked, hash-matching subset of the
-   wheel and source distribution. It stages and publishes only absent files from
-   the original artifact. If the complete exact set already exists, it skips the
-   publisher. It never rebuilds and never uses `skip-existing`. After publication,
-   it polls PyPI with bounded retries until the final filenames, yanked states,
-   and hashes exactly match. An upload race fails the publisher closed and can be
-   retried through the same preflight path.
+   wheel and source distribution. The preflight retries transient index failures
+   up to three times while treating a genuine version 404 as an empty set. It
+   stages and publishes only absent files from the original artifact. If the
+   complete exact set already exists, it skips the publisher. It never rebuilds
+   and never uses `skip-existing`. After publication, it polls PyPI with bounded
+   retries until the final filenames, yanked states, and hashes exactly match.
+   The final retry budget leaves at least five minutes of the job timeout for
+   setup and upload. An upload race fails the publisher closed and can be retried
+   through the same preflight path.
 
 The build artifact is named from the project version and peeled commit and is
 retained for 30 days. The workflow default permission is `contents: read`; only
