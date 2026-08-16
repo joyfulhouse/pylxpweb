@@ -18,69 +18,70 @@ The workflow has four jobs:
 
 ## Package release (`release.yml`)
 
-The only publishing trigger is a GitHub Release `published` event. Pushing a tag
-does not run this workflow, and a manual dispatch cannot publish to either package
-index.
+The only trigger is a GitHub Release `published` event. Pushing a tag does not run
+the workflow, and there is no branch-form manual release path. GitHub must execute
+the copy of `release.yml` stored in the release tag: `github.workflow_ref` must end
+in `@refs/tags/<tag>` and `github.workflow_sha`, `github.sha`, and the peeled tag
+commit must all be identical.
 
 ### Published-release path
 
-Publishing is a four-job promotion chain:
+Publishing is a linear seven-job promotion chain:
 
-1. `build` resolves the release's existing `v*` tag, peels it to a commit and
-   tree, and checks that the tag version, project metadata, release event, release
-   target, checked-out commit, and `origin/main` ancestry agree. It builds exactly
-   one wheel and one source distribution under Python 3.13 from a locked,
-   unchanged checkout, runs `twine check`, records source identity in
-   `release-source.json`, and records each distribution and the source manifest
-   in `SHA256SUMS`.
-2. `publish-testpypi` downloads and revalidates that one named Actions artifact,
-   then publishes it to TestPyPI with trusted publishing. `skip-existing` is
-   permitted here so an interrupted release can resume at the verification gate.
-3. `verify-testpypi` is unprivileged. It downloads and revalidates the original
-   Actions artifact, polls the exact TestPyPI name and version with bounded
-   retries, requires the exact non-yanked filename and SHA256 set, then downloads
-   and rehashes both the allowlisted HTTPS wheel and source distribution. The job
-   installs the verified local wheel in a clean Python 3.13 environment while
-   resolving dependencies only from production PyPI, then validates installed
-   metadata and import behavior.
-4. `publish-pypi` runs only after verification succeeds. It again downloads and
-   revalidates the original artifact, checks any files already present for the
-   version on PyPI, and accepts only a non-yanked, hash-matching subset of the
-   wheel and source distribution. The preflight retries transient index failures
-   up to three times while treating a genuine version 404 as an empty set. It
-   stages and publishes only absent files from the original artifact. If the
-   complete exact set already exists, it skips the publisher. It never rebuilds
-   and never uses `skip-existing`. After publication, it polls PyPI with bounded
-   retries until the final filenames, yanked states, and hashes exactly match.
-   The final retry budget leaves at least five minutes of the job timeout for
-   setup and upload. An upload race fails the publisher closed and can be retried
-   through the same preflight path.
+1. `bind-build-attest` force-fetches only `origin/main` with `--no-tags`, then
+   peels the event tag and requires the tag commit to be current `main`. The commit
+   must be a two-parent GitHub merge commit associated with exactly one merged
+   pull request. Its first parent is the previous `main`, its second parent is the
+   final pull-request head, the base is `main`, an effective non-self approval
+   covers that exact head, and the head's single `CI Success` result succeeded.
+2. The same job builds once in the official uv/Python 3.13 image pinned by the
+   platform-manifest digest recorded in the workflow. Source and container root
+   are read-only; only the distribution directory, ephemeral `/tmp`, and an empty
+   uv cache are writable. The container has no network. uv and Python versions
+   and the exact bundled `uv_build` backend are asserted before
+   `uv build --offline --no-python-downloads --no-sources` creates exactly one
+   wheel and one source distribution.
+3. Immediately before attestation, the job force-fetches `origin/main` again and
+   requires equality with the bound commit. This is the artifact-sealing
+   linearization point. Separate GitHub source-identity and build-provenance
+   attestations are generated, stored with the bundle, and the sealed artifact is
+   uploaded once.
+4. `prepare-testpypi` has no OIDC permission. It verifies the bundle's exact file
+   set and checksums and uses `gh attestation verify` to bind both attestations to
+   the release workflow, workflow digest, tag ref, source digest, and distribution
+   digests. Only then does it stage the two distributions.
+5. `publish-testpypi` has exactly two action steps: a full-SHA-pinned artifact
+   download and the full-SHA-pinned official PyPA publisher. It has OIDC only for
+   TestPyPI trusted publishing and may skip an already-present TestPyPI file.
+6. `verify-testpypi` is unprivileged. It revalidates the original sealed artifact,
+   polls the exact TestPyPI version, requires exactly the two non-yanked filenames
+   and SHA-256 digests, and downloads and rehashes their allowlisted HTTPS bytes.
+7. `prepare-pypi`, `publish-pypi`, and `verify-pypi` repeat the separation for
+   production: the no-OIDC prepare job revalidates and stages only when the
+   version is absent; the OIDC publisher again contains only the two pinned
+   actions; and the no-OIDC verifier polls and downloads the exact final bytes.
 
-The build artifact is named from the project version and peeled commit and is
-retained for 30 days. The workflow default permission is `contents: read`; only
-the two publisher jobs receive `id-token: write`. Production uses the protected
-`pypi` environment, while TestPyPI uses `testpypi`.
+The sealed artifact is named from the version and merge commit and is retained for
+30 days. Job summaries expose the tag, commit, tree, final PR/head, workflow
+ref/SHA, container digest, distribution names/digests, and attestation verification.
 
-### Manual validation path
-
-Manual dispatch requires an existing `v*` tag:
-
-```bash
-gh workflow run release.yml --ref main -f tag=v0.10.0b3
-```
-
-The dispatch must select `main`. It runs only the source-identity, build, package,
-manifest, and artifact checks. All publication and remote-index verification jobs
-are skipped. Use this path to validate release construction without publishing.
+GitHub build/source attestations establish the GitHub workflow and source identity
+for the local subjects. They are distinct from the PEP 740 attestations that the
+PyPA publishing action generates and sends to PyPI during trusted publication.
 
 ### Required repository settings
 
-Before relying on the published-release path, verify these settings after the
-workflow change merges:
+The workflow cannot create or repair these external controls. Verify them before
+unfreezing publication and again during release review:
 
-- The `pypi` environment requires a reviewer, limits deployment tags to `v*`, and
-  does not allow administrators to bypass protection.
-- The `testpypi` environment limits deployment tags to `v*`.
+- `main` is protected: the final release-candidate PR requires review, dismisses
+  stale approval, requires `CI Success`, requires the branch to be up to date,
+  prevents bypass, and is merged with GitHub's **Create a merge commit** method.
+- A tag ruleset protects `v*` tags from update and deletion except for the narrow,
+  audited recovery operation described below.
+- The `pypi` environment requires an independent reviewer, limits deployments to
+  protected `v*` tags, and disallows administrator bypass.
+- The `testpypi` environment limits deployments to protected `v*` tags.
 - PyPI and TestPyPI trusted-publisher bindings match this repository, the
   `release.yml` workflow, and their respective environment names.
 
@@ -89,19 +90,31 @@ or mutate repository, environment, or package-index settings.
 
 ## Release procedure
 
-1. Prepare the version in a pull request. `project.version` in `pyproject.toml`
-   must be the intended tag without the leading `v`.
-2. Merge the reviewed change to `main` after CI succeeds.
-3. Create the `v*` tag on the intended `main` commit.
-4. Optionally run the manual validation path for that tag.
-5. Publish a GitHub Release for the same tag. Publication starts the package
-   promotion chain.
-6. Review the TestPyPI verification result and approve the protected `pypi`
-   environment when prompted.
+1. Prepare the final version and every release-tree change in one final candidate
+   pull request. `project.version` must equal the intended tag without `v`.
+2. Obtain an effective approval and successful required CI on the exact final head.
+   If the head changes, repeat both gates.
+3. Merge with GitHub **Create a merge commit**. Do not squash or rebase.
+4. Confirm no later commit has reached `main`, then create the protected `v*` tag
+   on that GitHub merge commit and publish the GitHub Release for the same tag.
+5. Review the identity and attestation summaries after TestPyPI verification, then
+   approve the protected `pypi` environment if every value matches the candidate.
 
-If production publication is interrupted, rerun the same release workflow. The
-preflight accepts matching files already published from the original artifact and
-stages only the absent distribution; it never enables production `skip-existing`.
+### Recovery at the sealing boundary
+
+- If `main` moves before artifact sealing, the second equality check fails and no
+  package-index upload occurs. Delete the unpublished or failed GitHub Release and
+  its tag using the audited tag-recovery path. Prepare a new final candidate on
+  current `main`, obtain fresh exact-head review and CI, merge it, and create a new
+  release tag. Do not retarget or recreate the old candidate tag.
+- Movement of `main` after the sealing check does not change the sealed artifact.
+  The bound commit/tree/PR/workflow/container and attestation results remain visible
+  in the summaries. Treat the protected-environment approval as the explicit human
+  decision whether to promote that sealed candidate or reject it and use the new
+  candidate procedure above.
+- If TestPyPI or PyPI contains unexpected or mismatched files, stop. Package-index
+  files are immutable; do not use `skip-existing` in production and do not rebuild
+  under the same version. Investigate before preparing a new version.
 
 ## Package publishing compromise response
 
@@ -145,13 +158,12 @@ the GitHub-hosted release event, protected environments, and trusted publishing.
 
 ## Troubleshooting
 
-- A manual run with skipped `build` selected a ref other than `main`.
 - A source-identity failure means the event tag, project version, commit, tree,
-  release target, or `main` ancestry did not agree. Correct the release inputs; do
-  not weaken the check.
+  tag-resident workflow identity, reviewed merge identity, or freshly fetched
+  `main` did not agree. Correct the release inputs; do not weaken the check.
 - A TestPyPI verification failure means the remote name, version, filenames,
-  yanked state, hashes, downloaded wheel, dependency install, metadata, or import
-  did not match the built artifact.
+  yanked state, hashes, or downloaded distributions did not match the sealed
+  artifact.
 - A PyPI job waiting for approval is enforcing the production environment gate.
 - An OIDC failure requires checking the corresponding trusted-publisher binding;
   do not add long-lived package-index credentials.
