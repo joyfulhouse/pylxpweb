@@ -374,11 +374,8 @@ class BaseTransport:
                 result.close()
             elif isinstance(result, asyncio.Future):
                 if result.done():
-                    if result.cancelled():
-                        with contextlib.suppress(asyncio.CancelledError):
-                            result.result()
-                    elif result.exception() is None:
-                        result.result()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        result.exception()
             elif isinstance(result, Coroutine) or (
                 inspect.isawaitable(result) and inspect.isgenerator(result)
             ):

@@ -234,13 +234,10 @@ def test_register_observation_repr_redacts_raw_words_from_diagnostics(
         assert observation == RegisterObservation(RegisterSpace.INPUT, ())
     logging.getLogger(__name__).warning("synthetic observation: %r", observation)
 
-    deterministic_renderings = (
+    rendered = (
         repr(segment),
         repr(observation),
         str(RuntimeError(observation)),
-    )
-    rendered = (
-        *deterministic_renderings,
         str(assertion.value),
         caplog.text,
     )
@@ -250,8 +247,8 @@ def test_register_observation_repr_redacts_raw_words_from_diagnostics(
         for diagnostic in rendered
         for spelling in raw_word_spellings
     )
-    assert all("123" in diagnostic for diagnostic in deterministic_renderings)
-    assert all("word_count=2" in diagnostic for diagnostic in deterministic_renderings)
+    assert all("123" in diagnostic for diagnostic in rendered[:3])
+    assert all("word_count=2" in diagnostic for diagnostic in rendered[:3])
     assert "word_count=2" in caplog.text
 
 
