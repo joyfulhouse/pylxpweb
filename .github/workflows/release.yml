@@ -61,7 +61,6 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_TARGET: ${{ github.event.release.target_commitish }}
           RELEASE_URL: ${{ github.event.release.html_url }}
-          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -93,7 +92,6 @@ jobs:
 
           if [[ "$EVENT_NAME" == "release" ]]; then
             [[ "$EVENT_SHA" == "$commit" ]]
-            [[ "$RELEASE_TAG" == "$tag" ]]
             target_commit=$(git rev-parse "$RELEASE_TARGET^{commit}")
             git merge-base --is-ancestor "$commit" "$target_commit"
           fi
@@ -235,7 +233,7 @@ jobs:
           EXPECTED_TAG: ${{ steps.resolve-source.outputs.tag }}
           EXPECTED_TREE: ${{ steps.resolve-source.outputs.tree }}
           EXPECTED_VERSION: ${{ steps.resolve-source.outputs.version }}
-        run: |
+        run: &validate-release-bundle |
           set -euo pipefail
           (cd release-bundle && sha256sum --check SHA256SUMS)
           python3 - <<'PY'
@@ -290,18 +288,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: testpypi
-    permissions:
+    permissions: &publisher-permissions
       contents: read
       id-token: write
     steps:
-      - id: download-release-artifact
+      - &download-release-artifact
+        id: download-release-artifact
         name: Download original release artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ needs.build.outputs.artifact-name }}
           path: release-bundle/
 
-      - id: revalidate-release-bundle
+      - &revalidate-release-artifact
+        id: revalidate-release-bundle
         name: Revalidate original release artifact
         env:
           EXPECTED_ARTIFACT_NAME: ${{ needs.build.outputs.artifact-name }}
@@ -310,44 +310,7 @@ jobs:
           EXPECTED_TAG: ${{ needs.build.outputs.tag }}
           EXPECTED_TREE: ${{ needs.build.outputs.tree }}
           EXPECTED_VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          set -euo pipefail
-          (cd release-bundle && sha256sum --check SHA256SUMS)
-          python3 - <<'PY'
-          import json
-          import os
-          import pathlib
-
-          bundle = pathlib.Path("release-bundle")
-          source = json.loads(bundle.joinpath("release-source.json").read_text())
-          expected = {
-              "artifact_name": os.environ["EXPECTED_ARTIFACT_NAME"],
-              "commit": os.environ["EXPECTED_COMMIT"],
-              "project_name": os.environ["EXPECTED_PROJECT_NAME"],
-              "tag": os.environ["EXPECTED_TAG"],
-              "tree": os.environ["EXPECTED_TREE"],
-              "version": os.environ["EXPECTED_VERSION"],
-          }
-          assert {key: source[key] for key in expected} == expected
-          wheels = list(bundle.glob("dist/*.whl"))
-          sdists = list(bundle.glob("dist/*.tar.gz"))
-          assert len(wheels) == 1, wheels
-          assert len(sdists) == 1, sdists
-          manifest_paths = {
-              line.split("  ", 1)[1]
-              for line in bundle.joinpath("SHA256SUMS").read_text().splitlines()
-          }
-          expected_hashed = {
-              "release-source.json",
-              wheels[0].relative_to(bundle).as_posix(),
-              sdists[0].relative_to(bundle).as_posix(),
-          }
-          assert manifest_paths == expected_hashed
-          all_files = {
-              path.relative_to(bundle).as_posix() for path in bundle.rglob("*") if path.is_file()
-          }
-          assert all_files == expected_hashed | {"SHA256SUMS"}
-          PY
+        run: *validate-release-bundle
 
       - id: publish-testpypi
         name: Publish to TestPyPI with trusted publishing
@@ -366,60 +329,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - id: download-release-artifact
-        name: Download original release artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: ${{ needs.build.outputs.artifact-name }}
-          path: release-bundle/
+      - *download-release-artifact
 
-      - id: revalidate-release-bundle
-        name: Revalidate original release artifact
-        env:
-          EXPECTED_ARTIFACT_NAME: ${{ needs.build.outputs.artifact-name }}
-          EXPECTED_COMMIT: ${{ needs.build.outputs.commit }}
-          EXPECTED_PROJECT_NAME: ${{ needs.build.outputs.project-name }}
-          EXPECTED_TAG: ${{ needs.build.outputs.tag }}
-          EXPECTED_TREE: ${{ needs.build.outputs.tree }}
-          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          set -euo pipefail
-          (cd release-bundle && sha256sum --check SHA256SUMS)
-          python3 - <<'PY'
-          import json
-          import os
-          import pathlib
-
-          bundle = pathlib.Path("release-bundle")
-          source = json.loads(bundle.joinpath("release-source.json").read_text())
-          expected = {
-              "artifact_name": os.environ["EXPECTED_ARTIFACT_NAME"],
-              "commit": os.environ["EXPECTED_COMMIT"],
-              "project_name": os.environ["EXPECTED_PROJECT_NAME"],
-              "tag": os.environ["EXPECTED_TAG"],
-              "tree": os.environ["EXPECTED_TREE"],
-              "version": os.environ["EXPECTED_VERSION"],
-          }
-          assert {key: source[key] for key in expected} == expected
-          wheels = list(bundle.glob("dist/*.whl"))
-          sdists = list(bundle.glob("dist/*.tar.gz"))
-          assert len(wheels) == 1, wheels
-          assert len(sdists) == 1, sdists
-          manifest_paths = {
-              line.split("  ", 1)[1]
-              for line in bundle.joinpath("SHA256SUMS").read_text().splitlines()
-          }
-          expected_hashed = {
-              "release-source.json",
-              wheels[0].relative_to(bundle).as_posix(),
-              sdists[0].relative_to(bundle).as_posix(),
-          }
-          assert manifest_paths == expected_hashed
-          all_files = {
-              path.relative_to(bundle).as_posix() for path in bundle.rglob("*") if path.is_file()
-          }
-          assert all_files == expected_hashed | {"SHA256SUMS"}
-          PY
+      - *revalidate-release-artifact
 
       - id: setup-uv
         name: Install uv
@@ -440,7 +352,6 @@ jobs:
           import os
           import pathlib
           import time
-          import urllib.error
           import urllib.parse
           import urllib.request
 
@@ -471,7 +382,7 @@ jobs:
                   assert parsed.scheme == "https"
                   assert parsed.hostname == os.environ["ALLOWED_WHEEL_HOST"]
                   break
-              except (AssertionError, KeyError, OSError, ValueError, urllib.error.URLError):
+              except (AssertionError, KeyError, OSError, ValueError):
                   if attempt == attempts:
                       raise
                   time.sleep(min(5 * attempt, 30))
@@ -546,64 +457,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: pypi
-    permissions:
-      contents: read
-      id-token: write
+    permissions: *publisher-permissions
     steps:
-      - id: download-release-artifact
-        name: Download original release artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: ${{ needs.build.outputs.artifact-name }}
-          path: release-bundle/
+      - *download-release-artifact
 
-      - id: revalidate-release-bundle
-        name: Revalidate original release artifact
-        env:
-          EXPECTED_ARTIFACT_NAME: ${{ needs.build.outputs.artifact-name }}
-          EXPECTED_COMMIT: ${{ needs.build.outputs.commit }}
-          EXPECTED_PROJECT_NAME: ${{ needs.build.outputs.project-name }}
-          EXPECTED_TAG: ${{ needs.build.outputs.tag }}
-          EXPECTED_TREE: ${{ needs.build.outputs.tree }}
-          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          set -euo pipefail
-          (cd release-bundle && sha256sum --check SHA256SUMS)
-          python3 - <<'PY'
-          import json
-          import os
-          import pathlib
-
-          bundle = pathlib.Path("release-bundle")
-          source = json.loads(bundle.joinpath("release-source.json").read_text())
-          expected = {
-              "artifact_name": os.environ["EXPECTED_ARTIFACT_NAME"],
-              "commit": os.environ["EXPECTED_COMMIT"],
-              "project_name": os.environ["EXPECTED_PROJECT_NAME"],
-              "tag": os.environ["EXPECTED_TAG"],
-              "tree": os.environ["EXPECTED_TREE"],
-              "version": os.environ["EXPECTED_VERSION"],
-          }
-          assert {key: source[key] for key in expected} == expected
-          wheels = list(bundle.glob("dist/*.whl"))
-          sdists = list(bundle.glob("dist/*.tar.gz"))
-          assert len(wheels) == 1, wheels
-          assert len(sdists) == 1, sdists
-          manifest_paths = {
-              line.split("  ", 1)[1]
-              for line in bundle.joinpath("SHA256SUMS").read_text().splitlines()
-          }
-          expected_hashed = {
-              "release-source.json",
-              wheels[0].relative_to(bundle).as_posix(),
-              sdists[0].relative_to(bundle).as_posix(),
-          }
-          assert manifest_paths == expected_hashed
-          all_files = {
-              path.relative_to(bundle).as_posix() for path in bundle.rglob("*") if path.is_file()
-          }
-          assert all_files == expected_hashed | {"SHA256SUMS"}
-          PY
+      - *revalidate-release-artifact
 
       - id: publish-pypi
         name: Publish to PyPI with trusted publishing

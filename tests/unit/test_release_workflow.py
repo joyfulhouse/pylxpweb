@@ -104,7 +104,6 @@ def test_build_exports_bound_source_and_artifact_identity() -> None:
         "RELEASE_TAG": "${{ github.event.release.tag_name }}",
         "RELEASE_TARGET": "${{ github.event.release.target_commitish }}",
         "RELEASE_URL": "${{ github.event.release.html_url }}",
-        "REPOSITORY": "${{ github.repository }}",
     }
 
 
