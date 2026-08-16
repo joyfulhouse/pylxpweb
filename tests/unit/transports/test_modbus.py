@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -150,6 +152,43 @@ class _GenerationClientFactory:
         client = _GenerationClient(generation, self.clock, self.events, connect_result)
         self.clients.append(client)
         return client
+
+
+class _FakeSocketTransport:
+    """Socket-level transport recording close calls."""
+
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def close(self) -> None:
+        """Record the close call."""
+        self.close_calls += 1
+
+
+@contextlib.contextmanager
+def _session_patches(
+    factory: _GenerationClientFactory,
+    clock: _FakeMonotonicClock,
+    *,
+    hybrid: bool = False,
+) -> Iterator[None]:
+    """Install the fake client factory and monotonic clock seams."""
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("pymodbus.client.AsyncModbusTcpClient", factory))
+        stack.enter_context(
+            patch(
+                "pylxpweb.transports.modbus._monotonic",
+                side_effect=clock.monotonic,
+            )
+        )
+        if hybrid:
+            stack.enter_context(
+                patch(
+                    "pylxpweb.transports.hybrid._monotonic",
+                    side_effect=clock.monotonic,
+                )
+            )
+        yield
 
 
 def _session_setup(
@@ -1069,17 +1108,7 @@ class TestModbusSessionMaxAge:
         refresh_generations: list[list[int]] = []
         error_counts: list[int] = []
 
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-            patch(
-                "pylxpweb.transports.hybrid._monotonic",
-                side_effect=clock.monotonic,
-            ),
-        ):
+        with _session_patches(factory, clock, hybrid=True):
             await transport.connect()
             for _ in range(5):
                 event_start = len(factory.events)
@@ -1120,13 +1149,7 @@ class TestModbusSessionMaxAge:
         """The operation lock makes concurrent expired-session checks single-dial."""
         clock, factory, transport = _session_setup()
 
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-        ):
+        with _session_patches(factory, clock):
             await transport.connect()
             clock.advance(1.0)
             await asyncio.gather(
@@ -1143,13 +1166,7 @@ class TestModbusSessionMaxAge:
         """A failed proactive dial fails fast without redialing for 60 seconds."""
         clock, factory, transport = _session_setup(connect_results=[True, False, True])
 
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-        ):
+        with _session_patches(factory, clock):
             await transport.connect()
             clock.advance(1.0)
 
@@ -1178,17 +1195,7 @@ class TestModbusSessionMaxAge:
         http.read_runtime = AsyncMock(return_value=InverterRuntimeData(pv_total_power=999.0))
         hybrid = HybridTransport(local, http, local_retry_interval=60.0)
 
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-            patch(
-                "pylxpweb.transports.hybrid._monotonic",
-                side_effect=clock.monotonic,
-            ),
-        ):
+        with _session_patches(factory, clock, hybrid=True):
             await hybrid.connect()
             clock.advance(1.0)
             fallback_result = await hybrid.read_runtime()
@@ -1215,17 +1222,7 @@ class TestModbusSessionMaxAge:
         http.read_runtime = AsyncMock(return_value=InverterRuntimeData(pv_total_power=999.0))
         hybrid = HybridTransport(local, http, local_retry_interval=60.0)
 
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-            patch(
-                "pylxpweb.transports.hybrid._monotonic",
-                side_effect=clock.monotonic,
-            ),
-        ):
+        with _session_patches(factory, clock, hybrid=True):
             await hybrid.connect()
             fallback_result = await hybrid.read_runtime()
             clock.advance(60.0)
@@ -1242,13 +1239,7 @@ class TestModbusSessionMaxAge:
         """Runtime, energy, and parameter reads each keep one session generation."""
         # Runtime starts over-age and must recycle before any register read.
         runtime_clock, runtime_factory, runtime_transport = _session_setup()
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", runtime_factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=runtime_clock.monotonic,
-            ),
-        ):
+        with _session_patches(runtime_factory, runtime_clock):
             await runtime_transport.connect()
             runtime_clock.advance(1.0)
             await runtime_transport.read_runtime()
@@ -1260,13 +1251,7 @@ class TestModbusSessionMaxAge:
         # Energy crosses max-age during its first internal group read. The
         # supplementary BMS group must remain on the same generation.
         energy_clock, energy_factory, energy_transport = _session_setup(session_max_age=0.005)
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", energy_factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=energy_clock.monotonic,
-            ),
-        ):
+        with _session_patches(energy_factory, energy_clock):
             await energy_transport.connect()
             await energy_transport.read_energy()
         energy_generations = {
@@ -1277,13 +1262,7 @@ class TestModbusSessionMaxAge:
 
         # Parameter-only workloads must also recycle at their public boundary.
         parameter_clock, parameter_factory, parameter_transport = _session_setup()
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", parameter_factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=parameter_clock.monotonic,
-            ),
-        ):
+        with _session_patches(parameter_factory, parameter_clock):
             await parameter_transport.connect()
             parameter_clock.advance(1.0)
             await parameter_transport.read_parameters(0, 1)
@@ -1298,13 +1277,7 @@ class TestModbusSessionMaxAge:
     async def test_device_info_read_recycles_at_public_boundary(self) -> None:
         """A holding-register device-info workload does not retain an old session."""
         clock, factory, transport = _session_setup()
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-        ):
+        with _session_patches(factory, clock):
             await transport.connect()
             clock.advance(1.0)
             await transport.read_device_type()
@@ -1318,13 +1291,7 @@ class TestModbusSessionMaxAge:
     async def test_named_write_rmw_is_not_split_by_age_recycle(self) -> None:
         """Crossing max-age after the RMW read cannot recycle before its write."""
         clock, factory, transport = _session_setup(session_max_age=0.05)
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-        ):
+        with _session_patches(factory, clock):
             await transport.connect()
             await transport.write_named_parameters({"FUNC_EPS_EN": True})
 
@@ -1336,13 +1303,7 @@ class TestModbusSessionMaxAge:
     async def test_session_max_age_none_never_recycles(self) -> None:
         """The explicit None opt-out retains one TCP client across many hours."""
         clock, factory, transport = _session_setup(session_max_age=None)
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-        ):
+        with _session_patches(factory, clock):
             await transport.connect()
             for _ in range(3):
                 clock.advance(4 * 3600.0)
@@ -1380,14 +1341,7 @@ class TestModbusSessionMaxAge:
     ) -> None:
         """A failed proactive dial surfaces the age-recycle reason at WARNING."""
         clock, factory, transport = _session_setup(connect_results=[True, False])
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-            caplog.at_level(logging.WARNING),
-        ):
+        with _session_patches(factory, clock), caplog.at_level(logging.WARNING):
             await transport.connect()
             clock.advance(1.0)
             with pytest.raises(TransportConnectionError):
@@ -1476,28 +1430,21 @@ class TestModbusSessionMaxAge:
         connect_started = asyncio.Event()
         release_connect = asyncio.Event()
 
-        class FakeSocketTransport:
-            def __init__(self) -> None:
-                self.close_calls = 0
-
-            def close(self) -> None:
-                self.close_calls += 1
-
         class FakeContext:
             def __init__(self) -> None:
                 self.is_closing = False
-                self.transport: FakeSocketTransport | None = None
+                self.transport: _FakeSocketTransport | None = None
 
         class FaithfulPymodbusClient:
             def __init__(self) -> None:
                 self.ctx = FakeContext()
-                self.late_transport: FakeSocketTransport | None = None
+                self.late_transport: _FakeSocketTransport | None = None
 
             async def connect(self) -> bool:
                 self.ctx.is_closing = False
                 connect_started.set()
                 await release_connect.wait()
-                self.late_transport = FakeSocketTransport()
+                self.late_transport = _FakeSocketTransport()
                 self.ctx.transport = self.late_transport
                 return True
 
@@ -1536,24 +1483,17 @@ class TestModbusSessionMaxAge:
         connect_started = asyncio.Event()
         release_connect = asyncio.Event()
 
-        class FakeSocketTransport:
-            def __init__(self) -> None:
-                self.close_calls = 0
-
-            def close(self) -> None:
-                self.close_calls += 1
-
         class LegacyPymodbusClient:
             def __init__(self) -> None:
                 self.is_closing = False
-                self.transport: FakeSocketTransport | None = None
-                self.late_transport: FakeSocketTransport | None = None
+                self.transport: _FakeSocketTransport | None = None
+                self.late_transport: _FakeSocketTransport | None = None
 
             async def connect(self) -> bool:
                 self.is_closing = False
                 connect_started.set()
                 await release_connect.wait()
-                self.late_transport = FakeSocketTransport()
+                self.late_transport = _FakeSocketTransport()
                 self.transport = self.late_transport
                 return True
 
@@ -1651,13 +1591,7 @@ class TestModbusSessionMaxAge:
         """An explicit disconnect clears stale retry state and cannot resurrect."""
         clock, factory, transport = _session_setup(connect_results=[True, True])
 
-        with (
-            patch("pymodbus.client.AsyncModbusTcpClient", factory),
-            patch(
-                "pylxpweb.transports.modbus._monotonic",
-                side_effect=clock.monotonic,
-            ),
-        ):
+        with _session_patches(factory, clock):
             await transport.connect()
             transport._reconnect_retry_after = clock.monotonic()
             await transport.disconnect()

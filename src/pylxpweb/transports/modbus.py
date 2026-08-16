@@ -51,6 +51,8 @@ class _ClosingStateOwner(Protocol):
 
 def _closing_state_owner(client: object) -> _ClosingStateOwner | None:
     """Resolve closing state across supported pymodbus client layouts."""
+    # Verified layouts: >=3.7 keeps is_closing on the TransactionManager at
+    # client.ctx; 3.6.x keeps it on the client itself (ModbusProtocol).
     ctx = getattr(client, "ctx", None)
     if ctx is not None and hasattr(ctx, "is_closing"):
         return cast(_ClosingStateOwner, ctx)
