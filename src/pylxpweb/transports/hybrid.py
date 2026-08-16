@@ -32,6 +32,11 @@ _LOGGER = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+def _monotonic() -> float:
+    """Return monotonic time through a transport-local test seam."""
+    return time.monotonic()
+
+
 class HybridTransport(BaseTransport):
     """Transport that tries local first, falls back to HTTP on failure.
 
@@ -108,7 +113,7 @@ class HybridTransport(BaseTransport):
         if self._local_failed_at is None:
             return True
         # Check if retry interval has passed
-        return time.monotonic() - self._local_failed_at >= self._local_retry_interval
+        return _monotonic() - self._local_failed_at >= self._local_retry_interval
 
     @property
     def local_transport(self) -> ModbusTransport | DongleTransport:
@@ -131,7 +136,7 @@ class HybridTransport(BaseTransport):
 
     def _mark_local_failed(self) -> None:
         """Mark local transport as failed, enabling HTTP fallback."""
-        self._local_failed_at = time.monotonic()
+        self._local_failed_at = _monotonic()
         self._using_local = False
         _LOGGER.warning(
             "Local transport failed for %s, using HTTP fallback for %.0f seconds",
@@ -168,7 +173,7 @@ class HybridTransport(BaseTransport):
         self._ensure_connected()
         self._check_local_recovery()
 
-        if self._using_local and self._local.is_connected:
+        if self._using_local:
             try:
                 return await local_op()
             except (

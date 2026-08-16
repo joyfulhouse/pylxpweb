@@ -34,7 +34,7 @@ from .exceptions import (
     TransportTimeoutError,
     TransportWriteError,
 )
-from .observation import RegisterObserver, RegisterSegment
+from .observation import RegisterObserver
 from .protocol import BaseTransport
 
 if TYPE_CHECKING:
@@ -76,6 +76,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         pymodbus_retries: int = 3,
         max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
         register_observer: RegisterObserver | None = None,
+        session_max_age: float | None = None,
     ) -> None:
         """Initialize base Modbus transport.
 
@@ -99,6 +100,9 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 rejects large reads automatically falls back to the plain
                 grouped reads (eg4_web_monitor#254).
             register_observer: Optional callback for terminal raw-register segments.
+            session_max_age: Maximum connection age in seconds, or None to
+                disable proactive recycling. The base default keeps serial
+                transports from reopening their ports periodically.
         """
         super().__init__(serial, register_observer=register_observer)
         self._unit_id = unit_id
@@ -110,12 +114,15 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._retry_delay = retry_delay
         self._inter_register_delay = inter_register_delay
         self._pymodbus_retries = pymodbus_retries
+        self._session_max_age = session_max_age
         self._init_input_coalescing(max_input_block_size)
         self._client: Any = None
         self._lock = asyncio.Lock()
         self._consecutive_errors: int = 0
         self._max_consecutive_errors: int = 3
         self._last_read_retried: bool = False
+        self._op_guard_depth: int = 0
+        self._shutdown_requested = False
 
     # ------------------------------------------------------------------
     # Properties
@@ -167,6 +174,12 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     # Register Read/Write (with retry and error tracking)
     # ------------------------------------------------------------------
 
+    def _require_active_client(self) -> Any:
+        """Return the active client or raise a typed connection error."""
+        if self._client is None or self._shutdown_requested:
+            raise TransportConnectionError(f"Transport not connected for {self._serial}")
+        return self._client
+
     async def _read_registers(
         self,
         address: int,
@@ -190,9 +203,6 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         """
         self._ensure_connected()
 
-        if self._client is None:
-            raise TransportConnectionError("Modbus client not initialized")
-
         reg_type = "input" if input_registers else "holding"
         last_err: Exception | None = None
         self._last_read_retried = False
@@ -200,16 +210,18 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         for attempt in range(self._retries + 1):
             async with self._lock:
                 try:
+                    client = self._require_active_client()
                     read_fn = (
-                        self._client.read_input_registers
+                        client.read_input_registers
                         if input_registers
-                        else self._client.read_holding_registers
+                        else client.read_holding_registers
                     )
                     result = await read_fn(
                         address=address,
                         count=count,
                         device_id=self._unit_id,
                     )
+                    self._require_active_client()
 
                     if result.isError():
                         raise TransportReadError(
@@ -336,23 +348,22 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         """
         self._ensure_connected()
 
-        if self._client is None:
-            raise TransportConnectionError("Modbus client not initialized")
-
         async with self._lock:
             try:
+                client = self._require_active_client()
                 if len(values) == 1:
-                    result = await self._client.write_register(
+                    result = await client.write_register(
                         address=address,
                         value=values[0],
                         device_id=self._unit_id,
                     )
                 else:
-                    result = await self._client.write_registers(
+                    result = await client.write_registers(
                         address=address,
                         values=values,
                         device_id=self._unit_id,
                     )
+                self._require_active_client()
 
                 if result.isError():
                     # Functional exception response: the device answered, so
@@ -411,49 +422,34 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
 
     @contextlib.asynccontextmanager
     async def _op_guard(self) -> AsyncIterator[None]:
-        """Reconnect if the error gate is tripped, then hold the op lock."""
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
+        """Check reconnect once while holding the outermost operation boundary."""
         async with self._op_lock:
-            yield
+            self._op_guard_depth += 1
+            try:
+                if self._op_guard_depth == 1:
+                    await self._reconnect()
+                yield
+            finally:
+                self._op_guard_depth -= 1
 
     # ------------------------------------------------------------------
-    # Override: adaptive inter-group delay + auto-reconnect
+    # Public operation boundaries: one reconnect check per complete operation
     # ------------------------------------------------------------------
 
-    async def _read_register_groups(
-        self,
-        group_names: list[str] | None = None,
-        segments: list[RegisterSegment] | None = None,
-    ) -> dict[int, int]:
-        """Read register groups with adaptive delay and auto-reconnect.
+    async def read_runtime(self) -> InverterRuntimeData:
+        """Read the complete runtime snapshot under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_runtime()
 
-        Overrides ``RegisterDataMixin._read_register_groups`` to add the
-        auto-reconnect gate.  The adaptive delay increase after low-level
-        retries lives in the shared ``_read_group_plan`` loop (keyed on
-        ``_last_read_retried``, which only Modbus transports track).
-        """
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
-
-        return await super()._read_register_groups(group_names, segments)
-
-    # ------------------------------------------------------------------
-    # Overrides: combined read + read_battery with reconnect check
-    # ------------------------------------------------------------------
+    async def read_energy(self) -> InverterEnergyData:
+        """Read all energy and supplementary groups under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_energy()
 
     async def read_all_input_data(
         self,
     ) -> tuple[InverterRuntimeData, InverterEnergyData, BatteryBankData | None]:
-        """Read all input registers with reconnect on consecutive errors.
-
-        Overrides ``RegisterDataMixin.read_all_input_data`` to add the same
-        auto-reconnect check that ``_read_register_groups`` has.  Without this
-        override, a dropped TCP connection is never healed in HYBRID mode
-        because the combined read path bypasses ``_read_register_groups``
-        entirely, so ``_consecutive_errors`` accumulates but the reconnect
-        gate never fires.
-        """
+        """Read all input registers under one guarded public operation boundary."""
         async with self._op_guard():
             return await super().read_all_input_data()
 
@@ -481,9 +477,18 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         start_address: int,
         count: int,
     ) -> dict[int, int]:
-        """Read holding registers with op-level lock."""
-        async with self._op_lock:
+        """Read holding registers with reconnect gate and op-level lock."""
+        async with self._op_guard():
             return await super().read_parameters(start_address, count)
+
+    async def read_named_parameters(
+        self,
+        start_address: int,
+        count: int,
+    ) -> dict[str, Any]:
+        """Read and decode named parameters under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_named_parameters(start_address, count)
 
     async def read_quick_charge_remaining_seconds(self) -> int | None:
         """Read quick-charge remaining seconds (input reg 210) with op lock."""
@@ -515,6 +520,31 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         """
         async with self._op_guard():
             return await super().write_named_parameters(parameters)
+
+    async def read_serial_number(self) -> str:
+        """Read the serial number under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_serial_number()
+
+    async def read_firmware_version(self) -> str:
+        """Read the firmware version under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_firmware_version()
+
+    async def read_device_type(self) -> int:
+        """Read the device type under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_device_type()
+
+    async def read_parallel_config(self) -> int:
+        """Read the parallel configuration under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_parallel_config()
+
+    async def validate_serial(self, expected_serial: str) -> bool:
+        """Validate the serial number under one operation boundary."""
+        async with self._op_guard():
+            return await super().validate_serial(expected_serial)
 
     # ------------------------------------------------------------------
     # Reconnect (subclasses may override for custom logging)
