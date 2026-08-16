@@ -200,9 +200,6 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         """
         self._ensure_connected()
 
-        if self._client is None:
-            raise TransportConnectionError("Modbus client not initialized")
-
         reg_type = "input" if input_registers else "holding"
         last_err: Exception | None = None
         self._last_read_retried = False
@@ -347,9 +344,6 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
             TransportTimeoutError: If operation times out
         """
         self._ensure_connected()
-
-        if self._client is None:
-            raise TransportConnectionError("Modbus client not initialized")
 
         async with self._lock:
             try:

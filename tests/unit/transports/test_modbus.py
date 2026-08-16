@@ -1471,19 +1471,44 @@ class TestModbusSessionMaxAge:
 
     @pytest.mark.asyncio
     async def test_async_shutdown_bypasses_inflight_connect(self) -> None:
-        """Terminal shutdown closes a dialing client without waiting for its lock."""
+        """Terminal shutdown reclaims a socket installed after the first close."""
         connect_started = asyncio.Event()
         release_connect = asyncio.Event()
-        client = MagicMock()
-        client.ctx = None
-        client.close = MagicMock()
 
-        async def blocking_connect() -> bool:
-            connect_started.set()
-            await release_connect.wait()
-            return True
+        class FakeSocketTransport:
+            def __init__(self) -> None:
+                self.close_calls = 0
 
-        client.connect = blocking_connect
+            def close(self) -> None:
+                self.close_calls += 1
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.is_closing = False
+                self.transport: FakeSocketTransport | None = None
+
+        class FaithfulPymodbusClient:
+            def __init__(self) -> None:
+                self.ctx = FakeContext()
+                self.late_transport: FakeSocketTransport | None = None
+
+            async def connect(self) -> bool:
+                self.ctx.is_closing = False
+                connect_started.set()
+                await release_connect.wait()
+                self.late_transport = FakeSocketTransport()
+                self.ctx.transport = self.late_transport
+                return True
+
+            def close(self) -> None:
+                if self.ctx.is_closing:
+                    return
+                self.ctx.is_closing = True
+                if self.ctx.transport is not None:
+                    self.ctx.transport.close()
+                    self.ctx.transport = None
+
+        client = FaithfulPymodbusClient()
         transport = ModbusTransport(host="192.168.1.100", serial="CE12345678")
 
         with patch("pymodbus.client.AsyncModbusTcpClient", return_value=client):
@@ -1492,15 +1517,17 @@ class TestModbusSessionMaxAge:
             await asyncio.wait_for(transport.async_shutdown(), timeout=0.1)
             assert connect_task.done() is False
             assert transport.is_connected is False
-            client.close.assert_called_once()
-            client.close.reset_mock()
+            assert client.ctx.is_closing is True
+            assert client.ctx.transport is None
 
             release_connect.set()
             with pytest.raises(TransportConnectionError, match="shut down"):
                 await connect_task
 
         assert transport._client is None
-        client.close.assert_called_once()
+        assert client.late_transport is not None
+        assert client.late_transport.close_calls == 1
+        assert client.ctx.transport is None
 
     @pytest.mark.asyncio
     async def test_shutdown_between_read_attempts_raises_typed_error(self) -> None:

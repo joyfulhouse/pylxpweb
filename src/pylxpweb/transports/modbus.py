@@ -220,6 +220,12 @@ class ModbusTransport(BaseModbusTransport):
 
             connected = await client.connect()
             if self._shutdown_requested:
+                # pymodbus close() becomes a no-op after the first call sets
+                # ctx.is_closing, even if the in-flight dial later installs a
+                # transport. Reset the guard so this close reclaims that socket.
+                ctx = getattr(client, "ctx", None)
+                if ctx is not None:
+                    ctx.is_closing = False
                 client.close()
             self._raise_if_shutdown()
             if not connected:
