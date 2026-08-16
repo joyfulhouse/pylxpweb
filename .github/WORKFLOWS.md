@@ -1,190 +1,135 @@
-# GitHub Workflows Documentation
+# GitHub Workflows
 
-This document explains the CI/CD setup for pylxpweb.
+This document describes the CI and package-publication paths for pylxpweb. The
+workflow files are the source of truth for their executable details.
 
-## Overview
+## Pull request CI (`ci.yml`)
 
-The project uses a three-stage workflow optimized for efficiency:
+CI runs for pull requests and can also be started manually. It does not run for
+pushes to `main`.
 
-```
-PR → CI runs → Merge to main (no CI rerun) → Tag → Auto-release → Publish to PyPI
-```
+The workflow has four jobs:
 
-## Workflows
+1. `lint` runs Ruff checks, Ruff formatting validation, and strict mypy.
+2. `test` runs the unit suite with coverage and uploads coverage artifacts.
+3. `integration` runs after lint and unit tests in the protected
+   `integration-tests` environment. Dependabot pull requests skip this job.
+4. `ci-success` aggregates the preceding results for branch protection.
 
-### 1. CI Workflow (`ci.yml`)
+## Package release (`release.yml`)
 
-**Trigger**: Pull requests only (not pushes to main)
+The only publishing trigger is a GitHub Release `published` event. Pushing a tag
+does not run this workflow, and a manual dispatch cannot publish to either package
+index.
 
-**Purpose**: Run all quality checks before code is merged
+### Published-release path
 
-**Jobs**:
-- Lint & Type Check (ruff, mypy)
-- Unit Tests (pytest with coverage)
-- Integration Tests (real API tests)
-- CI Success (aggregate status check)
+Publishing is a four-job promotion chain:
 
-**Why no push to main?**
-- Prevents redundant CI runs
-- Branch protection ensures CI passes before merge
-- Code is already tested in the PR
+1. `build` resolves the release's existing `v*` tag, peels it to a commit and
+   tree, and checks that the tag version, project metadata, release event, release
+   target, checked-out commit, and `origin/main` ancestry agree. It builds exactly
+   one wheel and one source distribution from a locked, unchanged checkout, runs
+   `twine check`, records source identity in `release-source.json`, and records
+   each distribution and the source manifest in `SHA256SUMS`.
+2. `publish-testpypi` downloads and revalidates that one named Actions artifact,
+   then publishes it to TestPyPI with trusted publishing. `skip-existing` is
+   permitted here so an interrupted release can resume at the verification gate.
+3. `verify-testpypi` is unprivileged. It downloads and revalidates the original
+   Actions artifact, polls the exact TestPyPI name and version with bounded
+   retries, requires the exact non-yanked filename and SHA256 set, downloads the
+   allowlisted HTTPS wheel, and rehashes it. The job installs that local wheel in
+   a clean environment while resolving dependencies only from production PyPI,
+   then validates installed metadata and import behavior.
+4. `publish-pypi` runs only after verification succeeds. It again downloads and
+   revalidates the original artifact, then publishes those same bytes to PyPI. It
+   never rebuilds and never uses `skip-existing`.
 
-### 2. Release Workflow (`release.yml`)
+The build artifact is named from the project version and peeled commit and is
+retained for 30 days. The workflow default permission is `contents: read`; only
+the two publisher jobs receive `id-token: write`. Production uses the protected
+`pypi` environment, while TestPyPI uses `testpypi`.
 
-**Trigger**: Version tags (`v*.*.*`)
+### Manual validation path
 
-**Purpose**: Automatically create GitHub Release with changelog
-
-**Example**:
-```bash
-git tag v0.3.4
-git push origin v0.3.4
-# → Automatically creates GitHub Release
-```
-
-**What it does**:
-1. Extracts version from tag
-2. Pulls changelog section for that version from CHANGELOG.md
-3. Creates GitHub Release with changelog
-
-### 3. Publish Workflow (`publish.yml`)
-
-**Trigger**: GitHub Release published (automatic from release.yml)
-
-**Purpose**: Build and publish package to PyPI
-
-**Jobs**:
-1. Build package (uv build + twine check)
-2. Publish to TestPyPI (for verification)
-3. Publish to PyPI (production)
-
-**Why no tests?**
-- All code is already tested in the PR (via CI workflow)
-- Branch protection prevents untested code from reaching main
-- Re-running tests would be redundant and wasteful
-
-## Branch Protection
-
-The `main` branch is protected with these rules:
-
-- ✅ Require pull request before merging (no direct commits)
-- ✅ Require "CI Success" status check to pass
-- ✅ Require branches to be up to date before merging
-- ✅ Dismiss stale PR reviews when new commits pushed
-- ✅ Enforce rules for administrators
-- ✅ Block force pushes
-- ✅ Block branch deletion
-
-### Setup Branch Protection
-
-Run once to configure:
+Manual dispatch requires an existing `v*` tag:
 
 ```bash
-.github/setup-branch-protection.sh
+gh workflow run release.yml --ref main -f tag=v0.10.0b3
 ```
 
-Or configure manually at:
-https://github.com/joyfulhouse/pylxpweb/settings/branches
+The dispatch must select `main`. It runs only the source-identity, build, package,
+manifest, and artifact checks. All publication and remote-index verification jobs
+are skipped. Use this path to validate release construction without publishing.
 
-## Release Process
+### Required repository settings
 
-### Standard Release (Patch/Minor)
+Before relying on the published-release path, verify these settings after the
+workflow change merges:
 
-1. **Bump version** in PR:
-   ```bash
-   # Update version in:
-   # - src/pylxpweb/__init__.py
-   # - pyproject.toml
-   # - CHANGELOG.md
-   ```
+- The `pypi` environment requires a reviewer, limits deployment tags to `v*`, and
+  does not allow administrators to bypass protection.
+- The `testpypi` environment limits deployment tags to `v*`.
+- PyPI and TestPyPI trusted-publisher bindings match this repository, the
+  `release.yml` workflow, and their respective environment names.
 
-2. **Create and merge PR**:
-   - CI runs automatically
-   - Merge after "CI Success" passes
+These are post-merge settings gates. The workflow and this document do not apply
+or mutate repository, environment, or package-index settings.
 
-3. **Tag and push**:
-   ```bash
-   git checkout main
-   git pull
-   git tag v0.3.4
-   git push origin v0.3.4
-   ```
+## Release procedure
 
-4. **Automatic from here**:
-   - `release.yml` creates GitHub Release
-   - `publish.yml` publishes to PyPI
+1. Prepare the version in a pull request. `project.version` in `pyproject.toml`
+   must be the intended tag without the leading `v`.
+2. Merge the reviewed change to `main` after CI succeeds.
+3. Create the `v*` tag on the intended `main` commit.
+4. Optionally run the manual validation path for that tag.
+5. Publish a GitHub Release for the same tag. Publication starts the package
+   promotion chain.
+6. Review the TestPyPI verification result and approve the protected `pypi`
+   environment when prompted.
 
-### Manual Publish (Emergency)
+Do not create a second production upload for an existing version. Production
+publication deliberately fails instead of skipping existing files.
 
-If you need to publish without creating a release:
+## Executable builds (`build-executables.yml`)
+
+Publishing a GitHub Release also starts the separate executable-build workflow for
+Windows, macOS, and Linux. It can be dispatched manually. This path is independent
+of the Python package promotion artifact described above.
+
+## Local validation
+
+Use the locked uv environment:
 
 ```bash
-gh workflow run publish.yml -f environment=pypi
-```
-
-## Workflow Efficiency
-
-### Before (Old Setup)
-```
-PR: CI runs (5 min)
-Merge: CI runs again (5 min) ❌ Redundant!
-Release: CI runs third time (5 min) ❌ Redundant!
-Publish: 2 min
-Total: 17 minutes, 2 redundant CI runs
-```
-
-### After (New Setup)
-```
-PR: CI runs (5 min)
-Merge: No CI (instant) ✅
-Tag: Release created (10 sec) ✅
-Publish: 2 min ✅
-Total: 7 minutes, zero redundancy
-```
-
-**Savings**: 10 minutes per release + 2 fewer CI runs
-
-## CI Run Statistics
-
-- **Unit Tests**: ~53 seconds (492 tests)
-- **Integration Tests**: ~2.5 minutes (67 tests)
-- **Lint & Type Check**: ~14 seconds
-- **Total CI Time**: ~3.5 minutes per PR
-
-## Troubleshooting
-
-### CI didn't run on my PR
-- Check that the PR is targeting `main` branch
-- Manually trigger: Go to Actions → CI → Run workflow
-
-### Release didn't create
-- Verify tag format: `v*.*.*` (e.g., `v0.3.4`)
-- Check Actions tab for errors
-- Manually create release via GitHub UI
-
-### Publish failed
-- Check PyPI credentials (OIDC configured?)
-- Verify version doesn't already exist on PyPI
-- Check Actions tab for detailed error logs
-
-## Local Testing
-
-Before pushing:
-
-```bash
-# Run all checks locally
-uv run ruff check --fix && uv run ruff format
+uv sync --locked --all-extras
+uv run pytest tests/unit/test_release_workflow.py -v
+uv run pytest tests/unit/ -q
+uv run ruff check src/ tests/
+uv run ruff format --check src/ tests/
 uv run mypy --strict src/pylxpweb/
-uv run pytest tests/unit/ --cov=pylxpweb
-uv run pytest tests/integration/ -m integration  # Requires .env
-
-# Build package
 uv build
 uv run twine check dist/*
 ```
 
+No local command exercises a publisher job. TestPyPI and PyPI publication require
+the GitHub-hosted release event, protected environments, and trusted publishing.
+
+## Troubleshooting
+
+- A manual run with skipped `build` selected a ref other than `main`.
+- A source-identity failure means the event tag, project version, commit, tree,
+  release target, or `main` ancestry did not agree. Correct the release inputs; do
+  not weaken the check.
+- A TestPyPI verification failure means the remote name, version, filenames,
+  yanked state, hashes, downloaded wheel, dependency install, metadata, or import
+  did not match the built artifact.
+- A PyPI job waiting for approval is enforcing the production environment gate.
+- An OIDC failure requires checking the corresponding trusted-publisher binding;
+  do not add long-lived package-index credentials.
+
 ## References
 
-- [GitHub Branch Protection](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches)
 - [GitHub Actions](https://docs.github.com/en/actions)
-- [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
+- [GitHub deployment environments](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
+- [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/)
