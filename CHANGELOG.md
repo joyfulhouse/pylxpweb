@@ -16,12 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the new runtime-checkable `RegisterObserverControl` capability lets callers
   use `set_register_observer(...)` on concrete local transports to replace or
   detach their synchronous register observer without reconnecting. Hybrid
-  transports delegate that control only to their local transport. A change
-  revokes enabled captures that have not reached observer dispatch and rejects
-  queued dispatch from an older observer generation; it does not cancel or
-  drain transport operations, and it does not widen the existing transport
-  protocols. Observer callbacks must still return `None`; a borrowed
-  `Future` or `Task` returned in error is rejected without being cancelled.
+  transports apply the change only to their local transport. Observations
+  still being captured or queued for delivery are not sent to the previous
+  observer after a change. Existing structural transport protocols remain
+  unchanged, and observers remain synchronous callbacks that return `None`.
 
 ## [0.10.0b2] - 2026-08-15
 
