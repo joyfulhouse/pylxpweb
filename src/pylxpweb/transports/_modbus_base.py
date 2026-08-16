@@ -74,6 +74,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         inter_register_delay: float = 0.05,
         pymodbus_retries: int = 3,
         max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
+        session_max_age: float | None = None,
     ) -> None:
         """Initialize base Modbus transport.
 
@@ -96,6 +97,9 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 groups into fewer reads for faster polling; hardware that
                 rejects large reads automatically falls back to the plain
                 grouped reads (eg4_web_monitor#254).
+            session_max_age: Maximum connection age in seconds, or None to
+                disable proactive recycling. The base default keeps serial
+                transports from reopening their ports periodically.
         """
         super().__init__(serial)
         self._unit_id = unit_id
@@ -107,6 +111,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._retry_delay = retry_delay
         self._inter_register_delay = inter_register_delay
         self._pymodbus_retries = pymodbus_retries
+        self._session_max_age = session_max_age
         self._init_input_coalescing(max_input_block_size)
         self._client: Any = None
         self._lock = asyncio.Lock()
@@ -408,10 +413,9 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
 
     @contextlib.asynccontextmanager
     async def _op_guard(self) -> AsyncIterator[None]:
-        """Reconnect if the error gate is tripped, then hold the op lock."""
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
+        """Hold the op lock while checking whether the session needs recycling."""
         async with self._op_lock:
+            await self._reconnect()
             yield
 
     # ------------------------------------------------------------------
@@ -429,10 +433,8 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         retries lives in the shared ``_read_group_plan`` loop (keyed on
         ``_last_read_retried``, which only Modbus transports track).
         """
-        if self._consecutive_errors >= self._max_consecutive_errors:
-            await self._reconnect()
-
-        return await super()._read_register_groups(group_names)
+        async with self._op_guard():
+            return await super()._read_register_groups(group_names)
 
     # ------------------------------------------------------------------
     # Overrides: combined read + read_battery with reconnect check

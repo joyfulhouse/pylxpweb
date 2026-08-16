@@ -18,7 +18,9 @@ Disable other Modbus integrations before using this transport.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from ._modbus_base import INPUT_REGISTER_GROUPS, BaseModbusTransport
@@ -33,8 +35,29 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+_DEFAULT_SESSION_MAX_AGE = 3600.0
+_FAILED_RECONNECT_COOLDOWN = 60.0
+
 # Re-export for backward compatibility
 __all__ = ["INPUT_REGISTER_GROUPS", "ModbusTransport"]
+
+
+def _jittered_session_max_age(
+    session_max_age: float | None,
+    *,
+    host: str,
+    port: int,
+    unit_id: int,
+    serial: str,
+) -> float | None:
+    """Apply deterministic per-transport jitter of plus or minus ten percent."""
+    if session_max_age is None:
+        return None
+
+    identity = f"{host}:{port}:{unit_id}:{serial}".encode()
+    digest = hashlib.sha256(identity).digest()
+    fraction = int.from_bytes(digest[:8], "big") / ((1 << 64) - 1)
+    return session_max_age * (0.9 + 0.2 * fraction)
 
 
 class ModbusTransport(BaseModbusTransport):
@@ -85,6 +108,7 @@ class ModbusTransport(BaseModbusTransport):
         inter_register_delay: float = 0.05,
         pymodbus_retries: int = 3,
         max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
+        session_max_age: float | None = _DEFAULT_SESSION_MAX_AGE,
     ) -> None:
         """Initialize Modbus transport.
 
@@ -110,6 +134,10 @@ class ModbusTransport(BaseModbusTransport):
                 field-proven) consolidate adjacent register groups into fewer
                 reads; hardware that rejects large reads automatically falls
                 back to the plain grouped reads (eg4_web_monitor#254).
+            session_max_age: Maximum TCP session age in seconds before a
+                proactive reconnect (default 3600), with deterministic per-
+                transport jitter of plus or minus ten percent. None disables
+                proactive recycling.
         """
         super().__init__(
             serial,
@@ -121,11 +149,21 @@ class ModbusTransport(BaseModbusTransport):
             inter_register_delay=inter_register_delay,
             pymodbus_retries=pymodbus_retries,
             max_input_block_size=max_input_block_size,
+            session_max_age=_jittered_session_max_age(
+                session_max_age,
+                host=host,
+                port=port,
+                unit_id=unit_id,
+                serial=serial,
+            ),
         )
         self._host = host
         self._port = port
         # Narrow type for TCP client
         self._client: AsyncModbusTcpClient | None = None
+        self._session_started_at: float | None = None
+        self._reconnect_retry_after: float | None = None
+        self._session_reconnect_count = 0
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -145,11 +183,6 @@ class ModbusTransport(BaseModbusTransport):
     async def connect(self) -> None:
         """Establish Modbus TCP connection.
 
-        After connecting, performs a synchronization read to drain any stale
-        responses from the gateway's TCP buffer. This prevents transaction ID
-        desynchronization that occurs after integration reload/reconfigure,
-        where the gateway still has buffered responses from the old connection.
-
         Raises:
             TransportConnectionError: If connection fails
         """
@@ -166,12 +199,18 @@ class ModbusTransport(BaseModbusTransport):
 
             connected = await self._client.connect()
             if not connected:
+                self._client.close()
+                self._client = None
+                self._connected = False
+                self._session_started_at = None
                 raise TransportConnectionError(
                     f"Failed to connect to Modbus gateway at {self._host}:{self._port}"
                 )
 
             self._connected = True
             self._consecutive_errors = 0
+            self._session_started_at = time.monotonic()
+            self._reconnect_retry_after = None
 
             # Waveshare "Modbus TCP to RTU" gateways use MBAP framing on
             # the TCP side but don't echo the request's transaction ID —
@@ -192,6 +231,11 @@ class ModbusTransport(BaseModbusTransport):
                 "pymodbus package not installed. Install with: uv add pymodbus"
             ) from err
         except (TimeoutError, OSError) as err:
+            if self._client is not None:
+                self._client.close()
+                self._client = None
+            self._connected = False
+            self._session_started_at = None
             _LOGGER.error(
                 "Failed to connect to Modbus gateway at %s:%s: %s",
                 self._host,
@@ -260,25 +304,60 @@ class ModbusTransport(BaseModbusTransport):
             self._client = None
 
         self._connected = False
+        self._session_started_at = None
         _LOGGER.debug("Modbus transport disconnected for %s", self._serial)
 
     async def _reconnect(self) -> None:
         """Reconnect Modbus client to reset transaction ID state.
 
-        Called when consecutive read errors exceed the threshold, which
-        typically indicates transaction ID desynchronization (pymodbus
-        responses arriving for stale requests).
+        Called at operation boundaries for absent, failed, or over-age sessions.
         """
         async with self._lock:
-            if self._consecutive_errors < self._max_consecutive_errors:
+            now = time.monotonic()
+            if self._reconnect_retry_after is not None and now < self._reconnect_retry_after:
+                remaining = self._reconnect_retry_after - now
+                raise TransportConnectionError(
+                    f"Modbus reconnect cooldown active for {self._serial} "
+                    f"({remaining:.1f}s remaining)"
+                )
+
+            reason: str | None = None
+            if self._consecutive_errors >= self._max_consecutive_errors:
+                reason = "error-recycle"
+            elif self._reconnect_retry_after is not None and (
+                not self._connected or self._session_started_at is None
+            ):
+                reason = "disconnected-reconnect"
+            elif (
+                self._session_max_age is not None
+                and self._session_started_at is not None
+                and now - self._session_started_at >= self._session_max_age
+            ):
+                reason = "age-recycle"
+
+            if reason is None:
                 return
 
-            _LOGGER.warning(
-                "Reconnecting Modbus client for %s after %d consecutive errors "
-                "(likely transaction ID desync)",
-                self._serial,
-                self._consecutive_errors,
-            )
+            self._session_reconnect_count += 1
+            if reason == "error-recycle":
+                _LOGGER.warning(
+                    "Reconnecting Modbus client for %s: reason=%s errors=%d count=%d",
+                    self._serial,
+                    reason,
+                    self._consecutive_errors,
+                    self._session_reconnect_count,
+                )
+            else:
+                _LOGGER.info(
+                    "Reconnecting Modbus client for %s: reason=%s count=%d",
+                    self._serial,
+                    reason,
+                    self._session_reconnect_count,
+                )
+
             await self.disconnect()
-            await self.connect()
-            self._consecutive_errors = 0
+            try:
+                await self.connect()
+            except TransportConnectionError:
+                self._reconnect_retry_after = time.monotonic() + _FAILED_RECONNECT_COOLDOWN
+                raise

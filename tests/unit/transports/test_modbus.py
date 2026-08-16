@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,14 +15,104 @@ from pylxpweb.registers.battery import (
     BATTERY_REGISTER_COUNT,
 )
 from pylxpweb.transports._canonical_reader import read_battery_serial
-from pylxpweb.transports.data import BatteryBankData
+from pylxpweb.transports.data import BatteryBankData, InverterRuntimeData
 from pylxpweb.transports.exceptions import (
     TransportConnectionError,
     TransportReadError,
     TransportTimeoutError,
     TransportWriteError,
 )
+from pylxpweb.transports.hybrid import HybridTransport
 from pylxpweb.transports.modbus import ModbusTransport
+
+
+class _FakeMonotonicClock:
+    """Controllable monotonic clock for session-lifetime tests."""
+
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def monotonic(self) -> float:
+        """Return the current fake timestamp."""
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        """Advance the fake timestamp."""
+        self.now += seconds
+
+
+class _GenerationClient:
+    """Fake pymodbus client tied to one TCP-session generation."""
+
+    def __init__(
+        self,
+        generation: int,
+        clock: _FakeMonotonicClock,
+        events: list[str],
+        connect_result: bool,
+    ) -> None:
+        self.generation = generation
+        self._clock = clock
+        self._events = events
+        self._connect_result = connect_result
+        self._generation_reads = 0
+        self.ctx = None
+
+    async def connect(self) -> bool:
+        """Return this generation's configured dial result."""
+        self._events.append(f"connect:{self.generation}")
+        return self._connect_result
+
+    def close(self) -> None:
+        """Record complete client closure."""
+        self._events.append(f"close:{self.generation}")
+
+    async def read_input_registers(
+        self,
+        address: int,
+        count: int,
+        **kwargs: int,
+    ) -> MagicMock:
+        """Return successful data while simulating generation-specific latency."""
+        self._events.append(f"read:{self.generation}")
+        self._generation_reads += 1
+        if self.generation == 1:
+            refresh_number = (self._generation_reads - 1) // 8 + 1
+            self._clock.advance(0.01 * refresh_number)
+        else:
+            self._clock.advance(0.01)
+
+        response = MagicMock()
+        response.isError.return_value = False
+        response.registers = [0] * count
+        return response
+
+
+class _GenerationClientFactory:
+    """Produce a fresh fake client for each TCP connection attempt."""
+
+    def __init__(
+        self,
+        clock: _FakeMonotonicClock,
+        *,
+        connect_results: list[bool] | None = None,
+    ) -> None:
+        self.clock = clock
+        self.events: list[str] = []
+        self.clients: list[_GenerationClient] = []
+        self._connect_results = connect_results or []
+
+    def __call__(self, **kwargs: object) -> _GenerationClient:
+        """Construct the next client generation."""
+        generation = len(self.clients) + 1
+        connect_result = (
+            self._connect_results[generation - 1]
+            if generation <= len(self._connect_results)
+            else True
+        )
+        client = _GenerationClient(generation, self.clock, self.events, connect_result)
+        self.clients.append(client)
+        return client
 
 
 def _build_battery_slot_values(
@@ -913,6 +1004,161 @@ class TestReadAllInputData:
             # No chunked reads at 5042, 5082, etc.
             assert 5042 not in battery_reads
             assert 5082 not in battery_reads
+
+
+class TestModbusSessionMaxAge:
+    """Regression coverage for latency-only TCP session degradation (#288)."""
+
+    @pytest.mark.asyncio
+    async def test_age_recycle_restores_latency_at_operation_boundary(self) -> None:
+        """Successful but slowing reads recover on one whole-session recycle."""
+        clock = _FakeMonotonicClock()
+        factory = _GenerationClientFactory(clock)
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            inter_register_delay=0,
+            session_max_age=0.5,
+        )
+        durations: list[float] = []
+        refresh_generations: list[list[int]] = []
+        error_counts: list[int] = []
+
+        with (
+            patch("pymodbus.client.AsyncModbusTcpClient", factory),
+            patch("time.monotonic", side_effect=clock.monotonic),
+        ):
+            await transport.connect()
+            for _ in range(5):
+                event_start = len(factory.events)
+                started = clock.monotonic()
+                await transport.read_all_input_data()
+                durations.append(clock.monotonic() - started)
+                refresh_generations.append(
+                    [
+                        int(event.split(":")[1])
+                        for event in factory.events[event_start:]
+                        if event.startswith("read:")
+                    ]
+                )
+                error_counts.append(transport._consecutive_errors)
+
+        assert len(factory.clients) == 2
+        first_healthy = next(
+            index
+            for index, generations in enumerate(refresh_generations)
+            if generations and generations[0] == 2
+        )
+        degraded_durations = durations[:first_healthy]
+
+        assert len(degraded_durations) >= 3
+        assert all(
+            later > earlier
+            for earlier, later in zip(degraded_durations, degraded_durations[1:], strict=False)
+        )
+        assert error_counts == [0] * 5
+        assert factory.events.index("close:1") < factory.events.index("read:2")
+        assert all(len(set(generations)) == 1 for generations in refresh_generations)
+        assert durations[first_healthy] == pytest.approx(0.08)
+        assert durations[first_healthy] < degraded_durations[-1] * 0.5
+
+    @pytest.mark.asyncio
+    async def test_concurrent_age_checks_reconnect_once(self) -> None:
+        """The operation lock makes concurrent expired-session checks single-dial."""
+        clock = _FakeMonotonicClock()
+        factory = _GenerationClientFactory(clock)
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            inter_register_delay=0,
+            session_max_age=0.5,
+        )
+
+        with (
+            patch("pymodbus.client.AsyncModbusTcpClient", factory),
+            patch("time.monotonic", side_effect=clock.monotonic),
+        ):
+            await transport.connect()
+            clock.advance(1.0)
+            await asyncio.gather(
+                transport.read_all_input_data(),
+                transport.read_all_input_data(),
+            )
+
+        assert len(factory.clients) == 2
+        assert factory.events.count("connect:2") == 1
+        assert factory.events.index("close:1") < factory.events.index("read:2")
+
+    @pytest.mark.asyncio
+    async def test_failed_age_reconnect_observes_cooldown(self) -> None:
+        """A failed proactive dial fails fast without redialing for 60 seconds."""
+        clock = _FakeMonotonicClock()
+        factory = _GenerationClientFactory(clock, connect_results=[True, False, True])
+        transport = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            inter_register_delay=0,
+            session_max_age=0.5,
+        )
+
+        with (
+            patch("pymodbus.client.AsyncModbusTcpClient", factory),
+            patch("time.monotonic", side_effect=clock.monotonic),
+        ):
+            await transport.connect()
+            clock.advance(1.0)
+
+            with pytest.raises(TransportConnectionError):
+                await transport.read_all_input_data()
+            assert len(factory.clients) == 2
+
+            clock.advance(59.0)
+            with pytest.raises(TransportConnectionError, match="cooldown"):
+                await transport.read_all_input_data()
+            assert len(factory.clients) == 2
+
+            clock.advance(1.1)
+            await transport.read_all_input_data()
+
+        assert len(factory.clients) == 3
+        assert factory.events.count("connect:3") == 1
+
+    @pytest.mark.asyncio
+    async def test_hybrid_retries_disconnected_local_after_interval(self) -> None:
+        """HYBRID retries local after an age-recycle dial failure disconnects it."""
+        clock = _FakeMonotonicClock()
+        factory = _GenerationClientFactory(clock, connect_results=[True, False, True])
+        local = ModbusTransport(
+            host="192.168.1.100",
+            serial="CE12345678",
+            inter_register_delay=0,
+            session_max_age=0.5,
+        )
+        http = MagicMock()
+        http.connect = AsyncMock()
+        http.disconnect = AsyncMock()
+        http.read_runtime = AsyncMock(return_value=InverterRuntimeData(pv_total_power=999.0))
+        hybrid = HybridTransport(local, http, local_retry_interval=60.0)
+
+        with (
+            patch("pymodbus.client.AsyncModbusTcpClient", factory),
+            patch("time.monotonic", side_effect=clock.monotonic),
+        ):
+            await hybrid.connect()
+            clock.advance(1.0)
+            fallback_result = await hybrid.read_runtime()
+
+            assert fallback_result.pv_total_power == 999.0
+            assert local.is_connected is False
+            assert len(factory.clients) == 2
+
+            clock.advance(60.1)
+            recovered_result = await hybrid.read_runtime()
+
+        assert recovered_result.pv_total_power == 0.0
+        assert local.is_connected is True
+        assert len(factory.clients) == 3
+        http.read_runtime.assert_awaited_once()
 
 
 class TestAdaptiveBatterySlotCeiling:

@@ -158,7 +158,7 @@ class HybridTransport(BaseTransport):
         self._ensure_connected()
         self._check_local_recovery()
 
-        if self._using_local and self._local.is_connected:
+        if self._using_local:
             try:
                 return await local_op()
             except (
