@@ -22,7 +22,7 @@ import asyncio
 import hashlib
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 from ._modbus_base import INPUT_REGISTER_GROUPS, BaseModbusTransport
 from ._register_data import DEFAULT_INPUT_BLOCK_SIZE
@@ -41,6 +41,22 @@ _FAILED_RECONNECT_COOLDOWN = 60.0
 
 # Re-export for backward compatibility
 __all__ = ["INPUT_REGISTER_GROUPS", "ModbusTransport"]
+
+
+class _ClosingStateOwner(Protocol):
+    """Object that owns pymodbus transport closing state."""
+
+    is_closing: bool
+
+
+def _closing_state_owner(client: object) -> _ClosingStateOwner | None:
+    """Resolve closing state across supported pymodbus client layouts."""
+    ctx = getattr(client, "ctx", None)
+    if ctx is not None and hasattr(ctx, "is_closing"):
+        return cast(_ClosingStateOwner, ctx)
+    if hasattr(client, "is_closing"):
+        return cast(_ClosingStateOwner, client)
+    return None
 
 
 def _monotonic() -> float:
@@ -221,11 +237,18 @@ class ModbusTransport(BaseModbusTransport):
             connected = await client.connect()
             if self._shutdown_requested:
                 # pymodbus close() becomes a no-op after the first call sets
-                # ctx.is_closing, even if the in-flight dial later installs a
-                # transport. Reset the guard so this close reclaims that socket.
-                ctx = getattr(client, "ctx", None)
-                if ctx is not None:
-                    ctx.is_closing = False
+                # is_closing, even if the in-flight dial later installs a
+                # transport. Reset its version-dependent owner so this close
+                # reclaims that socket.
+                closing_owner = _closing_state_owner(client)
+                if closing_owner is not None:
+                    closing_owner.is_closing = False
+                else:
+                    _LOGGER.debug(
+                        "Unable to resolve pymodbus closing state for %s; "
+                        "attempting best-effort close",
+                        type(client).__name__,
+                    )
                 client.close()
             self._raise_if_shutdown()
             if not connected:

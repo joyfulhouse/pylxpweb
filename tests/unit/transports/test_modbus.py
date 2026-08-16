@@ -15,6 +15,7 @@ from pylxpweb.registers.battery import (
     BATTERY_MAX_COUNT,
     BATTERY_REGISTER_COUNT,
 )
+from pylxpweb.transports import modbus as modbus_module
 from pylxpweb.transports._canonical_reader import read_battery_serial
 from pylxpweb.transports.data import BatteryBankData, InverterRuntimeData
 from pylxpweb.transports.exceptions import (
@@ -1528,6 +1529,70 @@ class TestModbusSessionMaxAge:
         assert client.late_transport is not None
         assert client.late_transport.close_calls == 1
         assert client.ctx.transport is None
+
+    @pytest.mark.asyncio
+    async def test_async_shutdown_reclaims_legacy_client_socket(self) -> None:
+        """A 3.6-style client with direct state also closes its late socket."""
+        connect_started = asyncio.Event()
+        release_connect = asyncio.Event()
+
+        class FakeSocketTransport:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        class LegacyPymodbusClient:
+            def __init__(self) -> None:
+                self.is_closing = False
+                self.transport: FakeSocketTransport | None = None
+                self.late_transport: FakeSocketTransport | None = None
+
+            async def connect(self) -> bool:
+                self.is_closing = False
+                connect_started.set()
+                await release_connect.wait()
+                self.late_transport = FakeSocketTransport()
+                self.transport = self.late_transport
+                return True
+
+            def close(self) -> None:
+                if self.is_closing:
+                    return
+                self.is_closing = True
+                if self.transport is not None:
+                    self.transport.close()
+                    self.transport = None
+
+        client = LegacyPymodbusClient()
+        transport = ModbusTransport(host="192.168.1.100", serial="CE12345678")
+
+        with patch("pymodbus.client.AsyncModbusTcpClient", return_value=client):
+            connect_task = asyncio.create_task(transport.connect())
+            await asyncio.wait_for(connect_started.wait(), timeout=1.0)
+            await asyncio.wait_for(transport.async_shutdown(), timeout=0.1)
+            release_connect.set()
+            with pytest.raises(TransportConnectionError, match="shut down"):
+                await connect_task
+
+        assert client.late_transport is not None
+        assert client.late_transport.close_calls == 1
+        assert client.transport is None
+
+    @pytest.mark.asyncio
+    async def test_closing_state_owner_matches_installed_pymodbus(self) -> None:
+        """The resolver follows the actual installed AsyncModbusTcpClient shape."""
+        from pymodbus.client import AsyncModbusTcpClient
+
+        client = AsyncModbusTcpClient("127.0.0.1")
+        try:
+            owner = modbus_module._closing_state_owner(client)
+            expected_owner = getattr(client, "ctx", client)
+            assert owner is expected_owner
+            assert hasattr(owner, "is_closing")
+        finally:
+            client.close()
 
     @pytest.mark.asyncio
     async def test_shutdown_between_read_attempts_raises_typed_error(self) -> None:
