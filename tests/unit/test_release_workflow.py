@@ -22,7 +22,7 @@ _FULL_SHA_ACTION = re.compile(r"^[^\s@]+@[0-9a-f]{40}$")
 _PACKAGE_INDEX_PUBLISHER = re.compile(
     r"pypa/gh-action-pypi-publish@|"
     r"https://(?:(?:test|upload)\.)?pypi\.org/legacy/|"
-    r"\b(?:twine\s+upload|uv\s+publish)\b",
+    r"\b(?:twine\s+upload|(?:uv|poetry|hatch|flit|pdm)\s+publish)\b",
     re.IGNORECASE,
 )
 _WHEEL_NAME = "pylxpweb-1.2.3-py3-none-any.whl"
@@ -920,6 +920,21 @@ def test_package_index_workflow_audit_detects_a_competing_publisher(tmp_path: Pa
     )
 
     assert _package_index_publisher_workflows(tmp_path) == {"build-executables.yml"}
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["poetry publish", "hatch publish", "flit publish", "pdm publish"],
+)
+def test_package_index_workflow_audit_detects_known_publish_commands(
+    tmp_path: Path, command: str
+) -> None:
+    """The audit recognizes established Python package publisher commands."""
+    tmp_path.joinpath("competing.yml").write_text(
+        f"jobs:\n  publish:\n    steps:\n      - run: {command}\n"
+    )
+
+    assert _package_index_publisher_workflows(tmp_path) == {"competing.yml"}
 
 
 def test_workflow_docs_define_compromise_response_and_keep_settings_gate() -> None:
