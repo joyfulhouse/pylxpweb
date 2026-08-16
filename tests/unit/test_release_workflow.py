@@ -18,6 +18,12 @@ import yaml
 _WORKFLOW_PATH = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
 _WORKFLOW_DOCS_PATH = Path(__file__).resolve().parents[2] / ".github" / "WORKFLOWS.md"
 _FULL_SHA_ACTION = re.compile(r"^[^\s@]+@[0-9a-f]{40}$")
+_WHEEL_NAME = "pylxpweb-1.2.3-py3-none-any.whl"
+_SDIST_NAME = "pylxpweb-1.2.3.tar.gz"
+_DISTRIBUTIONS = {_WHEEL_NAME: b"wheel bytes", _SDIST_NAME: b"sdist bytes"}
+_DISTRIBUTION_HASHES = {
+    name: hashlib.sha256(content).hexdigest() for name, content in _DISTRIBUTIONS.items()
+}
 
 
 def _workflow() -> dict[str, Any]:
@@ -116,6 +122,15 @@ def _python_heredoc(job_id: str, step_id: str) -> str:
     return match.group("code")
 
 
+def _execute_python_heredoc(job_id: str, step_id: str) -> None:
+    namespace: dict[str, Any] = {"__builtins__": __builtins__}
+    exec(
+        compile(_python_heredoc(job_id, step_id), step_id, "exec"),
+        namespace,
+        namespace,
+    )
+
+
 class _Response(io.BytesIO):
     def __init__(self, content: bytes, url: str) -> None:
         super().__init__(content)
@@ -125,28 +140,39 @@ class _Response(io.BytesIO):
         return self._url
 
 
-def _testpypi_payload(
-    wheel_name: str,
-    sdist_name: str,
-    hashes: dict[str, str],
+def _index_payload(
+    filenames: list[str] | tuple[str, ...],
+    *,
+    file_host: str | None = None,
 ) -> dict[str, Any]:
-    return {
-        "info": {"name": "pylxpweb", "version": "1.2.3"},
-        "urls": [
-            {
-                "filename": wheel_name,
-                "url": f"https://files.test/{wheel_name}",
-                "yanked": False,
-                "digests": {"sha256": hashes[wheel_name]},
-            },
-            {
-                "filename": sdist_name,
-                "url": f"https://files.test/{sdist_name}",
-                "yanked": False,
-                "digests": {"sha256": hashes[sdist_name]},
-            },
-        ],
-    }
+    releases = []
+    for filename in filenames:
+        release = {
+            "filename": filename,
+            "yanked": False,
+            "digests": {"sha256": _DISTRIBUTION_HASHES.get(filename, "0" * 64)},
+        }
+        if file_host is not None:
+            release["url"] = f"https://{file_host}/{filename}"
+        releases.append(release)
+    return {"info": {"name": "pylxpweb", "version": "1.2.3"}, "urls": releases}
+
+
+def _write_release_bundle(tmp_path: Path) -> None:
+    bundle = tmp_path / "release-bundle"
+    dist = bundle / "dist"
+    dist.mkdir(parents=True)
+    for filename, content in _DISTRIBUTIONS.items():
+        dist.joinpath(filename).write_bytes(content)
+    bundle.joinpath("SHA256SUMS").write_text(
+        "\n".join(
+            [
+                f"{'0' * 64}  release-source.json",
+                *(f"{_DISTRIBUTION_HASHES[name]}  dist/{name}" for name in sorted(_DISTRIBUTIONS)),
+            ]
+        )
+        + "\n"
+    )
 
 
 def _run_testpypi_verifier(
@@ -155,26 +181,11 @@ def _run_testpypi_verifier(
     *,
     payload: dict[str, Any],
     downloads: dict[str, bytes],
-    hashes: dict[str, str],
 ) -> None:
-    bundle = tmp_path / "release-bundle"
-    bundle.mkdir()
-    wheel_name = "pylxpweb-1.2.3-py3-none-any.whl"
-    sdist_name = "pylxpweb-1.2.3.tar.gz"
-    bundle.joinpath("SHA256SUMS").write_text(
-        "\n".join(
-            [
-                f"{'0' * 64}  release-source.json",
-                f"{hashes[wheel_name]}  dist/{wheel_name}",
-                f"{hashes[sdist_name]}  dist/{sdist_name}",
-            ]
-        )
-        + "\n"
-    )
+    _write_release_bundle(tmp_path)
     output = tmp_path / "github-output"
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ALLOWED_DISTRIBUTION_HOST", "files.test")
-    monkeypatch.setenv("ALLOWED_WHEEL_HOST", "files.test")
     monkeypatch.setenv("EXPECTED_PROJECT_NAME", "pylxpweb")
     monkeypatch.setenv("EXPECTED_VERSION", "1.2.3")
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
@@ -190,36 +201,25 @@ def _run_testpypi_verifier(
         return _Response(downloads[filename], url)
 
     monkeypatch.setattr("urllib.request.urlopen", urlopen)
-    namespace: dict[str, Any] = {"__builtins__": __builtins__}
-    exec(
-        compile(_python_heredoc("verify-testpypi", "query-testpypi"), "query-testpypi", "exec"),
-        namespace,
-        namespace,
-    )
+    _execute_python_heredoc("verify-testpypi", "query-testpypi")
 
 
 def test_testpypi_verifier_downloads_and_hashes_both_distributions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Remote verification covers the wheel and sdist while exporting the wheel."""
-    wheel_name = "pylxpweb-1.2.3-py3-none-any.whl"
-    sdist_name = "pylxpweb-1.2.3.tar.gz"
-    downloads = {wheel_name: b"wheel bytes", sdist_name: b"sdist bytes"}
-    hashes = {name: hashlib.sha256(content).hexdigest() for name, content in downloads.items()}
-
     _run_testpypi_verifier(
         tmp_path,
         monkeypatch,
-        payload=_testpypi_payload(wheel_name, sdist_name, hashes),
-        downloads=downloads,
-        hashes=hashes,
+        payload=_index_payload(tuple(_DISTRIBUTIONS), file_host="files.test"),
+        downloads=_DISTRIBUTIONS,
     )
 
     verified = tmp_path / "verified-distributions"
-    assert verified.joinpath(wheel_name).read_bytes() == downloads[wheel_name]
-    assert verified.joinpath(sdist_name).read_bytes() == downloads[sdist_name]
+    assert verified.joinpath(_WHEEL_NAME).read_bytes() == _DISTRIBUTIONS[_WHEEL_NAME]
+    assert verified.joinpath(_SDIST_NAME).read_bytes() == _DISTRIBUTIONS[_SDIST_NAME]
     assert (tmp_path / "github-output").read_text() == (
-        f"wheel-path=verified-distributions/{wheel_name}\n"
+        f"wheel-path=verified-distributions/{_WHEEL_NAME}\n"
     )
 
 
@@ -243,21 +243,18 @@ def test_testpypi_verifier_rejects_untrusted_remote_state(
     expected_error: str,
 ) -> None:
     """Index metadata, hosts, file sets, and downloaded bytes fail closed."""
-    wheel_name = "pylxpweb-1.2.3-py3-none-any.whl"
-    sdist_name = "pylxpweb-1.2.3.tar.gz"
-    downloads = {wheel_name: b"wheel bytes", sdist_name: b"sdist bytes"}
-    hashes = {name: hashlib.sha256(content).hexdigest() for name, content in downloads.items()}
-    payload = _testpypi_payload(wheel_name, sdist_name, hashes)
+    downloads = _DISTRIBUTIONS.copy()
+    payload = _index_payload(tuple(_DISTRIBUTIONS), file_host="files.test")
     if case == "wrong-project":
         payload["info"]["name"] = "other"
     elif case == "wrong-version":
         payload["info"]["version"] = "9.9.9"
     elif case == "wrong-host":
-        payload["urls"][1]["url"] = f"https://evil.test/{sdist_name}"
+        payload["urls"][1]["url"] = f"https://evil.test/{_SDIST_NAME}"
     elif case == "wrong-index-hash":
         payload["urls"][1]["digests"]["sha256"] = "0" * 64
     elif case == "wrong-download-hash":
-        downloads[sdist_name] = b"different"
+        downloads[_SDIST_NAME] = b"different"
     elif case == "yanked":
         payload["urls"][1]["yanked"] = True
     elif case == "unexpected":
@@ -278,22 +275,7 @@ def test_testpypi_verifier_rejects_untrusted_remote_state(
             monkeypatch,
             payload=payload,
             downloads=downloads,
-            hashes=hashes,
         )
-
-
-def _pypi_payload(filenames: list[str], hashes: dict[str, str]) -> dict[str, Any]:
-    return {
-        "info": {"name": "pylxpweb", "version": "1.2.3"},
-        "urls": [
-            {
-                "filename": filename,
-                "yanked": False,
-                "digests": {"sha256": hashes.get(filename, "0" * 64)},
-            }
-            for filename in filenames
-        ],
-    }
 
 
 def _run_pypi_state_step(
@@ -304,25 +286,7 @@ def _run_pypi_state_step(
     mode: str,
     responses: list[dict[str, Any] | None],
 ) -> tuple[set[str], str, int]:
-    bundle = tmp_path / "release-bundle"
-    dist = bundle / "dist"
-    dist.mkdir(parents=True)
-    files = {
-        "pylxpweb-1.2.3-py3-none-any.whl": b"wheel bytes",
-        "pylxpweb-1.2.3.tar.gz": b"sdist bytes",
-    }
-    hashes = {name: hashlib.sha256(content).hexdigest() for name, content in files.items()}
-    for filename, content in files.items():
-        dist.joinpath(filename).write_bytes(content)
-    bundle.joinpath("SHA256SUMS").write_text(
-        "\n".join(
-            [
-                f"{'0' * 64}  release-source.json",
-                *(f"{hashes[name]}  dist/{name}" for name in sorted(files)),
-            ]
-        )
-        + "\n"
-    )
+    _write_release_bundle(tmp_path)
     output = tmp_path / "github-output"
     upload = tmp_path / "pypi-upload"
     monkeypatch.chdir(tmp_path)
@@ -347,12 +311,7 @@ def _run_pypi_state_step(
         return _Response(json.dumps(payload).encode(), request.full_url)
 
     monkeypatch.setattr("urllib.request.urlopen", urlopen)
-    namespace: dict[str, Any] = {"__builtins__": __builtins__}
-    exec(
-        compile(_python_heredoc("publish-pypi", step_id), step_id, "exec"),
-        namespace,
-        namespace,
-    )
+    _execute_python_heredoc("publish-pypi", step_id)
     staged = {path.name for path in upload.iterdir()} if upload.exists() else set()
     return staged, output.read_text() if output.exists() else "", calls
 
@@ -362,15 +321,8 @@ def test_pypi_preflight_stages_only_absent_distributions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing_count: int
 ) -> None:
     """A retry publishes none, one, or both files without production skipping."""
-    filenames = [
-        "pylxpweb-1.2.3-py3-none-any.whl",
-        "pylxpweb-1.2.3.tar.gz",
-    ]
-    hashes = {
-        filenames[0]: hashlib.sha256(b"wheel bytes").hexdigest(),
-        filenames[1]: hashlib.sha256(b"sdist bytes").hexdigest(),
-    }
-    payload = None if existing_count == 0 else _pypi_payload(filenames[:existing_count], hashes)
+    filenames = list(_DISTRIBUTIONS)
+    payload = None if existing_count == 0 else _index_payload(filenames[:existing_count])
 
     staged, output, calls = _run_pypi_state_step(
         tmp_path,
@@ -400,9 +352,7 @@ def test_pypi_preflight_rejects_untrusted_existing_files(
     expected_error: str,
 ) -> None:
     """Existing production files are accepted only as an exact trusted subset."""
-    wheel = "pylxpweb-1.2.3-py3-none-any.whl"
-    hashes = {wheel: hashlib.sha256(b"wheel bytes").hexdigest()}
-    payload = _pypi_payload([wheel], hashes)
+    payload = _index_payload([_WHEEL_NAME])
     if case == "wrong-hash":
         payload["urls"][0]["digests"]["sha256"] = "0" * 64
     elif case == "unexpected":
@@ -430,14 +380,7 @@ def test_pypi_final_verification_retries_until_exact_set(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Index propagation is bounded and must converge to the exact file set."""
-    filenames = [
-        "pylxpweb-1.2.3-py3-none-any.whl",
-        "pylxpweb-1.2.3.tar.gz",
-    ]
-    hashes = {
-        filenames[0]: hashlib.sha256(b"wheel bytes").hexdigest(),
-        filenames[1]: hashlib.sha256(b"sdist bytes").hexdigest(),
-    }
+    filenames = list(_DISTRIBUTIONS)
 
     staged, output, calls = _run_pypi_state_step(
         tmp_path,
@@ -445,8 +388,8 @@ def test_pypi_final_verification_retries_until_exact_set(
         step_id="verify-pypi",
         mode="verify",
         responses=[
-            _pypi_payload(filenames[:1], hashes),
-            _pypi_payload(filenames, hashes),
+            _index_payload(filenames[:1]),
+            _index_payload(filenames),
         ],
     )
 
@@ -471,15 +414,7 @@ def test_pypi_final_verification_rejects_untrusted_state(
     expected_error: str,
 ) -> None:
     """Post-publication verification fails closed on every non-exact state."""
-    filenames = [
-        "pylxpweb-1.2.3-py3-none-any.whl",
-        "pylxpweb-1.2.3.tar.gz",
-    ]
-    hashes = {
-        filenames[0]: hashlib.sha256(b"wheel bytes").hexdigest(),
-        filenames[1]: hashlib.sha256(b"sdist bytes").hexdigest(),
-    }
-    payload = _pypi_payload(filenames, hashes)
+    payload = _index_payload(list(_DISTRIBUTIONS))
     if case == "missing":
         payload["urls"].pop()
     elif case == "wrong-hash":
