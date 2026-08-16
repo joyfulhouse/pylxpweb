@@ -199,10 +199,7 @@ class ModbusTransport(BaseModbusTransport):
 
             connected = await self._client.connect()
             if not connected:
-                self._client.close()
-                self._client = None
-                self._connected = False
-                self._session_started_at = None
+                self._drop_session()
                 raise TransportConnectionError(
                     f"Failed to connect to Modbus gateway at {self._host}:{self._port}"
                 )
@@ -231,11 +228,7 @@ class ModbusTransport(BaseModbusTransport):
                 "pymodbus package not installed. Install with: uv add pymodbus"
             ) from err
         except (TimeoutError, OSError) as err:
-            if self._client is not None:
-                self._client.close()
-                self._client = None
-            self._connected = False
-            self._session_started_at = None
+            self._drop_session()
             _LOGGER.error(
                 "Failed to connect to Modbus gateway at %s:%s: %s",
                 self._host,
@@ -297,14 +290,17 @@ class ModbusTransport(BaseModbusTransport):
             self._serial,
         )
 
-    async def disconnect(self) -> None:
-        """Close Modbus TCP connection."""
-        if self._client:
+    def _drop_session(self) -> None:
+        """Close and forget the client, marking the session as dead."""
+        if self._client is not None:
             self._client.close()
             self._client = None
-
         self._connected = False
         self._session_started_at = None
+
+    async def disconnect(self) -> None:
+        """Close Modbus TCP connection."""
+        self._drop_session()
         _LOGGER.debug("Modbus transport disconnected for %s", self._serial)
 
     async def _reconnect(self) -> None:
@@ -324,9 +320,7 @@ class ModbusTransport(BaseModbusTransport):
             reason: str | None = None
             if self._consecutive_errors >= self._max_consecutive_errors:
                 reason = "error-recycle"
-            elif self._reconnect_retry_after is not None and (
-                not self._connected or self._session_started_at is None
-            ):
+            elif self._reconnect_retry_after is not None and not self._connected:
                 reason = "disconnected-reconnect"
             elif (
                 self._session_max_age is not None
@@ -339,21 +333,14 @@ class ModbusTransport(BaseModbusTransport):
                 return
 
             self._session_reconnect_count += 1
-            if reason == "error-recycle":
-                _LOGGER.warning(
-                    "Reconnecting Modbus client for %s: reason=%s errors=%d count=%d",
-                    self._serial,
-                    reason,
-                    self._consecutive_errors,
-                    self._session_reconnect_count,
-                )
-            else:
-                _LOGGER.info(
-                    "Reconnecting Modbus client for %s: reason=%s count=%d",
-                    self._serial,
-                    reason,
-                    self._session_reconnect_count,
-                )
+            _LOGGER.log(
+                logging.WARNING if reason == "error-recycle" else logging.INFO,
+                "Reconnecting Modbus client for %s: reason=%s errors=%d count=%d",
+                self._serial,
+                reason,
+                self._consecutive_errors,
+                self._session_reconnect_count,
+            )
 
             await self.disconnect()
             try:

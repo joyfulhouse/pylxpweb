@@ -115,6 +115,21 @@ class _GenerationClientFactory:
         return client
 
 
+def _session_setup(
+    connect_results: list[bool] | None = None,
+) -> tuple[_FakeMonotonicClock, _GenerationClientFactory, ModbusTransport]:
+    """Build the fake clock, client factory, and transport for session tests."""
+    clock = _FakeMonotonicClock()
+    factory = _GenerationClientFactory(clock, connect_results=connect_results)
+    transport = ModbusTransport(
+        host="192.168.1.100",
+        serial="CE12345678",
+        inter_register_delay=0,
+        session_max_age=0.5,
+    )
+    return clock, factory, transport
+
+
 def _build_battery_slot_values(
     positions: list[int],
     voltage_raw: int = 5246,
@@ -1012,14 +1027,7 @@ class TestModbusSessionMaxAge:
     @pytest.mark.asyncio
     async def test_age_recycle_restores_latency_at_operation_boundary(self) -> None:
         """Successful but slowing reads recover on one whole-session recycle."""
-        clock = _FakeMonotonicClock()
-        factory = _GenerationClientFactory(clock)
-        transport = ModbusTransport(
-            host="192.168.1.100",
-            serial="CE12345678",
-            inter_register_delay=0,
-            session_max_age=0.5,
-        )
+        clock, factory, transport = _session_setup()
         durations: list[float] = []
         refresh_generations: list[list[int]] = []
         error_counts: list[int] = []
@@ -1065,14 +1073,7 @@ class TestModbusSessionMaxAge:
     @pytest.mark.asyncio
     async def test_concurrent_age_checks_reconnect_once(self) -> None:
         """The operation lock makes concurrent expired-session checks single-dial."""
-        clock = _FakeMonotonicClock()
-        factory = _GenerationClientFactory(clock)
-        transport = ModbusTransport(
-            host="192.168.1.100",
-            serial="CE12345678",
-            inter_register_delay=0,
-            session_max_age=0.5,
-        )
+        clock, factory, transport = _session_setup()
 
         with (
             patch("pymodbus.client.AsyncModbusTcpClient", factory),
@@ -1092,14 +1093,7 @@ class TestModbusSessionMaxAge:
     @pytest.mark.asyncio
     async def test_failed_age_reconnect_observes_cooldown(self) -> None:
         """A failed proactive dial fails fast without redialing for 60 seconds."""
-        clock = _FakeMonotonicClock()
-        factory = _GenerationClientFactory(clock, connect_results=[True, False, True])
-        transport = ModbusTransport(
-            host="192.168.1.100",
-            serial="CE12345678",
-            inter_register_delay=0,
-            session_max_age=0.5,
-        )
+        clock, factory, transport = _session_setup(connect_results=[True, False, True])
 
         with (
             patch("pymodbus.client.AsyncModbusTcpClient", factory),
@@ -1126,14 +1120,7 @@ class TestModbusSessionMaxAge:
     @pytest.mark.asyncio
     async def test_hybrid_retries_disconnected_local_after_interval(self) -> None:
         """HYBRID retries local after an age-recycle dial failure disconnects it."""
-        clock = _FakeMonotonicClock()
-        factory = _GenerationClientFactory(clock, connect_results=[True, False, True])
-        local = ModbusTransport(
-            host="192.168.1.100",
-            serial="CE12345678",
-            inter_register_delay=0,
-            session_max_age=0.5,
-        )
+        clock, factory, local = _session_setup(connect_results=[True, False, True])
         http = MagicMock()
         http.connect = AsyncMock()
         http.disconnect = AsyncMock()
