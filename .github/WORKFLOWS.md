@@ -29,21 +29,29 @@ Publishing is a four-job promotion chain:
 1. `build` resolves the release's existing `v*` tag, peels it to a commit and
    tree, and checks that the tag version, project metadata, release event, release
    target, checked-out commit, and `origin/main` ancestry agree. It builds exactly
-   one wheel and one source distribution from a locked, unchanged checkout, runs
-   `twine check`, records source identity in `release-source.json`, and records
-   each distribution and the source manifest in `SHA256SUMS`.
+   one wheel and one source distribution under Python 3.13 from a locked,
+   unchanged checkout, runs `twine check`, records source identity in
+   `release-source.json`, and records each distribution and the source manifest
+   in `SHA256SUMS`.
 2. `publish-testpypi` downloads and revalidates that one named Actions artifact,
    then publishes it to TestPyPI with trusted publishing. `skip-existing` is
    permitted here so an interrupted release can resume at the verification gate.
 3. `verify-testpypi` is unprivileged. It downloads and revalidates the original
    Actions artifact, polls the exact TestPyPI name and version with bounded
-   retries, requires the exact non-yanked filename and SHA256 set, downloads the
-   allowlisted HTTPS wheel, and rehashes it. The job installs that local wheel in
-   a clean environment while resolving dependencies only from production PyPI,
-   then validates installed metadata and import behavior.
+   retries, requires the exact non-yanked filename and SHA256 set, then downloads
+   and rehashes both the allowlisted HTTPS wheel and source distribution. The job
+   installs the verified local wheel in a clean Python 3.13 environment while
+   resolving dependencies only from production PyPI, then validates installed
+   metadata and import behavior.
 4. `publish-pypi` runs only after verification succeeds. It again downloads and
-   revalidates the original artifact, then publishes those same bytes to PyPI. It
-   never rebuilds and never uses `skip-existing`.
+   revalidates the original artifact, checks any files already present for the
+   version on PyPI, and accepts only a non-yanked, hash-matching subset of the
+   wheel and source distribution. It stages and publishes only absent files from
+   the original artifact. If the complete exact set already exists, it skips the
+   publisher. It never rebuilds and never uses `skip-existing`. After publication,
+   it polls PyPI with bounded retries until the final filenames, yanked states,
+   and hashes exactly match. An upload race fails the publisher closed and can be
+   retried through the same preflight path.
 
 The build artifact is named from the project version and peeled commit and is
 retained for 30 days. The workflow default permission is `contents: read`; only
@@ -88,8 +96,25 @@ or mutate repository, environment, or package-index settings.
 6. Review the TestPyPI verification result and approve the protected `pypi`
    environment when prompted.
 
-Do not create a second production upload for an existing version. Production
-publication deliberately fails instead of skipping existing files.
+If production publication is interrupted, rerun the same release workflow. The
+preflight accepts matching files already published from the original artifact and
+stages only the absent distribution; it never enables production `skip-existing`.
+
+## Package publishing compromise response
+
+If a release workflow or authorized GitHub identity may be compromised:
+
+1. Cancel active release workflow runs and pending environment approvals.
+2. Disable the `pypi` and `testpypi` environments or remove the corresponding
+   trusted-publisher bindings so no new package-index identity can be minted.
+3. Audit the compromised GitHub identity and revoke its sessions, tokens, and
+   keys. Review repository, environment, release, and package-index audit records
+   for unauthorized changes or publications.
+4. Restore environments and trusted-publisher bindings only after recovery,
+   identity rotation, artifact verification, and review are complete.
+
+Trusted publishing remains secretless. No long-lived package-index credential is
+introduced for normal publication or recovery.
 
 ## Executable builds (`build-executables.yml`)
 

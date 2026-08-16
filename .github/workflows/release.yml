@@ -23,6 +23,8 @@ jobs:
     if: github.event_name == 'release' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      UV_PYTHON: '3.13'
     outputs:
       artifact-name: ${{ steps.resolve-source.outputs.artifact-name }}
       commit: ${{ steps.resolve-source.outputs.commit }}
@@ -64,36 +66,56 @@ jobs:
         run: |
           set -euo pipefail
 
+          die() {
+            echo "$1" >&2
+            exit 1
+          }
+
           if [[ "$EVENT_NAME" == "release" ]]; then
             tag="$RELEASE_TAG"
-            [[ "$RELEASE_DRAFT" == "false" ]]
-            [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
-            [[ -n "$RELEASE_URL" ]]
-          else
+            [[ "$RELEASE_DRAFT" == "false" ]] || die "release must be published"
+            [[ "$RELEASE_ID" =~ ^[0-9]+$ ]] || die "release ID is malformed"
+            [[ -n "$RELEASE_URL" ]] || die "release URL is missing"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             tag="$DISPATCH_TAG"
+          else
+            die "unsupported release workflow event"
           fi
 
-          [[ "$tag" == v?* ]]
-          git show-ref --verify --quiet "refs/tags/$tag"
+          [[ "$tag" == v?* ]] || die "release tag must start with v"
+          git show-ref --verify --quiet "refs/tags/$tag" || die "release tag does not exist"
 
           tag_object=$(git rev-parse "refs/tags/$tag")
           commit=$(git rev-parse "refs/tags/$tag^{commit}")
           tree=$(git rev-parse "refs/tags/$tag^{tree}")
-          [[ "$(git rev-parse HEAD)" == "$commit" ]]
-          [[ "$(git rev-parse HEAD^{tree})" == "$tree" ]]
-          git merge-base --is-ancestor "$commit" origin/main
+          [[ "$(git rev-parse HEAD)" == "$commit" ]] || die "checked-out commit does not match tag commit"
+          [[ "$(git rev-parse HEAD^{tree})" == "$tree" ]] || die "checked-out tree does not match tag tree"
+          git merge-base --is-ancestor "$commit" refs/remotes/origin/main || \
+            die "release tag is not an ancestor of origin/main"
 
           project_name=$(python3 -c \
             'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["name"])')
           version=$(python3 -c \
             'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
-          [[ "$project_name" == "pylxpweb" ]]
-          [[ "$tag" == "v$version" ]]
+          [[ "$project_name" == "pylxpweb" ]] || die "unexpected project name"
+          [[ "$tag" == "v$version" ]] || die "release tag does not match project version"
 
           if [[ "$EVENT_NAME" == "release" ]]; then
-            [[ "$EVENT_SHA" == "$commit" ]]
-            target_commit=$(git rev-parse "$RELEASE_TARGET^{commit}")
-            git merge-base --is-ancestor "$commit" "$target_commit"
+            [[ "$EVENT_SHA" == "$commit" ]] || die "release event commit does not match tag commit"
+            if [[ "$RELEASE_TARGET" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              target_commit=$(git rev-parse --verify "$RELEASE_TARGET^{commit}") || \
+                die "invalid or unresolved release target"
+            elif git check-ref-format "refs/remotes/origin/$RELEASE_TARGET" >/dev/null 2>&1; then
+              target_ref="refs/remotes/origin/$RELEASE_TARGET"
+              git show-ref --verify --quiet "$target_ref" || \
+                die "invalid or unresolved release target"
+              target_commit=$(git rev-parse --verify "$target_ref^{commit}") || \
+                die "invalid or unresolved release target"
+            else
+              die "invalid or unresolved release target"
+            fi
+            git merge-base --is-ancestor "$commit" "$target_commit" || \
+              die "release tag is not an ancestor of release target"
           fi
 
           artifact_name="pylxpweb-release-$version-${commit:0:12}"
@@ -251,7 +273,8 @@ jobs:
               "tree": os.environ["EXPECTED_TREE"],
               "version": os.environ["EXPECTED_VERSION"],
           }
-          assert {key: source[key] for key in expected} == expected
+          assert {key: source[key] for key in expected} == expected, \
+              "release source identity does not match"
           wheels = list(bundle.glob("dist/*.whl"))
           sdists = list(bundle.glob("dist/*.tar.gz"))
           assert len(wheels) == 1, wheels
@@ -338,9 +361,9 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
 
       - id: query-testpypi
-        name: Verify TestPyPI JSON and download the published wheel
+        name: Verify TestPyPI JSON and download both distributions
         env:
-          ALLOWED_WHEEL_HOST: test-files.pythonhosted.org
+          ALLOWED_DISTRIBUTION_HOST: test-files.pythonhosted.org
           EXPECTED_PROJECT_NAME: ${{ needs.build.outputs.project-name }}
           EXPECTED_VERSION: ${{ needs.build.outputs.version }}
           MAX_ATTEMPTS: '12'
@@ -359,7 +382,13 @@ jobs:
           hashes = {}
           for line in bundle.joinpath("SHA256SUMS").read_text().splitlines():
               digest, path = line.split("  ", 1)
-              hashes[pathlib.PurePosixPath(path).name] = digest
+              manifest_path = pathlib.PurePosixPath(path)
+              if manifest_path.parts[0] == "dist":
+                  hashes[manifest_path.name] = digest
+
+          assert len(hashes) == 2, "release artifact must contain exactly two distributions"
+          assert sum(name.endswith(".whl") for name in hashes) == 1, "release artifact must contain one wheel"
+          assert sum(name.endswith(".tar.gz") for name in hashes) == 1, "release artifact must contain one sdist"
 
           project = os.environ["EXPECTED_PROJECT_NAME"]
           version = os.environ["EXPECTED_VERSION"]
@@ -371,41 +400,59 @@ jobs:
               try:
                   with urllib.request.urlopen(request, timeout=30) as response:
                       payload = json.load(response)
-                  assert payload["info"]["name"] == project
-                  assert payload["info"]["version"] == version
+                  assert payload["info"]["name"] == project, "package index project name does not match"
+                  assert payload["info"]["version"] == version, "package index version does not match"
                   releases = payload["urls"]
-                  assert {release["filename"] for release in releases} == set(hashes) - {"release-source.json"}
-                  assert all(release["yanked"] is False for release in releases)
-                  assert all(release["digests"]["sha256"] == hashes[release["filename"]] for release in releases)
-                  wheel = next(release for release in releases if release["filename"].endswith(".whl"))
-                  parsed = urllib.parse.urlparse(wheel["url"])
-                  assert parsed.scheme == "https"
-                  assert parsed.hostname == os.environ["ALLOWED_WHEEL_HOST"]
+                  filenames = {release["filename"] for release in releases}
+                  assert len(releases) == len(hashes) and filenames == set(hashes), \
+                      "package index file set does not match"
+                  assert all(release["yanked"] is False for release in releases), \
+                      "package index contains yanked file"
+                  assert all(
+                      release["digests"]["sha256"] == hashes[release["filename"]]
+                      for release in releases
+                  ), "package index hash does not match"
+                  for release in releases:
+                      parsed = urllib.parse.urlparse(release["url"])
+                      assert (
+                          parsed.scheme == "https"
+                          and parsed.hostname == os.environ["ALLOWED_DISTRIBUTION_HOST"]
+                      ), "distribution URL is not allowlisted HTTPS"
                   break
-              except (AssertionError, KeyError, OSError, ValueError):
+              except (AssertionError, KeyError, OSError, TypeError, ValueError):
                   if attempt == attempts:
                       raise
                   time.sleep(min(5 * attempt, 30))
 
-          wheel_request = urllib.request.Request(
-              wheel["url"], headers={"User-Agent": "pylxpweb-release-verifier"}
-          )
-          with urllib.request.urlopen(wheel_request, timeout=60) as response:
-              final_url = urllib.parse.urlparse(response.geturl())
-              assert final_url.scheme == "https"
-              assert final_url.hostname == os.environ["ALLOWED_WHEEL_HOST"]
-              wheel_bytes = response.read()
-          assert hashlib.sha256(wheel_bytes).hexdigest() == hashes[wheel["filename"]]
-          wheel_path = pathlib.Path("verified-wheel") / wheel["filename"]
-          wheel_path.parent.mkdir()
-          wheel_path.write_bytes(wheel_bytes)
+          verified = pathlib.Path("verified-distributions")
+          verified.mkdir()
+          wheel_path = None
+          for release in releases:
+              download_request = urllib.request.Request(
+                  release["url"], headers={"User-Agent": "pylxpweb-release-verifier"}
+              )
+              with urllib.request.urlopen(download_request, timeout=60) as response:
+                  final_url = urllib.parse.urlparse(response.geturl())
+                  assert (
+                      final_url.scheme == "https"
+                      and final_url.hostname == os.environ["ALLOWED_DISTRIBUTION_HOST"]
+                  ), "distribution URL is not allowlisted HTTPS"
+                  content = response.read()
+              filename = release["filename"]
+              assert hashlib.sha256(content).hexdigest() == hashes[filename], \
+                  "downloaded distribution hash does not match"
+              path = verified / filename
+              path.write_bytes(content)
+              if filename.endswith(".whl"):
+                  wheel_path = path
+          assert wheel_path is not None, "verified wheel is missing"
           with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
               print(f"wheel-path={wheel_path}", file=output)
           PY
 
       - id: create-verification-environment
         name: Create clean verification environment
-        run: uv venv --python 3.12 .verify-venv
+        run: uv venv --python 3.13 .verify-venv
 
       - id: install-testpypi-wheel
         name: Install downloaded wheel with dependencies from production PyPI only
@@ -463,8 +510,111 @@ jobs:
 
       - *revalidate-release-artifact
 
+      - id: prepare-pypi
+        name: Validate existing PyPI files and stage absent distributions
+        env:
+          EXPECTED_PROJECT_NAME: ${{ needs.build.outputs.project-name }}
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+          MAX_ATTEMPTS: '1'
+          MODE: prepare
+          PYPI_JSON_BASE_URL: https://pypi.org/pypi
+          UPLOAD_DIR: pypi-upload
+        run: &verify-pypi-state |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import shutil
+          import time
+          import urllib.error
+          import urllib.request
+
+          bundle = pathlib.Path("release-bundle")
+          hashes = {}
+          paths = {}
+          for line in bundle.joinpath("SHA256SUMS").read_text().splitlines():
+              digest, path = line.split("  ", 1)
+              manifest_path = pathlib.PurePosixPath(path)
+              if manifest_path.parts[0] == "dist":
+                  hashes[manifest_path.name] = digest
+                  paths[manifest_path.name] = bundle.joinpath(*manifest_path.parts)
+
+          assert len(hashes) == 2, "release artifact must contain exactly two distributions"
+          assert sum(name.endswith(".whl") for name in hashes) == 1, "release artifact must contain one wheel"
+          assert sum(name.endswith(".tar.gz") for name in hashes) == 1, "release artifact must contain one sdist"
+          for filename, path in paths.items():
+              assert path.is_file(), f"release artifact is missing {filename}"
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[filename], \
+                  f"release artifact hash does not match for {filename}"
+
+          project = os.environ["EXPECTED_PROJECT_NAME"]
+          version = os.environ["EXPECTED_VERSION"]
+          mode = os.environ["MODE"]
+          assert mode in {"prepare", "verify"}, "invalid PyPI verification mode"
+          attempts = int(os.environ["MAX_ATTEMPTS"])
+          url = f'{os.environ["PYPI_JSON_BASE_URL"]}/{project}/{version}/json'
+          request = urllib.request.Request(url, headers={"User-Agent": "pylxpweb-release-verifier"})
+
+          for attempt in range(1, attempts + 1):
+              try:
+                  try:
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          payload = json.load(response)
+                  except urllib.error.HTTPError as error:
+                      if error.code != 404:
+                          raise
+                      payload = None
+
+                  if payload is None:
+                      releases = []
+                  else:
+                      assert payload["info"]["name"] == project, "PyPI project name does not match"
+                      assert payload["info"]["version"] == version, "PyPI version does not match"
+                      releases = payload["urls"]
+
+                  filenames = [release["filename"] for release in releases]
+                  filename_set = set(filenames)
+                  assert len(filenames) == len(filename_set), "PyPI contains duplicate filenames"
+                  assert filename_set <= set(hashes), "PyPI contains unexpected file"
+                  assert all(release["yanked"] is False for release in releases), \
+                      "PyPI contains yanked file"
+                  assert all(
+                      release["digests"]["sha256"] == hashes[release["filename"]]
+                      for release in releases
+                  ), "PyPI hash does not match"
+                  if mode == "verify":
+                      assert filename_set == set(hashes), "PyPI final file set does not match"
+                  break
+              except (AssertionError, KeyError, OSError, TypeError, ValueError):
+                  if attempt == attempts:
+                      raise
+                  time.sleep(min(5 * attempt, 30))
+
+          if mode == "prepare":
+              upload_dir = pathlib.Path(os.environ["UPLOAD_DIR"])
+              upload_dir.mkdir()
+              absent = set(hashes) - filename_set
+              for filename in sorted(absent):
+                  shutil.copyfile(paths[filename], upload_dir / filename)
+              with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+                  print(f"upload-needed={'true' if absent else 'false'}", file=output)
+          PY
+
       - id: publish-pypi
         name: Publish to PyPI with trusted publishing
+        if: steps.prepare-pypi.outputs.upload-needed == 'true'
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
-          packages-dir: release-bundle/dist/
+          packages-dir: pypi-upload/
+
+      - id: verify-pypi
+        name: Verify final exact PyPI distribution set
+        env:
+          EXPECTED_PROJECT_NAME: ${{ needs.build.outputs.project-name }}
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+          MAX_ATTEMPTS: '12'
+          MODE: verify
+          PYPI_JSON_BASE_URL: https://pypi.org/pypi
+          UPLOAD_DIR: pypi-upload
+        run: *verify-pypi-state
