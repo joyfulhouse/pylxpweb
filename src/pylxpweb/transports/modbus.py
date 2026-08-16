@@ -18,6 +18,7 @@ Disable other Modbus integrations before using this transport.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -40,6 +41,11 @@ _FAILED_RECONNECT_COOLDOWN = 60.0
 
 # Re-export for backward compatibility
 __all__ = ["INPUT_REGISTER_GROUPS", "ModbusTransport"]
+
+
+def _monotonic() -> float:
+    """Return monotonic time through a transport-local test seam."""
+    return time.monotonic()
 
 
 def _jittered_session_max_age(
@@ -181,11 +187,20 @@ class ModbusTransport(BaseModbusTransport):
         return self._port
 
     async def connect(self) -> None:
-        """Establish Modbus TCP connection.
+        """Establish a Modbus TCP connection under the operation lock."""
+        async with self._op_lock:
+            await self._connect_locked()
+
+    async def _connect_locked(self) -> None:
+        """Establish a connection while the caller owns the operation lock.
 
         Raises:
             TransportConnectionError: If connection fails
         """
+        if self._connected:
+            return
+        self._drop_session()
+
         try:
             # Import pymodbus here to make it optional
             from pymodbus.client import AsyncModbusTcpClient
@@ -200,13 +215,14 @@ class ModbusTransport(BaseModbusTransport):
             connected = await self._client.connect()
             if not connected:
                 self._drop_session()
+                self._reconnect_retry_after = _monotonic() + _FAILED_RECONNECT_COOLDOWN
                 raise TransportConnectionError(
                     f"Failed to connect to Modbus gateway at {self._host}:{self._port}"
                 )
 
             self._connected = True
             self._consecutive_errors = 0
-            self._session_started_at = time.monotonic()
+            self._session_started_at = _monotonic()
             self._reconnect_retry_after = None
 
             # Waveshare "Modbus TCP to RTU" gateways use MBAP framing on
@@ -223,12 +239,16 @@ class ModbusTransport(BaseModbusTransport):
                 self._serial,
             )
 
+        except asyncio.CancelledError:
+            self._drop_session()
+            raise
         except ImportError as err:
             raise TransportConnectionError(
                 "pymodbus package not installed. Install with: uv add pymodbus"
             ) from err
         except (TimeoutError, OSError) as err:
             self._drop_session()
+            self._reconnect_retry_after = _monotonic() + _FAILED_RECONNECT_COOLDOWN
             _LOGGER.error(
                 "Failed to connect to Modbus gateway at %s:%s: %s",
                 self._host,
@@ -299,9 +319,10 @@ class ModbusTransport(BaseModbusTransport):
         self._session_started_at = None
 
     async def disconnect(self) -> None:
-        """Close Modbus TCP connection."""
-        self._drop_session()
-        _LOGGER.debug("Modbus transport disconnected for %s", self._serial)
+        """Close the Modbus TCP connection under the operation lock."""
+        async with self._op_lock:
+            self._drop_session()
+            _LOGGER.debug("Modbus transport disconnected for %s", self._serial)
 
     async def _reconnect(self) -> None:
         """Reconnect Modbus client to reset transaction ID state.
@@ -309,7 +330,7 @@ class ModbusTransport(BaseModbusTransport):
         Called at operation boundaries for absent, failed, or over-age sessions.
         """
         async with self._lock:
-            now = time.monotonic()
+            now = _monotonic()
             if self._reconnect_retry_after is not None and now < self._reconnect_retry_after:
                 remaining = self._reconnect_retry_after - now
                 raise TransportConnectionError(
@@ -346,5 +367,11 @@ class ModbusTransport(BaseModbusTransport):
             try:
                 await self.connect()
             except TransportConnectionError:
-                self._reconnect_retry_after = time.monotonic() + _FAILED_RECONNECT_COOLDOWN
+                _LOGGER.warning(
+                    "Modbus reconnect failed for %s: reason=%s count=%d",
+                    self._serial,
+                    reason,
+                    self._session_reconnect_count,
+                )
+                self._reconnect_retry_after = _monotonic() + _FAILED_RECONNECT_COOLDOWN
                 raise

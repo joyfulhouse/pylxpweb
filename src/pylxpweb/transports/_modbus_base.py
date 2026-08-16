@@ -118,6 +118,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._consecutive_errors: int = 0
         self._max_consecutive_errors: int = 3
         self._last_read_retried: bool = False
+        self._op_guard_depth: int = 0
 
     # ------------------------------------------------------------------
     # Properties
@@ -413,32 +414,29 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
 
     @contextlib.asynccontextmanager
     async def _op_guard(self) -> AsyncIterator[None]:
-        """Hold the op lock while checking whether the session needs recycling."""
+        """Check reconnect once while holding the outermost operation boundary."""
         async with self._op_lock:
-            await self._reconnect()
-            yield
+            self._op_guard_depth += 1
+            try:
+                if self._op_guard_depth == 1:
+                    await self._reconnect()
+                yield
+            finally:
+                self._op_guard_depth -= 1
 
     # ------------------------------------------------------------------
-    # Override: adaptive inter-group delay + auto-reconnect
+    # Public operation boundaries: one reconnect check per complete operation
     # ------------------------------------------------------------------
 
-    async def _read_register_groups(
-        self,
-        group_names: list[str] | None = None,
-    ) -> dict[int, int]:
-        """Read register groups with adaptive delay and auto-reconnect.
-
-        Overrides ``RegisterDataMixin._read_register_groups`` to add the
-        auto-reconnect gate.  The adaptive delay increase after low-level
-        retries lives in the shared ``_read_group_plan`` loop (keyed on
-        ``_last_read_retried``, which only Modbus transports track).
-        """
+    async def read_runtime(self) -> InverterRuntimeData:
+        """Read the complete runtime snapshot under one operation boundary."""
         async with self._op_guard():
-            return await super()._read_register_groups(group_names)
+            return await super().read_runtime()
 
-    # ------------------------------------------------------------------
-    # Overrides: combined read + read_battery with reconnect check
-    # ------------------------------------------------------------------
+    async def read_energy(self) -> InverterEnergyData:
+        """Read all energy and supplementary groups under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_energy()
 
     async def read_all_input_data(
         self,
@@ -479,9 +477,18 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         start_address: int,
         count: int,
     ) -> dict[int, int]:
-        """Read holding registers with op-level lock."""
-        async with self._op_lock:
+        """Read holding registers with reconnect gate and op-level lock."""
+        async with self._op_guard():
             return await super().read_parameters(start_address, count)
+
+    async def read_named_parameters(
+        self,
+        start_address: int,
+        count: int,
+    ) -> dict[str, Any]:
+        """Read and decode named parameters under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_named_parameters(start_address, count)
 
     async def read_quick_charge_remaining_seconds(self) -> int | None:
         """Read quick-charge remaining seconds (input reg 210) with op lock."""
@@ -513,6 +520,31 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         """
         async with self._op_guard():
             return await super().write_named_parameters(parameters)
+
+    async def read_serial_number(self) -> str:
+        """Read the serial number under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_serial_number()
+
+    async def read_firmware_version(self) -> str:
+        """Read the firmware version under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_firmware_version()
+
+    async def read_device_type(self) -> int:
+        """Read the device type under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_device_type()
+
+    async def read_parallel_config(self) -> int:
+        """Read the parallel configuration under one operation boundary."""
+        async with self._op_guard():
+            return await super().read_parallel_config()
+
+    async def validate_serial(self, expected_serial: str) -> bool:
+        """Validate the serial number under one operation boundary."""
+        async with self._op_guard():
+            return await super().validate_serial(expected_serial)
 
     # ------------------------------------------------------------------
     # Reconnect (subclasses may override for custom logging)
