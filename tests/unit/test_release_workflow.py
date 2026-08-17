@@ -1398,17 +1398,12 @@ def _run_pypi_classifier(
         "SOCKET_TIMEOUT_SECONDS": "1",
     }
     env.update(env_overrides or {})
-    step = _step("prepare-pypi", "classify-pypi-state")
-    marker = "python3 - <<'PY'\n"
-    assert step["run"].startswith(marker)
-    python = step["run"].removeprefix(marker).removesuffix("\nPY\n")
-    result = subprocess.run(
-        [sys.executable, "-c", python],
+    result = _run_yaml_script(
+        _step("prepare-pypi", "classify-pypi-state")["run"],
         cwd=tmp_path,
         env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        tmp_path=tmp_path,
+        timeout_seconds=15,
     )
     state = _read_output(output, "state") if output.exists() else ""
     return result, state
@@ -1513,7 +1508,7 @@ def test_pypi_classifier_never_publishes_untrusted_or_unstable_evidence(
                 "yanked": False,
             }
         )
-    if mutation == "advertised-host":
+    if mutation in {"advertised-host", "partial-advertised-host"}:
         payload["urls"][0]["url"] = payload["urls"][0]["url"].replace("127.0.0.1", "localhost")
     elif mutation in {"redirect-host", "partial-redirect-host"}:
         name = payload["urls"][0]["filename"]
@@ -1523,8 +1518,6 @@ def test_pypi_classifier_never_publishes_untrusted_or_unstable_evidence(
         payload["urls"][0]["digests"]["sha256"] = "0" * 64
     elif mutation in {"downloaded-bytes", "partial-downloaded-bytes", "extra-downloaded-bytes"}:
         server["files"][payload["urls"][0]["filename"]] = b"tampered"
-    elif mutation == "partial-advertised-host":
-        payload["urls"][0]["url"] = payload["urls"][0]["url"].replace("127.0.0.1", "localhost")
     elif mutation == "inconsistent-snapshots":
         changed = json.loads(json.dumps(payload))
         changed["urls"][0]["yanked"] = True
