@@ -193,7 +193,7 @@ jobs:
 
           gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
             "repos/$REPOSITORY/commits/$head/check-runs" > "$api_dir/checks.json"
-          mapfile -t ci_identity < <(
+          ci_run_id=$(
             python3 - "$api_dir/checks.json" "$head" "$REPOSITORY" <<'PY'
           import json
           import pathlib
@@ -222,7 +222,7 @@ jobs:
           PY
           )
           gh api -H "Accept: application/vnd.github+json" \
-            "repos/$REPOSITORY/actions/runs/${ci_identity[0]}" > "$api_dir/ci-run.json"
+            "repos/$REPOSITORY/actions/runs/$ci_run_id" > "$api_dir/ci-run.json"
           python3 - "$api_dir/ci-run.json" "$head" "$REPOSITORY" <<'PY'
           import json
           import pathlib

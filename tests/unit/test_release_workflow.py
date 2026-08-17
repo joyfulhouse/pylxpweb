@@ -38,12 +38,10 @@ def package_index_server() -> Iterator[tuple[str, dict[str, Any]]]:
         "index_calls": 0,
         "index_responses": [],
         "redirected_files": {},
-        "requests": [],
     }
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
-            state["requests"].append(self.path)
             if self.path.startswith("/pypi/"):
                 responses = state["index_responses"]
                 index = min(state["index_calls"], len(responses) - 1)
@@ -135,12 +133,9 @@ def _package_index_publisher_workflows(workflows_path: Path) -> set[str]:
 def _index_payload(
     base_url: str,
     files: dict[str, bytes],
-    *,
-    project: str = "pylxpweb",
-    version: str = "1.2.3",
 ) -> dict[str, Any]:
     return {
-        "info": {"name": project, "version": version},
+        "info": {"name": "pylxpweb", "version": "1.2.3"},
         "urls": [
             {
                 "digests": {"sha256": hashlib.sha256(content).hexdigest()},
@@ -153,7 +148,13 @@ def _index_payload(
     }
 
 
-def _write_dist_manifest(tmp_path: Path, files: dict[str, bytes]) -> None:
+def _prepare_index_case(
+    tmp_path: Path, base_url: str, state: dict[str, Any]
+) -> tuple[dict[str, bytes], dict[str, Any]]:
+    files = {
+        "pylxpweb-1.2.3-py3-none-any.whl": b"wheel",
+        "pylxpweb-1.2.3.tar.gz": b"sdist",
+    }
     bundle = tmp_path / "release-bundle"
     bundle.mkdir(exist_ok=True)
     bundle.joinpath("DIST_SHA256SUMS").write_text(
@@ -162,6 +163,8 @@ def _write_dist_manifest(tmp_path: Path, files: dict[str, bytes]) -> None:
             for name, content in files.items()
         )
     )
+    state["files"] = dict(files)
+    return files, _index_payload(base_url, files)
 
 
 def _run_index_verifier(
@@ -169,15 +172,13 @@ def _run_index_verifier(
     base_url: str,
     *,
     job_id: str = "verify-testpypi",
-    allowed_host: str = "127.0.0.1",
-    attempts: int = 3,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ | {
-        "ALLOWED_FILE_HOST": allowed_host,
+        "ALLOWED_FILE_HOST": "127.0.0.1",
         "EXPECTED_PROJECT_NAME": "pylxpweb",
         "EXPECTED_VERSION": "1.2.3",
         "INDEX_JSON_BASE": f"{base_url}/pypi",
-        "MAX_ATTEMPTS": str(attempts),
+        "MAX_ATTEMPTS": "3",
         "REQUIRED_FILE_SCHEME": "http",
         "RETRY_BASE_SECONDS": "0",
     }
@@ -993,13 +994,7 @@ def test_index_verifier_retries_then_accepts_exact_remote_bytes(
 ) -> None:
     """The YAML-derived verifier handles transient index lag and exact bytes."""
     base_url, state = package_index_server
-    files = {
-        "pylxpweb-1.2.3-py3-none-any.whl": b"wheel",
-        "pylxpweb-1.2.3.tar.gz": b"sdist",
-    }
-    _write_dist_manifest(tmp_path, files)
-    state["files"] = files
-    payload = _index_payload(base_url, files)
+    _, payload = _prepare_index_case(tmp_path, base_url, state)
     state["index_responses"] = [503, payload]
     result = _run_index_verifier(tmp_path, base_url, job_id=job_id)
     assert result.returncode == 0, result.stderr
@@ -1030,13 +1025,7 @@ def test_index_verifier_rejects_remote_identity_and_byte_mutations(
 ) -> None:
     """Weakening any remote-index check admits a different published artifact set."""
     base_url, state = package_index_server
-    files = {
-        "pylxpweb-1.2.3-py3-none-any.whl": b"wheel",
-        "pylxpweb-1.2.3.tar.gz": b"sdist",
-    }
-    _write_dist_manifest(tmp_path, files)
-    state["files"] = dict(files)
-    payload = _index_payload(base_url, files)
+    files, payload = _prepare_index_case(tmp_path, base_url, state)
     if mutation == "wrong-project":
         payload["info"]["name"] = "lookalike"
     elif mutation == "wrong-version":
@@ -1082,13 +1071,7 @@ def test_index_verifier_rejects_competing_publication_race(
 ) -> None:
     """A second index snapshot catches a file added while exact bytes are downloaded."""
     base_url, state = package_index_server
-    files = {
-        "pylxpweb-1.2.3-py3-none-any.whl": b"wheel",
-        "pylxpweb-1.2.3.tar.gz": b"sdist",
-    }
-    _write_dist_manifest(tmp_path, files)
-    state["files"] = files
-    exact = _index_payload(base_url, files)
+    _, exact = _prepare_index_case(tmp_path, base_url, state)
     raced = json.loads(json.dumps(exact))
     raced["urls"].append(
         {
