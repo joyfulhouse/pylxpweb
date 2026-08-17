@@ -28,6 +28,7 @@ jobs:
       attestations: write
       artifact-metadata: write
     outputs:
+      artifact-digest: ${{ steps.upload-release-artifact.outputs.artifact-digest }}
       artifact-name: ${{ steps.bind-source.outputs.artifact-name }}
       commit: ${{ steps.bind-source.outputs.commit }}
       head: ${{ steps.bind-source.outputs.head }}
@@ -651,7 +652,7 @@ jobs:
           REQUIRED_FILE_SCHEME: https
           RETRY_BASE_SECONDS: '5'
           SOCKET_TIMEOUT_SECONDS: '10'
-        run: &verify-index |
+        run: |
           python3 - <<'PY'
           import hashlib
           import json
@@ -725,52 +726,324 @@ jobs:
           PY
 
   prepare-pypi:
-    name: Verify and stage for PyPI
+    name: Classify, verify, and conditionally stage for PyPI
     needs: [bind-build-attest, verify-testpypi]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    environment: pypi
     permissions:
+      actions: read
       contents: read
     outputs:
       staging-artifact: ${{ steps.stage.outputs.artifact-name }}
+      state: ${{ steps.classify-pypi-state.outputs.state }}
     steps:
+      - id: resolve-release-artifact
+        name: Rediscover the immutable sealed artifact from this run
+        env: &artifact-identity
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.bind-build-attest.outputs.artifact-digest }}
+          EXPECTED_ARTIFACT_NAME: ${{ needs.bind-build-attest.outputs.artifact-name }}
+          EXPECTED_COMMIT: ${{ needs.bind-build-attest.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: &resolve-release-artifact |
+          set -euo pipefail
+          evidence=$(mktemp -d)
+          trap 'rm -rf "$evidence"' EXIT
+          gh api -H "Accept: application/vnd.github+json" \
+            "repos/$REPOSITORY/actions/runs/$RUN_ID" > "$evidence/run.json"
+          gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
+            "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" > "$evidence/artifacts.json"
+          python3 - "$evidence/run.json" "$evidence/artifacts.json" <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+
+          run = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          pages = json.loads(pathlib.Path(sys.argv[2]).read_text())
+          assert isinstance(pages, list) and pages, "artifact response pages are missing"
+          assert all(
+              isinstance(page, dict)
+              and isinstance(page.get("total_count"), int)
+              and isinstance(page.get("artifacts"), list)
+              for page in pages
+          ), "artifact response has the wrong shape"
+          artifacts = [artifact for page in pages for artifact in page["artifacts"]]
+          assert pages[0]["total_count"] == len(artifacts), "artifact pagination mismatch"
+          repository = os.environ["REPOSITORY"]
+          run_id = int(os.environ["RUN_ID"])
+          commit = os.environ["EXPECTED_COMMIT"]
+          expected_digest = os.environ["EXPECTED_ARTIFACT_DIGEST"]
+          assert re.fullmatch(r"[0-9a-f]{64}", expected_digest), (
+              "upload artifact digest has the wrong format"
+          )
+          assert run["id"] == run_id, "workflow run id mismatch"
+          assert run["repository"]["full_name"] == repository, "workflow repository mismatch"
+          assert run["head_repository"]["full_name"] == repository, "head repository mismatch"
+          assert run["event"] == "release", "workflow event mismatch"
+          assert run["path"] == ".github/workflows/release.yml", "workflow path mismatch"
+          assert run["head_sha"] == commit, "workflow head mismatch"
+          matches = [
+              artifact
+              for artifact in artifacts
+              if artifact["name"] == os.environ["EXPECTED_ARTIFACT_NAME"]
+          ]
+          assert len(matches) == 1, "sealed artifact is missing or duplicated"
+          artifact = matches[0]
+          assert not artifact["expired"], "sealed artifact is expired"
+          assert artifact["digest"] == f"sha256:{expected_digest}", (
+              "sealed artifact digest mismatch"
+          )
+          owner = artifact["workflow_run"]
+          assert owner["id"] == run_id, "artifact workflow run mismatch"
+          assert owner["head_sha"] == commit, "artifact head mismatch"
+          assert owner["repository_id"] == run["repository"]["id"], (
+              "artifact repository mismatch"
+          )
+          assert owner["head_repository_id"] == run["head_repository"]["id"], (
+              "artifact head repository mismatch"
+          )
+          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f'artifact-id={artifact["id"]}', file=output)
+              print(f'artifact-name={artifact["name"]}', file=output)
+              print(f'artifact-digest={artifact["digest"]}', file=output)
+          with pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              print("## Rediscovered sealed artifact", file=summary)
+              print(f'- Run/head: `{run_id}` / `{commit}`', file=summary)
+              print(f'- Artifact ID/name: `{artifact["id"]}` / `{artifact["name"]}`', file=summary)
+              print(f'- Artifact digest: `{artifact["digest"]}`', file=summary)
+          PY
       - id: download-release-artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
-          name: ${{ needs.bind-build-attest.outputs.artifact-name }}
+          artifact-ids: ${{ steps.resolve-release-artifact.outputs.artifact-id }}
+          digest-mismatch: error
+          github-token: ${{ github.token }}
           path: release-bundle/
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
       - id: verify-release-bundle
         env: *bundle-identity
         run: *verify-release-bundle
-      - id: verify-pypi-absence
-        name: Fail closed if the production version already exists
+      - id: classify-pypi-state
+        name: Classify stable PyPI state against the sealed bytes
         env:
+          ALLOWED_FILE_HOST: files.pythonhosted.org
+          DOWNLOAD_TOTAL_SECONDS: '60'
           EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
           EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
-          PYPI_JSON_BASE: https://pypi.org/pypi
-        run: |
+          INDEX_JSON_BASE: https://pypi.org/pypi
+          INDEX_TOTAL_SECONDS: '30'
+          REQUIRED_FILE_SCHEME: https
+          SNAPSHOT_DELAY_SECONDS: '5'
+          SOCKET_TIMEOUT_SECONDS: '10'
+        run: &classify-pypi-state |
           python3 - <<'PY'
+          import hashlib
+          import json
           import os
+          import pathlib
+          import signal
+          import time
           import urllib.error
+          import urllib.parse
           import urllib.request
-          url = f'{os.environ["PYPI_JSON_BASE"]}/{os.environ["EXPECTED_PROJECT_NAME"]}/{os.environ["EXPECTED_VERSION"]}/json'
+
+          bundle = pathlib.Path("release-bundle")
+          expected = {}
+          for line in bundle.joinpath("DIST_SHA256SUMS").read_text().splitlines():
+              digest, path = line.split("  ", 1)
+              expected[pathlib.PurePosixPath(path).name] = digest
+          assert len(expected) == 2
+          project = os.environ["EXPECTED_PROJECT_NAME"]
+          version = os.environ["EXPECTED_VERSION"]
+          request = urllib.request.Request(
+              f'{os.environ["INDEX_JSON_BASE"]}/{project}/{version}/json',
+              headers={"User-Agent": "pylxpweb-release-classifier"},
+          )
+          socket_timeout = float(os.environ["SOCKET_TIMEOUT_SECONDS"])
+
+          def timeout_handler(_signum, _frame):
+              raise TimeoutError("total HTTP transfer deadline exceeded")
+
+          signal.signal(signal.SIGALRM, timeout_handler)
+
+          def fetch(url, total_seconds):
+              signal.setitimer(signal.ITIMER_REAL, total_seconds)
+              try:
+                  with urllib.request.urlopen(url, timeout=socket_timeout) as response:
+                      return response.geturl(), response.read()
+              finally:
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+
+          def snapshot():
+              try:
+                  _, content = fetch(request, float(os.environ["INDEX_TOTAL_SECONDS"]))
+              except urllib.error.HTTPError as error:
+                  if error.code == 404:
+                      return "absent", None, None
+                  raise
+              payload = json.loads(content)
+              if not isinstance(payload, dict):
+                  raise TypeError("index response is not an object")
+              info = payload["info"]
+              urls = payload["urls"]
+              if not isinstance(info, dict) or not isinstance(urls, list):
+                  raise TypeError("index response has the wrong shape")
+              canonical = json.dumps(
+                  {
+                      "name": info.get("name"),
+                      "version": info.get("version"),
+                      "urls": sorted(
+                          (
+                              item.get("filename"),
+                              item.get("digests", {}).get("sha256"),
+                              item.get("url"),
+                              item.get("yanked"),
+                          )
+                          for item in urls
+                          if isinstance(item, dict)
+                      ),
+                  },
+                  separators=(",", ":"),
+              )
+              return "present", payload, canonical
+
+          def shape_state(payload):
+              if payload["info"].get("name") != project or payload["info"].get(
+                  "version"
+              ) != version:
+                  return "MISMATCH"
+              releases = payload["urls"]
+              if not all(isinstance(item, dict) for item in releases):
+                  return "MISMATCH"
+              filenames = [item.get("filename") for item in releases]
+              if len(filenames) != len(set(filenames)):
+                  return "COMPETING"
+              if any(item.get("yanked") is not False for item in releases):
+                  return "YANKED"
+              remote = set(filenames)
+              wanted = set(expected)
+              if remote and remote < wanted:
+                  return "PARTIAL"
+              if wanted < remote:
+                  return "EXTRA"
+              if remote != wanted:
+                  return "COMPETING"
+              for item in releases:
+                  filename = item["filename"]
+                  if item.get("digests", {}).get("sha256") != expected[filename]:
+                      return "MISMATCH"
+                  advertised = urllib.parse.urlparse(item.get("url", ""))
+                  if (
+                      advertised.scheme != os.environ["REQUIRED_FILE_SCHEME"]
+                      or advertised.hostname != os.environ["ALLOWED_FILE_HOST"]
+                  ):
+                      return "MISMATCH"
+              return "candidate-exact"
+
+          state = "UNCERTAIN"
+          reason = "remote evidence could not be classified"
+          first_kind = "unavailable"
+          first_canonical = None
+          second_kind = "unavailable"
+          second_canonical = None
           try:
-              urllib.request.urlopen(url, timeout=30)
-          except urllib.error.HTTPError as error:
-              assert error.code == 404, error
-          else:
-              raise AssertionError("production version already exists")
+              first_kind, first_payload, first_canonical = snapshot()
+              first_state = None
+              downloaded_state = None
+              if first_kind == "present":
+                  first_state = shape_state(first_payload)
+                  if first_state == "candidate-exact":
+                      downloaded_state = "EXACT_COMPLETE"
+                      for item in first_payload["urls"]:
+                          final_url, content = fetch(
+                              item["url"], float(os.environ["DOWNLOAD_TOTAL_SECONDS"])
+                          )
+                          final = urllib.parse.urlparse(final_url)
+                          if (
+                              final.scheme != os.environ["REQUIRED_FILE_SCHEME"]
+                              or final.hostname != os.environ["ALLOWED_FILE_HOST"]
+                              or hashlib.sha256(content).hexdigest()
+                              != expected[item["filename"]]
+                          ):
+                              downloaded_state = "MISMATCH"
+                              break
+              time.sleep(float(os.environ["SNAPSHOT_DELAY_SECONDS"]))
+              second_kind, second_payload, second_canonical = snapshot()
+              if first_kind != second_kind or first_canonical != second_canonical:
+                  state = "UNCERTAIN"
+                  reason = "PyPI snapshots were inconsistent"
+              elif first_kind == "absent":
+                  state = "ABSENT"
+                  reason = "two clean PyPI snapshots report version absence"
+              else:
+                  second_state = shape_state(second_payload)
+                  if first_state != second_state:
+                      state = "UNCERTAIN"
+                      reason = "PyPI classifications changed between snapshots"
+                  elif first_state != "candidate-exact":
+                      state = first_state
+                      reason = "stable PyPI metadata conflicts with the sealed set"
+                  elif downloaded_state == "MISMATCH":
+                      state = "MISMATCH"
+                      reason = "downloaded PyPI bytes do not match the sealed set"
+                  else:
+                      state = "EXACT_COMPLETE"
+                      reason = "stable PyPI metadata and downloaded bytes exactly match"
+          except (
+              json.JSONDecodeError,
+              KeyError,
+              OSError,
+              TimeoutError,
+              TypeError,
+              ValueError,
+          ) as error:
+              state = "UNCERTAIN"
+              reason = f"remote evidence error: {type(error).__name__}"
+
+          guidance = {
+              "ABSENT": "Publisher may upload the full sealed wheel and sdist once.",
+              "EXACT_COMPLETE": "Do not republish; verifier-only completion is required.",
+              "PARTIAL": "Burn this immutable version and prepare a new version; never top up.",
+              "MISMATCH": "Stop, preserve evidence, investigate compromise, and use a new version.",
+              "YANKED": "Stop, preserve evidence, and use the compromise/new-version runbook.",
+              "EXTRA": "Stop, preserve evidence, and use the compromise/new-version runbook.",
+              "COMPETING": "Stop, preserve evidence, and use the compromise/new-version runbook.",
+              "UNCERTAIN": "Do not publish; retry only prepare-pypi and its dependent jobs.",
+          }
+          assert state in guidance
+          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f"state={state}", file=output)
+              print(f"reason={reason}", file=output)
+          with pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              print("## PyPI publication state", file=summary)
+              print(f"- State: `{state}`", file=summary)
+              print(f"- Evidence: {reason}", file=summary)
+              print(
+                  f"- Expected sealed files: `{json.dumps(expected, sort_keys=True)}`",
+                  file=summary,
+              )
+              print(f"- First snapshot: `{first_canonical or first_kind}`", file=summary)
+              print(f"- Second snapshot: `{second_canonical or second_kind}`", file=summary)
+              print(f"- Required action: {guidance[state]}", file=summary)
           PY
       - id: stage
         name: Stage the verified distributions
+        if: steps.classify-pypi-state.outputs.state == 'ABSENT'
         env:
           COMMIT: ${{ needs.bind-build-attest.outputs.commit }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           mkdir pypi-upload
           cp release-bundle/dist/* pypi-upload/
-          echo "artifact-name=pylxpweb-pypi-${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=pylxpweb-pypi-${COMMIT}-attempt-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
       - id: upload-staging-artifact
+        if: steps.classify-pypi-state.outputs.state == 'ABSENT'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: ${{ steps.stage.outputs.artifact-name }}
@@ -781,6 +1054,7 @@ jobs:
   publish-pypi:
     name: Publish staged artifact to PyPI
     needs: prepare-pypi
+    if: needs.prepare-pypi.outputs.state == 'ABSENT'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: pypi
@@ -797,32 +1071,72 @@ jobs:
           packages-dir: upload/
 
   verify-pypi:
-    name: Verify PyPI publication
-    needs: [bind-build-attest, publish-pypi]
+    name: Define terminal PyPI completion
+    needs: [bind-build-attest, prepare-pypi, publish-pypi]
+    if: ${{ always() && !cancelled() && needs.prepare-pypi.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: read
     steps:
+      - id: resolve-release-artifact
+        name: Rediscover the immutable sealed artifact from this run
+        env: *artifact-identity
+        run: *resolve-release-artifact
       - id: download-release-artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
-          name: ${{ needs.bind-build-attest.outputs.artifact-name }}
+          artifact-ids: ${{ steps.resolve-release-artifact.outputs.artifact-id }}
+          digest-mismatch: error
+          github-token: ${{ github.token }}
           path: release-bundle/
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
       - id: verify-release-bundle
         env: *bundle-identity
         run: *verify-release-bundle
-      - id: verify-pypi-files
-        name: Poll PyPI and verify the exact remote bytes
+      - id: classify-pypi-state
+        name: Reclassify PyPI from stable remote bytes
         env:
+          ALLOWED_FILE_HOST: files.pythonhosted.org
+          DOWNLOAD_TOTAL_SECONDS: '60'
           EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
           EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
           INDEX_JSON_BASE: https://pypi.org/pypi
-          ALLOWED_FILE_HOST: files.pythonhosted.org
-          DOWNLOAD_TOTAL_SECONDS: '60'
           INDEX_TOTAL_SECONDS: '30'
-          MAX_ATTEMPTS: '8'
           REQUIRED_FILE_SCHEME: https
-          RETRY_BASE_SECONDS: '5'
+          SNAPSHOT_DELAY_SECONDS: '5'
           SOCKET_TIMEOUT_SECONDS: '10'
-        run: *verify-index
+        run: *classify-pypi-state
+      - id: require-exact-complete
+        name: Require exact-complete terminal state
+        env:
+          STATE: ${{ steps.classify-pypi-state.outputs.state }}
+        run: |
+          set -euo pipefail
+          case "$STATE" in
+            EXACT_COMPLETE)
+              echo "PyPI exactly contains the sealed wheel and sdist."
+              ;;
+            ABSENT)
+              echo "PyPI is still absent; retry prepare-pypi and its dependent jobs only." >&2
+              exit 1
+              ;;
+            PARTIAL)
+              echo "PyPI is partial; burn this version and prepare a new version. Never top up." >&2
+              exit 1
+              ;;
+            UNCERTAIN)
+              echo "PyPI evidence is uncertain; do not publish. Retry prepare-pypi and its dependent jobs only." >&2
+              exit 1
+              ;;
+            MISMATCH|YANKED|EXTRA|COMPETING)
+              echo "PyPI state is $STATE; preserve evidence and follow the compromise/new-version runbook." >&2
+              exit 1
+              ;;
+            *)
+              echo "Unknown PyPI state: $STATE" >&2
+              exit 1
+              ;;
+          esac

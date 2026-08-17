@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -39,11 +40,13 @@ def package_index_server() -> Iterator[tuple[str, dict[str, Any]]]:
         "index_calls": 0,
         "index_responses": [],
         "redirected_files": {},
+        "request_events": [],
     }
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
             if self.path.startswith("/pypi/"):
+                state["request_events"].append("index")
                 responses = state["index_responses"]
                 index = min(state["index_calls"], len(responses) - 1)
                 state["index_calls"] += 1
@@ -59,6 +62,7 @@ def package_index_server() -> Iterator[tuple[str, dict[str, Any]]]:
                 self.wfile.write(body)
                 return
             if self.path.startswith("/files/"):
+                state["request_events"].append("file")
                 name = self.path.removeprefix("/files/")
                 response = state["files"][name]
                 if isinstance(response, dict) and "redirect" in response:
@@ -1067,7 +1071,7 @@ def test_bundle_validation_rejects_artifact_and_attestation_tampering(tmp_path: 
     assert tampered_attestation.returncode != 0
 
 
-@pytest.mark.parametrize("job_id", ["verify-testpypi", "verify-pypi"])
+@pytest.mark.parametrize("job_id", ["verify-testpypi"])
 def test_index_verifier_retries_then_accepts_exact_remote_bytes(
     tmp_path: Path,
     package_index_server: tuple[str, dict[str, Any]],
@@ -1082,7 +1086,7 @@ def test_index_verifier_retries_then_accepts_exact_remote_bytes(
     assert state["index_calls"] >= 2
 
 
-@pytest.mark.parametrize("job_id", ["verify-testpypi", "verify-pypi"])
+@pytest.mark.parametrize("job_id", ["verify-testpypi"])
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -1144,7 +1148,7 @@ def test_index_verifier_rejects_remote_identity_and_byte_mutations(
     assert result.returncode != 0
 
 
-@pytest.mark.parametrize("job_id", ["verify-testpypi", "verify-pypi"])
+@pytest.mark.parametrize("job_id", ["verify-testpypi"])
 def test_index_verifier_rejects_competing_publication_race(
     tmp_path: Path,
     package_index_server: tuple[str, dict[str, Any]],
@@ -1168,7 +1172,7 @@ def test_index_verifier_rejects_competing_publication_race(
     assert state["index_calls"] == 2
 
 
-@pytest.mark.parametrize("job_id", ["verify-testpypi", "verify-pypi"])
+@pytest.mark.parametrize("job_id", ["verify-testpypi"])
 def test_index_verifier_worst_case_fits_job_timeout_with_five_minute_headroom(
     job_id: str,
 ) -> None:
@@ -1212,37 +1216,436 @@ def test_index_verifier_enforces_total_deadline_despite_socket_activity(
     assert result.returncode != 0
 
 
-@pytest.mark.parametrize(
-    ("response", "expected_success"),
-    [(404, True), ("existing", False), (503, False)],
-    ids=["absent", "pre-existing", "unexpected-error"],
-)
-def test_pypi_absence_check_uses_controlled_index_and_fails_closed(
+def _read_output(path: Path, key: str) -> str:
+    """Read the last scalar written for a GitHub Actions output."""
+    prefix = f"{key}="
+    return next(
+        line.removeprefix(prefix)
+        for line in reversed(path.read_text().splitlines())
+        if line.startswith(prefix)
+    )
+
+
+def _run_pypi_classifier(
     tmp_path: Path,
-    package_index_server: tuple[str, dict[str, Any]],
-    response: int | str,
-    expected_success: bool,
-) -> None:
-    """The exact prepare path accepts only a 404 and rejects an occupied version."""
-    base_url, state = package_index_server
-    state["index_responses"] = [
-        _index_payload(base_url, {}) if response == "existing" else response
-    ]
+    base_url: str,
+    *,
+    job_id: str = "prepare-pypi",
+    env_overrides: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    output = tmp_path / f"{job_id}-output"
+    summary = tmp_path / f"{job_id}-summary"
     env = os.environ | {
+        "ALLOWED_FILE_HOST": "127.0.0.1",
+        "DOWNLOAD_TOTAL_SECONDS": "2",
         "EXPECTED_PROJECT_NAME": "pylxpweb",
         "EXPECTED_VERSION": "1.2.3",
-        "PYPI_JSON_BASE": f"{base_url}/pypi",
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_STEP_SUMMARY": str(summary),
+        "INDEX_JSON_BASE": f"{base_url}/pypi",
+        "INDEX_TOTAL_SECONDS": "2",
+        "REQUIRED_FILE_SCHEME": "http",
+        "SNAPSHOT_DELAY_SECONDS": "0",
+        "SOCKET_TIMEOUT_SECONDS": "1",
     }
+    env.update(env_overrides or {})
+    step = _step(job_id, "classify-pypi-state")
+    marker = "python3 - <<'PY'\n"
+    assert step["run"].startswith(marker)
+    python = step["run"].removeprefix(marker).removesuffix("\nPY\n")
     result = subprocess.run(
-        ["bash", "-c", _step("prepare-pypi", "verify-pypi-absence")["run"]],
+        [sys.executable, "-c", python],
         cwd=tmp_path,
         env=env,
         text=True,
         capture_output=True,
         check=False,
     )
-    assert state["index_calls"] == 1
-    assert (result.returncode == 0) is expected_success
+    state = _read_output(output, "state") if output.exists() else ""
+    return result, state
+
+
+@pytest.mark.parametrize(
+    ("remote_case", "expected_state"),
+    [
+        ("absent", "ABSENT"),
+        ("exact", "EXACT_COMPLETE"),
+        ("partial", "PARTIAL"),
+        ("mismatch", "MISMATCH"),
+        ("yanked", "YANKED"),
+        ("extra", "EXTRA"),
+        ("competing", "COMPETING"),
+        ("uncertain", "UNCERTAIN"),
+    ],
+)
+def test_pypi_classifier_emits_closed_state_machine_from_remote_bytes(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+    remote_case: str,
+    expected_state: str,
+) -> None:
+    """Deleting any state branch makes an immutable remote state publishable or ambiguous."""
+    base_url, server = package_index_server
+    files, payload = _prepare_index_case(tmp_path, base_url, server)
+    if remote_case == "absent":
+        server["index_responses"] = [404, 404]
+    elif remote_case == "partial":
+        payload["urls"] = payload["urls"][:1]
+    elif remote_case == "mismatch":
+        payload["urls"][0]["digests"]["sha256"] = "0" * 64
+    elif remote_case == "yanked":
+        payload["urls"][0]["yanked"] = True
+    elif remote_case == "extra":
+        payload["urls"].append(
+            {
+                "digests": {"sha256": hashlib.sha256(b"extra").hexdigest()},
+                "filename": "pylxpweb-1.2.3.zip",
+                "url": f"{base_url}/files/pylxpweb-1.2.3.zip",
+                "yanked": False,
+            }
+        )
+    elif remote_case == "competing":
+        payload["urls"].append(dict(payload["urls"][0]))
+    elif remote_case == "uncertain":
+        server["index_responses"] = [503, 503]
+    if not server["index_responses"]:
+        server["index_responses"] = [payload, payload]
+    result, state = _run_pypi_classifier(tmp_path, base_url)
+    assert result.returncode == 0, result.stderr
+    assert state == expected_state
+    summary = (tmp_path / "prepare-pypi-summary").read_text()
+    assert "Expected sealed files" in summary
+    assert "First snapshot" in summary
+    assert "Second snapshot" in summary
+    if expected_state == "EXACT_COMPLETE":
+        assert server["files"] == files
+        assert server["request_events"][0] == "index"
+        assert server["request_events"][-1] == "index"
+        assert "file" in server["request_events"][1:-1]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "advertised-host",
+        "redirect-host",
+        "metadata-hash",
+        "downloaded-bytes",
+        "inconsistent-snapshots",
+        "malformed-json",
+    ],
+)
+def test_pypi_classifier_never_publishes_untrusted_or_unstable_evidence(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+    mutation: str,
+) -> None:
+    """Weakening host/hash/byte/snapshot checks can misclassify occupied PyPI as absent."""
+    base_url, server = package_index_server
+    files, payload = _prepare_index_case(tmp_path, base_url, server)
+    expected = "MISMATCH"
+    if mutation == "advertised-host":
+        payload["urls"][0]["url"] = payload["urls"][0]["url"].replace("127.0.0.1", "localhost")
+    elif mutation == "redirect-host":
+        name = payload["urls"][0]["filename"]
+        server["redirected_files"][name] = files[name]
+        server["files"][name] = {
+            "redirect": f"{base_url.replace('127.0.0.1', 'localhost')}/redirected/{name}"
+        }
+    elif mutation == "metadata-hash":
+        payload["urls"][0]["digests"]["sha256"] = "0" * 64
+    elif mutation == "downloaded-bytes":
+        server["files"][payload["urls"][0]["filename"]] = b"tampered"
+    elif mutation == "inconsistent-snapshots":
+        changed = json.loads(json.dumps(payload))
+        changed["urls"][0]["yanked"] = True
+        server["index_responses"] = [payload, changed]
+        expected = "UNCERTAIN"
+    elif mutation == "malformed-json":
+        server["index_responses"] = ["not-an-object", "not-an-object"]
+        expected = "UNCERTAIN"
+    if not server["index_responses"]:
+        server["index_responses"] = [payload, payload]
+    result, state = _run_pypi_classifier(tmp_path, base_url)
+    assert result.returncode == 0, result.stderr
+    assert state == expected
+    assert state != "ABSENT"
+
+
+def test_recovery_recomputes_state_from_mutable_remote_without_rebuilding(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+) -> None:
+    """Caching prepare output would miss an upload accepted after a lost publisher response."""
+    base_url, server = package_index_server
+    _, payload = _prepare_index_case(tmp_path, base_url, server)
+    server["index_responses"] = [404, 404]
+    first, first_state = _run_pypi_classifier(tmp_path, base_url)
+    server["index_calls"] = 0
+    server["index_responses"] = [payload, payload]
+    second, second_state = _run_pypi_classifier(tmp_path, base_url)
+    assert first.returncode == second.returncode == 0
+    assert (first_state, second_state) == ("ABSENT", "EXACT_COMPLETE")
+    assert _job("prepare-pypi")["needs"] == ["bind-build-attest", "verify-testpypi"]
+    assert "bind-build-attest" not in _job("prepare-pypi").get("if", "")
+
+
+def _artifact_fixture(expected_name: str, expected_digest: str) -> dict[str, Any]:
+    run_id = 12345
+    commit = "a" * 40
+    repository = "joyfulhouse/pylxpweb"
+    artifact = {
+        "id": 987,
+        "name": expected_name,
+        "expired": False,
+        "digest": expected_digest,
+        "workflow_run": {
+            "id": run_id,
+            "head_sha": commit,
+            "repository_id": 42,
+            "head_repository_id": 42,
+        },
+    }
+    return {
+        f"repos/{repository}/actions/runs/{run_id}": {
+            "id": run_id,
+            "event": "release",
+            "head_sha": commit,
+            "path": ".github/workflows/release.yml",
+            "repository": {"id": 42, "full_name": repository},
+            "head_repository": {"id": 42, "full_name": repository},
+        },
+        f"repos/{repository}/actions/runs/{run_id}/artifacts": {
+            "total_count": 1,
+            "artifacts": [artifact],
+        },
+    }
+
+
+def _run_artifact_resolution(
+    tmp_path: Path,
+    fixtures: dict[str, Any],
+    *,
+    expected_digest: str = "d" * 64,
+) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    _write_fake_gh(bin_dir)
+    fixtures_path = tmp_path / "artifact-fixtures.json"
+    fixtures_path.write_text(json.dumps(fixtures))
+    env = os.environ | {
+        "EXPECTED_ARTIFACT_DIGEST": expected_digest,
+        "EXPECTED_ARTIFACT_NAME": "pylxpweb-release-1.2.3-aaaaaaaaaaaa",
+        "EXPECTED_COMMIT": "a" * 40,
+        "GH_FIXTURES": str(fixtures_path),
+        "GITHUB_OUTPUT": str(tmp_path / "artifact-output"),
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "artifact-summary"),
+        "GH_TOKEN": "scoped-test-token",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "REPOSITORY": "joyfulhouse/pylxpweb",
+        "RUN_ID": "12345",
+    }
+    run = _step("prepare-pypi", "resolve-release-artifact")["run"]
+    marker = 'python3 - "$evidence/run.json" "$evidence/artifacts.json" <<\'PY\'\n'
+    shell, python = run.split(marker, 1)
+    resolver = tmp_path / "resolve-release-artifact.py"
+    resolver.write_text(python.removesuffix("\nPY\n"))
+    script = tmp_path / "resolve-release-artifact.sh"
+    script.write_text(
+        shell + f'python3 "{resolver}" "$evidence/run.json" "$evidence/artifacts.json"\n'
+    )
+    return subprocess.run(
+        ["bash", str(script)],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing",
+        "expired",
+        "duplicate",
+        "count-mismatch",
+        "wrong-envelope",
+        "wrong-name",
+        "wrong-digest",
+        "wrong-action-digest-format",
+        "wrong-run",
+        "wrong-head",
+        "wrong-repository",
+    ],
+)
+def test_prepare_rediscovers_one_exact_nonexpired_run_artifact(
+    tmp_path: Path, mutation: str
+) -> None:
+    """Trusting only stale job outputs can select missing, replaced, or cross-run bytes."""
+    name = "pylxpweb-release-1.2.3-aaaaaaaaaaaa"
+    digest = "sha256:" + "d" * 64
+    fixtures = _artifact_fixture(name, digest)
+    page = fixtures["repos/joyfulhouse/pylxpweb/actions/runs/12345/artifacts"]
+    artifacts = page["artifacts"]
+    artifact = artifacts[0]
+    run = fixtures["repos/joyfulhouse/pylxpweb/actions/runs/12345"]
+    if mutation == "missing":
+        artifacts.clear()
+        page["total_count"] = 0
+    elif mutation == "expired":
+        artifact["expired"] = True
+    elif mutation == "duplicate":
+        artifacts.append(dict(artifact, id=988))
+        page["total_count"] = 2
+    elif mutation == "count-mismatch":
+        page["total_count"] = 2
+    elif mutation == "wrong-envelope":
+        fixtures["repos/joyfulhouse/pylxpweb/actions/runs/12345/artifacts"] = artifacts
+    elif mutation == "wrong-name":
+        artifact["name"] = "attacker-artifact"
+    elif mutation == "wrong-digest":
+        artifact["digest"] = "sha256:" + "0" * 64
+    elif mutation == "wrong-run":
+        artifact["workflow_run"]["id"] = 54321
+    elif mutation == "wrong-head":
+        artifact["workflow_run"]["head_sha"] = "b" * 40
+    elif mutation == "wrong-repository":
+        run["repository"]["full_name"] = "attacker/pylxpweb"
+    expected_digest = "sha256:" + "d" * 64 if mutation == "wrong-action-digest-format" else "d" * 64
+    result = _run_artifact_resolution(tmp_path, fixtures, expected_digest=expected_digest)
+    assert result.returncode != 0
+
+
+def test_prepare_accepts_exact_run_artifact_and_binds_download_by_id(tmp_path: Path) -> None:
+    """The accepted API identity must drive the immutable artifact download selector."""
+    name = "pylxpweb-release-1.2.3-aaaaaaaaaaaa"
+    digest = "sha256:" + "d" * 64
+    result = _run_artifact_resolution(tmp_path, _artifact_fixture(name, digest))
+    assert result.returncode == 0, result.stderr
+    output = tmp_path / "artifact-output"
+    assert _read_output(output, "artifact-id") == "987"
+    summary = (tmp_path / "artifact-summary").read_text()
+    assert "987" in summary
+    assert name in summary
+    assert digest in summary
+    download = _step("prepare-pypi", "download-release-artifact")
+    assert download["with"]["artifact-ids"] == (
+        "${{ steps.resolve-release-artifact.outputs.artifact-id }}"
+    )
+    assert download["with"]["run-id"] == "${{ github.run_id }}"
+    assert download["with"]["digest-mismatch"] == "error"
+
+
+def test_production_recovery_topology_has_one_terminal_verifier() -> None:
+    """Changing conditions can republish exact state, top up partial state, or hide failure."""
+    prepare = _job("prepare-pypi")
+    publish = _job("publish-pypi")
+    verify = _job("verify-pypi")
+    assert prepare["environment"] == "pypi"
+    assert prepare["outputs"]["state"] == "${{ steps.classify-pypi-state.outputs.state }}"
+    assert _step("prepare-pypi", "stage")["if"] == (
+        "steps.classify-pypi-state.outputs.state == 'ABSENT'"
+    )
+    assert _step("prepare-pypi", "upload-staging-artifact")["if"] == (
+        "steps.classify-pypi-state.outputs.state == 'ABSENT'"
+    )
+    assert publish["if"] == "needs.prepare-pypi.outputs.state == 'ABSENT'"
+    assert publish["needs"] == "prepare-pypi"
+    assert verify["needs"] == ["bind-build-attest", "prepare-pypi", "publish-pypi"]
+    assert verify["if"] == (
+        "${{ always() && !cancelled() && needs.prepare-pypi.result == 'success' }}"
+    )
+    assert "needs.publish-pypi.result" not in verify["if"]
+    assert (
+        _step("verify-pypi", "classify-pypi-state")["run"]
+        == _step("prepare-pypi", "classify-pypi-state")["run"]
+    )
+    terminal = _step("verify-pypi", "require-exact-complete")
+    assert terminal["env"]["STATE"] == "${{ steps.classify-pypi-state.outputs.state }}"
+    assert "EXACT_COMPLETE" in terminal["run"]
+    assert not any("continue-on-error" in step for step in publish["steps"])
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "ABSENT",
+        "EXACT_COMPLETE",
+        "PARTIAL",
+        "MISMATCH",
+        "YANKED",
+        "EXTRA",
+        "COMPETING",
+        "UNCERTAIN",
+    ],
+)
+def test_terminal_verifier_succeeds_only_for_exact_complete(state: str) -> None:
+    """Any other successful terminal state can hide a lost or immutable partial upload."""
+    step = _step("verify-pypi", "require-exact-complete")
+    result = subprocess.run(
+        ["bash", "-c", step["run"]],
+        env=os.environ | {"STATE": state},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is (state == "EXACT_COMPLETE")
+
+
+def test_production_classifier_worst_case_fits_verifier_timeout() -> None:
+    """Two snapshots and both byte downloads leave at least five minutes of headroom."""
+    job = _job("verify-pypi")
+    env = _step("verify-pypi", "classify-pypi-state")["env"]
+    classifier_worst_case = (
+        2 * int(env["INDEX_TOTAL_SECONDS"])
+        + 2 * int(env["DOWNLOAD_TOTAL_SECONDS"])
+        + int(env["SNAPSHOT_DELAY_SECONDS"])
+    )
+    assert int(job["timeout-minutes"]) * 60 - classifier_worst_case >= 300
+    assert int(env["SOCKET_TIMEOUT_SECONDS"]) < int(env["INDEX_TOTAL_SECONDS"])
+    assert "signal.setitimer" in _step("verify-pypi", "classify-pypi-state")["run"]
+
+
+def test_prepare_and_verifier_share_artifact_and_remote_evidence_scripts() -> None:
+    """Divergent recovery verification can bless evidence normal verification rejects."""
+    assert (
+        _step("prepare-pypi", "resolve-release-artifact")["run"]
+        == _step("verify-pypi", "resolve-release-artifact")["run"]
+    )
+    assert (
+        _step("prepare-pypi", "verify-release-bundle")["run"]
+        == _step("verify-pypi", "verify-release-bundle")["run"]
+    )
+    assert (
+        _step("prepare-pypi", "classify-pypi-state")["run"]
+        == _step("verify-pypi", "classify-pypi-state")["run"]
+    )
+
+
+def test_only_absent_state_can_reach_action_only_production_publisher() -> None:
+    """Any broader publisher guard permits republish or immutable one-file top-up."""
+    publish = _job("publish-pypi")
+    assert publish["environment"] == "pypi"
+    assert publish["permissions"] == {"contents": "read", "id-token": "write"}
+    assert publish["if"] == "needs.prepare-pypi.outputs.state == 'ABSENT'"
+    assert len(publish["steps"]) == 2
+    assert all(set(step) <= {"uses", "with", "name"} for step in publish["steps"])
+    assert all("run" not in step for step in publish["steps"])
+    assert "skip-existing" not in publish["steps"][1].get("with", {})
+    workflow = _workflow()
+    production_oidc = [
+        job_id
+        for job_id, job in workflow["jobs"].items()
+        if job.get("permissions", {}).get("id-token") == "write"
+        and job.get("environment") == "pypi"
+    ]
+    assert production_oidc == ["publish-pypi"]
+    assert not any(
+        "continue-on-error" in job or any("continue-on-error" in step for step in job["steps"])
+        for job in workflow["jobs"].values()
+    )
 
 
 def test_all_release_actions_are_immutable_full_sha_pins() -> None:

@@ -64,30 +64,66 @@ Publishing is a linear seven-job promotion chain:
    polls the exact TestPyPI version, requires exactly the two non-yanked filenames
    and SHA-256 digests, and downloads and rehashes their allowlisted HTTPS bytes.
    It then takes a second exact index snapshot so a competing publication during
-   download fails closed. Production verification uses the same rule.
+   download fails closed.
 
 The TestPyPI verifier's mechanical worst case is 12 minutes 45 seconds: twelve
 30-second index attempts, 255 seconds of capped backoff, two 60-second downloads,
 and a final 30-second snapshot. Its 20-minute job timeout leaves 7 minutes 15
 seconds for artifact download, checksums, attestation verification, and runner
-overhead. The PyPI verifier's corresponding worst case is 8 minutes 45 seconds
-inside a 15-minute job, leaving 6 minutes 15 seconds. A 10-second socket timeout
-only detects inactivity; a process-level total-transfer deadline separately caps
-each index request at 30 seconds and each distribution download at 60 seconds.
-7. `prepare-pypi`, `publish-pypi`, and `verify-pypi` repeat the separation for
-   production: the no-OIDC prepare job revalidates and stages only when the
-   version is absent; the OIDC publisher again contains only the two pinned
-   actions; and the no-OIDC verifier polls and downloads the exact final bytes.
+overhead. A 10-second socket timeout only detects inactivity; a process-level
+total-transfer deadline separately caps each index request at 30 seconds and each
+distribution download at 60 seconds.
+7. `prepare-pypi` has no OIDC and is itself protected by the `pypi` environment.
+   It does not trust only prior job outputs: it queries the Actions run and artifact
+   APIs for `github.run_id`, requires exactly one non-expired sealed artifact with
+   the expected repository, release run, head, deterministic name, and upload
+   digest, then downloads it by artifact ID with digest mismatch set to an error.
+   It rechecks the bundle hashes, source identity, and separate source/build
+   attestations before taking two PyPI snapshots around any distribution downloads.
+   It emits one state from the closed state machine below and stages the **full**
+   wheel-plus-sdist set only for `ABSENT`.
+8. `publish-pypi` runs only when the fresh prepare output is exactly `ABSENT`. It
+   retains exactly two full-SHA-pinned action steps: download the run-attempt-scoped
+   staging artifact and invoke the official PyPA publisher. This is the only
+   production OIDC job. It has no shell, `skip-existing`, partial-file path, or
+   continue-on-error behavior.
+9. `verify-pypi` is the sole terminal definition of production completion. Its
+   `always()`/non-cancelled condition runs it after a successful prepare whether
+   the publisher succeeded, failed, or was skipped. It rediscovers and revalidates
+   the sealed artifact and attestations, reruns the same classifier against fresh
+   PyPI bytes, and succeeds only for `EXACT_COMPLETE`.
+
+The production classifier's mechanical worst case is 3 minutes 5 seconds: two
+30-second index snapshots, two 60-second downloads, and a five-second stability
+interval. Its 15-minute verifier timeout leaves 11 minutes 55 seconds for Actions
+API discovery, artifact download, checksum and attestation verification, and
+runner overhead.
+
+| State | Meaning | Workflow consequence |
+|---|---|---|
+| `ABSENT` | Two clean 404 snapshots with no conflicting or uncertain evidence | The only state that stages and permits the publisher |
+| `EXACT_COMPLETE` | Stable exact filenames, index hashes, allowlisted final hosts, downloaded bytes, non-yanked status, sealed bundle, and GitHub attestations | Publisher skips; terminal verifier succeeds |
+| `PARTIAL` | A stable non-empty strict subset, even when every present byte matches | Terminal failure; burn the version and never top up |
+| `MISMATCH` | Stable identity, hash, host, or downloaded-byte conflict | Terminal failure; preserve evidence and use compromise/new-version procedure |
+| `YANKED` | Any expected remote file is yanked | Terminal failure; preserve evidence and use compromise/new-version procedure |
+| `EXTRA` | The full expected set plus stable additional files | Terminal failure; preserve evidence and use compromise/new-version procedure |
+| `COMPETING` | A duplicate filename or another stable occupied file set | Terminal failure; preserve evidence and use compromise/new-version procedure |
+| `UNCERTAIN` | Timeout, TLS/JSON/API/429/5xx error, inconsistent snapshots, or unavailable artifact/attestation evidence | Never publish; retry only the classifier/verifier recovery chain |
 
 The sealed artifact is named from the version and merge commit and is retained for
-30 days. The two staged upload artifacts use the same 30-day retention so a delayed
-protected-environment approval does not require rebuilding or restaging. Job
-summaries expose the tag, commit, tree, final PR/head, workflow
-ref/SHA, container digest, distribution names/digests, and attestation verification.
+30 days. Staging artifacts also retain for 30 days and include `github.run_attempt`
+in their names so a recovery attempt cannot collide with immutable staging from an
+earlier attempt. Job summaries expose the tag, commit, tree, final PR/head,
+workflow ref/SHA, container digest, distribution names/digests, attestation
+verification, classifier state, evidence, and required action.
 
 GitHub build/source attestations establish the GitHub workflow and source identity
 for the local subjects. They are distinct from the PEP 740 attestations that the
 PyPA publishing action generates and sends to PyPI during trusted publication.
+PyPI Integrity API inspection of the publish attestation is optional
+defense-in-depth when that API is available and reliable. It is not a substitute
+for any MUST check above, and this workflow does not claim or require the PyPI
+attestation to expose the same GitHub run or attempt as a PyPI-enforced property.
 
 ### Required repository settings
 
@@ -121,7 +157,12 @@ or mutate repository, environment, or package-index settings.
 4. Confirm no later commit has reached `main`, then create the protected `v*` tag
    on that GitHub merge commit and publish the GitHub Release for the same tag.
 5. Review the identity and attestation summaries after TestPyPI verification, then
-   approve the protected `pypi` environment if every value matches the candidate.
+   approve the protected `pypi` environment for `prepare-pypi` if every value
+   matches the candidate. Each job that references an environment is separately
+   protected. An `EXACT_COMPLETE` recovery needs only the prepare approval because
+   the publisher skips. An `ABSENT` path normally asks for a second `pypi` approval
+   when `publish-pypi` becomes pending; approve it only after reviewing the fresh
+   `ABSENT` summary. Never approve a publisher job directly as a recovery shortcut.
 
 ### Recovery at the sealing boundary
 
@@ -138,6 +179,54 @@ or mutate repository, environment, or package-index settings.
 - If TestPyPI or PyPI contains unexpected or mismatched files, stop. Package-index
   files are immutable; do not use `skip-existing` in production and do not rebuild
   under the same version. Investigate before preparing a new version.
+
+### PyPI recovery runbook
+
+The following decisions are **MUST** requirements. A normal PyPI recovery never
+rebuilds, never runs **Re-run all jobs**, never directly reruns `publish-pypi`, and
+never recreates, moves, or deletes the tag or GitHub Release. GitHub's job-rerun API
+reruns the selected job and its dependent jobs while retaining the original event
+SHA/ref. Select `prepare-pypi` so classification is fresh and its dependent
+publisher/verifier jobs follow the state machine:
+
+```bash
+run_id=<original-release-workflow-run-id>
+prepare_job_id=$(gh run view "$run_id" --repo joyfulhouse/pylxpweb \
+  --json jobs --jq '.jobs[] | select(.name == "Classify, verify, and conditionally stage for PyPI") | .databaseId')
+test -n "$prepare_job_id"
+gh run rerun --repo joyfulhouse/pylxpweb --job "$prepare_job_id"
+```
+
+- **Failure before upload / clean absence:** MUST rerun `prepare-pypi` and its
+  dependents as above. After protected-environment approval, two clean absence
+  snapshots permit one full-set publisher attempt. A verifier result of `ABSENT`
+  means the attempt did not complete; use the same recovery invocation, not the
+  publisher job.
+- **Lost publisher response / exact complete:** MUST use the same recovery
+  invocation. Fresh `EXACT_COMPLETE` classification skips the publisher and the
+  terminal verifier completes from the sealed artifact and exact remote bytes.
+- **Partial publication:** MUST preserve the run summaries and package-index
+  evidence, treat the version as burned, and prepare a new version through the
+  normal reviewed release process. Never upload the missing file as a top-up.
+- **Mismatch, yanked, extra, or competing publication:** MUST stop publication,
+  preserve all evidence, and begin the compromise assessment below before creating
+  a new reviewed version. Do not normalize, delete, or overwrite remote evidence.
+- **Uncertain evidence:** MUST NOT approve or publish. Retry only `prepare-pypi`
+  and its dependent verifier/classifier path after the transient condition is
+  understood. Repeated uncertainty is not evidence of absence.
+- **Missing, expired, duplicated, or unverifiable sealed artifact/attestation:**
+  MUST treat the run as `UNCERTAIN`; never rebuild under the same version. If the
+  original 30-day artifact cannot be recovered, prepare a new version through the
+  normal release process.
+- **Compromise or revocation:** MUST follow the response steps below, including
+  canceling pending approvals and disabling trusted-publisher authority before any
+  new release. Normal recovery does not authorize tag/Release cleanup.
+
+An operator **MAY** additionally inspect PyPI's Integrity API publish attestation
+for the expected repository, `release.yml`, tag, and `pypi` environment identity
+when the API is available and its fixture contract has been revalidated. This is a
+SHOULD defense-in-depth check, not a completion condition. Do not infer a mandatory
+same-run or same-attempt binding that PyPI does not enforce and expose reliably.
 
 ## Package publishing compromise response
 
