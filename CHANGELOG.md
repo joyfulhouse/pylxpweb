@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.40] - 2026-08-16
+
+### Fixed
+
+- Recycle aging long-lived local Modbus TCP sessions at operation boundaries
+  (bounded max-age with jitter) so gradual gateway-latency degradation can no
+  longer make the effective poll interval grow unbounded over time in LOCAL and
+  HYBRID modes; adds a lock-free `async_shutdown()` fast-teardown path and
+  version-portable pymodbus socket reclaim
+  ([#288](https://github.com/joyfulhouse/pylxpweb/issues/288),
+  [#290](https://github.com/joyfulhouse/pylxpweb/pull/290)).
+
 ## [0.9.39] - 2026-08-13
 
 The first stable release of the 0.9.39 line, graduating the b1–b11 beta series
@@ -2665,7 +2677,8 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
-[Unreleased]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.32...HEAD
+[Unreleased]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.40...HEAD
+[0.9.40]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.39...v0.9.40
 [0.9.32]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.29...v0.9.32
 [0.9.29]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.26...v0.9.29
 [0.9.26]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.17...v0.9.26
