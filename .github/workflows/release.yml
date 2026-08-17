@@ -77,7 +77,6 @@ jobs:
           git fetch --no-tags --force origin \
             "+refs/heads/main:refs/remotes/origin/main"
           git show-ref --verify --quiet "refs/tags/$tag" || die "release tag does not exist"
-          tag_object=$(git rev-parse "refs/tags/$tag")
           commit=$(git rev-parse "refs/tags/$tag^{commit}")
           tree=$(git rev-parse "refs/tags/$tag^{tree}")
           [[ "$commit" == "$EVENT_SHA" ]] || die "event commit does not match tag commit"
@@ -103,7 +102,8 @@ jobs:
           trap 'rm -rf "$api_dir"' EXIT
           gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
             "repos/$REPOSITORY/commits/$commit/pulls" > "$api_dir/pulls.json"
-          python3 - "$api_dir/pulls.json" "$commit" "$first_parent" "$second_parent" <<'PY'
+          mapfile -t pr_identity < <(
+            python3 - "$api_dir/pulls.json" "$commit" "$first_parent" "$second_parent" <<'PY'
           import json
           import pathlib
           import sys
@@ -122,17 +122,6 @@ jobs:
           print(pull["head"]["sha"])
           print(pull["user"]["login"])
           PY
-          mapfile -t pr_identity < <(
-            python3 - "$api_dir/pulls.json" <<'PY'
-          import json
-          import pathlib
-          import sys
-          pages = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          pull = [pull for page in pages for pull in page][0]
-          print(pull["number"])
-          print(pull["head"]["sha"])
-          print(pull["user"]["login"])
-          PY
           )
           pr="${pr_identity[0]}"
           head="${pr_identity[1]}"
@@ -140,7 +129,8 @@ jobs:
 
           gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
             "repos/$REPOSITORY/pulls/$pr/reviews" > "$api_dir/reviews.json"
-          python3 - "$api_dir/reviews.json" > "$api_dir/reviewers.txt" <<'PY'
+          python3 - "$api_dir/reviews.json" "$api_dir/effective-reviews.json" \
+            > "$api_dir/reviewers.txt" <<'PY'
           import json
           import pathlib
           import sys
@@ -154,6 +144,7 @@ jobs:
           ):
               if review["state"] in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
                   effective[review["user"]["login"]] = review
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(effective))
           for login, review in sorted(effective.items()):
               if review["state"] in {"APPROVED", "CHANGES_REQUESTED"}:
                   print(login)
@@ -164,26 +155,18 @@ jobs:
               "repos/$REPOSITORY/collaborators/$reviewer/permission" --jq .permission)
             printf '%s\t%s\n' "$reviewer" "$permission" >> "$api_dir/permissions.tsv"
           done < "$api_dir/reviewers.txt"
-          python3 - "$api_dir/reviews.json" "$api_dir/permissions.tsv" \
+          python3 - "$api_dir/effective-reviews.json" "$api_dir/permissions.tsv" \
             "$head" "$author" <<'PY'
           import json
           import pathlib
           import sys
 
-          pages = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          reviews = [review for page in pages for review in page]
+          effective = json.loads(pathlib.Path(sys.argv[1]).read_text())
           permissions = dict(
               line.split("\t", 1)
               for line in pathlib.Path(sys.argv[2]).read_text().splitlines()
           )
           head, author = sys.argv[3:]
-          effective = {}
-          for review in sorted(
-              reviews,
-              key=lambda item: (item.get("submitted_at") or "", item.get("id", 0)),
-          ):
-              if review["state"] in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
-                  effective[review["user"]["login"]] = review
           eligible = {
               login: review
               for login, review in effective.items()
@@ -220,12 +203,10 @@ jobs:
           {
             echo "artifact-name=$artifact_name"
             echo "commit=$commit"
-            echo "first-parent=$first_parent"
             echo "head=$head"
             echo "pr=$pr"
             echo "project-name=$project_name"
             echo "tag=$tag"
-            echo "tag-object=$tag_object"
             echo "tree=$tree"
             echo "version=$version"
             echo "workflow-ref=$WORKFLOW_REF"
