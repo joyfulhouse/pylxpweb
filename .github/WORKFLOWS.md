@@ -80,8 +80,18 @@ distribution download at 60 seconds.
    digest, then downloads it by artifact ID with digest mismatch set to an error.
    It rechecks the bundle hashes, source identity, and separate source/build
    attestations before taking two PyPI snapshots around any distribution downloads.
-   It emits one state from the closed state machine below and stages the **full**
-   wheel-plus-sdist set only for `ABSENT`.
+   Each index snapshot requires the final response URL to be HTTPS on the pinned
+   `pypi.org` index host, so an off-origin redirect — including one that ends in a
+   404 — classifies as `UNCERTAIN`, never as `ABSENT`. Every expected file the
+   index advertises is validated (metadata digest, advertised and final HTTPS
+   `files.pythonhosted.org` URL, and downloaded bytes) before subset/superset
+   classification, so a partial or extra file set with any conflicting evidence
+   classifies as `MISMATCH` rather than `PARTIAL`/`EXTRA`. Its evidence steps
+   tolerate failure: a missing, expired, duplicated, or unverifiable sealed
+   artifact or attestation funnels into a **successful** prepare result with
+   state `UNCERTAIN` instead of terminating the job, so the terminal verifier
+   below still runs and fails closed. It emits one state from the closed state
+   machine below and stages the **full** wheel-plus-sdist set only for `ABSENT`.
 8. `publish-pypi` runs only when the fresh prepare output is exactly `ABSENT`. It
    retains exactly two full-SHA-pinned action steps: download the run-attempt-scoped
    staging artifact and invoke the official PyPA publisher. This is the only
@@ -91,7 +101,9 @@ distribution download at 60 seconds.
    `always()`/non-cancelled condition runs it after a successful prepare whether
    the publisher succeeded, failed, or was skipped. It rediscovers and revalidates
    the sealed artifact and attestations, reruns the same classifier against fresh
-   PyPI bytes, and succeeds only for `EXACT_COMPLETE`.
+   PyPI bytes, and succeeds only for `EXACT_COMPLETE`. Unlike `prepare-pypi`, its
+   evidence steps fail hard: any evidence failure fails the terminal verifier
+   itself.
 
 The production classifier's mechanical worst case is 3 minutes 5 seconds: two
 30-second index snapshots, two 60-second downloads, and a five-second stability
@@ -103,12 +115,12 @@ runner overhead.
 |---|---|---|
 | `ABSENT` | Two clean 404 snapshots with no conflicting or uncertain evidence | The only state that stages and permits the publisher |
 | `EXACT_COMPLETE` | Stable exact filenames, index hashes, allowlisted final hosts, downloaded bytes, non-yanked status, sealed bundle, and GitHub attestations | Publisher skips; terminal verifier succeeds |
-| `PARTIAL` | A stable non-empty strict subset, even when every present byte matches | Terminal failure; burn the version and never top up |
-| `MISMATCH` | Stable identity, hash, host, or downloaded-byte conflict | Terminal failure; preserve evidence and use compromise/new-version procedure |
+| `PARTIAL` | A stable non-empty strict subset whose present files fully validate (metadata, hosts, and downloaded bytes) | Terminal failure; burn the version and never top up |
+| `MISMATCH` | Stable identity, hash, host, or downloaded-byte conflict — including one inside an otherwise partial or extra file set | Terminal failure; preserve evidence and use compromise/new-version procedure |
 | `YANKED` | Any expected remote file is yanked | Terminal failure; preserve evidence and use compromise/new-version procedure |
-| `EXTRA` | The full expected set plus stable additional files | Terminal failure; preserve evidence and use compromise/new-version procedure |
+| `EXTRA` | The full expected set, fully validated, plus stable additional files | Terminal failure; preserve evidence and use compromise/new-version procedure |
 | `COMPETING` | A duplicate filename or another stable occupied file set | Terminal failure; preserve evidence and use compromise/new-version procedure |
-| `UNCERTAIN` | Timeout, TLS/JSON/API/429/5xx error, inconsistent snapshots, or unavailable artifact/attestation evidence | Never publish; retry only the classifier/verifier recovery chain |
+| `UNCERTAIN` | Timeout, TLS/JSON/API/429/5xx error, off-origin index redirect, inconsistent snapshots, or unavailable artifact/attestation evidence | Never publish; retry only the classifier/verifier recovery chain |
 
 The sealed artifact is named from the version and merge commit and is retained for
 30 days. Staging artifacts also retain for 30 days and include `github.run_attempt`

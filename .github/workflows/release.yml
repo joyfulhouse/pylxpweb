@@ -736,10 +736,11 @@ jobs:
       contents: read
     outputs:
       staging-artifact: ${{ steps.stage.outputs.artifact-name }}
-      state: ${{ steps.classify-pypi-state.outputs.state }}
+      state: ${{ steps.resolve-prepare-state.outputs.state }}
     steps:
       - id: resolve-release-artifact
         name: Rediscover the immutable sealed artifact from this run
+        continue-on-error: true
         env: &artifact-identity
           EXPECTED_ARTIFACT_DIGEST: ${{ needs.bind-build-attest.outputs.artifact-digest }}
           EXPECTED_ARTIFACT_NAME: ${{ needs.bind-build-attest.outputs.artifact-name }}
@@ -817,6 +818,8 @@ jobs:
               print(f'- Artifact digest: `{artifact["digest"]}`', file=summary)
           PY
       - id: download-release-artifact
+        if: steps.resolve-release-artifact.outcome == 'success'
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
           artifact-ids: ${{ steps.resolve-release-artifact.outputs.artifact-id }}
@@ -826,18 +829,24 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
       - id: verify-release-bundle
+        if: steps.download-release-artifact.outcome == 'success'
+        continue-on-error: true
         env: *bundle-identity
         run: *verify-release-bundle
       - id: classify-pypi-state
         name: Classify stable PyPI state against the sealed bytes
+        if: steps.verify-release-bundle.outcome == 'success'
+        continue-on-error: true
         env: &pypi-classifier-env
           ALLOWED_FILE_HOST: files.pythonhosted.org
+          ALLOWED_INDEX_HOST: pypi.org
           DOWNLOAD_TOTAL_SECONDS: '60'
           EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
           EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
           INDEX_JSON_BASE: https://pypi.org/pypi
           INDEX_TOTAL_SECONDS: '30'
           REQUIRED_FILE_SCHEME: https
+          REQUIRED_INDEX_SCHEME: https
           SNAPSHOT_DELAY_SECONDS: '5'
           SOCKET_TIMEOUT_SECONDS: '10'
         run: &classify-pypi-state |
@@ -879,13 +888,23 @@ jobs:
               finally:
                   signal.setitimer(signal.ITIMER_REAL, 0)
 
+          def require_index_origin(url):
+              parsed = urllib.parse.urlparse(url)
+              if (
+                  parsed.scheme != os.environ["REQUIRED_INDEX_SCHEME"]
+                  or parsed.hostname != os.environ["ALLOWED_INDEX_HOST"]
+              ):
+                  raise ValueError("index response final URL is not the pinned index origin")
+
           def snapshot():
               try:
-                  _, content = fetch(request, float(os.environ["INDEX_TOTAL_SECONDS"]))
+                  final_url, content = fetch(request, float(os.environ["INDEX_TOTAL_SECONDS"]))
               except urllib.error.HTTPError as error:
                   if error.code == 404:
+                      require_index_origin(error.url)
                       return "absent", None, None
                   raise
+              require_index_origin(final_url)
               payload = json.loads(content)
               if not isinstance(payload, dict):
                   raise TypeError("index response is not an object")
@@ -925,16 +944,10 @@ jobs:
                   return "COMPETING"
               if any(item.get("yanked") is not False for item in releases):
                   return "YANKED"
-              remote = set(filenames)
-              wanted = set(expected)
-              if remote and remote < wanted:
-                  return "PARTIAL"
-              if wanted < remote:
-                  return "EXTRA"
-              if remote != wanted:
-                  return "COMPETING"
               for item in releases:
-                  filename = item["filename"]
+                  filename = item.get("filename")
+                  if filename not in expected:
+                      continue
                   if item.get("digests", {}).get("sha256") != expected[filename]:
                       return "MISMATCH"
                   advertised = urllib.parse.urlparse(item.get("url", ""))
@@ -943,7 +956,15 @@ jobs:
                       or advertised.hostname != os.environ["ALLOWED_FILE_HOST"]
                   ):
                       return "MISMATCH"
-              return "candidate-exact"
+              remote = set(filenames)
+              wanted = set(expected)
+              if remote == wanted:
+                  return "candidate-exact"
+              if remote and remote < wanted:
+                  return "PARTIAL"
+              if wanted < remote:
+                  return "EXTRA"
+              return "COMPETING"
 
           state = "UNCERTAIN"
           reason = "remote evidence could not be classified"
@@ -957,9 +978,12 @@ jobs:
               downloaded_state = None
               if first_kind == "present":
                   first_state = shape_state(first_payload)
-                  if first_state == "candidate-exact":
-                      downloaded_state = "EXACT_COMPLETE"
+                  if first_state in {"candidate-exact", "PARTIAL", "EXTRA"}:
+                      downloaded_state = "downloads-exact"
                       for item in first_payload["urls"]:
+                          filename = item.get("filename")
+                          if filename not in expected:
+                              continue
                           final_url, content = fetch(
                               item["url"], float(os.environ["DOWNLOAD_TOTAL_SECONDS"])
                           )
@@ -968,7 +992,7 @@ jobs:
                               final.scheme != os.environ["REQUIRED_FILE_SCHEME"]
                               or final.hostname != os.environ["ALLOWED_FILE_HOST"]
                               or hashlib.sha256(content).hexdigest()
-                              != expected[item["filename"]]
+                              != expected[filename]
                           ):
                               downloaded_state = "MISMATCH"
                               break
@@ -985,12 +1009,12 @@ jobs:
                   if first_state != second_state:
                       state = "UNCERTAIN"
                       reason = "PyPI classifications changed between snapshots"
-                  elif first_state != "candidate-exact":
-                      state = first_state
-                      reason = "stable PyPI metadata conflicts with the sealed set"
                   elif downloaded_state == "MISMATCH":
                       state = "MISMATCH"
                       reason = "downloaded PyPI bytes do not match the sealed set"
+                  elif first_state != "candidate-exact":
+                      state = first_state
+                      reason = "stable PyPI metadata conflicts with the sealed set"
                   else:
                       state = "EXACT_COMPLETE"
                       reason = "stable PyPI metadata and downloaded bytes exactly match"
@@ -1031,9 +1055,37 @@ jobs:
               print(f"- Second snapshot: `{second_canonical or second_kind}`", file=summary)
               print(f"- Required action: {guidance[state]}", file=summary)
           PY
+      - id: resolve-prepare-state
+        name: Funnel missing prerequisite evidence into an UNCERTAIN result
+        env:
+          CLASSIFIED_REASON: ${{ steps.classify-pypi-state.outputs.reason }}
+          CLASSIFIED_STATE: ${{ steps.classify-pypi-state.outputs.state }}
+          CLASSIFY_OUTCOME: ${{ steps.classify-pypi-state.outcome }}
+          DOWNLOAD_OUTCOME: ${{ steps.download-release-artifact.outcome }}
+          RESOLVE_OUTCOME: ${{ steps.resolve-release-artifact.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify-release-bundle.outcome }}
+        run: |
+          set -euo pipefail
+          state="UNCERTAIN"
+          reason="artifact, bundle, or attestation evidence failed before classification"
+          if [[ "$RESOLVE_OUTCOME" == "success" && "$DOWNLOAD_OUTCOME" == "success" && \
+                "$VERIFY_OUTCOME" == "success" && "$CLASSIFY_OUTCOME" == "success" && \
+                -n "$CLASSIFIED_STATE" ]]; then
+            state="$CLASSIFIED_STATE"
+            reason="$CLASSIFIED_REASON"
+          fi
+          {
+            echo "state=$state"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Prepare result"
+            echo "- State: \`$state\`"
+            echo "- Evidence: $reason"
+          } >> "$GITHUB_STEP_SUMMARY"
       - id: stage
         name: Stage the verified distributions
-        if: steps.classify-pypi-state.outputs.state == 'ABSENT'
+        if: steps.resolve-prepare-state.outputs.state == 'ABSENT'
         env:
           COMMIT: ${{ needs.bind-build-attest.outputs.commit }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -1043,7 +1095,7 @@ jobs:
           cp release-bundle/dist/* pypi-upload/
           echo "artifact-name=pylxpweb-pypi-${COMMIT}-attempt-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
       - id: upload-staging-artifact
-        if: steps.classify-pypi-state.outputs.state == 'ABSENT'
+        if: steps.resolve-prepare-state.outputs.state == 'ABSENT'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
           name: ${{ steps.stage.outputs.artifact-name }}

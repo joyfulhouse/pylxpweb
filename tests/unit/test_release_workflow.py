@@ -48,6 +48,7 @@ def package_index_server() -> Iterator[tuple[str, dict[str, Any]]]:
         "index_calls": 0,
         "index_responses": [],
         "redirected_files": {},
+        "redirected_index": None,
         "request_events": [],
     }
 
@@ -61,6 +62,11 @@ def package_index_server() -> Iterator[tuple[str, dict[str, Any]]]:
                 response = responses[index]
                 if isinstance(response, int):
                     self.send_error(response)
+                    return
+                if isinstance(response, dict) and "redirect" in response:
+                    self.send_response(302)
+                    self.send_header("Location", response["redirect"])
+                    self.end_headers()
                     return
                 body = json.dumps(response).encode()
                 self.send_response(200)
@@ -103,6 +109,18 @@ def package_index_server() -> Iterator[tuple[str, dict[str, Any]]]:
                 self.send_header("Content-Length", str(len(response)))
                 self.end_headers()
                 self.wfile.write(response)
+                return
+            if self.path.startswith("/redirected-index"):
+                response = state["redirected_index"]
+                if response is None:
+                    self.send_error(404)
+                    return
+                body = json.dumps(response).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             self.send_error(404)
 
@@ -1331,6 +1349,7 @@ def _run_pypi_classifier(
     summary = tmp_path / "prepare-pypi-summary"
     env = os.environ | {
         "ALLOWED_FILE_HOST": "127.0.0.1",
+        "ALLOWED_INDEX_HOST": "127.0.0.1",
         "DOWNLOAD_TOTAL_SECONDS": "2",
         "EXPECTED_PROJECT_NAME": "pylxpweb",
         "EXPECTED_VERSION": "1.2.3",
@@ -1339,6 +1358,7 @@ def _run_pypi_classifier(
         "INDEX_JSON_BASE": f"{base_url}/pypi",
         "INDEX_TOTAL_SECONDS": "2",
         "REQUIRED_FILE_SCHEME": "http",
+        "REQUIRED_INDEX_SCHEME": "http",
         "SNAPSHOT_DELAY_SECONDS": "0",
         "SOCKET_TIMEOUT_SECONDS": "1",
     }
@@ -1427,6 +1447,14 @@ def test_pypi_classifier_emits_closed_state_machine_from_remote_bytes(
         "downloaded-bytes",
         "inconsistent-snapshots",
         "malformed-json",
+        "partial-metadata-hash",
+        "partial-advertised-host",
+        "partial-downloaded-bytes",
+        "partial-redirect-host",
+        "extra-metadata-hash",
+        "extra-downloaded-bytes",
+        "index-redirect-host",
+        "index-redirect-absent",
     ],
 )
 def test_pypi_classifier_never_publishes_untrusted_or_unstable_evidence(
@@ -1437,19 +1465,31 @@ def test_pypi_classifier_never_publishes_untrusted_or_unstable_evidence(
     """Weakening host/hash/byte/snapshot checks can misclassify occupied PyPI as absent."""
     base_url, server = package_index_server
     files, payload = _prepare_index_case(tmp_path, base_url, server)
+    localhost_base = base_url.replace("127.0.0.1", "localhost")
     expected = "MISMATCH"
+    if mutation.startswith("partial-"):
+        payload["urls"] = payload["urls"][:1]
+    elif mutation.startswith("extra-"):
+        payload["urls"].append(
+            {
+                "digests": {"sha256": hashlib.sha256(b"extra").hexdigest()},
+                "filename": "pylxpweb-1.2.3.zip",
+                "url": f"{base_url}/files/pylxpweb-1.2.3.zip",
+                "yanked": False,
+            }
+        )
     if mutation == "advertised-host":
         payload["urls"][0]["url"] = payload["urls"][0]["url"].replace("127.0.0.1", "localhost")
-    elif mutation == "redirect-host":
+    elif mutation in {"redirect-host", "partial-redirect-host"}:
         name = payload["urls"][0]["filename"]
         server["redirected_files"][name] = files[name]
-        server["files"][name] = {
-            "redirect": f"{base_url.replace('127.0.0.1', 'localhost')}/redirected/{name}"
-        }
-    elif mutation == "metadata-hash":
+        server["files"][name] = {"redirect": f"{localhost_base}/redirected/{name}"}
+    elif mutation in {"metadata-hash", "partial-metadata-hash", "extra-metadata-hash"}:
         payload["urls"][0]["digests"]["sha256"] = "0" * 64
-    elif mutation == "downloaded-bytes":
+    elif mutation in {"downloaded-bytes", "partial-downloaded-bytes", "extra-downloaded-bytes"}:
         server["files"][payload["urls"][0]["filename"]] = b"tampered"
+    elif mutation == "partial-advertised-host":
+        payload["urls"][0]["url"] = payload["urls"][0]["url"].replace("127.0.0.1", "localhost")
     elif mutation == "inconsistent-snapshots":
         changed = json.loads(json.dumps(payload))
         changed["urls"][0]["yanked"] = True
@@ -1457,6 +1497,15 @@ def test_pypi_classifier_never_publishes_untrusted_or_unstable_evidence(
         expected = "UNCERTAIN"
     elif mutation == "malformed-json":
         server["index_responses"] = ["not-an-object", "not-an-object"]
+        expected = "UNCERTAIN"
+    elif mutation == "index-redirect-host":
+        server["redirected_index"] = payload
+        redirect = {"redirect": f"{localhost_base}/redirected-index"}
+        server["index_responses"] = [redirect, redirect]
+        expected = "UNCERTAIN"
+    elif mutation == "index-redirect-absent":
+        redirect = {"redirect": f"{localhost_base}/missing-index"}
+        server["index_responses"] = [redirect, redirect]
         expected = "UNCERTAIN"
     if not server["index_responses"]:
         server["index_responses"] = [payload, payload]
@@ -1628,12 +1677,12 @@ def test_production_recovery_topology_has_one_terminal_verifier() -> None:
     publish = _job("publish-pypi")
     verify = _job("verify-pypi")
     assert prepare["environment"] == "pypi"
-    assert prepare["outputs"]["state"] == "${{ steps.classify-pypi-state.outputs.state }}"
+    assert prepare["outputs"]["state"] == "${{ steps.resolve-prepare-state.outputs.state }}"
     assert _step("prepare-pypi", "stage")["if"] == (
-        "steps.classify-pypi-state.outputs.state == 'ABSENT'"
+        "steps.resolve-prepare-state.outputs.state == 'ABSENT'"
     )
     assert _step("prepare-pypi", "upload-staging-artifact")["if"] == (
-        "steps.classify-pypi-state.outputs.state == 'ABSENT'"
+        "steps.resolve-prepare-state.outputs.state == 'ABSENT'"
     )
     assert publish["if"] == "needs.prepare-pypi.outputs.state == 'ABSENT'"
     assert publish["needs"] == "prepare-pypi"
@@ -1650,6 +1699,107 @@ def test_production_recovery_topology_has_one_terminal_verifier() -> None:
     assert terminal["env"]["STATE"] == "${{ steps.classify-pypi-state.outputs.state }}"
     assert "EXACT_COMPLETE" in terminal["run"]
     assert not any("continue-on-error" in step for step in publish["steps"])
+
+
+_PREPARE_EVIDENCE_STEPS = (
+    "resolve-release-artifact",
+    "download-release-artifact",
+    "verify-release-bundle",
+    "classify-pypi-state",
+)
+
+
+def test_prepare_evidence_failures_funnel_into_uncertain_not_job_failure() -> None:
+    """A hard prepare failure skips the terminal verifier and hides a lost upload."""
+    for step_id in _PREPARE_EVIDENCE_STEPS:
+        assert _step("prepare-pypi", step_id).get("continue-on-error") is True
+    assert _step("prepare-pypi", "download-release-artifact")["if"] == (
+        "steps.resolve-release-artifact.outcome == 'success'"
+    )
+    assert _step("prepare-pypi", "verify-release-bundle")["if"] == (
+        "steps.download-release-artifact.outcome == 'success'"
+    )
+    assert _step("prepare-pypi", "classify-pypi-state")["if"] == (
+        "steps.verify-release-bundle.outcome == 'success'"
+    )
+    resolver = _step("prepare-pypi", "resolve-prepare-state")
+    assert "if" not in resolver
+    assert "continue-on-error" not in resolver
+    assert resolver["env"]["CLASSIFY_OUTCOME"] == "${{ steps.classify-pypi-state.outcome }}"
+    # The terminal verifier must keep failing hard on the same evidence.
+    for step_id in _PREPARE_EVIDENCE_STEPS:
+        verify_step = _step("verify-pypi", step_id)
+        assert "continue-on-error" not in verify_step
+        assert "if" not in verify_step
+    verify_step_ids = [step.get("id") for step in _job("verify-pypi")["steps"]]
+    assert "resolve-prepare-state" not in verify_step_ids
+
+
+def _run_prepare_state_resolver(
+    tmp_path: Path, outcomes: dict[str, str]
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
+    output = tmp_path / "resolver-output"
+    summary = tmp_path / "resolver-summary"
+    env = os.environ | {
+        "CLASSIFIED_REASON": "",
+        "CLASSIFIED_STATE": "",
+        "CLASSIFY_OUTCOME": "skipped",
+        "DOWNLOAD_OUTCOME": "success",
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_STEP_SUMMARY": str(summary),
+        "RESOLVE_OUTCOME": "success",
+        "VERIFY_OUTCOME": "success",
+    }
+    env.update(outcomes)
+    result = _run_yaml_script(
+        _step("prepare-pypi", "resolve-prepare-state")["run"],
+        cwd=tmp_path,
+        env=env,
+        tmp_path=tmp_path,
+        timeout_seconds=15,
+    )
+    state = _read_output(output, "state") if output.exists() else ""
+    reason = _read_output(output, "reason") if output.exists() else ""
+    return result, state, reason
+
+
+@pytest.mark.parametrize(
+    "outcomes",
+    [
+        {"RESOLVE_OUTCOME": "failure"},
+        {"DOWNLOAD_OUTCOME": "failure"},
+        {"VERIFY_OUTCOME": "failure"},
+        {"CLASSIFY_OUTCOME": "failure"},
+        {"CLASSIFY_OUTCOME": "skipped"},
+        {"CLASSIFY_OUTCOME": "success"},  # succeeded but emitted no state
+    ],
+)
+def test_prepare_state_resolver_reports_uncertain_for_missing_evidence(
+    tmp_path: Path, outcomes: dict[str, str]
+) -> None:
+    """Terminating prepare on evidence failure would skip the sole terminal verifier."""
+    result, state, reason = _run_prepare_state_resolver(tmp_path, outcomes)
+    assert result.returncode == 0, result.stderr
+    assert state == "UNCERTAIN"
+    assert reason
+
+
+@pytest.mark.parametrize("classified_state", ["ABSENT", "EXACT_COMPLETE", "PARTIAL", "UNCERTAIN"])
+def test_prepare_state_resolver_passes_through_classified_states(
+    tmp_path: Path, classified_state: str
+) -> None:
+    """The resolver must not invent, drop, or rewrite a genuine classification."""
+    result, state, reason = _run_prepare_state_resolver(
+        tmp_path,
+        {
+            "CLASSIFY_OUTCOME": "success",
+            "CLASSIFIED_STATE": classified_state,
+            "CLASSIFIED_REASON": "classifier evidence reason",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert state == classified_state
+    assert reason == "classifier evidence reason"
 
 
 @pytest.mark.parametrize(
@@ -1692,6 +1842,17 @@ def test_production_classifier_worst_case_fits_verifier_timeout() -> None:
     assert "signal.setitimer" in _step("verify-pypi", "classify-pypi-state")["run"]
 
 
+def test_production_classifier_pins_https_pypi_index_origin() -> None:
+    """An off-origin index redirect could impersonate absence and trigger a republish."""
+    for job_id in ("prepare-pypi", "verify-pypi"):
+        env = _step(job_id, "classify-pypi-state")["env"]
+        assert env["INDEX_JSON_BASE"] == "https://pypi.org/pypi"
+        assert env["ALLOWED_INDEX_HOST"] == "pypi.org"
+        assert env["REQUIRED_INDEX_SCHEME"] == "https"
+        assert env["ALLOWED_FILE_HOST"] == "files.pythonhosted.org"
+        assert env["REQUIRED_FILE_SCHEME"] == "https"
+
+
 def test_prepare_and_verifier_share_artifact_and_remote_evidence_scripts() -> None:
     """Divergent recovery verification can bless evidence normal verification rejects."""
     assert (
@@ -1726,10 +1887,16 @@ def test_only_absent_state_can_reach_action_only_production_publisher() -> None:
         and job.get("environment") == "pypi"
     ]
     assert production_oidc == ["publish-pypi"]
-    assert not any(
-        "continue-on-error" in job or any("continue-on-error" in step for step in job["steps"])
-        for job in workflow["jobs"].values()
-    )
+    assert not any("continue-on-error" in job for job in workflow["jobs"].values())
+    tolerated = [
+        (job_id, step.get("id"))
+        for job_id, job in workflow["jobs"].items()
+        for step in job["steps"]
+        if "continue-on-error" in step
+    ]
+    # Only prepare-pypi evidence steps may tolerate failure: they funnel into an
+    # UNCERTAIN prepare result so the sole terminal verifier still runs and fails.
+    assert tolerated == [("prepare-pypi", step_id) for step_id in _PREPARE_EVIDENCE_STEPS]
 
 
 def test_all_release_actions_are_immutable_full_sha_pins() -> None:
