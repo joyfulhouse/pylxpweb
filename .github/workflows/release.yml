@@ -830,7 +830,7 @@ jobs:
         run: *verify-release-bundle
       - id: classify-pypi-state
         name: Classify stable PyPI state against the sealed bytes
-        env:
+        env: &pypi-classifier-env
           ALLOWED_FILE_HOST: files.pythonhosted.org
           DOWNLOAD_TOTAL_SECONDS: '60'
           EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
@@ -1098,16 +1098,7 @@ jobs:
         run: *verify-release-bundle
       - id: classify-pypi-state
         name: Reclassify PyPI from stable remote bytes
-        env:
-          ALLOWED_FILE_HOST: files.pythonhosted.org
-          DOWNLOAD_TOTAL_SECONDS: '60'
-          EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
-          EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
-          INDEX_JSON_BASE: https://pypi.org/pypi
-          INDEX_TOTAL_SECONDS: '30'
-          REQUIRED_FILE_SCHEME: https
-          SNAPSHOT_DELAY_SECONDS: '5'
-          SOCKET_TIMEOUT_SECONDS: '10'
+        env: *pypi-classifier-env
         run: *classify-pypi-state
       - id: require-exact-complete
         name: Require exact-complete terminal state

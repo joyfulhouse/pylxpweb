@@ -1071,22 +1071,19 @@ def test_bundle_validation_rejects_artifact_and_attestation_tampering(tmp_path: 
     assert tampered_attestation.returncode != 0
 
 
-@pytest.mark.parametrize("job_id", ["verify-testpypi"])
 def test_index_verifier_retries_then_accepts_exact_remote_bytes(
     tmp_path: Path,
     package_index_server: tuple[str, dict[str, Any]],
-    job_id: str,
 ) -> None:
     """The YAML-derived verifier handles transient index lag and exact bytes."""
     base_url, state = package_index_server
     _, payload = _prepare_index_case(tmp_path, base_url, state)
     state["index_responses"] = [503, payload]
-    result = _run_index_verifier(tmp_path, base_url, job_id=job_id)
+    result = _run_index_verifier(tmp_path, base_url, job_id="verify-testpypi")
     assert result.returncode == 0, result.stderr
     assert state["index_calls"] >= 2
 
 
-@pytest.mark.parametrize("job_id", ["verify-testpypi"])
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -1105,7 +1102,6 @@ def test_index_verifier_retries_then_accepts_exact_remote_bytes(
 def test_index_verifier_rejects_remote_identity_and_byte_mutations(
     tmp_path: Path,
     package_index_server: tuple[str, dict[str, Any]],
-    job_id: str,
     mutation: str,
 ) -> None:
     """Weakening any remote-index check admits a different published artifact set."""
@@ -1144,15 +1140,13 @@ def test_index_verifier_rejects_remote_identity_and_byte_mutations(
         state["index_responses"] = [503, 503, 503]
     if not state["index_responses"]:
         state["index_responses"] = [payload]
-    result = _run_index_verifier(tmp_path, base_url, job_id=job_id)
+    result = _run_index_verifier(tmp_path, base_url, job_id="verify-testpypi")
     assert result.returncode != 0
 
 
-@pytest.mark.parametrize("job_id", ["verify-testpypi"])
 def test_index_verifier_rejects_competing_publication_race(
     tmp_path: Path,
     package_index_server: tuple[str, dict[str, Any]],
-    job_id: str,
 ) -> None:
     """A second index snapshot catches a file added while exact bytes are downloaded."""
     base_url, state = package_index_server
@@ -1167,18 +1161,15 @@ def test_index_verifier_rejects_competing_publication_race(
         }
     )
     state["index_responses"] = [exact, raced]
-    result = _run_index_verifier(tmp_path, base_url, job_id=job_id)
+    result = _run_index_verifier(tmp_path, base_url, job_id="verify-testpypi")
     assert result.returncode != 0
     assert state["index_calls"] == 2
 
 
-@pytest.mark.parametrize("job_id", ["verify-testpypi"])
-def test_index_verifier_worst_case_fits_job_timeout_with_five_minute_headroom(
-    job_id: str,
-) -> None:
+def test_index_verifier_worst_case_fits_job_timeout_with_five_minute_headroom() -> None:
     """Polling, transfers, final snapshot, and non-index verification fit mechanically."""
-    job = _job(job_id)
-    step = _step(job_id, f"verify-{job_id.removeprefix('verify-')}-files")
+    job = _job("verify-testpypi")
+    step = _step("verify-testpypi", "verify-testpypi-files")
     env = step["env"]
     attempts = int(env["MAX_ATTEMPTS"])
     retry_base = int(env["RETRY_BASE_SECONDS"])
@@ -1230,11 +1221,10 @@ def _run_pypi_classifier(
     tmp_path: Path,
     base_url: str,
     *,
-    job_id: str = "prepare-pypi",
     env_overrides: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
-    output = tmp_path / f"{job_id}-output"
-    summary = tmp_path / f"{job_id}-summary"
+    output = tmp_path / "prepare-pypi-output"
+    summary = tmp_path / "prepare-pypi-summary"
     env = os.environ | {
         "ALLOWED_FILE_HOST": "127.0.0.1",
         "DOWNLOAD_TOTAL_SECONDS": "2",
@@ -1249,7 +1239,7 @@ def _run_pypi_classifier(
         "SOCKET_TIMEOUT_SECONDS": "1",
     }
     env.update(env_overrides or {})
-    step = _step(job_id, "classify-pypi-state")
+    step = _step("prepare-pypi", "classify-pypi-state")
     marker = "python3 - <<'PY'\n"
     assert step["run"].startswith(marker)
     python = step["run"].removeprefix(marker).removesuffix("\nPY\n")
