@@ -7,12 +7,15 @@ import http.server
 import json
 import os
 import re
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +32,11 @@ _PACKAGE_INDEX_PUBLISHER = re.compile(
     r"https://(?:(?:test|upload)\.)?pypi\.org/legacy/|"
     r"\b(?:twine\s+upload|(?:uv|poetry|hatch|flit|pdm)\s+publish)\b",
     re.IGNORECASE,
+)
+_BINDING_TIMEOUT_SECONDS = 15.0
+_PYTHON_HEREDOC = re.compile(
+    r"python3 -(?P<args>[^\n]*(?:\\\n[^\n]*)*) <<'PY'\n(?P<body>.*?)\nPY",
+    re.DOTALL,
 )
 
 
@@ -205,13 +213,12 @@ def _run_index_verifier(
         "SOCKET_TIMEOUT_SECONDS": "1",
     }
     env.update(env_overrides or {})
-    return subprocess.run(
-        ["bash", "-c", _step(job_id, f"verify-{job_id.removeprefix('verify-')}-files")["run"]],
+    return _run_yaml_script(
+        _step(job_id, f"verify-{job_id.removeprefix('verify-')}-files")["run"],
         cwd=tmp_path,
         env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        tmp_path=tmp_path,
+        timeout_seconds=15,
     )
 
 
@@ -405,6 +412,68 @@ def _release_repo(
     }
 
 
+def _run_bounded_subprocess(
+    args: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: float,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        args,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        close_fds=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except BaseException:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+
+
+def _materialize_python_heredocs(script: str, tmp_path: Path) -> str:
+    script_dir = tmp_path / "yaml-script"
+    script_dir.mkdir(exist_ok=True)
+    heredoc_count = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal heredoc_count
+        body_path = script_dir / f"heredoc-{heredoc_count}.py"
+        heredoc_count += 1
+        body_path.write_text(match.group("body") + "\n")
+        return f"python3 {shlex.quote(str(body_path))}{match.group('args')}"
+
+    materialized = _PYTHON_HEREDOC.sub(replace, script)
+    assert heredoc_count == script.count("<<'PY'")
+    assert "<<'PY'" not in materialized
+    return materialized
+
+
+def _run_yaml_script(
+    script: str,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    tmp_path: Path,
+    timeout_seconds: float,
+) -> subprocess.CompletedProcess[str]:
+    return _run_bounded_subprocess(
+        ["bash", "-c", _materialize_python_heredocs(script, tmp_path)],
+        cwd=cwd,
+        env=env,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 def _run_binding(
     case: dict[str, Any], tmp_path: Path, **env_overrides: str
 ) -> subprocess.CompletedProcess[str]:
@@ -422,6 +491,9 @@ def _run_binding(
         "GITHUB_OUTPUT": str(output),
         "GITHUB_STEP_SUMMARY": str(summary),
         "GH_FIXTURES": str(fixtures_path),
+        "GH_PROMPT_DISABLED": "1",
+        "GCM_INTERACTIVE": "Never",
+        "GIT_TERMINAL_PROMPT": "0",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "RELEASE_DRAFT": "false",
         "RELEASE_TAG": "v1.2.3",
@@ -430,14 +502,39 @@ def _run_binding(
         "WORKFLOW_SHA": case["merge"],
     }
     env.update(env_overrides)
-    return subprocess.run(
-        ["bash", "-c", _step("bind-build-attest", "bind-source")["run"]],
+    return _run_yaml_script(
+        _step("bind-build-attest", "bind-source")["run"],
         cwd=repo,
         env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        tmp_path=tmp_path,
+        timeout_seconds=_BINDING_TIMEOUT_SECONDS,
     )
+
+
+def test_bounded_subprocess_terminates_entire_child_group(tmp_path: Path) -> None:
+    """A timed-out shell must not leave descendants holding captured pipes open."""
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_bounded_subprocess(
+            ["bash", "-c", "sleep 60 & wait"],
+            cwd=tmp_path,
+            env=os.environ.copy(),
+            timeout_seconds=0.2,
+        )
+    assert time.monotonic() - started < 2
+
+
+def test_binding_harness_terminates_under_bash_52_stress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Materialized heredocs avoid the macOS Bash pipe deadlock under stress."""
+    monkeypatch.setenv("BASH_COMPAT", "52")
+    for index in range(12):
+        run_path = tmp_path / str(index)
+        run_path.mkdir()
+        case = _release_repo(run_path)
+        result = _run_binding(case, run_path)
+        assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("lightweight", [False, True], ids=["annotated", "lightweight"])
@@ -797,13 +894,12 @@ def test_source_tree_checks_reject_mutable_build_inputs(
     else:
         repo.joinpath("build-input.py").write_text("MUTATED = True\n")
     env = os.environ | {"EXPECTED_COMMIT": case["merge"]}
-    result = subprocess.run(
-        ["bash", "-c", _step("bind-build-attest", step_id)["run"]],
+    result = _run_yaml_script(
+        _step("bind-build-attest", step_id)["run"],
         cwd=repo,
         env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        tmp_path=tmp_path,
+        timeout_seconds=15,
     )
     assert result.returncode != 0
     assert "source tree" in result.stderr.lower()
@@ -818,13 +914,12 @@ def test_sealing_allows_only_the_expected_release_bundle(tmp_path: Path) -> None
     output.mkdir(parents=True)
     output.joinpath("expected.whl").write_bytes(b"expected output")
     env = os.environ | {"EXPECTED_COMMIT": case["merge"]}
-    result = subprocess.run(
-        ["bash", "-c", _step("bind-build-attest", "seal-source")["run"]],
+    result = _run_yaml_script(
+        _step("bind-build-attest", "seal-source")["run"],
         cwd=repo,
         env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        tmp_path=tmp_path,
+        timeout_seconds=15,
     )
     assert result.returncode == 0, result.stderr
 
@@ -839,13 +934,12 @@ def test_sealing_rechecks_fresh_main_immediately_before_attestation(tmp_path: Pa
     subprocess.run(["git", "push", "-q", "origin", "main"], cwd=repo, check=True)
     subprocess.run(["git", "checkout", "-q", "--detach", "v1.2.3"], cwd=repo, check=True)
     env = os.environ | {"EXPECTED_COMMIT": case["merge"]}
-    result = subprocess.run(
-        ["bash", "-c", _step("bind-build-attest", "seal-source")["run"]],
+    result = _run_yaml_script(
+        _step("bind-build-attest", "seal-source")["run"],
         cwd=repo,
         env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        tmp_path=tmp_path,
+        timeout_seconds=15,
     )
     assert result.returncode != 0
     assert "current main" in result.stderr.lower()
@@ -1025,10 +1119,20 @@ def test_bundle_validation_rejects_artifact_and_attestation_tampering(tmp_path: 
     }
     env.pop("GH_TOKEN", None)
     run = _step("prepare-testpypi", "verify-release-bundle")["run"]
-    missing_auth = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, check=False)
+
+    def run_verifier(script: str) -> subprocess.CompletedProcess[str]:
+        return _run_yaml_script(
+            script,
+            cwd=tmp_path,
+            env=env,
+            tmp_path=tmp_path,
+            timeout_seconds=15,
+        )
+
+    missing_auth = run_verifier(run)
     assert missing_auth.returncode != 0
     env["GH_TOKEN"] = "scoped-test-token"
-    good = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, check=False)
+    good = run_verifier(run)
     assert good.returncode == 0
     calls = (tmp_path / "gh-calls").read_text().splitlines()
     assert len(calls) == 3
@@ -1060,14 +1164,14 @@ def test_bundle_validation_rejects_artifact_and_attestation_tampering(tmp_path: 
     for label, (expected, replacement) in identity_mutations.items():
         assert expected in run, label
         mutated = run.replace(expected, replacement, 1)
-        result = subprocess.run(["bash", "-c", mutated], cwd=tmp_path, env=env, check=False)
+        result = run_verifier(mutated)
         assert result.returncode != 0, label
     wheel.write_bytes(b"tampered")
-    tampered_artifact = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, check=False)
+    tampered_artifact = run_verifier(run)
     assert tampered_artifact.returncode != 0
     wheel.write_bytes(b"wheel")
     env["EXPECTED_ATTESTATION_CONTENT"] = "not-the-bundle"
-    tampered_attestation = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, check=False)
+    tampered_attestation = run_verifier(run)
     assert tampered_attestation.returncode != 0
 
 
@@ -1435,22 +1539,12 @@ def _run_artifact_resolution(
         "REPOSITORY": "joyfulhouse/pylxpweb",
         "RUN_ID": "12345",
     }
-    run = _step("prepare-pypi", "resolve-release-artifact")["run"]
-    marker = 'python3 - "$evidence/run.json" "$evidence/artifacts.json" <<\'PY\'\n'
-    shell, python = run.split(marker, 1)
-    resolver = tmp_path / "resolve-release-artifact.py"
-    resolver.write_text(python.removesuffix("\nPY\n"))
-    script = tmp_path / "resolve-release-artifact.sh"
-    script.write_text(
-        shell + f'python3 "{resolver}" "$evidence/run.json" "$evidence/artifacts.json"\n'
-    )
-    return subprocess.run(
-        ["bash", str(script)],
+    return _run_yaml_script(
+        _step("prepare-pypi", "resolve-release-artifact")["run"],
         cwd=tmp_path,
         env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        tmp_path=tmp_path,
+        timeout_seconds=15,
     )
 
 
@@ -1571,15 +1665,15 @@ def test_production_recovery_topology_has_one_terminal_verifier() -> None:
         "UNCERTAIN",
     ],
 )
-def test_terminal_verifier_succeeds_only_for_exact_complete(state: str) -> None:
+def test_terminal_verifier_succeeds_only_for_exact_complete(state: str, tmp_path: Path) -> None:
     """Any other successful terminal state can hide a lost or immutable partial upload."""
     step = _step("verify-pypi", "require-exact-complete")
-    result = subprocess.run(
-        ["bash", "-c", step["run"]],
+    result = _run_yaml_script(
+        step["run"],
+        cwd=_ROOT,
         env=os.environ | {"STATE": state},
-        text=True,
-        capture_output=True,
-        check=False,
+        tmp_path=tmp_path,
+        timeout_seconds=15,
     )
     assert (result.returncode == 0) is (state == "EXACT_COMPLETE")
 
@@ -1710,7 +1804,13 @@ def test_build_produces_exactly_two_bit_reproducible_distributions(tmp_path: Pat
             "OUTPUT_DIR": str(output),
             "SOURCE_DATE_EPOCH": ambient_epoch,
         }
-        result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True)
+        result = _run_yaml_script(
+            script,
+            cwd=_ROOT,
+            env=env,
+            tmp_path=tmp_path,
+            timeout_seconds=180,
+        )
         assert result.returncode == 0, result.stderr
         files = sorted(path for path in output.iterdir() if path.is_file())
         assert sum(path.suffix == ".whl" for path in files) == 1
@@ -1748,7 +1848,13 @@ def test_build_container_rejects_wrong_backend_or_tool_version(
         "OUTPUT_DIR": str(output),
         "SOURCE_DATE_EPOCH": "1755302400",
     }
-    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, check=False)
+    result = _run_yaml_script(
+        script,
+        cwd=_ROOT,
+        env=env,
+        tmp_path=tmp_path,
+        timeout_seconds=180,
+    )
     assert result.returncode != 0
 
 
@@ -1774,10 +1880,11 @@ def test_build_container_denies_network_when_workflow_network_flag_is_mutated(
         "OUTPUT_DIR": str(output),
         "SOURCE_DATE_EPOCH": "1755302400",
     }
-    result = subprocess.run(
-        ["bash", "-c", script],
+    result = _run_yaml_script(
+        script,
+        cwd=_ROOT,
         env=env,
-        capture_output=True,
-        check=False,
+        tmp_path=tmp_path,
+        timeout_seconds=180,
     )
     assert result.returncode != 0
