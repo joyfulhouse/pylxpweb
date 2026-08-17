@@ -542,17 +542,52 @@ def test_bounded_subprocess_terminates_entire_child_group(tmp_path: Path) -> Non
     assert time.monotonic() - started < 2
 
 
-def test_binding_harness_terminates_under_bash_52_stress(
+def test_harness_never_hands_bash_a_python_heredoc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Materialized heredocs avoid the macOS Bash pipe deadlock under stress."""
-    monkeypatch.setenv("BASH_COMPAT", "52")
-    for index in range(12):
-        run_path = tmp_path / str(index)
-        run_path.mkdir()
-        case = _release_repo(run_path)
-        result = _run_binding(case, run_path)
-        assert result.returncode == 0, result.stderr
+    """Every workflow heredoc must be a private file before bash parses the script.
+
+    Homebrew Bash 5.3 on macOS can deadlock in heredoc_write under load, so the
+    harness removes the heredoc construct entirely instead of racing the pipe.
+    This checks the command actually handed to bash for every heredoc-bearing
+    workflow script: no ``<<'PY'`` survives, each body is byte-identical on
+    disk, and the interpreter arguments are preserved.
+    """
+    scripts = [
+        text
+        for job in _workflow()["jobs"].values()
+        for step in job["steps"]
+        for text in [step.get("run")]
+        if isinstance(text, str) and "<<'PY'" in text
+    ]
+    assert scripts, "release.yml no longer contains python heredocs to materialize"
+    executed: list[list[str]] = []
+
+    def record(
+        args: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        timeout_seconds: float,
+    ) -> subprocess.CompletedProcess[str]:
+        executed.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(sys.modules[__name__], "_run_bounded_subprocess", record)
+    for index, script in enumerate(scripts):
+        script_tmp = tmp_path / str(index)
+        script_tmp.mkdir()
+        _run_yaml_script(script, cwd=script_tmp, env={}, tmp_path=script_tmp, timeout_seconds=1.0)
+        executable, flag, command = executed[-1]
+        assert (executable, flag) == ("bash", "-c")
+        assert "<<'PY'" not in command
+        heredocs = list(_PYTHON_HEREDOC.finditer(script))
+        assert len(heredocs) == script.count("<<'PY'")
+        for heredoc_index, heredoc in enumerate(heredocs):
+            body_path = script_tmp / "yaml-script" / f"heredoc-{heredoc_index}.py"
+            invocation = f"python3 {shlex.quote(str(body_path))}{heredoc.group('args')}"
+            assert invocation in command
+            assert body_path.read_text() == heredoc.group("body") + "\n"
 
 
 @pytest.mark.parametrize("lightweight", [False, True], ids=["annotated", "lightweight"])
