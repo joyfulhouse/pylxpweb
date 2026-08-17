@@ -1300,7 +1300,6 @@ def test_build_produces_exactly_two_bit_reproducible_distributions(tmp_path: Pat
         f'  test "$SOURCE_DATE_EPOCH" = "{commit_epoch}"\n{build_command}',
     )
     image = _workflow()["env"]["BUILD_IMAGE"]
-    subprocess.run(["docker", "pull", image], check=True)
     source = tmp_path / "source"
     shutil.copytree(
         _ROOT,
