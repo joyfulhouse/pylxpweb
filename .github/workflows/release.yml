@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      actions: read
       contents: read
       pull-requests: read
       checks: read
@@ -74,8 +75,12 @@ jobs:
           [[ "$WORKFLOW_REF" == "$expected_workflow_ref" ]] || \
             die "workflow ref must be the release tag"
 
-          git fetch --no-tags --force origin \
-            "+refs/heads/main:refs/remotes/origin/main"
+          main_refspec="+refs/heads/main:refs/remotes/origin/main"
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            git fetch --no-tags --force --unshallow origin "$main_refspec"
+          else
+            git fetch --no-tags --force origin "$main_refspec"
+          fi
           git show-ref --verify --quiet "refs/tags/$tag" || die "release tag does not exist"
           commit=$(git rev-parse "refs/tags/$tag^{commit}")
           tree=$(git rev-parse "refs/tags/$tag^{tree}")
@@ -97,6 +102,10 @@ jobs:
           [[ "${#lineage[@]}" == 3 ]] || die "tag commit must have exactly two parents"
           first_parent="${lineage[1]}"
           second_parent="${lineage[2]}"
+          git merge-base --is-ancestor "$first_parent" "$second_parent" || \
+            die "release candidate was not up to date with its merge base"
+          [[ "$tree" == "$(git rev-parse "$second_parent^{tree}")" ]] || \
+            die "merge tree does not match the CI-tested PR head tree"
 
           api_dir=$(mktemp -d)
           trap 'rm -rf "$api_dir"' EXIT
@@ -116,7 +125,6 @@ jobs:
           assert pull["state"] == "closed" and pull["merged_at"], "PR is not merged"
           assert pull["merge_commit_sha"] == commit, "PR merge commit mismatch"
           assert pull["base"]["ref"] == "main", "PR base is not main"
-          assert pull["base"]["sha"] == first_parent, "PR base is not first parent"
           assert pull["head"]["sha"] == second_parent, "PR head is not second parent"
           print(pull["number"])
           print(pull["head"]["sha"])
@@ -185,18 +193,48 @@ jobs:
 
           gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
             "repos/$REPOSITORY/commits/$head/check-runs" > "$api_dir/checks.json"
-          python3 - "$api_dir/checks.json" "$head" <<'PY'
+          mapfile -t ci_identity < <(
+            python3 - "$api_dir/checks.json" "$head" "$REPOSITORY" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+          import urllib.parse
+
+          pages = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          checks = [check for page in pages for check in page["check_runs"]]
+          head, repository = sys.argv[2:]
+          required = [check for check in checks if check["name"] == "CI Success"]
+          assert len(required) == 1, "required CI result is missing or ambiguous"
+          check = required[0]
+          assert check["head_sha"] == head, "required CI covers the wrong head"
+          assert check["conclusion"] == "success", "required CI did not succeed"
+          assert check["app"]["slug"] == "github-actions", "required CI app mismatch"
+          assert check["app"]["owner"]["login"] == "github", "required CI owner mismatch"
+          details = urllib.parse.urlparse(check["details_url"])
+          assert details.scheme == "https" and details.hostname == "github.com"
+          match = re.fullmatch(
+              rf"/{re.escape(repository)}/actions/runs/([0-9]+)/job/[0-9]+",
+              details.path,
+          )
+          assert match, "required CI details URL mismatch"
+          print(match.group(1))
+          PY
+          )
+          gh api -H "Accept: application/vnd.github+json" \
+            "repos/$REPOSITORY/actions/runs/${ci_identity[0]}" > "$api_dir/ci-run.json"
+          python3 - "$api_dir/ci-run.json" "$head" "$REPOSITORY" <<'PY'
           import json
           import pathlib
           import sys
 
-          pages = json.loads(pathlib.Path(sys.argv[1]).read_text())
-          checks = [check for page in pages for check in page["check_runs"]]
-          head = sys.argv[2]
-          required = [check for check in checks if check["name"] == "CI Success"]
-          assert len(required) == 1, "required CI result is missing or ambiguous"
-          assert required[0]["head_sha"] == head, "required CI covers the wrong head"
-          assert required[0]["conclusion"] == "success", "required CI did not succeed"
+          run = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          head, repository = sys.argv[2:]
+          assert run["repository"]["full_name"] == repository, "CI repository mismatch"
+          assert run["path"] == ".github/workflows/ci.yml", "CI workflow path mismatch"
+          assert run["head_sha"] == head, "CI workflow run covers the wrong head"
+          assert run["event"] == "pull_request", "CI workflow event mismatch"
+          assert run["conclusion"] == "success", "CI workflow run did not succeed"
           PY
 
           artifact_name="pylxpweb-release-$version-${commit:0:12}"
@@ -212,6 +250,19 @@ jobs:
             echo "workflow-ref=$WORKFLOW_REF"
             echo "workflow-sha=$WORKFLOW_SHA"
           } >> "$GITHUB_OUTPUT"
+
+      - id: assert-clean-source
+        name: Require the checkout bytes to equal the bound tree
+        run: |
+          set -euo pipefail
+          git diff --quiet HEAD -- || {
+            echo "tracked or staged source tree changes are forbidden" >&2
+            exit 1
+          }
+          [[ -z "$(git ls-files --others --exclude-standard)" ]] || {
+            echo "untracked build inputs outside the source tree are forbidden" >&2
+            exit 1
+          }
 
       - id: build-distributions
         name: Build once in the pinned offline container
@@ -347,6 +398,16 @@ jobs:
           EXPECTED_COMMIT: ${{ steps.bind-source.outputs.commit }}
         run: |
           set -euo pipefail
+          git diff --quiet HEAD -- || {
+            echo "tracked or staged source tree changes are forbidden at sealing" >&2
+            exit 1
+          }
+          unexpected_untracked=$(git ls-files --others --exclude-standard | \
+            grep -Ev '^release-bundle/' || true)
+          [[ -z "$unexpected_untracked" ]] || {
+            echo "untracked build inputs outside the source tree are forbidden at sealing" >&2
+            exit 1
+          }
           git fetch --no-tags --force origin \
             "+refs/heads/main:refs/remotes/origin/main"
           [[ "$(git rev-parse 'refs/remotes/origin/main^{commit}')" == "$EXPECTED_COMMIT" ]] || {
@@ -449,6 +510,7 @@ jobs:
           EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
           EXPECTED_WORKFLOW_REF: ${{ needs.bind-build-attest.outputs.workflow-ref }}
           EXPECTED_WORKFLOW_SHA: ${{ needs.bind-build-attest.outputs.workflow-sha }}
+          GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: &verify-release-bundle |
           set -euo pipefail
@@ -538,7 +600,7 @@ jobs:
           name: ${{ steps.stage.outputs.artifact-name }}
           path: testpypi-upload/
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
 
   publish-testpypi:
     name: Publish staged artifact to TestPyPI
@@ -584,6 +646,8 @@ jobs:
           INDEX_JSON_BASE: https://test.pypi.org/pypi
           ALLOWED_FILE_HOST: test-files.pythonhosted.org
           MAX_ATTEMPTS: '12'
+          REQUIRED_FILE_SCHEME: https
+          RETRY_BASE_SECONDS: '5'
         run: &verify-index |
           python3 - <<'PY'
           import hashlib
@@ -606,36 +670,42 @@ jobs:
               f'{os.environ["INDEX_JSON_BASE"]}/{project}/{version}/json',
               headers={"User-Agent": "pylxpweb-release-verifier"},
           )
+          def validate(payload):
+              assert payload["info"]["name"] == project
+              assert payload["info"]["version"] == version
+              releases = payload["urls"]
+              assert {item["filename"] for item in releases} == set(expected)
+              assert len(releases) == 2
+              assert all(not item["yanked"] for item in releases)
+              assert all(
+                  item["digests"]["sha256"] == expected[item["filename"]]
+                  for item in releases
+              )
+              return releases
           attempts = int(os.environ["MAX_ATTEMPTS"])
+          retry_base = int(os.environ["RETRY_BASE_SECONDS"])
           for attempt in range(1, attempts + 1):
               try:
                   with urllib.request.urlopen(request, timeout=30) as response:
                       payload = json.load(response)
-                  assert payload["info"]["name"] == project
-                  assert payload["info"]["version"] == version
-                  releases = payload["urls"]
-                  assert {item["filename"] for item in releases} == set(expected)
-                  assert len(releases) == 2
-                  assert all(not item["yanked"] for item in releases)
-                  assert all(
-                      item["digests"]["sha256"] == expected[item["filename"]]
-                      for item in releases
-                  )
+                  releases = validate(payload)
                   break
               except (AssertionError, KeyError, OSError, TypeError, ValueError):
                   if attempt == attempts:
                       raise
-                  time.sleep(min(attempt * 5, 30))
+                  time.sleep(min(attempt * retry_base, 30))
           for item in releases:
               parsed = urllib.parse.urlparse(item["url"])
-              assert parsed.scheme == "https"
+              assert parsed.scheme == os.environ["REQUIRED_FILE_SCHEME"]
               assert parsed.hostname == os.environ["ALLOWED_FILE_HOST"]
               with urllib.request.urlopen(item["url"], timeout=60) as response:
                   final = urllib.parse.urlparse(response.geturl())
                   content = response.read()
-              assert final.scheme == "https"
+              assert final.scheme == os.environ["REQUIRED_FILE_SCHEME"]
               assert final.hostname == os.environ["ALLOWED_FILE_HOST"]
               assert hashlib.sha256(content).hexdigest() == expected[item["filename"]]
+          with urllib.request.urlopen(request, timeout=30) as response:
+              validate(json.load(response))
           PY
 
   prepare-pypi:
@@ -661,12 +731,13 @@ jobs:
         env:
           EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
           EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
+          PYPI_JSON_BASE: https://pypi.org/pypi
         run: |
           python3 - <<'PY'
           import os
           import urllib.error
           import urllib.request
-          url = f'https://pypi.org/pypi/{os.environ["EXPECTED_PROJECT_NAME"]}/{os.environ["EXPECTED_VERSION"]}/json'
+          url = f'{os.environ["PYPI_JSON_BASE"]}/{os.environ["EXPECTED_PROJECT_NAME"]}/{os.environ["EXPECTED_VERSION"]}/json'
           try:
               urllib.request.urlopen(url, timeout=30)
           except urllib.error.HTTPError as error:
@@ -689,7 +760,7 @@ jobs:
           name: ${{ steps.stage.outputs.artifact-name }}
           path: pypi-upload/
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
 
   publish-pypi:
     name: Publish staged artifact to PyPI
@@ -733,4 +804,6 @@ jobs:
           INDEX_JSON_BASE: https://pypi.org/pypi
           ALLOWED_FILE_HOST: files.pythonhosted.org
           MAX_ATTEMPTS: '8'
+          REQUIRED_FILE_SCHEME: https
+          RETRY_BASE_SECONDS: '5'
         run: *verify-index

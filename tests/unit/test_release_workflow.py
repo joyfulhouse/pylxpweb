@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import http.server
 import json
 import os
 import re
 import shutil
 import subprocess
+import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +28,72 @@ _PACKAGE_INDEX_PUBLISHER = re.compile(
     r"\b(?:twine\s+upload|(?:uv|poetry|hatch|flit|pdm)\s+publish)\b",
     re.IGNORECASE,
 )
+
+
+@pytest.fixture
+def package_index_server() -> Iterator[tuple[str, dict[str, Any]]]:
+    """Serve mutable package-index responses for the exact workflow scripts."""
+    state: dict[str, Any] = {
+        "files": {},
+        "index_calls": 0,
+        "index_responses": [],
+        "redirected_files": {},
+        "requests": [],
+    }
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
+            state["requests"].append(self.path)
+            if self.path.startswith("/pypi/"):
+                responses = state["index_responses"]
+                index = min(state["index_calls"], len(responses) - 1)
+                state["index_calls"] += 1
+                response = responses[index]
+                if isinstance(response, int):
+                    self.send_error(response)
+                    return
+                body = json.dumps(response).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path.startswith("/files/"):
+                name = self.path.removeprefix("/files/")
+                response = state["files"][name]
+                if isinstance(response, dict) and "redirect" in response:
+                    self.send_response(302)
+                    self.send_header("Location", response["redirect"])
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+                return
+            if self.path.startswith("/redirected/"):
+                name = self.path.removeprefix("/redirected/")
+                response = state["redirected_files"][name]
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(response)))
+                self.end_headers()
+                self.wfile.write(response)
+                return
+            self.send_error(404)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", state
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def _workflow() -> dict[str, Any]:
@@ -61,6 +130,65 @@ def _package_index_publisher_workflows(workflows_path: Path) -> set[str]:
         if any(_PACKAGE_INDEX_PUBLISHER.search(text) for text in _strings(document)):
             publishers.add(path.name)
     return publishers
+
+
+def _index_payload(
+    base_url: str,
+    files: dict[str, bytes],
+    *,
+    project: str = "pylxpweb",
+    version: str = "1.2.3",
+) -> dict[str, Any]:
+    return {
+        "info": {"name": project, "version": version},
+        "urls": [
+            {
+                "digests": {"sha256": hashlib.sha256(content).hexdigest()},
+                "filename": name,
+                "url": f"{base_url}/files/{name}",
+                "yanked": False,
+            }
+            for name, content in files.items()
+        ],
+    }
+
+
+def _write_dist_manifest(tmp_path: Path, files: dict[str, bytes]) -> None:
+    bundle = tmp_path / "release-bundle"
+    bundle.mkdir(exist_ok=True)
+    bundle.joinpath("DIST_SHA256SUMS").write_text(
+        "".join(
+            f"{hashlib.sha256(content).hexdigest()}  dist/{name}\n"
+            for name, content in files.items()
+        )
+    )
+
+
+def _run_index_verifier(
+    tmp_path: Path,
+    base_url: str,
+    *,
+    job_id: str = "verify-testpypi",
+    allowed_host: str = "127.0.0.1",
+    attempts: int = 3,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ | {
+        "ALLOWED_FILE_HOST": allowed_host,
+        "EXPECTED_PROJECT_NAME": "pylxpweb",
+        "EXPECTED_VERSION": "1.2.3",
+        "INDEX_JSON_BASE": f"{base_url}/pypi",
+        "MAX_ATTEMPTS": str(attempts),
+        "REQUIRED_FILE_SCHEME": "http",
+        "RETRY_BASE_SECONDS": "0",
+    }
+    return subprocess.run(
+        ["bash", "-c", _step(job_id, f"verify-{job_id.removeprefix('verify-')}-files")["run"]],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -106,6 +234,9 @@ if len(sys.argv) >= 2 and sys.argv[1] == "api":
     raise SystemExit(0)
 
 if sys.argv[1:3] == ["attestation", "verify"]:
+    if not os.environ.get("GH_TOKEN"):
+        print("GH_TOKEN is required", file=sys.stderr)
+        raise SystemExit(4)
     bundle = pathlib.Path(sys.argv[sys.argv.index("--bundle") + 1])
     expected = os.environ.get("EXPECTED_ATTESTATION_CONTENT")
     if expected is not None and bundle.read_text() != expected:
@@ -121,7 +252,9 @@ raise SystemExit(2)
     gh.chmod(0o755)
 
 
-def _release_repo(tmp_path: Path, *, lightweight: bool = False) -> dict[str, Any]:
+def _release_repo(
+    tmp_path: Path, *, lightweight: bool = False, stale_candidate: bool = False
+) -> dict[str, Any]:
     remote = tmp_path / "origin.git"
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
@@ -141,12 +274,17 @@ def _release_repo(tmp_path: Path, *, lightweight: bool = False) -> dict[str, Any
     subprocess.run(["git", "checkout", "-qb", "release-candidate"], cwd=repo, check=True)
     head = _commit(repo, "release candidate", "release")
     subprocess.run(["git", "checkout", "-q", "main"], cwd=repo, check=True)
+    if stale_candidate:
+        repo.joinpath("new-main.txt").write_text("newer-main")
+        subprocess.run(["git", "add", "new-main.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "newer main"], cwd=repo, check=True)
     subprocess.run(
         ["git", "merge", "-q", "--no-ff", "release-candidate", "-m", "merge candidate"],
         cwd=repo,
         check=True,
     )
     merge = _git(repo, "rev-parse", "HEAD")
+    first_parent = _git(repo, "rev-parse", "HEAD^1")
     tag_args = ["git", "-c", "tag.forceSignAnnotated=false", "tag", "v1.2.3"]
     if not lightweight:
         tag_args = ["git", "tag", "-a", "v1.2.3", "-m", "release"]
@@ -167,7 +305,7 @@ def _release_repo(tmp_path: Path, *, lightweight: bool = False) -> dict[str, Any
                 "merged_at": "2026-08-16T12:00:00Z",
                 "merge_commit_sha": merge,
                 "head": {"sha": head},
-                "base": {"ref": "main", "sha": parent},
+                "base": {"ref": "main", "sha": first_parent},
                 "user": {"login": "author"},
             }
         ],
@@ -181,7 +319,24 @@ def _release_repo(tmp_path: Path, *, lightweight: bool = False) -> dict[str, Any
         ],
         f"repos/{repository}/collaborators/reviewer/permission": {"permission": "write"},
         f"repos/{repository}/commits/{head}/check-runs": {
-            "check_runs": [{"name": "CI Success", "head_sha": head, "conclusion": "success"}]
+            "check_runs": [
+                {
+                    "name": "CI Success",
+                    "head_sha": head,
+                    "conclusion": "success",
+                    "details_url": (
+                        f"https://github.com/{repository}/actions/runs/12345/job/67890"
+                    ),
+                    "app": {"slug": "github-actions", "owner": {"login": "github"}},
+                }
+            ]
+        },
+        f"repos/{repository}/actions/runs/12345": {
+            "conclusion": "success",
+            "event": "pull_request",
+            "head_sha": head,
+            "path": ".github/workflows/ci.yml",
+            "repository": {"full_name": repository},
         },
     }
     return {
@@ -189,6 +344,7 @@ def _release_repo(tmp_path: Path, *, lightweight: bool = False) -> dict[str, Any
         "remote": remote,
         "stale": stale,
         "parent": parent,
+        "first_parent": first_parent,
         "head": head,
         "merge": merge,
         "fixtures": fixtures,
@@ -318,6 +474,64 @@ def test_binding_rejects_old_ancestor_or_main_movement(tmp_path: Path) -> None:
     assert "current main" in result.stderr.lower()
 
 
+def test_binding_rejects_stale_candidate_merged_onto_newer_main(tmp_path: Path) -> None:
+    """A successful old-head CI result cannot cover an untested combined merge tree."""
+    case = _release_repo(tmp_path, stale_candidate=True)
+    result = _run_binding(case, tmp_path)
+    assert result.returncode != 0
+    assert "up to date" in result.stderr.lower()
+
+
+def test_binding_rejects_merge_tree_not_tested_on_exact_pr_head(tmp_path: Path) -> None:
+    """An up-to-date two-parent commit cannot add bytes absent from the CI-tested head."""
+    case = _release_repo(tmp_path)
+    repo: Path = case["repo"]
+    old_merge = case["merge"]
+    repo.joinpath("injected.txt").write_text("not reviewed\n")
+    subprocess.run(["git", "add", "injected.txt"], cwd=repo, check=True)
+    tree = _git(repo, "write-tree")
+    altered = subprocess.check_output(
+        [
+            "git",
+            "commit-tree",
+            tree,
+            "-p",
+            case["first_parent"],
+            "-p",
+            case["head"],
+            "-m",
+            "altered merge tree",
+        ],
+        cwd=repo,
+        text=True,
+    ).strip()
+    subprocess.run(["git", "tag", "-f", "v1.2.3", altered], cwd=repo, check=True)
+    subprocess.run(["git", "branch", "-f", "main", altered], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "push", "-q", "--force", "origin", "main", "v1.2.3"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "checkout", "-q", "--detach", altered], cwd=repo, check=True)
+    pull_key = f"repos/joyfulhouse/pylxpweb/commits/{old_merge}/pulls"
+    pull = case["fixtures"].pop(pull_key)
+    pull[0]["merge_commit_sha"] = altered
+    case["fixtures"][f"repos/joyfulhouse/pylxpweb/commits/{altered}/pulls"] = pull
+    case["merge"] = altered
+    result = _run_binding(case, tmp_path)
+    assert result.returncode != 0
+    assert "merge tree" in result.stderr.lower()
+
+
+def test_binding_does_not_treat_mutable_pr_base_sha_as_merge_parent(tmp_path: Path) -> None:
+    """GitHub updates closed PR base.sha after merge; git parentage owns merge-time base."""
+    case = _release_repo(tmp_path)
+    pull_key = f"repos/joyfulhouse/pylxpweb/commits/{case['merge']}/pulls"
+    case["fixtures"][pull_key][0]["base"]["sha"] = case["merge"]
+    result = _run_binding(case, tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -327,7 +541,6 @@ def test_binding_rejects_old_ancestor_or_main_movement(tmp_path: Path) -> None:
         "wrong-pr",
         "wrong-merge-sha",
         "wrong-base",
-        "wrong-base-sha",
         "wrong-head",
     ],
 )
@@ -384,8 +597,6 @@ def test_binding_rejects_invalid_merge_and_associated_pr(tmp_path: Path, mutatio
         pull["merge_commit_sha"] = case["head"]
     elif mutation == "wrong-base":
         pull["base"]["ref"] = "release"
-    elif mutation == "wrong-base-sha":
-        pull["base"]["sha"] = case["head"]
     elif mutation == "wrong-head":
         pull["head"]["sha"] = case["parent"]
     result = _run_binding(case, tmp_path)
@@ -440,6 +651,47 @@ def test_binding_rejects_ineffective_review_or_required_ci(tmp_path: Path, mutat
     assert result.returncode != 0
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "collision",
+        "wrong-app",
+        "wrong-owner",
+        "wrong-workflow",
+        "wrong-run-head",
+        "wrong-event",
+    ],
+)
+def test_binding_rejects_same_name_ci_from_untrusted_producer(
+    tmp_path: Path, mutation: str
+) -> None:
+    """A same-name check must resolve to this repository's exact PR CI workflow run."""
+    case = _release_repo(tmp_path)
+    check_key = f"repos/joyfulhouse/pylxpweb/commits/{case['head']}/check-runs"
+    check = case["fixtures"][check_key]["check_runs"][0]
+    run = case["fixtures"]["repos/joyfulhouse/pylxpweb/actions/runs/12345"]
+    if mutation == "collision":
+        check_key = f"repos/joyfulhouse/pylxpweb/commits/{case['head']}/check-runs"
+        case["fixtures"][check_key]["check_runs"].append(
+            {
+                **check,
+                "app": {"slug": "attacker-ci", "owner": {"login": "attacker"}},
+            }
+        )
+    elif mutation == "wrong-app":
+        check["app"]["slug"] = "attacker-ci"
+    elif mutation == "wrong-owner":
+        check["app"]["owner"]["login"] = "attacker"
+    elif mutation == "wrong-workflow":
+        run["path"] = ".github/workflows/lookalike.yml"
+    elif mutation == "wrong-run-head":
+        run["head_sha"] = case["parent"]
+    elif mutation == "wrong-event":
+        run["event"] = "push"
+    result = _run_binding(case, tmp_path)
+    assert result.returncode != 0
+
+
 def test_binding_reads_all_review_pages_before_deciding(tmp_path: Path) -> None:
     """Dropping pagination can miss a later blocking review after page one."""
     case = _release_repo(tmp_path)
@@ -469,6 +721,58 @@ def test_binding_reads_all_review_pages_before_deciding(tmp_path: Path) -> None:
     }
     result = _run_binding(case, tmp_path)
     assert result.returncode != 0
+
+
+@pytest.mark.parametrize("step_id", ["assert-clean-source", "seal-source"])
+@pytest.mark.parametrize("mutation", ["tracked", "staged", "untracked"])
+def test_source_tree_checks_reject_mutable_build_inputs(
+    tmp_path: Path, step_id: str, mutation: str
+) -> None:
+    """Removing either cleanliness check permits bytes outside the recorded HEAD tree."""
+    case = _release_repo(tmp_path)
+    repo: Path = case["repo"]
+    if step_id == "seal-source":
+        assert _run_binding(case, tmp_path).returncode == 0
+        output = repo / "release-bundle" / "dist"
+        output.mkdir(parents=True)
+        output.joinpath("expected.whl").write_bytes(b"expected output")
+    if mutation in {"tracked", "staged"}:
+        repo.joinpath("source.txt").write_text("mutated")
+        if mutation == "staged":
+            subprocess.run(["git", "add", "source.txt"], cwd=repo, check=True)
+    else:
+        repo.joinpath("build-input.py").write_text("MUTATED = True\n")
+    env = os.environ | {"EXPECTED_COMMIT": case["merge"]}
+    result = subprocess.run(
+        ["bash", "-c", _step("bind-build-attest", step_id)["run"]],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "source tree" in result.stderr.lower()
+
+
+def test_sealing_allows_only_the_expected_release_bundle(tmp_path: Path) -> None:
+    """The generated sealed bundle is output, not an untracked build input."""
+    case = _release_repo(tmp_path)
+    assert _run_binding(case, tmp_path).returncode == 0
+    repo: Path = case["repo"]
+    output = repo / "release-bundle" / "dist"
+    output.mkdir(parents=True)
+    output.joinpath("expected.whl").write_bytes(b"expected output")
+    env = os.environ | {"EXPECTED_COMMIT": case["merge"]}
+    result = subprocess.run(
+        ["bash", "-c", _step("bind-build-attest", "seal-source")["run"]],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_sealing_rechecks_fresh_main_immediately_before_attestation(tmp_path: Path) -> None:
@@ -520,8 +824,13 @@ def test_release_job_graph_and_permissions_are_fail_closed() -> None:
         assert all("uses" in step and "run" not in step for step in job["steps"])
         assert "actions/download-artifact@" in job["steps"][0]["uses"]
         assert "pypa/gh-action-pypi-publish@" in job["steps"][1]["uses"]
+    assert "skip-existing" not in _job("publish-pypi")["steps"][1].get("with", {})
+    assert _job("bind-build-attest")["permissions"]["actions"] == "read"
     for job_id in set(expected) - {"bind-build-attest", "publish-testpypi", "publish-pypi"}:
         assert _job(job_id).get("permissions", {}).get("id-token") != "write"
+    for job_id in ("prepare-testpypi", "prepare-pypi"):
+        upload = _step(job_id, "upload-staging-artifact")
+        assert upload["with"]["retention-days"] == 30
 
 
 def test_release_trigger_and_workflow_identity_are_tag_only() -> None:
@@ -531,6 +840,8 @@ def test_release_trigger_and_workflow_identity_are_tag_only() -> None:
     checkout = _step("bind-build-attest", "checkout-source")
     assert checkout["with"]["ref"] == "${{ github.event.release.tag_name }}"
     assert checkout["with"]["fetch-tags"] is False
+    assert checkout["with"]["persist-credentials"] is False
+    assert "repository remains public" in (_ROOT / ".github" / "WORKFLOWS.md").read_text().lower()
 
 
 def test_build_uses_verified_digest_pinned_offline_read_only_container() -> None:
@@ -580,7 +891,9 @@ def test_build_attests_source_and_distributions_separately_with_full_sha_actions
 def test_preparation_verifies_attestation_identity_before_staging() -> None:
     """Dropping signer/source constraints permits a valid attestation from the wrong run."""
     for job_id in ("prepare-testpypi", "prepare-pypi"):
-        run = _step(job_id, "verify-release-bundle")["run"]
+        step = _step(job_id, "verify-release-bundle")
+        run = step["run"]
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
         for option in (
             "--signer-workflow",
             "--signer-digest",
@@ -656,7 +969,11 @@ def test_bundle_validation_rejects_artifact_and_attestation_tampering(tmp_path: 
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "REPOSITORY": "joyfulhouse/pylxpweb",
     }
+    env.pop("GH_TOKEN", None)
     run = _step("prepare-testpypi", "verify-release-bundle")["run"]
+    missing_auth = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, check=False)
+    assert missing_auth.returncode != 0
+    env["GH_TOKEN"] = "scoped-test-token"
     good = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, check=False)
     assert good.returncode == 0
     wheel.write_bytes(b"tampered")
@@ -666,6 +983,158 @@ def test_bundle_validation_rejects_artifact_and_attestation_tampering(tmp_path: 
     env["EXPECTED_ATTESTATION_CONTENT"] = "not-the-bundle"
     tampered_attestation = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, check=False)
     assert tampered_attestation.returncode != 0
+
+
+@pytest.mark.parametrize("job_id", ["verify-testpypi", "verify-pypi"])
+def test_index_verifier_retries_then_accepts_exact_remote_bytes(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+    job_id: str,
+) -> None:
+    """The YAML-derived verifier handles transient index lag and exact bytes."""
+    base_url, state = package_index_server
+    files = {
+        "pylxpweb-1.2.3-py3-none-any.whl": b"wheel",
+        "pylxpweb-1.2.3.tar.gz": b"sdist",
+    }
+    _write_dist_manifest(tmp_path, files)
+    state["files"] = files
+    payload = _index_payload(base_url, files)
+    state["index_responses"] = [503, payload]
+    result = _run_index_verifier(tmp_path, base_url, job_id=job_id)
+    assert result.returncode == 0, result.stderr
+    assert state["index_calls"] >= 2
+
+
+@pytest.mark.parametrize("job_id", ["verify-testpypi", "verify-pypi"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "wrong-project",
+        "wrong-version",
+        "advertised-host",
+        "redirect-host",
+        "missing-file",
+        "unexpected-file",
+        "yanked-file",
+        "index-hash",
+        "downloaded-bytes",
+        "exhausted-retries",
+    ],
+)
+def test_index_verifier_rejects_remote_identity_and_byte_mutations(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+    job_id: str,
+    mutation: str,
+) -> None:
+    """Weakening any remote-index check admits a different published artifact set."""
+    base_url, state = package_index_server
+    files = {
+        "pylxpweb-1.2.3-py3-none-any.whl": b"wheel",
+        "pylxpweb-1.2.3.tar.gz": b"sdist",
+    }
+    _write_dist_manifest(tmp_path, files)
+    state["files"] = dict(files)
+    payload = _index_payload(base_url, files)
+    if mutation == "wrong-project":
+        payload["info"]["name"] = "lookalike"
+    elif mutation == "wrong-version":
+        payload["info"]["version"] = "9.9.9"
+    elif mutation == "advertised-host":
+        payload["urls"][0]["url"] = payload["urls"][0]["url"].replace("127.0.0.1", "localhost")
+    elif mutation == "redirect-host":
+        name = payload["urls"][0]["filename"]
+        state["redirected_files"][name] = files[name]
+        state["files"][name] = {
+            "redirect": f"{base_url.replace('127.0.0.1', 'localhost')}/redirected/{name}"
+        }
+    elif mutation == "missing-file":
+        payload["urls"] = payload["urls"][:1]
+    elif mutation == "unexpected-file":
+        payload["urls"].append(
+            {
+                "digests": {"sha256": hashlib.sha256(b"other").hexdigest()},
+                "filename": "pylxpweb-1.2.3.zip",
+                "url": f"{base_url}/files/pylxpweb-1.2.3.zip",
+                "yanked": False,
+            }
+        )
+    elif mutation == "yanked-file":
+        payload["urls"][0]["yanked"] = True
+    elif mutation == "index-hash":
+        payload["urls"][0]["digests"]["sha256"] = "0" * 64
+    elif mutation == "downloaded-bytes":
+        state["files"][payload["urls"][0]["filename"]] = b"tampered"
+    elif mutation == "exhausted-retries":
+        state["index_responses"] = [503, 503, 503]
+    if not state["index_responses"]:
+        state["index_responses"] = [payload]
+    result = _run_index_verifier(tmp_path, base_url, job_id=job_id)
+    assert result.returncode != 0
+
+
+@pytest.mark.parametrize("job_id", ["verify-testpypi", "verify-pypi"])
+def test_index_verifier_rejects_competing_publication_race(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+    job_id: str,
+) -> None:
+    """A second index snapshot catches a file added while exact bytes are downloaded."""
+    base_url, state = package_index_server
+    files = {
+        "pylxpweb-1.2.3-py3-none-any.whl": b"wheel",
+        "pylxpweb-1.2.3.tar.gz": b"sdist",
+    }
+    _write_dist_manifest(tmp_path, files)
+    state["files"] = files
+    exact = _index_payload(base_url, files)
+    raced = json.loads(json.dumps(exact))
+    raced["urls"].append(
+        {
+            "digests": {"sha256": hashlib.sha256(b"competitor").hexdigest()},
+            "filename": "pylxpweb-1.2.3.zip",
+            "url": f"{base_url}/files/pylxpweb-1.2.3.zip",
+            "yanked": False,
+        }
+    )
+    state["index_responses"] = [exact, raced]
+    result = _run_index_verifier(tmp_path, base_url, job_id=job_id)
+    assert result.returncode != 0
+    assert state["index_calls"] == 2
+
+
+@pytest.mark.parametrize(
+    ("response", "expected_success"),
+    [(404, True), ("existing", False), (503, False)],
+    ids=["absent", "pre-existing", "unexpected-error"],
+)
+def test_pypi_absence_check_uses_controlled_index_and_fails_closed(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+    response: int | str,
+    expected_success: bool,
+) -> None:
+    """The exact prepare path accepts only a 404 and rejects an occupied version."""
+    base_url, state = package_index_server
+    state["index_responses"] = [
+        _index_payload(base_url, {}) if response == "existing" else response
+    ]
+    env = os.environ | {
+        "EXPECTED_PROJECT_NAME": "pylxpweb",
+        "EXPECTED_VERSION": "1.2.3",
+        "PYPI_JSON_BASE": f"{base_url}/pypi",
+    }
+    result = subprocess.run(
+        ["bash", "-c", _step("prepare-pypi", "verify-pypi-absence")["run"]],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert state["index_calls"] == 1
+    assert (result.returncode == 0) is expected_success
 
 
 def test_all_release_actions_are_immutable_full_sha_pins() -> None:

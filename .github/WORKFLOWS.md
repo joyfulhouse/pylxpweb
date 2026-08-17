@@ -32,13 +32,19 @@ Publishing is a linear seven-job promotion chain:
    peels the event tag and requires the tag commit to be current `main`. The commit
    must be a two-parent GitHub merge commit associated with exactly one merged
    pull request. Its first parent is the previous `main`, its second parent is the
-   final pull-request head, the base is `main`, an effective non-self approval
-   covers that exact head, and the head's single `CI Success` result succeeded.
+   final pull-request head, and the first parent must be an ancestor of that head.
+   The PR base is `main`; GitHub's mutable `pull.base.sha` is not used as historical
+   merge evidence. An effective non-self approval covers the exact head. The
+   head's single `CI Success` check must come from GitHub Actions and resolve to a
+   successful pull-request run of this repository's `.github/workflows/ci.yml`.
 2. The same job builds once in the official uv/Python 3.13 image pinned by the
    platform-manifest digest recorded in the workflow. Source and container root
    are read-only; only the distribution directory, ephemeral `/tmp`, and an empty
-   uv cache are writable. The container has no network. uv and Python versions
-   and the exact bundled `uv_build` backend are asserted before
+   uv cache are writable. The checkout must have no tracked, staged, or
+   build-relevant untracked changes before the build, and that condition is
+   rechecked at sealing while allowing only the generated `release-bundle/`.
+   The container has no network. uv and Python versions and the exact bundled
+   `uv_build` backend are asserted before
    `uv build --offline --no-python-downloads --no-sources` creates exactly one
    wheel and one source distribution.
 3. Immediately before attestation, the job force-fetches `origin/main` again and
@@ -56,13 +62,17 @@ Publishing is a linear seven-job promotion chain:
 6. `verify-testpypi` is unprivileged. It revalidates the original sealed artifact,
    polls the exact TestPyPI version, requires exactly the two non-yanked filenames
    and SHA-256 digests, and downloads and rehashes their allowlisted HTTPS bytes.
+   It then takes a second exact index snapshot so a competing publication during
+   download fails closed. Production verification uses the same rule.
 7. `prepare-pypi`, `publish-pypi`, and `verify-pypi` repeat the separation for
    production: the no-OIDC prepare job revalidates and stages only when the
    version is absent; the OIDC publisher again contains only the two pinned
    actions; and the no-OIDC verifier polls and downloads the exact final bytes.
 
 The sealed artifact is named from the version and merge commit and is retained for
-30 days. Job summaries expose the tag, commit, tree, final PR/head, workflow
+30 days. The two staged upload artifacts use the same 30-day retention so a delayed
+protected-environment approval does not require rebuilding or restaging. Job
+summaries expose the tag, commit, tree, final PR/head, workflow
 ref/SHA, container digest, distribution names/digests, and attestation verification.
 
 GitHub build/source attestations establish the GitHub workflow and source identity
@@ -84,6 +94,9 @@ unfreezing publication and again during release review:
 - The `testpypi` environment limits deployments to protected `v*` tags.
 - PyPI and TestPyPI trusted-publisher bindings match this repository, the
   `release.yml` workflow, and their respective environment names.
+- The repository remains public. Checkout credentials are deliberately not
+  persisted, and both source-binding fetches rely on anonymous read-only access to
+  `origin/main`; a visibility change therefore fails closed before any build.
 
 These are post-merge settings gates. The workflow and this document do not apply
 or mutate repository, environment, or package-index settings.
