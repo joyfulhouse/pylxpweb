@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,19 @@ def package_index_server() -> Iterator[tuple[str, dict[str, Any]]]:
                     self.send_response(302)
                     self.send_header("Location", response["redirect"])
                     self.end_headers()
+                    return
+                if isinstance(response, dict) and "drip" in response:
+                    content = response["drip"]
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(content)))
+                    self.end_headers()
+                    try:
+                        for byte in content:
+                            self.wfile.write(bytes([byte]))
+                            self.wfile.flush()
+                            time.sleep(response["delay"])
+                    except BrokenPipeError:
+                        pass
                     return
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(response)))
@@ -172,16 +186,21 @@ def _run_index_verifier(
     base_url: str,
     *,
     job_id: str = "verify-testpypi",
+    env_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ | {
         "ALLOWED_FILE_HOST": "127.0.0.1",
+        "DOWNLOAD_TOTAL_SECONDS": "2",
         "EXPECTED_PROJECT_NAME": "pylxpweb",
         "EXPECTED_VERSION": "1.2.3",
+        "INDEX_TOTAL_SECONDS": "2",
         "INDEX_JSON_BASE": f"{base_url}/pypi",
         "MAX_ATTEMPTS": "3",
         "REQUIRED_FILE_SCHEME": "http",
         "RETRY_BASE_SECONDS": "0",
+        "SOCKET_TIMEOUT_SECONDS": "1",
     }
+    env.update(env_overrides or {})
     return subprocess.run(
         ["bash", "-c", _step(job_id, f"verify-{job_id.removeprefix('verify-')}-files")["run"]],
         cwd=tmp_path,
@@ -238,11 +257,41 @@ if sys.argv[1:3] == ["attestation", "verify"]:
     if not os.environ.get("GH_TOKEN"):
         print("GH_TOKEN is required", file=sys.stderr)
         raise SystemExit(4)
+    subject = sys.argv[3]
     bundle = pathlib.Path(sys.argv[sys.argv.index("--bundle") + 1])
+    expected_options = {
+        "--repo": os.environ["REPOSITORY"],
+        "--signer-workflow": (
+            f'{os.environ["REPOSITORY"]}/.github/workflows/release.yml'
+        ),
+        "--signer-digest": os.environ["EXPECTED_WORKFLOW_SHA"],
+        "--source-ref": f'refs/tags/{os.environ["EXPECTED_TAG"]}',
+        "--source-digest": os.environ["EXPECTED_COMMIT"],
+    }
+    for option, expected_value in expected_options.items():
+        if option not in sys.argv or sys.argv[sys.argv.index(option) + 1] != expected_value:
+            print(f"attestation identity mismatch: {option}", file=sys.stderr)
+            raise SystemExit(1)
+    source_subject = "release-bundle/release-source.json"
+    dist_subjects = {
+        f"release-bundle/{line.split('  ', 1)[1]}"
+        for line in pathlib.Path("release-bundle/DIST_SHA256SUMS").read_text().splitlines()
+    }
+    if subject == source_subject:
+        expected_bundle = pathlib.Path("release-bundle/attestations/source.jsonl")
+    elif subject in dist_subjects:
+        expected_bundle = pathlib.Path("release-bundle/attestations/build.jsonl")
+    else:
+        print(f"unexpected attestation subject: {subject}", file=sys.stderr)
+        raise SystemExit(1)
+    if bundle != expected_bundle:
+        print(f"wrong attestation bundle for {subject}", file=sys.stderr)
+        raise SystemExit(1)
     expected = os.environ.get("EXPECTED_ATTESTATION_CONTENT")
     if expected is not None and bundle.read_text() != expected:
         raise SystemExit(1)
-    pathlib.Path(os.environ["GH_CALLS"]).write_text(" ".join(sys.argv[1:]) + "\n")
+    with pathlib.Path(os.environ["GH_CALLS"]).open("a") as calls:
+        calls.write(" ".join(sys.argv[1:]) + "\n")
     print("verified")
     raise SystemExit(0)
 
@@ -977,6 +1026,38 @@ def test_bundle_validation_rejects_artifact_and_attestation_tampering(tmp_path: 
     env["GH_TOKEN"] = "scoped-test-token"
     good = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, check=False)
     assert good.returncode == 0
+    calls = (tmp_path / "gh-calls").read_text().splitlines()
+    assert len(calls) == 3
+    assert {call.split()[2] for call in calls} == {
+        "release-bundle/release-source.json",
+        f"release-bundle/dist/{wheel.name}",
+        f"release-bundle/dist/{sdist.name}",
+    }
+    identity_mutations = {
+        "repository": ('--repo "$REPOSITORY"', '--repo "attacker/repository"'),
+        "workflow": (
+            'signer="$REPOSITORY/.github/workflows/release.yml"',
+            'signer="attacker/repository/.github/workflows/release.yml"',
+        ),
+        "workflow digest": (
+            '--signer-digest "$EXPECTED_WORKFLOW_SHA"',
+            f'--signer-digest "{"0" * 40}"',
+        ),
+        "tag": ('--source-ref "refs/tags/$EXPECTED_TAG"', '--source-ref "refs/tags/v9.9.9"'),
+        "commit": (
+            '--source-digest "$EXPECTED_COMMIT"',
+            f'--source-digest "{"f" * 40}"',
+        ),
+        "subject": (
+            "gh attestation verify release-bundle/release-source.json",
+            "gh attestation verify release-bundle/DIST_SHA256SUMS",
+        ),
+    }
+    for label, (expected, replacement) in identity_mutations.items():
+        assert expected in run, label
+        mutated = run.replace(expected, replacement, 1)
+        result = subprocess.run(["bash", "-c", mutated], cwd=tmp_path, env=env, check=False)
+        assert result.returncode != 0, label
     wheel.write_bytes(b"tampered")
     tampered_artifact = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, check=False)
     assert tampered_artifact.returncode != 0
@@ -1087,6 +1168,50 @@ def test_index_verifier_rejects_competing_publication_race(
     assert state["index_calls"] == 2
 
 
+@pytest.mark.parametrize("job_id", ["verify-testpypi", "verify-pypi"])
+def test_index_verifier_worst_case_fits_job_timeout_with_five_minute_headroom(
+    job_id: str,
+) -> None:
+    """Polling, transfers, final snapshot, and non-index verification fit mechanically."""
+    job = _job(job_id)
+    step = _step(job_id, f"verify-{job_id.removeprefix('verify-')}-files")
+    env = step["env"]
+    attempts = int(env["MAX_ATTEMPTS"])
+    retry_base = int(env["RETRY_BASE_SECONDS"])
+    index_total = int(env["INDEX_TOTAL_SECONDS"])
+    download_total = int(env["DOWNLOAD_TOTAL_SECONDS"])
+    socket_timeout = int(env["SOCKET_TIMEOUT_SECONDS"])
+    backoff = sum(min(attempt * retry_base, 30) for attempt in range(1, attempts))
+    verifier_worst_case = attempts * index_total + backoff + 2 * download_total + index_total
+    headroom = int(job["timeout-minutes"]) * 60 - verifier_worst_case
+    assert headroom >= 300
+    assert socket_timeout < index_total
+    assert socket_timeout < download_total
+    assert "signal.setitimer" in step["run"]
+
+
+def test_index_verifier_enforces_total_deadline_despite_socket_activity(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+) -> None:
+    """A drip-fed body cannot evade the total-transfer deadline via socket activity."""
+    base_url, state = package_index_server
+    files, payload = _prepare_index_case(tmp_path, base_url, state)
+    wheel_name = next(name for name in files if name.endswith(".whl"))
+    state["files"][wheel_name] = {"drip": files[wheel_name], "delay": 0.1}
+    state["index_responses"] = [payload]
+    result = _run_index_verifier(
+        tmp_path,
+        base_url,
+        env_overrides={
+            "DOWNLOAD_TOTAL_SECONDS": "0.2",
+            "INDEX_TOTAL_SECONDS": "2",
+            "SOCKET_TIMEOUT_SECONDS": "1",
+        },
+    )
+    assert result.returncode != 0
+
+
 @pytest.mark.parametrize(
     ("response", "expected_success"),
     [(404, True), ("existing", False), (503, False)],
@@ -1167,6 +1292,13 @@ def test_build_produces_exactly_two_bit_reproducible_distributions(tmp_path: Pat
         pytest.skip("Docker CLI is unavailable")
     subprocess.run(["docker", "info"], capture_output=True, check=True)
     script = _step("bind-build-attest", "build-distributions")["run"]
+    commit_epoch = _git(_ROOT, "show", "-s", "--format=%ct", "HEAD")
+    build_command = "  uv build --offline"
+    assert script.count(build_command) == 1
+    script = script.replace(
+        build_command,
+        f'  test "$SOURCE_DATE_EPOCH" = "{commit_epoch}"\n{build_command}',
+    )
     image = _workflow()["env"]["BUILD_IMAGE"]
     subprocess.run(["docker", "pull", image], check=True)
     source = tmp_path / "source"
@@ -1176,7 +1308,7 @@ def test_build_produces_exactly_two_bit_reproducible_distributions(tmp_path: Pat
         ignore=shutil.ignore_patterns(".git", ".venv", ".release-test-output-*"),
     )
     outputs: list[dict[str, str]] = []
-    for index in (1, 2):
+    for index, ambient_epoch in enumerate(("1", "2000000000"), start=1):
         output = tmp_path / f"output-{index}"
         output.mkdir()
         env = os.environ | {
@@ -1184,7 +1316,7 @@ def test_build_produces_exactly_two_bit_reproducible_distributions(tmp_path: Pat
             "EXPECTED_COMMIT": _git(_ROOT, "rev-parse", "HEAD"),
             "GITHUB_WORKSPACE": str(source),
             "OUTPUT_DIR": str(output),
-            "SOURCE_DATE_EPOCH": "1755302400",
+            "SOURCE_DATE_EPOCH": ambient_epoch,
         }
         result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True)
         assert result.returncode == 0, result.stderr

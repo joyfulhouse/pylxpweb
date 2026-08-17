@@ -44,7 +44,8 @@ Publishing is a linear seven-job promotion chain:
    build-relevant untracked changes before the build, and that condition is
    rechecked at sealing while allowing only the generated `release-bundle/`.
    The container has no network. uv and Python versions and the exact bundled
-   `uv_build` backend are asserted before
+   `uv_build` backend are asserted, and `SOURCE_DATE_EPOCH` is set unconditionally
+   from the bound commit timestamp rather than inherited from the runner, before
    `uv build --offline --no-python-downloads --no-sources` creates exactly one
    wheel and one source distribution.
 3. Immediately before attestation, the job force-fetches `origin/main` again and
@@ -64,6 +65,15 @@ Publishing is a linear seven-job promotion chain:
    and SHA-256 digests, and downloads and rehashes their allowlisted HTTPS bytes.
    It then takes a second exact index snapshot so a competing publication during
    download fails closed. Production verification uses the same rule.
+
+The TestPyPI verifier's mechanical worst case is 12 minutes 45 seconds: twelve
+30-second index attempts, 255 seconds of capped backoff, two 60-second downloads,
+and a final 30-second snapshot. Its 20-minute job timeout leaves 7 minutes 15
+seconds for artifact download, checksums, attestation verification, and runner
+overhead. The PyPI verifier's corresponding worst case is 8 minutes 45 seconds
+inside a 15-minute job, leaving 6 minutes 15 seconds. A 10-second socket timeout
+only detects inactivity; a process-level total-transfer deadline separately caps
+each index request at 30 seconds and each distribution download at 60 seconds.
 7. `prepare-pypi`, `publish-pypi`, and `verify-pypi` repeat the separation for
    production: the no-OIDC prepare job revalidates and stages only when the
    version is absent; the OIDC publisher again contains only the two pinned

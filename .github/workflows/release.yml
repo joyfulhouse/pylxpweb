@@ -284,7 +284,7 @@ jobs:
             --tmpfs /cache:rw,noexec,nosuid,nodev,size=64m \
             -e HOME=/tmp \
             -e UV_CACHE_DIR=/cache \
-            -e SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$epoch}" \
+            -e SOURCE_DATE_EPOCH="$epoch" \
             -v "$GITHUB_WORKSPACE:/src:ro" \
             -v "$OUTPUT_DIR:/out:rw" \
             -w /src \
@@ -626,7 +626,7 @@ jobs:
     name: Verify TestPyPI publication
     needs: [bind-build-attest, publish-testpypi]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -645,15 +645,19 @@ jobs:
           EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
           INDEX_JSON_BASE: https://test.pypi.org/pypi
           ALLOWED_FILE_HOST: test-files.pythonhosted.org
+          DOWNLOAD_TOTAL_SECONDS: '60'
+          INDEX_TOTAL_SECONDS: '30'
           MAX_ATTEMPTS: '12'
           REQUIRED_FILE_SCHEME: https
           RETRY_BASE_SECONDS: '5'
+          SOCKET_TIMEOUT_SECONDS: '10'
         run: &verify-index |
           python3 - <<'PY'
           import hashlib
           import json
           import os
           import pathlib
+          import signal
           import time
           import urllib.parse
           import urllib.request
@@ -670,6 +674,17 @@ jobs:
               f'{os.environ["INDEX_JSON_BASE"]}/{project}/{version}/json',
               headers={"User-Agent": "pylxpweb-release-verifier"},
           )
+          def timeout_handler(_signum, _frame):
+              raise TimeoutError("total HTTP transfer deadline exceeded")
+          signal.signal(signal.SIGALRM, timeout_handler)
+          socket_timeout = float(os.environ["SOCKET_TIMEOUT_SECONDS"])
+          def fetch(url, total_seconds):
+              signal.setitimer(signal.ITIMER_REAL, total_seconds)
+              try:
+                  with urllib.request.urlopen(url, timeout=socket_timeout) as response:
+                      return response.geturl(), response.read()
+              finally:
+                  signal.setitimer(signal.ITIMER_REAL, 0)
           def validate(payload):
               assert payload["info"]["name"] == project
               assert payload["info"]["version"] == version
@@ -684,10 +699,12 @@ jobs:
               return releases
           attempts = int(os.environ["MAX_ATTEMPTS"])
           retry_base = int(os.environ["RETRY_BASE_SECONDS"])
+          index_total = float(os.environ["INDEX_TOTAL_SECONDS"])
+          download_total = float(os.environ["DOWNLOAD_TOTAL_SECONDS"])
           for attempt in range(1, attempts + 1):
               try:
-                  with urllib.request.urlopen(request, timeout=30) as response:
-                      payload = json.load(response)
+                  _, content = fetch(request, index_total)
+                  payload = json.loads(content)
                   releases = validate(payload)
                   break
               except (AssertionError, KeyError, OSError, TypeError, ValueError):
@@ -698,14 +715,13 @@ jobs:
               parsed = urllib.parse.urlparse(item["url"])
               assert parsed.scheme == os.environ["REQUIRED_FILE_SCHEME"]
               assert parsed.hostname == os.environ["ALLOWED_FILE_HOST"]
-              with urllib.request.urlopen(item["url"], timeout=60) as response:
-                  final = urllib.parse.urlparse(response.geturl())
-                  content = response.read()
+              final_url, content = fetch(item["url"], download_total)
+              final = urllib.parse.urlparse(final_url)
               assert final.scheme == os.environ["REQUIRED_FILE_SCHEME"]
               assert final.hostname == os.environ["ALLOWED_FILE_HOST"]
               assert hashlib.sha256(content).hexdigest() == expected[item["filename"]]
-          with urllib.request.urlopen(request, timeout=30) as response:
-              validate(json.load(response))
+          _, content = fetch(request, index_total)
+          validate(json.loads(content))
           PY
 
   prepare-pypi:
@@ -803,7 +819,10 @@ jobs:
           EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
           INDEX_JSON_BASE: https://pypi.org/pypi
           ALLOWED_FILE_HOST: files.pythonhosted.org
+          DOWNLOAD_TOTAL_SECONDS: '60'
+          INDEX_TOTAL_SECONDS: '30'
           MAX_ATTEMPTS: '8'
           REQUIRED_FILE_SCHEME: https
           RETRY_BASE_SECONDS: '5'
+          SOCKET_TIMEOUT_SECONDS: '10'
         run: *verify-index
