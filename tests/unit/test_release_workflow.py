@@ -436,6 +436,47 @@ def _release_repo(
     }
 
 
+# Pipes whose reader threads were abandoned are parked here for the life of the
+# process instead of being closed: closing them would free the fd numbers for
+# reuse while a zombie reader could still loop, letting it read an unrelated
+# later file that happened to receive the recycled fd number.
+_ABANDONED_PIPES: list[IO[bytes]] = []
+
+
+def _drain_pipe(
+    fd: int,
+    key: str,
+    captured: dict[str, deque[bytes]],
+    retained: dict[str, int],
+    dropped: dict[str, int],
+    capture_tail_bytes: int,
+    last_progress: list[float],
+    abandoned: threading.Event,
+) -> None:
+    """Drain one captured pipe into a bounded tail until EOF or abandonment.
+
+    The abandon event is checked before every read: once the harness gives up
+    on this reader it must never issue another ``os.read``, because the fd
+    number could otherwise be recycled to an unrelated file whose bytes a
+    still-looping zombie reader would steal. OSError also ends the drain when
+    the abandoning thread switches the fd to non-blocking (EAGAIN).
+    """
+    with suppress(OSError, ValueError):
+        while not abandoned.is_set() and (chunk := os.read(fd, 65536)):
+            captured[key].append(chunk)
+            retained[key] += len(chunk)
+            while retained[key] > capture_tail_bytes and len(captured[key]) > 1:
+                oldest = captured[key].popleft()
+                retained[key] -= len(oldest)
+                dropped[key] += len(oldest)
+            if retained[key] > capture_tail_bytes:
+                excess = retained[key] - capture_tail_bytes
+                captured[key][0] = captured[key][0][excess:]
+                retained[key] -= excess
+                dropped[key] += excess
+            last_progress[0] = time.monotonic()
+
+
 def _run_bounded_subprocess(
     args: list[str],
     *,
@@ -471,30 +512,24 @@ def _run_bounded_subprocess(
     dropped = {"stdout": 0, "stderr": 0}
     started = time.monotonic()
     last_progress = [started]
-
-    def drain(stream: IO[bytes], key: str) -> None:
-        # OSError/ValueError terminate the drain when the parent closes the
-        # read end from under a reader blocked on a pipe an escaped descendant
-        # still holds open.
-        fd = stream.fileno()
-        with suppress(OSError, ValueError):
-            while chunk := os.read(fd, 65536):
-                captured[key].append(chunk)
-                retained[key] += len(chunk)
-                while retained[key] > capture_tail_bytes and len(captured[key]) > 1:
-                    oldest = captured[key].popleft()
-                    retained[key] -= len(oldest)
-                    dropped[key] += len(oldest)
-                if retained[key] > capture_tail_bytes:
-                    excess = retained[key] - capture_tail_bytes
-                    captured[key][0] = captured[key][0][excess:]
-                    retained[key] -= excess
-                    dropped[key] += excess
-                last_progress[0] = time.monotonic()
+    abandoned = threading.Event()
 
     readers = [
-        threading.Thread(target=drain, args=(stdout_pipe, "stdout"), daemon=True),
-        threading.Thread(target=drain, args=(stderr_pipe, "stderr"), daemon=True),
+        threading.Thread(
+            target=_drain_pipe,
+            args=(
+                pipe.fileno(),
+                key,
+                captured,
+                retained,
+                dropped,
+                capture_tail_bytes,
+                last_progress,
+                abandoned,
+            ),
+            daemon=True,
+        )
+        for pipe, key in ((stdout_pipe, "stdout"), (stderr_pipe, "stderr"))
     ]
     for reader in readers:
         reader.start()
@@ -525,22 +560,33 @@ def _run_bounded_subprocess(
     finally:
         # A descendant that re-setsid'd or double-forked survives the group
         # SIGKILL and keeps the captured pipes open, so joins must be bounded
-        # or pytest hangs despite both deadlines. On expiry, close the
-        # parent's read ends to force the drains to EOF/EBADF, then join once
-        # more; the readers are daemon threads so a reader stuck in a blocked
-        # read can never block interpreter exit.
+        # or pytest hangs despite both deadlines. On join expiry the readers
+        # are abandoned, never woken by force: close() from this thread would
+        # not interrupt a reader blocked in os.read (the syscall holds the old
+        # file description) and would free the fd numbers for reuse, letting a
+        # still-looping reader steal bytes from an unrelated later file. So
+        # instead the abandon event guarantees no reader issues a new os.read,
+        # the fds are switched to non-blocking so a not-yet-blocked read fails
+        # fast, and the pipe objects are parked module-globally, never closed,
+        # so their fd numbers cannot be recycled. A reader already blocked in
+        # os.read may stay blocked; the daemon flag plus the bounded joins are
+        # the backstop that keeps pytest exit and this harness prompt.
         deadline = time.monotonic() + _SUBPROCESS_READER_JOIN_SECONDS
         for reader in readers:
             reader.join(timeout=max(0.0, deadline - time.monotonic()))
         if any(reader.is_alive() for reader in readers):
+            abandoned.set()
             for pipe in (stdout_pipe, stderr_pipe):
-                with suppress(OSError):
-                    pipe.close()
+                with suppress(OSError, ValueError):
+                    os.set_blocking(pipe.fileno(), False)
             deadline = time.monotonic() + _SUBPROCESS_READER_JOIN_SECONDS
             for reader in readers:
                 reader.join(timeout=max(0.0, deadline - time.monotonic()))
-        stdout_pipe.close()
-        stderr_pipe.close()
+        if any(reader.is_alive() for reader in readers):
+            _ABANDONED_PIPES.extend((stdout_pipe, stderr_pipe))
+        else:
+            stdout_pipe.close()
+            stderr_pipe.close()
         returncode = process.wait()
     if expired_deadline is not None:
         raise subprocess.TimeoutExpired(
@@ -672,6 +718,41 @@ def test_bounded_subprocess_join_stays_bounded_when_descendant_escapes_group(
             timeout_seconds=0.3,
         )
     assert time.monotonic() - started < 15
+
+
+def test_drain_pipe_never_issues_a_read_once_abandoned() -> None:
+    """An abandoned drain must not touch its fd again, even with bytes pending.
+
+    After the harness abandons a reader, its fd number must be treated as
+    poisoned: one more ``os.read`` from a zombie reader could consume bytes
+    from an unrelated file if the number were ever recycled. The abandon event
+    is therefore checked before every read, so a drain entered (or resumed)
+    after abandonment returns without consuming the pending bytes.
+    """
+    read_fd, write_fd = os.pipe()
+    try:
+        os.write(write_fd, b"pending bytes")
+        os.close(write_fd)
+        write_fd = -1
+        captured: dict[str, deque[bytes]] = {"stdout": deque()}
+        abandoned = threading.Event()
+        abandoned.set()
+        _drain_pipe(
+            read_fd,
+            "stdout",
+            captured,
+            {"stdout": 0},
+            {"stdout": 0},
+            _SUBPROCESS_TAIL_BYTES,
+            [time.monotonic()],
+            abandoned,
+        )
+        assert not captured["stdout"]
+        assert os.read(read_fd, 65536) == b"pending bytes"
+    finally:
+        os.close(read_fd)
+        if write_fd != -1:
+            os.close(write_fd)
 
 
 def test_heredoc_materialization_keeps_body_lines_starting_with_py(tmp_path: Path) -> None:
