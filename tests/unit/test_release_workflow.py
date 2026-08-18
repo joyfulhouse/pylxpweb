@@ -17,7 +17,7 @@ import time
 from collections.abc import Iterator
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import pytest
 import yaml
@@ -437,6 +437,9 @@ def _run_bounded_subprocess(
     env: dict[str, str],
     timeout_seconds: float,
 ) -> subprocess.CompletedProcess[str]:
+    # The deadline bounds *silence*, not total runtime: a child that keeps
+    # writing to either captured pipe stays alive, while one that produces no
+    # output for timeout_seconds is killed with its whole process group.
     process = subprocess.Popen(
         args,
         cwd=cwd,
@@ -444,18 +447,53 @@ def _run_bounded_subprocess(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
         close_fds=True,
         start_new_session=True,
     )
+    stdout_pipe = process.stdout
+    stderr_pipe = process.stderr
+    assert stdout_pipe is not None and stderr_pipe is not None
+    captured: dict[str, list[bytes]] = {"stdout": [], "stderr": []}
+    last_progress = [time.monotonic()]
+
+    def drain(stream: IO[bytes], key: str) -> None:
+        while chunk := os.read(stream.fileno(), 65536):
+            captured[key].append(chunk)
+            last_progress[0] = time.monotonic()
+
+    readers = [
+        threading.Thread(target=drain, args=(stdout_pipe, "stdout")),
+        threading.Thread(target=drain, args=(stderr_pipe, "stderr")),
+    ]
+    for reader in readers:
+        reader.start()
+
+    def decoded(key: str) -> str:
+        return b"".join(captured[key]).decode(errors="replace")
+
     try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        while process.poll() is None or any(reader.is_alive() for reader in readers):
+            if time.monotonic() - last_progress[0] >= timeout_seconds:
+                raise subprocess.TimeoutExpired(
+                    args,
+                    timeout_seconds,
+                    output=decoded("stdout"),
+                    stderr=decoded("stderr"),
+                )
+            time.sleep(0.01)
     except BaseException:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-        process.communicate()
+        for reader in readers:
+            reader.join()
+        process.wait()
         raise
-    return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+    finally:
+        for reader in readers:
+            reader.join()
+        stdout_pipe.close()
+        stderr_pipe.close()
+    return subprocess.CompletedProcess(args, process.wait(), decoded("stdout"), decoded("stderr"))
 
 
 def _materialize_python_heredocs(script: str, tmp_path: Path) -> str:
@@ -540,6 +578,41 @@ def test_bounded_subprocess_terminates_entire_child_group(tmp_path: Path) -> Non
             timeout_seconds=0.2,
         )
     assert time.monotonic() - started < 2
+
+
+def test_bounded_subprocess_tolerates_slow_but_progressing_child(tmp_path: Path) -> None:
+    """The deadline bounds silence, not total runtime.
+
+    A child whose output gaps stay under the deadline must run to completion
+    even when its total runtime exceeds the deadline several times over, and
+    the harness must not leave reader threads behind afterwards.
+    """
+    threads_before = threading.active_count()
+    result = _run_bounded_subprocess(
+        ["bash", "-c", 'for i in $(seq 20); do echo "tick $i"; sleep 0.05; done'],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+        timeout_seconds=0.3,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [f"tick {i}" for i in range(1, 21)]
+    assert threading.active_count() == threads_before
+
+
+def test_bounded_subprocess_kills_child_that_stops_progressing(tmp_path: Path) -> None:
+    """Progress followed by silence is still killed, with the whole group."""
+    threads_before = threading.active_count()
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        _run_bounded_subprocess(
+            ["bash", "-c", 'echo "made progress"; sleep 60 & wait'],
+            cwd=tmp_path,
+            env=os.environ.copy(),
+            timeout_seconds=0.3,
+        )
+    assert time.monotonic() - started < 2
+    assert "made progress" in (excinfo.value.output or "")
+    assert threading.active_count() == threads_before
 
 
 def test_harness_never_hands_bash_a_python_heredoc(
