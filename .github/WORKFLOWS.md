@@ -103,13 +103,23 @@ distribution download at 60 seconds.
    the sealed artifact and attestations, reruns the same classifier against fresh
    PyPI bytes, and succeeds only for `EXACT_COMPLETE`. Unlike `prepare-pypi`, its
    evidence steps fail hard: any evidence failure fails the terminal verifier
-   itself.
+   itself. Because it runs immediately after `publish-pypi`, routine PyPI index
+   propagation can briefly report absence: the terminal reclassification wraps a
+   stable `ABSENT` snapshot pair in a bounded recheck loop (12 attempts, 5-second
+   backoff base capped at 30 seconds — the TestPyPI verifier's envelope). Each
+   attempt keeps the full two-snapshot stability rule, only `ABSENT` retries, and
+   `prepare-pypi` keeps its single-pass classification semantics: absence is a
+   publishable state there and must never be retried away.
 
-The production classifier's mechanical worst case is 3 minutes 5 seconds: two
+The prepare-time classifier's mechanical worst case is 3 minutes 5 seconds: two
 30-second index snapshots, two 60-second downloads, and a five-second stability
-interval. Its 15-minute verifier timeout leaves 11 minutes 55 seconds for Actions
+interval. Its 15-minute prepare timeout leaves 11 minutes 55 seconds for Actions
 API discovery, artifact download, checksum and attestation verification, and
-runner overhead.
+runner overhead. The terminal reclassification's mechanical worst case is 19
+minutes 15 seconds: twelve 65-second snapshot pairs, 255 seconds of capped
+backoff, and two 60-second downloads on the final attempt. The 25-minute
+`verify-pypi` timeout leaves 5 minutes 45 seconds for the same non-classifier
+work.
 
 | State | Meaning | Workflow consequence |
 |---|---|---|
@@ -117,7 +127,7 @@ runner overhead.
 | `EXACT_COMPLETE` | Stable exact filenames, index hashes, allowlisted final hosts, downloaded bytes, non-yanked status, sealed bundle, and GitHub attestations | Publisher skips; terminal verifier succeeds |
 | `PARTIAL` | A stable non-empty strict subset whose present files fully validate (metadata, hosts, and downloaded bytes) | Terminal failure; burn the version and never top up |
 | `MISMATCH` | Stable identity, hash, host, or downloaded-byte conflict — including one inside an otherwise partial or extra file set | Terminal failure; preserve evidence and use compromise/new-version procedure |
-| `YANKED` | Any expected remote file is yanked | Terminal failure; preserve evidence and use compromise/new-version procedure |
+| `YANKED` | Any advertised remote file for the version is yanked, expected or not | Terminal failure; preserve evidence and use compromise/new-version procedure |
 | `EXTRA` | The full expected set, fully validated, plus stable additional files | Terminal failure; preserve evidence and use compromise/new-version procedure |
 | `COMPETING` | A duplicate filename or another stable occupied file set | Terminal failure; preserve evidence and use compromise/new-version procedure |
 | `UNCERTAIN` | Timeout, TLS/JSON/API/429/5xx error, off-origin index redirect, inconsistent snapshots, or unavailable artifact/attestation evidence | Never publish; retry only the classifier/verifier recovery chain |
@@ -128,6 +138,39 @@ in their names so a recovery attempt cannot collide with immutable staging from 
 earlier attempt. Job summaries expose the tag, commit, tree, final PR/head,
 workflow ref/SHA, container digest, distribution names/digests, attestation
 verification, classifier state, evidence, and required action.
+
+### Pinned artifact-action contract evidence
+
+Three digest-binding assumptions in `release.yml` are properties of the pinned
+action code, not of the workflow YAML — GitHub Actions silently ignores unknown
+action inputs, so these facts must be re-verified whenever either pin moves
+(`tests/unit/test_release_workflow.py::test_artifact_action_pins_match_recorded_contract_verification`
+fails until this note and the test's recorded map match the new pin):
+
+- `actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` (v8.0.0),
+  `action.yml` SHA-256
+  `e98559b7a31ba31be4709f20d22102dc2737fa630f69a339eb89981151e505fe`:
+  - Declares the `digest-mismatch` input (options `ignore`/`info`/`warn`/`error`,
+    default `error`), so `digest-mismatch: error` is enforced rather than
+    silently dropped.
+  - `src/download-artifact.ts` (SHA-256
+    `665dccdfa36cc93c7d75515fd93a9f97b8dee937b9b5517a15ba77d2a48f6934`) selects
+    the resolved `path:` directly whenever exactly one artifact is downloaded
+    (`isSingleArtifactDownload || inputs.mergeMultiple || artifacts.length === 1`),
+    so a single-`artifact-ids` download extracts flat into `path:`, not into a
+    per-artifact subdirectory.
+- `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` (v7.0.0),
+  `action.yml` SHA-256
+  `c5979822866a72362e609844b6ebe77d4b7e759af68cc1c2c425dcf51481fab4`:
+  - Declares the `artifact-digest` output, and `src/shared/upload-artifact.ts`
+    (SHA-256 `bfab1f3c0e5ada3dd46e64addb583730dd84e17a47f06e24f9bda3cd50b9153b`)
+    sets it to the artifact toolkit's bare-hex SHA-256 digest — no `sha256:`
+    prefix — matching the workflow's `[0-9a-f]{64}` fullmatch. Independently
+    verified against the action source during review (2026-08) and re-verified
+    2026-08-18.
+
+Verified 2026-08-18 by fetching `action.yml` and the named source files at the
+exact pinned commits from `github.com` and hashing them with `sha256sum`.
 
 GitHub build/source attestations establish the GitHub workflow and source identity
 for the local subjects. They are distinct from the PEP 740 attestations that the

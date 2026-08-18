@@ -838,6 +838,10 @@ jobs:
         if: steps.verify-release-bundle.outcome == 'success'
         continue-on-error: true
         env: &pypi-classifier-env
+          # Prepare-time classification is a single stability pair: absence is a
+          # publishable state here, so it must never be retried away.
+          ABSENT_RECHECK_BASE_SECONDS: '0'
+          ABSENT_RECHECK_MAX_ATTEMPTS: '1'
           ALLOWED_FILE_HOST: files.pythonhosted.org
           ALLOWED_INDEX_HOST: pypi.org
           DOWNLOAD_TOTAL_SECONDS: '60'
@@ -966,68 +970,80 @@ jobs:
                   return "EXTRA"
               return "COMPETING"
 
-          state = "UNCERTAIN"
-          reason = "remote evidence could not be classified"
-          first_kind = "unavailable"
-          first_canonical = None
-          second_kind = "unavailable"
-          second_canonical = None
-          try:
-              first_kind, first_payload, first_canonical = snapshot()
-              first_state = None
-              downloaded_state = None
-              if first_kind == "present":
-                  first_state = shape_state(first_payload)
-                  if first_state in {"candidate-exact", "PARTIAL", "EXTRA"}:
-                      downloaded_state = "downloads-exact"
-                      for item in first_payload["urls"]:
-                          filename = item.get("filename")
-                          if filename not in expected:
-                              continue
-                          final_url, content = fetch(
-                              item["url"], float(os.environ["DOWNLOAD_TOTAL_SECONDS"])
-                          )
-                          final = urllib.parse.urlparse(final_url)
-                          if (
-                              final.scheme != os.environ["REQUIRED_FILE_SCHEME"]
-                              or final.hostname != os.environ["ALLOWED_FILE_HOST"]
-                              or hashlib.sha256(content).hexdigest()
-                              != expected[filename]
-                          ):
-                              downloaded_state = "MISMATCH"
-                              break
-              time.sleep(float(os.environ["SNAPSHOT_DELAY_SECONDS"]))
-              second_kind, second_payload, second_canonical = snapshot()
-              if first_kind != second_kind or first_canonical != second_canonical:
-                  state = "UNCERTAIN"
-                  reason = "PyPI snapshots were inconsistent"
-              elif first_kind == "absent":
-                  state = "ABSENT"
-                  reason = "two clean PyPI snapshots report version absence"
-              else:
-                  second_state = shape_state(second_payload)
-                  if first_state != second_state:
-                      state = "UNCERTAIN"
-                      reason = "PyPI classifications changed between snapshots"
-                  elif downloaded_state == "MISMATCH":
-                      state = "MISMATCH"
-                      reason = "downloaded PyPI bytes do not match the sealed set"
-                  elif first_state != "candidate-exact":
-                      state = first_state
-                      reason = "stable PyPI metadata conflicts with the sealed set"
-                  else:
-                      state = "EXACT_COMPLETE"
-                      reason = "stable PyPI metadata and downloaded bytes exactly match"
-          except (
-              json.JSONDecodeError,
-              KeyError,
-              OSError,
-              TimeoutError,
-              TypeError,
-              ValueError,
-          ) as error:
+          # An ABSENT pair of snapshots is re-taken up to ABSENT_RECHECK_MAX_ATTEMPTS
+          # times with capped backoff so routine index-propagation lag right after a
+          # publish cannot fail terminal verification. Only ABSENT retries: every
+          # other state (including UNCERTAIN) returns after one stability pair, and
+          # prepare-time classification pins the attempt budget to a single pass.
+          recheck_attempts = int(os.environ.get("ABSENT_RECHECK_MAX_ATTEMPTS", "1"))
+          recheck_base = int(os.environ.get("ABSENT_RECHECK_BASE_SECONDS", "0"))
+          assert recheck_attempts >= 1
+          for recheck in range(1, recheck_attempts + 1):
               state = "UNCERTAIN"
-              reason = f"remote evidence error: {type(error).__name__}"
+              reason = "remote evidence could not be classified"
+              first_kind = "unavailable"
+              first_canonical = None
+              second_kind = "unavailable"
+              second_canonical = None
+              try:
+                  first_kind, first_payload, first_canonical = snapshot()
+                  first_state = None
+                  downloaded_state = None
+                  if first_kind == "present":
+                      first_state = shape_state(first_payload)
+                      if first_state in {"candidate-exact", "PARTIAL", "EXTRA"}:
+                          downloaded_state = "downloads-exact"
+                          for item in first_payload["urls"]:
+                              filename = item.get("filename")
+                              if filename not in expected:
+                                  continue
+                              final_url, content = fetch(
+                                  item["url"], float(os.environ["DOWNLOAD_TOTAL_SECONDS"])
+                              )
+                              final = urllib.parse.urlparse(final_url)
+                              if (
+                                  final.scheme != os.environ["REQUIRED_FILE_SCHEME"]
+                                  or final.hostname != os.environ["ALLOWED_FILE_HOST"]
+                                  or hashlib.sha256(content).hexdigest()
+                                  != expected[filename]
+                              ):
+                                  downloaded_state = "MISMATCH"
+                                  break
+                  time.sleep(float(os.environ["SNAPSHOT_DELAY_SECONDS"]))
+                  second_kind, second_payload, second_canonical = snapshot()
+                  if first_kind != second_kind or first_canonical != second_canonical:
+                      state = "UNCERTAIN"
+                      reason = "PyPI snapshots were inconsistent"
+                  elif first_kind == "absent":
+                      state = "ABSENT"
+                      reason = "two clean PyPI snapshots report version absence"
+                  else:
+                      second_state = shape_state(second_payload)
+                      if first_state != second_state:
+                          state = "UNCERTAIN"
+                          reason = "PyPI classifications changed between snapshots"
+                      elif downloaded_state == "MISMATCH":
+                          state = "MISMATCH"
+                          reason = "downloaded PyPI bytes do not match the sealed set"
+                      elif first_state != "candidate-exact":
+                          state = first_state
+                          reason = "stable PyPI metadata conflicts with the sealed set"
+                      else:
+                          state = "EXACT_COMPLETE"
+                          reason = "stable PyPI metadata and downloaded bytes exactly match"
+              except (
+                  json.JSONDecodeError,
+                  KeyError,
+                  OSError,
+                  TimeoutError,
+                  TypeError,
+                  ValueError,
+              ) as error:
+                  state = "UNCERTAIN"
+                  reason = f"remote evidence error: {type(error).__name__}"
+              if state != "ABSENT" or recheck == recheck_attempts:
+                  break
+              time.sleep(min(recheck * recheck_base, 30))
 
           guidance = {
               "ABSENT": "Publisher may upload the full sealed wheel and sdist once.",
@@ -1127,7 +1143,7 @@ jobs:
     needs: [bind-build-attest, prepare-pypi, publish-pypi]
     if: ${{ always() && !cancelled() && needs.prepare-pypi.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       actions: read
       contents: read
@@ -1150,7 +1166,24 @@ jobs:
         run: *verify-release-bundle
       - id: classify-pypi-state
         name: Reclassify PyPI from stable remote bytes
-        env: *pypi-classifier-env
+        # Same script and identity/host/deadline values as prepare-pypi, but the
+        # terminal reclassification may re-take an ABSENT snapshot pair with the
+        # TestPyPI-verifier retry envelope (12 attempts, 5s base, 30s backoff cap)
+        # so index-propagation lag after publish-pypi cannot fail the happy path.
+        env:
+          ABSENT_RECHECK_BASE_SECONDS: '5'
+          ABSENT_RECHECK_MAX_ATTEMPTS: '12'
+          ALLOWED_FILE_HOST: files.pythonhosted.org
+          ALLOWED_INDEX_HOST: pypi.org
+          DOWNLOAD_TOTAL_SECONDS: '60'
+          EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
+          EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
+          INDEX_JSON_BASE: https://pypi.org/pypi
+          INDEX_TOTAL_SECONDS: '30'
+          REQUIRED_FILE_SCHEME: https
+          REQUIRED_INDEX_SCHEME: https
+          SNAPSHOT_DELAY_SECONDS: '5'
+          SOCKET_TIMEOUT_SECONDS: '10'
         run: *classify-pypi-state
       - id: require-exact-complete
         name: Require exact-complete terminal state

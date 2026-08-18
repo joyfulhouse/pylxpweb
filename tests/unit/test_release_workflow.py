@@ -37,8 +37,11 @@ _PACKAGE_INDEX_PUBLISHER = re.compile(
 _BINDING_TIMEOUT_SECONDS = 15.0
 _SUBPROCESS_WALL_MULTIPLIER = 20.0
 _SUBPROCESS_TAIL_BYTES = 1 << 20
+_SUBPROCESS_READER_JOIN_SECONDS = 2.0
+# The terminator must be a whole ``PY`` line: without the lookahead a body line
+# merely *starting* with ``PY`` would silently truncate the materialized script.
 _PYTHON_HEREDOC = re.compile(
-    r"python3 -(?P<args>[^\n]*(?:\\\n[^\n]*)*) <<'PY'\n(?P<body>.*?)\nPY",
+    r"python3 -(?P<args>[^\n]*(?:\\\n[^\n]*)*) <<'PY'\n(?P<body>.*?)\nPY(?=\n|$)",
     re.DOTALL,
 )
 
@@ -470,23 +473,28 @@ def _run_bounded_subprocess(
     last_progress = [started]
 
     def drain(stream: IO[bytes], key: str) -> None:
-        while chunk := os.read(stream.fileno(), 65536):
-            captured[key].append(chunk)
-            retained[key] += len(chunk)
-            while retained[key] > capture_tail_bytes and len(captured[key]) > 1:
-                oldest = captured[key].popleft()
-                retained[key] -= len(oldest)
-                dropped[key] += len(oldest)
-            if retained[key] > capture_tail_bytes:
-                excess = retained[key] - capture_tail_bytes
-                captured[key][0] = captured[key][0][excess:]
-                retained[key] -= excess
-                dropped[key] += excess
-            last_progress[0] = time.monotonic()
+        # OSError/ValueError terminate the drain when the parent closes the
+        # read end from under a reader blocked on a pipe an escaped descendant
+        # still holds open.
+        fd = stream.fileno()
+        with suppress(OSError, ValueError):
+            while chunk := os.read(fd, 65536):
+                captured[key].append(chunk)
+                retained[key] += len(chunk)
+                while retained[key] > capture_tail_bytes and len(captured[key]) > 1:
+                    oldest = captured[key].popleft()
+                    retained[key] -= len(oldest)
+                    dropped[key] += len(oldest)
+                if retained[key] > capture_tail_bytes:
+                    excess = retained[key] - capture_tail_bytes
+                    captured[key][0] = captured[key][0][excess:]
+                    retained[key] -= excess
+                    dropped[key] += excess
+                last_progress[0] = time.monotonic()
 
     readers = [
-        threading.Thread(target=drain, args=(stdout_pipe, "stdout")),
-        threading.Thread(target=drain, args=(stderr_pipe, "stderr")),
+        threading.Thread(target=drain, args=(stdout_pipe, "stdout"), daemon=True),
+        threading.Thread(target=drain, args=(stderr_pipe, "stderr"), daemon=True),
     ]
     for reader in readers:
         reader.start()
@@ -515,8 +523,22 @@ def _run_bounded_subprocess(
             os.killpg(process.pid, signal.SIGKILL)
         raise
     finally:
+        # A descendant that re-setsid'd or double-forked survives the group
+        # SIGKILL and keeps the captured pipes open, so joins must be bounded
+        # or pytest hangs despite both deadlines. On expiry, close the
+        # parent's read ends to force the drains to EOF/EBADF, then join once
+        # more; the readers are daemon threads so a reader stuck in a blocked
+        # read can never block interpreter exit.
+        deadline = time.monotonic() + _SUBPROCESS_READER_JOIN_SECONDS
         for reader in readers:
-            reader.join()
+            reader.join(timeout=max(0.0, deadline - time.monotonic()))
+        if any(reader.is_alive() for reader in readers):
+            for pipe in (stdout_pipe, stderr_pipe):
+                with suppress(OSError):
+                    pipe.close()
+            deadline = time.monotonic() + _SUBPROCESS_READER_JOIN_SECONDS
+            for reader in readers:
+                reader.join(timeout=max(0.0, deadline - time.monotonic()))
         stdout_pipe.close()
         stderr_pipe.close()
         returncode = process.wait()
@@ -601,6 +623,19 @@ def _run_binding(
     )
 
 
+def _assert_reader_threads_settled(threads_before: int) -> None:
+    """Reader threads must wind down after the harness returns.
+
+    Uses a bounded retry and a ``<=`` comparison instead of exact equality:
+    unrelated interpreter threads can start or stop under load, and exact
+    ``threading.active_count()`` equality is flaky on loaded CI runners.
+    """
+    deadline = time.monotonic() + 5.0
+    while threading.active_count() > threads_before and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert threading.active_count() <= threads_before
+
+
 def test_bounded_subprocess_terminates_entire_child_group(tmp_path: Path) -> None:
     """A timed-out shell must not leave descendants holding captured pipes open."""
     started = time.monotonic()
@@ -614,23 +649,64 @@ def test_bounded_subprocess_terminates_entire_child_group(tmp_path: Path) -> Non
     assert time.monotonic() - started < 2
 
 
+def test_bounded_subprocess_join_stays_bounded_when_descendant_escapes_group(
+    tmp_path: Path,
+) -> None:
+    """A re-setsid'd descendant surviving the group SIGKILL cannot hang pytest.
+
+    The escaped child inherits the captured pipes and keeps them open for 30
+    seconds after the group is killed, so an unbounded ``reader.join()`` would
+    block until the child exits. The harness must instead give up on the
+    readers within its bounded join budget and raise the timeout promptly.
+    """
+    escaped = (
+        f"{shlex.quote(sys.executable)} -c "
+        '"import os, time; os.setsid(); time.sleep(30)" & sleep 30'
+    )
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run_bounded_subprocess(
+            ["bash", "-c", escaped],
+            cwd=tmp_path,
+            env=os.environ.copy(),
+            timeout_seconds=0.3,
+        )
+    assert time.monotonic() - started < 15
+
+
+def test_heredoc_materialization_keeps_body_lines_starting_with_py(tmp_path: Path) -> None:
+    """A heredoc body line starting with ``PY`` is body, not the terminator.
+
+    Without a line-anchored terminator the materialized script is silently
+    truncated at the first ``PY``-prefixed body line and the sync assertions
+    in ``_materialize_python_heredocs`` cannot catch it.
+    """
+    script = "python3 - <<'PY'\nx = 1\nPY_MARKER = 2\nprint(x + PY_MARKER)\nPY\n"
+    materialized = _materialize_python_heredocs(script, tmp_path)
+    body_path = tmp_path / "yaml-script" / "heredoc-0.py"
+    assert body_path.read_text() == "x = 1\nPY_MARKER = 2\nprint(x + PY_MARKER)\n"
+    assert "PY_MARKER" not in materialized
+
+
 def test_bounded_subprocess_tolerates_slow_but_progressing_child(tmp_path: Path) -> None:
     """The deadline bounds silence, not total runtime.
 
     A child whose output gaps stay under the deadline must run to completion
     even when its total runtime exceeds the deadline several times over, and
-    the harness must not leave reader threads behind afterwards.
+    the harness must not leave reader threads behind afterwards. The 1-second
+    silence deadline leaves ~20x margin over the 0.05-second cadence so a
+    loaded CI runner cannot stretch one gap past the deadline.
     """
     threads_before = threading.active_count()
     result = _run_bounded_subprocess(
-        ["bash", "-c", 'for i in $(seq 20); do echo "tick $i"; sleep 0.05; done'],
+        ["bash", "-c", 'for i in $(seq 60); do echo "tick $i"; sleep 0.05; done'],
         cwd=tmp_path,
         env=os.environ.copy(),
-        timeout_seconds=0.3,
+        timeout_seconds=1.0,
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == [f"tick {i}" for i in range(1, 21)]
-    assert threading.active_count() == threads_before
+    assert result.stdout.splitlines() == [f"tick {i}" for i in range(1, 61)]
+    _assert_reader_threads_settled(threads_before)
 
 
 def test_bounded_subprocess_kills_child_that_stops_progressing(tmp_path: Path) -> None:
@@ -646,7 +722,7 @@ def test_bounded_subprocess_kills_child_that_stops_progressing(tmp_path: Path) -
         )
     assert time.monotonic() - started < 2
     assert "made progress" in (excinfo.value.output or "")
-    assert threading.active_count() == threads_before
+    _assert_reader_threads_settled(threads_before)
 
 
 def test_bounded_subprocess_enforces_wall_deadline_despite_progress(tmp_path: Path) -> None:
@@ -664,7 +740,7 @@ def test_bounded_subprocess_enforces_wall_deadline_despite_progress(tmp_path: Pa
     assert time.monotonic() - started < 3
     assert excinfo.value.timeout == 0.4
     assert "still alive" in (excinfo.value.output or "")
-    assert threading.active_count() == threads_before
+    _assert_reader_threads_settled(threads_before)
 
 
 def test_bounded_subprocess_default_wall_deadline_is_finite() -> None:
@@ -2029,17 +2105,97 @@ def test_terminal_verifier_succeeds_only_for_exact_complete(state: str, tmp_path
 
 
 def test_production_classifier_worst_case_fits_verifier_timeout() -> None:
-    """Two snapshots and both byte downloads leave at least five minutes of headroom."""
+    """Bounded ABSENT rechecks and both byte downloads leave five minutes of headroom."""
     job = _job("verify-pypi")
     env = _step("verify-pypi", "classify-pypi-state")["env"]
+    attempts = int(env["ABSENT_RECHECK_MAX_ATTEMPTS"])
+    retry_base = int(env["ABSENT_RECHECK_BASE_SECONDS"])
+    snapshot_pair = 2 * int(env["INDEX_TOTAL_SECONDS"]) + int(env["SNAPSHOT_DELAY_SECONDS"])
+    backoff = sum(min(recheck * retry_base, 30) for recheck in range(1, attempts))
     classifier_worst_case = (
-        2 * int(env["INDEX_TOTAL_SECONDS"])
-        + 2 * int(env["DOWNLOAD_TOTAL_SECONDS"])
-        + int(env["SNAPSHOT_DELAY_SECONDS"])
+        attempts * snapshot_pair + backoff + 2 * int(env["DOWNLOAD_TOTAL_SECONDS"])
     )
     assert int(job["timeout-minutes"]) * 60 - classifier_worst_case >= 300
     assert int(env["SOCKET_TIMEOUT_SECONDS"]) < int(env["INDEX_TOTAL_SECONDS"])
     assert "signal.setitimer" in _step("verify-pypi", "classify-pypi-state")["run"]
+    prepare_env = _step("prepare-pypi", "classify-pypi-state")["env"]
+    prepare_worst_case = snapshot_pair + 2 * int(prepare_env["DOWNLOAD_TOTAL_SECONDS"])
+    assert int(_job("prepare-pypi")["timeout-minutes"]) * 60 - prepare_worst_case >= 300
+
+
+def test_verify_pypi_retries_absent_but_prepare_classifies_once() -> None:
+    """Prepare must keep single-pass semantics; only terminal verification retries.
+
+    A retrying prepare could wait out genuine absence differently than the
+    reviewed publish gate expects, while a non-retrying terminal verifier fails
+    the happy path on routine PyPI index-propagation lag after publish-pypi.
+    """
+    prepare_env = _step("prepare-pypi", "classify-pypi-state")["env"]
+    verify_env = _step("verify-pypi", "classify-pypi-state")["env"]
+    assert int(prepare_env["ABSENT_RECHECK_MAX_ATTEMPTS"]) == 1
+    assert int(verify_env["ABSENT_RECHECK_MAX_ATTEMPTS"]) > 1
+    assert int(verify_env["ABSENT_RECHECK_BASE_SECONDS"]) > 0
+    # The retry knob is the only permitted divergence between the two envs.
+    divergent = {
+        key
+        for key in prepare_env.keys() | verify_env.keys()
+        if prepare_env.get(key) != verify_env.get(key)
+    }
+    assert divergent == {"ABSENT_RECHECK_MAX_ATTEMPTS", "ABSENT_RECHECK_BASE_SECONDS"}
+
+
+def test_pypi_classifier_rechecks_absent_within_bounded_attempts(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+) -> None:
+    """An ABSENT snapshot pair is re-taken until stable evidence appears."""
+    base_url, server = package_index_server
+    _, payload = _prepare_index_case(tmp_path, base_url, server)
+    server["index_responses"] = [404, 404, 404, 404, payload, payload]
+    result, state = _run_pypi_classifier(
+        tmp_path,
+        base_url,
+        env_overrides={
+            "ABSENT_RECHECK_MAX_ATTEMPTS": "5",
+            "ABSENT_RECHECK_BASE_SECONDS": "0",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert state == "EXACT_COMPLETE"
+    assert server["index_calls"] == 6
+
+
+@pytest.mark.parametrize(
+    ("responses", "expected_state", "expected_calls"),
+    [
+        # Persistent absence exhausts the bounded budget and stays ABSENT.
+        ([404, 404, 404, 404, 404, 404], "ABSENT", 6),
+        # Snapshot instability is UNCERTAIN and must not consume retry budget.
+        ([404, "payload", 404, 404], "UNCERTAIN", 2),
+    ],
+)
+def test_pypi_classifier_absent_recheck_is_bounded_and_absent_only(
+    tmp_path: Path,
+    package_index_server: tuple[str, dict[str, Any]],
+    responses: list[Any],
+    expected_state: str,
+    expected_calls: int,
+) -> None:
+    """Only a stable ABSENT pair retries; the per-attempt stability rule survives."""
+    base_url, server = package_index_server
+    _, payload = _prepare_index_case(tmp_path, base_url, server)
+    server["index_responses"] = [payload if item == "payload" else item for item in responses]
+    result, state = _run_pypi_classifier(
+        tmp_path,
+        base_url,
+        env_overrides={
+            "ABSENT_RECHECK_MAX_ATTEMPTS": "3",
+            "ABSENT_RECHECK_BASE_SECONDS": "0",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert state == expected_state
+    assert server["index_calls"] == expected_calls
 
 
 def test_production_classifier_pins_https_pypi_index_origin() -> None:
@@ -2097,6 +2253,55 @@ def test_only_absent_state_can_reach_action_only_production_publisher() -> None:
     # Only prepare-pypi evidence steps may tolerate failure: they funnel into an
     # UNCERTAIN prepare result so the sole terminal verifier still runs and fails.
     assert tolerated == [("prepare-pypi", step_id) for step_id in _PREPARE_EVIDENCE_STEPS]
+
+
+# CI-only artifact-action contract facts, verified 2026-08-18 against the pinned
+# actions' committed sources (evidence, including the verified file hashes, lives
+# in .github/WORKFLOWS.md under "Pinned artifact-action contract evidence"):
+# - actions/download-artifact `action.yml` declares the `digest-mismatch` input
+#   (unknown action inputs are silently ignored, so existence at the exact pin is
+#   load-bearing) and `src/download-artifact.ts` selects `resolvedPath` whenever
+#   `artifacts.length === 1`, so a single-`artifact-ids` download extracts flat
+#   into `path:`, not into a per-artifact subdirectory.
+# - actions/upload-artifact `action.yml` declares the `artifact-digest` output and
+#   `src/shared/upload-artifact.ts` emits the toolkit's bare-hex SHA-256 (no
+#   `sha256:` prefix), matching the workflow's `[0-9a-f]{64}` fullmatch.
+_VERIFIED_ARTIFACT_ACTION_CONTRACTS = {
+    "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c": (
+        "e98559b7a31ba31be4709f20d22102dc2737fa630f69a339eb89981151e505fe"
+    ),
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a": (
+        "c5979822866a72362e609844b6ebe77d4b7e759af68cc1c2c425dcf51481fab4"
+    ),
+}
+
+
+def test_artifact_action_pins_match_recorded_contract_verification() -> None:
+    """Every artifact-action pin must carry recorded contract evidence.
+
+    Bumping either pin invalidates the recorded verification of the CI-only
+    contract facts above, so the new SHA must be re-verified and both this map
+    and the WORKFLOWS.md evidence note updated before the pin can land.
+    """
+    used = {
+        step["uses"]
+        for job in _workflow()["jobs"].values()
+        for step in job["steps"]
+        if step.get("uses", "").split("@")[0]
+        in {"actions/download-artifact", "actions/upload-artifact"}
+    }
+    assert used == set(_VERIFIED_ARTIFACT_ACTION_CONTRACTS)
+    evidence = (_ROOT / ".github" / "WORKFLOWS.md").read_text()
+    for pin, action_yml_sha256 in _VERIFIED_ARTIFACT_ACTION_CONTRACTS.items():
+        assert pin.split("@")[1] in evidence
+        assert action_yml_sha256 in evidence
+    # The digest binding only holds if every by-id download opts into hard failure.
+    for job in _workflow()["jobs"].values():
+        for step in job["steps"]:
+            if "download-artifact@" in step.get("uses", ""):
+                with_options = step.get("with", {})
+                if "artifact-ids" in with_options:
+                    assert with_options["digest-mismatch"] == "error"
 
 
 def test_all_release_actions_are_immutable_full_sha_pins() -> None:
