@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from collections.abc import Iterator
 from contextlib import suppress
 from pathlib import Path
@@ -34,6 +35,8 @@ _PACKAGE_INDEX_PUBLISHER = re.compile(
     re.IGNORECASE,
 )
 _BINDING_TIMEOUT_SECONDS = 15.0
+_SUBPROCESS_WALL_MULTIPLIER = 20.0
+_SUBPROCESS_TAIL_BYTES = 1 << 20
 _PYTHON_HEREDOC = re.compile(
     r"python3 -(?P<args>[^\n]*(?:\\\n[^\n]*)*) <<'PY'\n(?P<body>.*?)\nPY",
     re.DOTALL,
@@ -436,10 +439,17 @@ def _run_bounded_subprocess(
     cwd: Path,
     env: dict[str, str],
     timeout_seconds: float,
+    wall_timeout_seconds: float | None = None,
+    capture_tail_bytes: int = _SUBPROCESS_TAIL_BYTES,
 ) -> subprocess.CompletedProcess[str]:
-    # The deadline bounds *silence*, not total runtime: a child that keeps
-    # writing to either captured pipe stays alive, while one that produces no
-    # output for timeout_seconds is killed with its whole process group.
+    # Two independent deadlines: timeout_seconds bounds *silence* (a child that
+    # keeps writing to either captured pipe stays alive), wall_timeout_seconds
+    # bounds *total runtime* even while output keeps arriving. Either firing
+    # kills the whole process group. Captured output is a bounded tail: only
+    # the most recent capture_tail_bytes per stream are retained, with a
+    # truncation notice when earlier bytes were dropped.
+    if wall_timeout_seconds is None:
+        wall_timeout_seconds = timeout_seconds * _SUBPROCESS_WALL_MULTIPLIER
     process = subprocess.Popen(
         args,
         cwd=cwd,
@@ -453,12 +463,25 @@ def _run_bounded_subprocess(
     stdout_pipe = process.stdout
     stderr_pipe = process.stderr
     assert stdout_pipe is not None and stderr_pipe is not None
-    captured: dict[str, list[bytes]] = {"stdout": [], "stderr": []}
-    last_progress = [time.monotonic()]
+    captured: dict[str, deque[bytes]] = {"stdout": deque(), "stderr": deque()}
+    retained = {"stdout": 0, "stderr": 0}
+    dropped = {"stdout": 0, "stderr": 0}
+    started = time.monotonic()
+    last_progress = [started]
 
     def drain(stream: IO[bytes], key: str) -> None:
         while chunk := os.read(stream.fileno(), 65536):
             captured[key].append(chunk)
+            retained[key] += len(chunk)
+            while retained[key] > capture_tail_bytes and len(captured[key]) > 1:
+                oldest = captured[key].popleft()
+                retained[key] -= len(oldest)
+                dropped[key] += len(oldest)
+            if retained[key] > capture_tail_bytes:
+                excess = retained[key] - capture_tail_bytes
+                captured[key][0] = captured[key][0][excess:]
+                retained[key] -= excess
+                dropped[key] += excess
             last_progress[0] = time.monotonic()
 
     readers = [
@@ -469,17 +492,23 @@ def _run_bounded_subprocess(
         reader.start()
 
     def decoded(key: str) -> str:
-        return b"".join(captured[key]).decode(errors="replace")
+        text = b"".join(captured[key]).decode(errors="replace")
+        if dropped[key]:
+            return f"[... {dropped[key]} bytes dropped ...]\n{text}"
+        return text
 
+    expired_deadline: float | None = None
     try:
         while process.poll() is None or any(reader.is_alive() for reader in readers):
-            if time.monotonic() - last_progress[0] >= timeout_seconds:
-                raise subprocess.TimeoutExpired(
-                    args,
-                    timeout_seconds,
-                    output=decoded("stdout"),
-                    stderr=decoded("stderr"),
-                )
+            now = time.monotonic()
+            if now - started >= wall_timeout_seconds:
+                expired_deadline = wall_timeout_seconds
+            elif now - last_progress[0] >= timeout_seconds:
+                expired_deadline = timeout_seconds
+            if expired_deadline is not None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                break
             time.sleep(0.01)
     except BaseException:
         with suppress(ProcessLookupError):
@@ -493,7 +522,15 @@ def _run_bounded_subprocess(
             reader.join()
         stdout_pipe.close()
         stderr_pipe.close()
-    return subprocess.CompletedProcess(args, process.wait(), decoded("stdout"), decoded("stderr"))
+    returncode = process.wait()
+    if expired_deadline is not None:
+        raise subprocess.TimeoutExpired(
+            args,
+            expired_deadline,
+            output=decoded("stdout"),
+            stderr=decoded("stderr"),
+        )
+    return subprocess.CompletedProcess(args, returncode, decoded("stdout"), decoded("stderr"))
 
 
 def _materialize_python_heredocs(script: str, tmp_path: Path) -> str:
@@ -613,6 +650,71 @@ def test_bounded_subprocess_kills_child_that_stops_progressing(tmp_path: Path) -
     assert time.monotonic() - started < 2
     assert "made progress" in (excinfo.value.output or "")
     assert threading.active_count() == threads_before
+
+
+def test_bounded_subprocess_enforces_wall_deadline_despite_progress(tmp_path: Path) -> None:
+    """A child that keeps emitting output must still die at the wall deadline."""
+    threads_before = threading.active_count()
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        _run_bounded_subprocess(
+            ["bash", "-c", 'while true; do echo "still alive"; sleep 0.02; done'],
+            cwd=tmp_path,
+            env=os.environ.copy(),
+            timeout_seconds=5.0,
+            wall_timeout_seconds=0.4,
+        )
+    assert time.monotonic() - started < 3
+    assert excinfo.value.timeout == 0.4
+    assert "still alive" in (excinfo.value.output or "")
+    assert threading.active_count() == threads_before
+
+
+def test_bounded_subprocess_default_wall_deadline_is_finite() -> None:
+    """Omitting the wall deadline must still yield a hard total-runtime bound."""
+    assert _SUBPROCESS_WALL_MULTIPLIER > 1
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        _run_bounded_subprocess(
+            ["bash", "-c", 'while true; do echo "still alive"; done'],
+            cwd=Path.cwd(),
+            env=os.environ.copy(),
+            timeout_seconds=0.1,
+        )
+    assert time.monotonic() - started < 5
+    assert excinfo.value.timeout == pytest.approx(0.1 * _SUBPROCESS_WALL_MULTIPLIER)
+
+
+def test_bounded_subprocess_retains_bounded_tail_of_output(tmp_path: Path) -> None:
+    """Retained output stays bounded while the diagnostic tail survives."""
+    result = _run_bounded_subprocess(
+        ["bash", "-c", 'for i in $(seq 2000); do echo "line $i"; done'],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+        timeout_seconds=5.0,
+        capture_tail_bytes=1024,
+    )
+    assert result.returncode == 0
+    assert len(result.stdout.encode()) < 1024 + 200
+    assert result.stdout.startswith("[... ")
+    assert "bytes dropped ...]" in result.stdout
+    assert result.stdout.rstrip().endswith("line 2000")
+
+
+def test_bounded_subprocess_bounds_memory_of_endlessly_emitting_child(tmp_path: Path) -> None:
+    """A killed chatty child leaves a bounded diagnostic, not unbounded capture."""
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        _run_bounded_subprocess(
+            ["bash", "-c", 'while true; do echo "flood flood flood flood"; done'],
+            cwd=tmp_path,
+            env=os.environ.copy(),
+            timeout_seconds=5.0,
+            wall_timeout_seconds=0.4,
+            capture_tail_bytes=2048,
+        )
+    output = excinfo.value.output or ""
+    assert len(output.encode()) < 2048 + 200
+    assert "flood" in output
 
 
 def test_harness_never_hands_bash_a_python_heredoc(
