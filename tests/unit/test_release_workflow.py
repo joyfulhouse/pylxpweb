@@ -513,16 +513,13 @@ def _run_bounded_subprocess(
     except BaseException:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-        for reader in readers:
-            reader.join()
-        process.wait()
         raise
     finally:
         for reader in readers:
             reader.join()
         stdout_pipe.close()
         stderr_pipe.close()
-    returncode = process.wait()
+        returncode = process.wait()
     if expired_deadline is not None:
         raise subprocess.TimeoutExpired(
             args,
