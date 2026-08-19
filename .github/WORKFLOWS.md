@@ -83,7 +83,7 @@ distribution download at 60 seconds.
    which for this job serves only the protected-tag branch policy — it has
    no required reviewers, so nothing in the release path waits for a manual
    approval. The environment's OIDC trusted-publisher scoping matters only for
-   `publish-pypi`, the sole production job granted `id-token: write`. It does not trust only prior job outputs: it queries the Actions run and artifact
+   `publish-pypi`, the sole job using the production trusted-publisher binding. It does not trust only prior job outputs: it queries the Actions run and artifact
    APIs for `github.run_id`, requires exactly one non-expired sealed artifact with
    the expected repository, release run, head, deterministic name, and upload
    digest, then downloads it by artifact ID with digest mismatch set to an error.
