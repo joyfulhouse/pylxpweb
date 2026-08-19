@@ -79,8 +79,10 @@ seconds for artifact download, checksums, attestation verification, and runner
 overhead. A 10-second socket timeout only detects inactivity; a process-level
 total-transfer deadline separately caps each index request at 30 seconds and each
 distribution download at 60 seconds.
-7. `prepare-pypi` has no OIDC and is itself protected by the `pypi` environment.
-   It does not trust only prior job outputs: it queries the Actions run and artifact
+7. `prepare-pypi` has no OIDC and runs in the `pypi` environment, which provides
+   OIDC trusted-publisher scoping and protected-tag branch policy only — it has
+   no required reviewers, so nothing in the release path waits for a manual
+   approval. It does not trust only prior job outputs: it queries the Actions run and artifact
    APIs for `github.run_id`, requires exactly one non-expired sealed artifact with
    the expected repository, release run, head, deterministic name, and upload
    digest, then downloads it by artifact ID with digest mismatch set to an error.
@@ -189,7 +191,7 @@ attestation to expose the same GitHub run or attempt as a PyPI-enforced property
 ### Required repository settings
 
 The workflow cannot create or repair these external controls. Verify them before
-unfreezing publication and again during release review:
+unfreezing publication and again at each release:
 
 - `main` is protected: direct pushes are prevented, `CI Success` is required,
   the branch must be up to date, bypass is prevented, and the final
@@ -198,10 +200,15 @@ unfreezing publication and again during release review:
   repository and bot/self merges are acceptable.
 - A tag ruleset protects `v*` tags from update and deletion except for the narrow,
   audited recovery operation described below.
-- The `pypi` environment requires a deployment reviewer (the maintainer — the
-  explicit human promotion decision), limits deployments to protected `v*`
-  tags, and disallows administrator bypass.
-- The `testpypi` environment limits deployments to protected `v*` tags.
+- The `pypi` environment has **no required reviewers**; publication runs
+  unattended end-to-end once the GitHub Release exists (verified live
+  2026-08-19: `gh api repos/joyfulhouse/pylxpweb/environments/pypi
+  -q '[.protection_rules[].type]'` returns `["branch_policy"]`). The
+  environment remains for OIDC trusted-publisher scoping and its branch
+  policy, which limits deployments to protected `v*` tags; administrator
+  bypass remains disallowed.
+- The `testpypi` environment likewise has no required reviewers and limits
+  deployments to protected `v*` tags.
 - PyPI and TestPyPI trusted-publisher bindings match this repository, the
   `release.yml` workflow, and their respective environment names.
 - The repository remains public. Checkout credentials are deliberately not
@@ -220,13 +227,13 @@ or mutate repository, environment, or package-index settings.
 3. Merge with GitHub **Create a merge commit**. Do not squash or rebase.
 4. Confirm no later commit has reached `main`, then create the protected `v*` tag
    on that GitHub merge commit and publish the GitHub Release for the same tag.
-5. Review the identity and attestation summaries after TestPyPI verification, then
-   approve the protected `pypi` environment for `prepare-pypi` if every value
-   matches the candidate. Each job that references an environment is separately
-   protected. An `EXACT_COMPLETE` recovery needs only the prepare approval because
-   the publisher skips. An `ABSENT` path normally asks for a second `pypi` approval
-   when `publish-pypi` becomes pending; approve it only after reviewing the fresh
-   `ABSENT` summary. Never approve a publisher job directly as a recovery shortcut.
+5. No approval step exists. Once the GitHub Release is published, the pipeline
+   runs unattended through TestPyPI verification, PyPI classification,
+   publication, and the terminal verifier — the `pypi` environment scopes the
+   OIDC identity and enforces the protected-tag branch policy but gates on no
+   reviewer. As an OPTIONAL post-hoc audit, the maintainer may review the
+   identity, attestation, and classifier summaries on the run — they are still
+   emitted for every job — but the release does not wait on that review.
 
 ### Recovery at the sealing boundary
 
@@ -237,9 +244,10 @@ or mutate repository, environment, or package-index settings.
   release tag. Do not retarget or recreate the old candidate tag.
 - Movement of `main` after the sealing check does not change the sealed artifact.
   The bound commit/tree/PR/workflow/container and attestation results remain visible
-  in the summaries. Treat the protected-environment approval as the explicit human
-  decision whether to promote that sealed candidate or reject it and use the new
-  candidate procedure above.
+  in the summaries. There is no approval gate: the sealed candidate promotes
+  automatically once its classifier permits. To reject it instead, cancel the
+  workflow run before `publish-pypi` completes and use the new candidate
+  procedure above.
 - If TestPyPI or PyPI contains unexpected or mismatched files, stop. Package-index
   files are immutable; do not use `skip-existing` in production and do not rebuild
   under the same version. Investigate before preparing a new version.
@@ -262,10 +270,9 @@ gh run rerun --repo joyfulhouse/pylxpweb --job "$prepare_job_id"
 ```
 
 - **Failure before upload / clean absence:** MUST rerun `prepare-pypi` and its
-  dependents as above. After protected-environment approval, two clean absence
-  snapshots permit one full-set publisher attempt. A verifier result of `ABSENT`
-  means the attempt did not complete; use the same recovery invocation, not the
-  publisher job.
+  dependents as above. Two clean absence snapshots permit one full-set publisher
+  attempt. A verifier result of `ABSENT` means the attempt did not complete; use
+  the same recovery invocation, not the publisher job.
 - **Lost publisher response / exact complete:** MUST use the same recovery
   invocation. Fresh `EXACT_COMPLETE` classification skips the publisher and the
   terminal verifier completes from the sealed artifact and exact remote bytes.
@@ -275,16 +282,16 @@ gh run rerun --repo joyfulhouse/pylxpweb --job "$prepare_job_id"
 - **Mismatch, yanked, extra, or competing publication:** MUST stop publication,
   preserve all evidence, and begin the compromise assessment below before creating
   a new version. Do not normalize, delete, or overwrite remote evidence.
-- **Uncertain evidence:** MUST NOT approve or publish. Retry only `prepare-pypi`
-  and its dependent verifier/classifier path after the transient condition is
+- **Uncertain evidence:** MUST NOT publish. Retry only `prepare-pypi` and its
+  dependent verifier/classifier path after the transient condition is
   understood. Repeated uncertainty is not evidence of absence.
 - **Missing, expired, duplicated, or unverifiable sealed artifact/attestation:**
   MUST treat the run as `UNCERTAIN`; never rebuild under the same version. If the
   original 30-day artifact cannot be recovered, prepare a new version through the
   normal release process.
 - **Compromise or revocation:** MUST follow the response steps below, including
-  canceling pending approvals and disabling trusted-publisher authority before any
-  new release. Normal recovery does not authorize tag/Release cleanup.
+  canceling in-progress release runs and disabling trusted-publisher authority
+  before any new release. Normal recovery does not authorize tag/Release cleanup.
 
 An operator **MAY** additionally inspect PyPI's Integrity API publish attestation
 for the expected repository, `release.yml`, tag, and `pypi` environment identity
@@ -296,7 +303,7 @@ same-run or same-attempt binding that PyPI does not enforce and expose reliably.
 
 If a release workflow or authorized GitHub identity may be compromised:
 
-1. Cancel active release workflow runs and pending environment approvals.
+1. Cancel active release workflow runs.
 2. Disable the `pypi` and `testpypi` environments or remove the corresponding
    trusted-publisher bindings so no new package-index identity can be minted.
 3. Audit the compromised GitHub identity and revoke its sessions, tokens, and
@@ -340,7 +347,9 @@ the GitHub-hosted release event, protected environments, and trusted publishing.
 - A TestPyPI verification failure means the remote name, version, filenames,
   yanked state, hashes, or downloaded distributions did not match the sealed
   artifact.
-- A PyPI job waiting for approval is enforcing the production environment gate.
+- A PyPI job that has not started is waiting on its upstream jobs, not on an
+  approval: the `pypi` environment has no required reviewers, so no release job
+  ever pauses for a reviewer.
 - An OIDC failure requires checking the corresponding trusted-publisher binding;
   do not add long-lived package-index credentials.
 
