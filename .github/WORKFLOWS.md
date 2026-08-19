@@ -79,10 +79,11 @@ seconds for artifact download, checksums, attestation verification, and runner
 overhead. A 10-second socket timeout only detects inactivity; a process-level
 total-transfer deadline separately caps each index request at 30 seconds and each
 distribution download at 60 seconds.
-7. `prepare-pypi` has no OIDC and runs in the `pypi` environment, which provides
-   OIDC trusted-publisher scoping and protected-tag branch policy only — it has
+7. `prepare-pypi` has no OIDC permission and runs in the `pypi` environment,
+   which for this job serves only the protected-tag branch policy — it has
    no required reviewers, so nothing in the release path waits for a manual
-   approval. It does not trust only prior job outputs: it queries the Actions run and artifact
+   approval. The environment's OIDC trusted-publisher scoping matters only for
+   `publish-pypi`, the sole production job granted `id-token: write`. It does not trust only prior job outputs: it queries the Actions run and artifact
    APIs for `github.run_id`, requires exactly one non-expired sealed artifact with
    the expected repository, release run, head, deterministic name, and upload
    digest, then downloads it by artifact ID with digest mismatch set to an error.
@@ -191,7 +192,7 @@ attestation to expose the same GitHub run or attempt as a PyPI-enforced property
 ### Required repository settings
 
 The workflow cannot create or repair these external controls. Verify them before
-unfreezing publication and again at each release:
+the first release after any settings change and again at each release:
 
 - `main` is protected: direct pushes are prevented, `CI Success` is required,
   the branch must be up to date, bypass is prevented, and the final
@@ -203,10 +204,12 @@ unfreezing publication and again at each release:
 - The `pypi` environment has **no required reviewers**; publication runs
   unattended end-to-end once the GitHub Release exists (verified live
   2026-08-19: `gh api repos/joyfulhouse/pylxpweb/environments/pypi
-  -q '[.protection_rules[].type]'` returns `["branch_policy"]`). The
-  environment remains for OIDC trusted-publisher scoping and its branch
+  -q '{protection_rules: [.protection_rules[].type], can_admins_bypass}'`
+  returns `{"can_admins_bypass":false,"protection_rules":["branch_policy"]}`).
+  The environment remains for OIDC trusted-publisher scoping and its branch
   policy, which limits deployments to protected `v*` tags; administrator
-  bypass remains disallowed.
+  bypass remains disallowed (`can_admins_bypass` is `false` in the same
+  verified response).
 - The `testpypi` environment likewise has no required reviewers and limits
   deployments to protected `v*` tags.
 - PyPI and TestPyPI trusted-publisher bindings match this repository, the
@@ -246,8 +249,16 @@ or mutate repository, environment, or package-index settings.
   The bound commit/tree/PR/workflow/container and attestation results remain visible
   in the summaries. There is no approval gate: the sealed candidate promotes
   automatically once its classifier permits. To reject it instead, cancel the
-  workflow run before `publish-pypi` completes and use the new candidate
-  procedure above.
+  workflow run **before `publish-pypi` starts**. `publish-pypi` is only an
+  artifact-download step plus the PyPA publisher step, so an upload can land
+  before a later cancellation takes effect; once the publisher step has begun,
+  treat the candidate as possibly published until `verify-pypi` or direct PyPI
+  index evidence proves otherwise. If cancellation misses and the version
+  published, the version stands — or is burned under the `PARTIAL`/`MISMATCH`
+  rules of the state table and recovery runbook below. Never delete the GitHub
+  Release or tag of a published version; prepare a new version instead. Only a
+  run cancelled before `publish-pypi` starts is certainly unpublished, and only
+  then does the new-candidate procedure above apply.
 - If TestPyPI or PyPI contains unexpected or mismatched files, stop. Package-index
   files are immutable; do not use `skip-existing` in production and do not rebuild
   under the same version. Investigate before preparing a new version.
