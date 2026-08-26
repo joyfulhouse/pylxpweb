@@ -256,6 +256,16 @@ class HybridTransport(BaseTransport):
         self._connected = False
         _LOGGER.debug("Hybrid transport shut down for %s", self._serial)
 
+    # NOTE: HybridTransport deliberately does NOT expose ``check_link()``
+    # (the cheap dead-endpoint probe the direct local transports offer for
+    # eg4_web_monitor#587).  Devices built from a HybridTransport have no
+    # cloud client of their own — this transport IS the HTTP fallback — so
+    # a failed cheap probe would skip read_runtime() and with it the
+    # internal ``_with_fallback`` HTTP path, freezing data whenever the
+    # local side is down.  The full-read probe stays cheap here anyway:
+    # ``_with_fallback`` marks the local side failed and routes straight to
+    # HTTP until ``local_retry_interval`` expires.
+
     async def read_runtime(self) -> InverterRuntimeData:
         """Read runtime data, preferring local transport.
 

@@ -45,7 +45,7 @@ from .exceptions import (
     TransportWriteError,
 )
 from .observation import RegisterObserver
-from .protocol import BaseTransport
+from .protocol import LINK_PROBE_TIMEOUT_SECONDS, BaseTransport
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
@@ -96,6 +96,10 @@ _SHUTDOWN_CLOSE_TIMEOUT = 0.25
 DEFAULT_WRITE_RETRIES = 2  # sequence-level retries (3 attempts total)
 DEFAULT_WRITE_STEP_DELAY = 0.2  # settle delay before write/verify steps (s)
 WRITE_RETRY_DELAY = 0.5  # base backoff between sequence attempts (s)
+# Connect allowance on top of the probe response budget: covers the connect
+# retry ladder for refused/unreachable endpoints without paying the full dial
+# sequence (check_link outer bound).
+_LINK_PROBE_CONNECT_GRACE_SECONDS = 3.0
 VERIFY_MAX_REGISTERS = 3  # skip readback verification above this many registers
 
 
@@ -815,6 +819,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         expected_register: int | None = None,
         expected_count: int | None = None,
         retry_on_timeout: bool = False,
+        timeout_override: float | None = None,
     ) -> list[int]:
         """Send a packet and receive response with retry logic.
 
@@ -848,6 +853,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 (register writes resend the same absolute values).  Reads
                 keep fail-fast behavior: raise on the first timeout and let
                 the caller's next poll reconnect.
+            timeout_override: Response-wait budget for this request only,
+                replacing the transport's default ``timeout`` (used by the
+                cheap ``check_link`` probe).
 
         Returns:
             List of register values from response
@@ -903,7 +911,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # fragmented reads do not each restart the timeout.
                     response = await asyncio.wait_for(
                         self._receive_frame(),
-                        timeout=self._timeout,
+                        timeout=timeout_override if timeout_override is not None else self._timeout,
                     )
                     self._raise_if_shutdown()
 
@@ -1305,6 +1313,57 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             )
 
         return registers
+
+    async def check_link(self) -> bool:
+        """Cheap link-down probe: one read, single attempt, short timeout.
+
+        The production failure mode this bounds: the dongle accepts TCP but
+        never answers (wedged firmware, blocked port 8000), so a normal read
+        pays the full response timeout (default 10 s) inside every
+        coordinator refresh while the link is down — Home Assistant absorbs
+        that into the effective poll interval (eg4_web_monitor#587).
+
+        The outer bound also caps the connect retry ladder for
+        connection-refused endpoints.  Any exception — including the outer
+        cancellation — reports the link as down; ``_send_receive`` already
+        tears the connection down on response timeouts, and the explicit
+        teardown after an outer cancellation guarantees the next probe
+        dials fresh.
+
+        The outer budget is not a strict wall-clock bound: ``wait_for``
+        awaits cancellation cleanup, and a cancel landing inside
+        ``connect()`` awaits ``_close_connection`` (itself bounded).  Worst
+        case the probe approaches ~2x the budget — still far below the
+        default 10s response timeout it replaces.
+        """
+        packet = self._build_packet(
+            tcp_func=TCP_FUNC_TRANSLATED,
+            modbus_func=MODBUS_READ_INPUT,
+            start_register=0,
+            register_count=1,
+        )
+        try:
+            await asyncio.wait_for(
+                self._send_receive(
+                    packet,
+                    max_retries=0,
+                    expected_func=MODBUS_READ_INPUT,
+                    expected_register=0,
+                    timeout_override=LINK_PROBE_TIMEOUT_SECONDS,
+                ),
+                timeout=LINK_PROBE_TIMEOUT_SECONDS + _LINK_PROBE_CONNECT_GRACE_SECONDS,
+            )
+        except TimeoutError:
+            # Outer budget hit (e.g. connect stalled): the cancellation may
+            # have left a half-established connection — tear it down so the
+            # next probe dials fresh.
+            await self._force_reconnect()
+            _LOGGER.debug("[%s] Link probe exceeded its budget", self._serial)
+            return False
+        except (TransportError, OSError) as err:
+            _LOGGER.debug("[%s] Link probe failed: %s", self._serial, err)
+            return False
+        return True
 
     async def _read_input_registers(
         self,

@@ -30,12 +30,13 @@ from ._register_data import (
 )
 from .exceptions import (
     TransportConnectionError,
+    TransportError,
     TransportReadError,
     TransportTimeoutError,
     TransportWriteError,
 )
 from .observation import RegisterObserver
-from .protocol import BaseTransport
+from .protocol import LINK_PROBE_TIMEOUT_SECONDS, BaseTransport
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
@@ -179,6 +180,38 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         if self._client is None or self._shutdown_requested:
             raise TransportConnectionError(f"Transport not connected for {self._serial}")
         return self._client
+
+    async def check_link(self) -> bool:
+        """Cheap link-down probe: one read, bounded by a short timeout.
+
+        Issues a single input-register read (no application retries) capped
+        at LINK_PROBE_TIMEOUT_SECONDS, so probing a deaf endpoint — TCP
+        session up but the gateway never answers — costs a bounded couple of
+        seconds instead of the full ``(retries+1) x timeout + backoff``
+        chain (eg4_web_monitor#587).  Any decoded response, including a
+        Modbus exception response, proves the link is alive.
+
+        Failed probes advance the consecutive-error counter so the standard
+        ``_reconnect()`` error-recycle gate dials a fresh session after the
+        usual threshold — the only way a wedged gateway session recovers.
+        """
+        try:
+            async with self._op_guard(), self._lock:
+                client = self._require_active_client()
+                await asyncio.wait_for(
+                    client.read_input_registers(
+                        address=0,
+                        count=1,
+                        device_id=self._unit_id,
+                    ),
+                    timeout=LINK_PROBE_TIMEOUT_SECONDS,
+                )
+        except (TimeoutError, OSError, ModbusException, TransportError) as err:
+            self._consecutive_errors += 1
+            _LOGGER.debug("[%s] Link probe failed: %s", self._serial, err)
+            return False
+        self._consecutive_errors = 0
+        return True
 
     async def _read_registers(
         self,

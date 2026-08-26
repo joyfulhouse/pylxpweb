@@ -24,6 +24,13 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Response budget (seconds) for the cheap link-down probe (``check_link``).
+# A deaf endpoint — TCP accepts but never answers — must be detectable in a
+# bounded couple of seconds, never the transport's full read timeout chain,
+# because devices probe from inside every coordinator refresh while the link
+# is down (eg4_web_monitor#587).
+LINK_PROBE_TIMEOUT_SECONDS = 2.0
+
 # FUNC_<register>_BIT<n> keys name bit positions whose function has never been
 # hardware-verified. They exist so reads decode the whole register honestly
 # rather than mislabelling unknown bits — writing one would flip an unknown

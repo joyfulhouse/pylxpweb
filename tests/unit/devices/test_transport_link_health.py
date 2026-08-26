@@ -22,7 +22,7 @@ import pytest
 
 from pylxpweb import LuxpowerClient
 from pylxpweb.devices.base import (
-    LINK_PROBE_MIN_INTERVAL_SECONDS,
+    LINK_PROBE_MAX_INTERVAL_SECONDS,
     TRANSPORT_LINK_DOWN_THRESHOLD,
 )
 from pylxpweb.devices.inverters.generic import GenericInverter
@@ -239,7 +239,7 @@ class TestInverterFailureCounter:
 
     @pytest.mark.asyncio
     async def test_same_tick_duplicate_refresh_collapses_to_one_probe(self) -> None:
-        """While down, probes rate-limit to one per LINK_PROBE_MIN_INTERVAL_SECONDS.
+        """While down, probes rate-limit to one per probe window.
 
         Coordinator paths call refresh() twice per tick (group refresh +
         device processing); without the throttle each call would hit the
@@ -269,7 +269,7 @@ class TestInverterFailureCounter:
         assert transport.read_runtime.await_count == probe_calls + 1
 
         # Next coordinator tick (interval elapsed): probes again.
-        inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
+        inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MAX_INTERVAL_SECONDS
         await inverter.refresh()
         assert transport.read_runtime.await_count == probe_calls + 2
         assert transport.read_all_input_data.await_count == combined_after_down
@@ -290,7 +290,7 @@ class TestInverterFailureCounter:
         # Recovery is detected by the runtime probe while the link is down.
         transport.read_runtime.side_effect = None
         transport.read_runtime.return_value = runtime
-        inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
+        inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MAX_INTERVAL_SECONDS
         await inverter.refresh()
 
         assert inverter.transport_link_down is False
@@ -364,7 +364,7 @@ class TestInverterLinkDownLogging:
             transport.read_runtime.return_value = runtime
             # Age the probe gate: recovery happens on a later coordinator
             # tick, not within the same-tick throttle window.
-            inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
+            inverter._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MAX_INTERVAL_SECONDS
             await inverter.refresh(force=True)
             await inverter.refresh(force=True)
 
@@ -1047,6 +1047,6 @@ class TestMIDDeviceLinkHealth:
         assert mock_client.api.devices.get_midbox_runtime.await_count == http_calls + 1
 
         # Next coordinator tick (interval elapsed): probes again
-        mid._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MIN_INTERVAL_SECONDS
+        mid._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MAX_INTERVAL_SECONDS
         await mid.refresh()
         assert transport.read_midbox_runtime.await_count == probe_calls + 1

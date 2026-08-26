@@ -45,6 +45,12 @@ TRANSPORT_LINK_DOWN_THRESHOLD = 3
 # so every real cycle still probes.
 LINK_PROBE_MIN_INTERVAL_SECONDS = 4.0
 
+# Cap for the exponential link-down probe backoff.  Each consecutive failed
+# probe doubles the interval (base x 2^(failures - threshold)) so a sustained
+# outage settles at one probe per minute instead of paying the transport's
+# full timeout chain inside every coordinator refresh (eg4_web_monitor#587).
+LINK_PROBE_MAX_INTERVAL_SECONDS = 60.0
+
 _T = TypeVar("_T")
 
 
@@ -627,11 +633,29 @@ class BaseDevice(ABC):
         now = time.monotonic()
         if (
             self._last_link_probe_monotonic is not None
-            and now - self._last_link_probe_monotonic < LINK_PROBE_MIN_INTERVAL_SECONDS
+            and now - self._last_link_probe_monotonic < self._link_probe_interval()
         ):
             return False
         self._last_link_probe_monotonic = now
         return True
+
+    def _link_probe_interval(self) -> float:
+        """Current probe window: exponential backoff on consecutive failures.
+
+        Each failed probe past the link-down threshold doubles the window,
+        capped at LINK_PROBE_MAX_INTERVAL_SECONDS, so a sustained outage
+        settles at ~one probe per minute instead of paying the transport
+        timeout chain inside every coordinator refresh.  Any successful
+        read resets the failure counter and with it the window.
+        """
+        excess = max(
+            0,
+            self._transport_consecutive_failures - TRANSPORT_LINK_DOWN_THRESHOLD,
+        )
+        return min(
+            LINK_PROBE_MIN_INTERVAL_SECONDS * (2.0**excess),
+            LINK_PROBE_MAX_INTERVAL_SECONDS,
+        )
 
     def _record_transport_read_success(self) -> None:
         """Reset the failure counter after a successful transport read."""
@@ -650,7 +674,17 @@ class BaseDevice(ABC):
 
     def _record_transport_read_failure(self) -> None:
         """Count a failed transport read; escalate once on the down transition."""
+        was_down = self.transport_link_down
         self._transport_consecutive_failures += 1
+        if was_down and self._last_link_probe_monotonic is not None:
+            # Stamp probe COMPLETION: a probe slower than its own window
+            # (e.g. a full transport timeout) must not let the same-tick
+            # duplicate refresh() immediately probe the dead endpoint again.
+            # Only re-stamps a window _link_probe_due() actually opened —
+            # non-probe reads still in flight during the transition refresh
+            # (energy/battery on individual-read transports) must not push
+            # the first recovery probe out.
+            self._last_link_probe_monotonic = time.monotonic()
         if self.transport_link_down and not self._transport_link_down_logged:
             self._transport_link_down_logged = True
             _LOGGER.warning(

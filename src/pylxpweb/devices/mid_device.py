@@ -245,6 +245,16 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
                 if self._cloud_fallback_available:
                     await self._refresh_via_http()
                 return
+            check_link = getattr(transport, "check_link", None)
+            # Cheap single-attempt, short-timeout probe: a dead endpoint
+            # must not cost the full read timeout chain inside every
+            # coordinator refresh (eg4_web_monitor#587).  Only a passing
+            # probe pays for the full data read below.
+            if self.transport_link_down and check_link is not None and not await check_link():
+                self._record_transport_read_failure()
+                if self._cloud_fallback_available:
+                    await self._refresh_via_http()
+                return
             try:
                 runtime_data = await self._tracked_transport_read(transport.read_midbox_runtime())
                 if self.validate_data and runtime_data.is_corrupt(
