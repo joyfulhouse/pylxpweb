@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0b4] - 2026-08-26
+
+### Fixed
+
+- **Bounded dead-link probe cost — poll interval no longer degrades to ~30s
+  against a deaf local endpoint**
+  ([eg4_web_monitor#587](https://github.com/joyfulhouse/eg4_web_monitor/issues/587),
+  PR [#310](https://github.com/joyfulhouse/pylxpweb/pull/310)):
+  when a local endpoint goes deaf (TCP accepts but never answers — the wedged
+  dongle / Waveshare gateway failure mode), every coordinator refresh paid the
+  transport's full read timeout chain (10s dongle response timeout; up to ~30s
+  Modbus retry chain) as its link-down probe, which Home Assistant absorbs into
+  the effective poll interval. Now: the probe rate-limit window is stamped at
+  probe completion and backs off exponentially (4s base, 60s cap, reset on any
+  success), and the Modbus/dongle transports expose a cheap single-attempt
+  `check_link()` probe with a 2s budget that devices use while the link is
+  down — the HTTP fallback keeps data flowing meanwhile. `HybridTransport`
+  deliberately does not expose `check_link()`: it is its devices' HTTP
+  fallback, and its own local-failure gating already keeps probes cheap.
+- **Restored the hermetic `uv_build` release pin**
+  (PR [#311](https://github.com/joyfulhouse/pylxpweb/pull/311)): Dependabot
+  bumped `uv_build` past the version bundled in the digest-pinned offline
+  build container, which would have broken the release build. The pin is
+  reverted to match the container and Dependabot now ignores it; `main` is
+  branch-protected requiring the `CI Success` check so red PRs can no longer
+  merge.
+
 ## [0.10.0b3] - 2026-08-16
 
 ### Added
