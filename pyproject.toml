@@ -49,7 +49,11 @@ pylxpweb-collect = "pylxpweb.cli.collect_device_data:main"
 pylxpweb-modbus-diag = "pylxpweb.cli.modbus_diag:main"
 
 [build-system]
-requires = ["uv_build==0.12.5"]
+# Hermetic release pin: must equal the uv version bundled in the release
+# workflow's digest-pinned BUILD_IMAGE (uv build --offline cannot fetch a
+# different backend). Bump ONLY together with BUILD_IMAGE and the
+# test_release_workflow.py pins. Dependabot is configured to ignore it.
+requires = ["uv_build==0.9.30"]
 build-backend = "uv_build"
 
 [tool.ruff]

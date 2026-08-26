@@ -43,3 +43,8 @@ updates:
     # Ensure compatibility with uv
     reviewers:
       - "bryanli"
+    # uv_build is a hermetic release pin: it must match the uv bundled in the
+    # release workflow's digest-pinned BUILD_IMAGE (offline build). Bumping it
+    # alone breaks the release build (see #307/#308 regression).
+    ignore:
+      - dependency-name: "uv_build"
