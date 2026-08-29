@@ -211,43 +211,51 @@ async def discover_device_info(transport: DiscoveryTransport) -> DeviceDiscovery
 
     # Read parallel config from input register 113 (preferred source)
     # Format: bits 0-1 = master/slave, bits 2-3 = phase, bits 8-15 = parallel number
+    #
+    # GridBOSS/MID devices are never parallel-group members, and their input
+    # registers 112-113 are the ac_couple3_energy_total_l1 lifetime counter
+    # (registers/gridboss.py), not parallel config — once that counter passes
+    # 6553.6 kWh the high word (113) goes nonzero and would decode as a bogus
+    # role/phase/group (eg4_web_monitor#596). Skip the read entirely and keep
+    # standalone defaults.
     parallel_master_slave = 0
     parallel_number = 0
     parallel_phase = 0
 
-    try:
-        reg113_raw = await transport.read_parallel_config()
-        if reg113_raw > 0:
-            # Parse packed parallel config
-            parallel_master_slave = reg113_raw & 0x03
-            parallel_phase = (reg113_raw >> 2) & 0x03
-            parallel_number = (reg113_raw >> 8) & 0xFF
-            _LOGGER.debug(
-                "Parsed register 113 for %s: raw=0x%04X, master_slave=%d, phase=%d, number=%d",
-                transport.serial,
-                reg113_raw,
-                parallel_master_slave,
-                parallel_phase,
-                parallel_number,
-            )
-    except Exception as e:
-        _LOGGER.debug(
-            "Failed to read parallel config register 113 for %s: %s, trying fallback",
-            transport.serial,
-            e,
-        )
-        # Fallback to holding registers 107-108 (less reliable)
+    if not is_gridboss:
         try:
-            parallel_regs = await transport.read_parameters(HOLD_PARALLEL_NUMBER, 2)
-            parallel_number = parallel_regs.get(HOLD_PARALLEL_NUMBER, 0) & 0xFF
-            parallel_phase = parallel_regs.get(HOLD_PARALLEL_PHASE, 0) & 0xFF
-        except Exception as e2:
+            reg113_raw = await transport.read_parallel_config()
+            if reg113_raw > 0:
+                # Parse packed parallel config
+                parallel_master_slave = reg113_raw & 0x03
+                parallel_phase = (reg113_raw >> 2) & 0x03
+                parallel_number = (reg113_raw >> 8) & 0xFF
+                _LOGGER.debug(
+                    "Parsed register 113 for %s: raw=0x%04X, master_slave=%d, phase=%d, number=%d",
+                    transport.serial,
+                    reg113_raw,
+                    parallel_master_slave,
+                    parallel_phase,
+                    parallel_number,
+                )
+        except Exception as e:
             _LOGGER.debug(
-                "Failed to read fallback parallel registers for %s: %s",
+                "Failed to read parallel config register 113 for %s: %s, trying fallback",
                 transport.serial,
-                e2,
+                e,
             )
-        # Default to standalone if both fail
+            # Fallback to holding registers 107-108 (less reliable)
+            try:
+                parallel_regs = await transport.read_parameters(HOLD_PARALLEL_NUMBER, 2)
+                parallel_number = parallel_regs.get(HOLD_PARALLEL_NUMBER, 0) & 0xFF
+                parallel_phase = parallel_regs.get(HOLD_PARALLEL_PHASE, 0) & 0xFF
+            except Exception as e2:
+                _LOGGER.debug(
+                    "Failed to read fallback parallel registers for %s: %s",
+                    transport.serial,
+                    e2,
+                )
+            # Default to standalone if both fail
 
     # Read firmware version (best effort - may fail on some devices)
     firmware_version = ""
