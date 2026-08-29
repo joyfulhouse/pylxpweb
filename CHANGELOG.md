@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **GridBOSS Modbus discovery: serial number falls back to holding
+  registers 2-6**
+  ([eg4_web_monitor#593](https://github.com/joyfulhouse/eg4_web_monitor/issues/593)):
+  the "serial at input registers 115-119" layout is inverter-family-specific —
+  on MID/GridBOSS devices those registers are AC-couple ports 3-4
+  lifetime-energy counters (`registers/gridboss.py`), which read as zeros on a
+  unit with those ports unused, so local Modbus TCP discovery failed with
+  "Failed to read serial number from device". `read_serial_number()` now falls
+  back to holding registers 2-6 (`HOLD_SERIAL_NUM`, documented for every
+  family) whenever the input-register decode yields fewer than 10 characters.
+  This also stops a latent wrong-identity case: a GridBOSS *with* accumulated
+  AC-couple energy at 115-119 could decode those bytes into printable garbage
+  and silently adopt it as the device serial.
+
 ## [0.10.0b4] - 2026-08-26
 
 ### Fixed

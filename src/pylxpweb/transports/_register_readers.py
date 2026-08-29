@@ -22,8 +22,14 @@ DEVICE_TYPE_MIDBOX = 50
 DEVICE_TYPE_REGISTER = 19
 
 # Serial number is stored in input registers 115-119 (5 registers, 10 ASCII chars)
+# on inverter-family devices. On MID/GridBOSS devices those input registers are
+# AC-couple lifetime-energy counters (see registers/gridboss.py), so the serial
+# read falls back to holding registers 2-6 (HOLD_SERIAL_NUM), which hold the
+# serial on every documented family (eg4_web_monitor#593).
 SERIAL_NUMBER_START_REGISTER = 115
 SERIAL_NUMBER_REGISTER_COUNT = 5
+SERIAL_NUMBER_HOLDING_START_REGISTER = 2
+SERIAL_NUMBER_LENGTH = 10
 
 # Firmware version is in holding registers 7-10
 FIRMWARE_REGISTER_START = 7
@@ -160,19 +166,48 @@ async def read_device_type_async(
 async def read_serial_number_async(
     read_input: Callable[[int, int], Coroutine[None, None, list[int]]],
     serial: str,
+    read_holding: Callable[[int, int], Coroutine[None, None, list[int]]] | None = None,
 ) -> str:
-    """Read inverter serial number from input registers 115-119.
+    """Read device serial number.
+
+    Tries input registers 115-119 first (inverter-family layout). If the
+    decoded result is not a complete 10-character serial — GridBOSS units
+    keep AC-couple energy counters there, which decode to an empty or
+    truncated string — falls back to holding registers 2-6
+    (HOLD_SERIAL_NUM), the canonical location shared by all families.
 
     Args:
         read_input: Async function to read input registers
         serial: Device serial for logging
+        read_holding: Optional async function to read holding registers,
+            enabling the holding-register fallback
 
     Returns:
         10-character serial number string (e.g., "BA12345678")
     """
     values = await read_input(SERIAL_NUMBER_START_REGISTER, SERIAL_NUMBER_REGISTER_COUNT)
     result = decode_serial_from_registers(values)
-    _LOGGER.debug("Read serial number from device %s: %s", serial, result)
+    if len(result) == SERIAL_NUMBER_LENGTH or read_holding is None:
+        _LOGGER.debug("Read serial number from device %s: %s", serial, result)
+        return result
+
+    _LOGGER.debug(
+        "Input registers 115-119 returned incomplete serial %r for %s; "
+        "falling back to holding registers 2-6",
+        result,
+        serial,
+    )
+    holding_values = await read_holding(
+        SERIAL_NUMBER_HOLDING_START_REGISTER, SERIAL_NUMBER_REGISTER_COUNT
+    )
+    holding_result = decode_serial_from_registers(holding_values)
+    if holding_result:
+        _LOGGER.debug(
+            "Read serial number from holding registers for device %s: %s",
+            serial,
+            holding_result,
+        )
+        return holding_result
     return result
 
 

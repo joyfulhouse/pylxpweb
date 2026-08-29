@@ -1786,12 +1786,22 @@ class RegisterDataMixin(_DataMixinBase):
     # ------------------------------------------------------------------
 
     async def read_serial_number(self) -> str:
-        """Read inverter serial number from input registers 115-119."""
+        """Read device serial number.
+
+        Input registers 115-119 first; falls back to holding registers 2-6
+        (HOLD_SERIAL_NUM) when the input decode is incomplete — GridBOSS
+        units keep AC-couple energy counters at input 115-119.
+        """
         segments = self._new_observed_segments()
+        holding_segments = self._new_observed_segments()
         reader = _capture_register_reads(self._read_input_registers, segments)
-        result = await read_serial_number_async(reader, self._serial)
-        if segments:
-            await self._notify_observed_segments((RegisterSpace.INPUT, segments))
+        holding_reader = _capture_register_reads(self._read_holding_registers, holding_segments)
+        result = await read_serial_number_async(reader, self._serial, read_holding=holding_reader)
+        if segments or holding_segments:
+            await self._notify_observed_segments(
+                (RegisterSpace.INPUT, segments),
+                (RegisterSpace.HOLDING, holding_segments),
+            )
         return result
 
     async def read_firmware_version(self) -> str:

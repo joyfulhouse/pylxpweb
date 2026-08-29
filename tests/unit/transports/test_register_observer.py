@@ -140,24 +140,26 @@ PUBLIC_OBSERVATION_READS: tuple[object, ...] = (
 )
 
 CANONICAL_OBSERVATION_READS: tuple[object, ...] = (
+    # The fake transport reads all-zero registers, so read_serial_number's
+    # holding-register fallback (GridBOSS, eg4_web_monitor#593) also fires.
     pytest.param(
         lambda transport: transport.read_serial_number(),
-        (RegisterSpace.INPUT, 115, 5),
+        ((RegisterSpace.INPUT, 115, 5), (RegisterSpace.HOLDING, 2, 5)),
         id="serial",
     ),
     pytest.param(
         lambda transport: transport.read_firmware_version(),
-        (RegisterSpace.HOLDING, 7, 4),
+        ((RegisterSpace.HOLDING, 7, 4),),
         id="firmware",
     ),
     pytest.param(
         lambda transport: transport.read_device_type(),
-        (RegisterSpace.HOLDING, 19, 1),
+        ((RegisterSpace.HOLDING, 19, 1),),
         id="device-type",
     ),
     pytest.param(
         lambda transport: transport.read_parallel_config(),
-        (RegisterSpace.INPUT, 113, 1),
+        ((RegisterSpace.INPUT, 113, 1),),
         id="parallel",
     ),
 )
@@ -420,12 +422,12 @@ async def test_observer_adds_zero_reads_and_preserves_request_order() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("public_read", "expected_read"),
+    ("public_read", "expected_reads"),
     CANONICAL_OBSERVATION_READS,
 )
 async def test_canonical_readers_observe_enabled_terminal_segment_without_extra_reads(
     public_read: PublicRead,
-    expected_read: tuple[RegisterSpace, int, int],
+    expected_reads: tuple[tuple[RegisterSpace, int, int], ...],
 ) -> None:
     baseline = _FakeRegisterTransport()
     observed: list[ObservationBatch] = []
@@ -434,16 +436,16 @@ async def test_canonical_readers_observe_enabled_terminal_segment_without_extra_
     baseline_result = await public_read(baseline)
     enabled_result = await public_read(enabled)
 
-    space, start, count = expected_read
     assert enabled_result == baseline_result
-    assert baseline.reads == [expected_read]
-    assert enabled.reads == [expected_read]
+    assert baseline.reads == list(expected_reads)
+    assert enabled.reads == list(expected_reads)
     assert observed == [
-        (
+        tuple(
             RegisterObservation(
                 space,
                 (RegisterSegment(start, (0,) * count),),
-            ),
+            )
+            for space, start, count in expected_reads
         )
     ]
 
