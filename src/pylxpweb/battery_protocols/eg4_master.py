@@ -244,7 +244,8 @@ class EG4MasterProtocol(BatteryProtocol):
         # Firmware: total_remaining / total_full * 100 via FUN_190BA
         # For master's individual SOC, use decode_with_slaves() instead
         soc = raw_regs.get(21, 0)
-        soh = raw_regs.get(32, 100)
+        soh_raw = raw_regs.get(32, 0)
+        soh = soh_raw if soh_raw > 0 else None  # 0 = not reported (#309)
         cycle_count = raw_regs.get(30, 0)
 
         # Designed capacity: reg 33 /20 (unique to master protocol)

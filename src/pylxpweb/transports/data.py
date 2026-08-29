@@ -631,7 +631,7 @@ class InverterRuntimeData:
                     raw = read_raw(input_registers, reg)
                     if raw is not None:
                         soc = raw & 0xFF
-                        soh = (raw >> 8) & 0xFF
+                        soh: int | None = (raw >> 8) & 0xFF
                         if soh == 0:
                             soh = None  # not reported; absent, not perfect health
                         kwargs["battery_soc"] = soc
@@ -977,7 +977,8 @@ class BatteryData:
     All values are already scaled to proper units.
 
     Validation:
-        - soc and soh are clamped to 0-100 range
+        - soc and soh are clamped to 0-100 range (soh stays None when
+          the BMS does not report it)
     """
 
     # Identity
@@ -988,7 +989,7 @@ class BatteryData:
     voltage: float = 0.0  # V
     current: float = 0.0  # A
     soc: int = 0  # %
-    soh: int = 100  # %
+    soh: int | None = None  # % (None = not reported by BMS)
     temperature: float = 0.0  # °C
 
     # Capacity
@@ -1036,16 +1037,16 @@ class BatteryData:
 
     # Pre-clamp raw values for corruption detection (populated by __post_init__)
     _raw_soc: int = field(default=0, repr=False)
-    _raw_soh: int = field(default=100, repr=False)
+    _raw_soh: int | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         """Validate and clamp percentage values."""
         self._raw_soc = self.soc
         self._raw_soh = self.soh
-        # soc/soh are non-nullable (defaults 0/100), so _clamp_percentage
-        # always returns a non-None int here.
+        # soc is non-nullable (default 0), so _clamp_percentage always
+        # returns a non-None int for it.  soh stays None when unreported.
         self.soc = _clamp_percentage(self.soc, "battery_soc") or 0
-        self.soh = _clamp_percentage(self.soh, "battery_soh") or 100
+        self.soh = _clamp_percentage(self.soh, "battery_soh")
 
     def is_corrupt(self) -> bool:
         """Check if battery data contains physically impossible values.
@@ -1062,7 +1063,7 @@ class BatteryData:
                 self._raw_soc,
             )
             return True
-        if self._raw_soh > 100:
+        if self._raw_soh is not None and self._raw_soh > 100:
             _LOGGER.warning(
                 "Battery %d canary: raw_soh=%d > 100",
                 self.battery_index,
@@ -1250,7 +1251,7 @@ class BatteryData:
         # Build kwargs from canonical definitions using BATTERY_FIELD mapping
         kwargs: dict[str, float | int] = {}
         soc: int = 0
-        soh: int = 100
+        soh: int = 0
 
         for reg in BATTERY_REGISTERS:
             cname = reg.canonical_name

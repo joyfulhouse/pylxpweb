@@ -219,11 +219,13 @@ class BatteryBank(BaseDevice):
         The weakest battery determines effective bank health.
 
         Returns:
-            Lowest SOH percentage, or None if no batteries present.
+            Lowest SOH percentage, or None if no batteries present or
+            none of them report SOH.
         """
-        if not self.batteries:
+        vals = [b.soh for b in self.batteries if b.soh is not None]
+        if not vals:
             return None
-        return min(b.soh for b in self.batteries)
+        return min(vals)
 
     @property
     def soh_delta(self) -> int | None:
@@ -234,11 +236,11 @@ class BatteryBank(BaseDevice):
 
         Returns:
             SOH difference in percentage points, or None if fewer than
-            2 batteries are present.
+            2 batteries report SOH.
         """
-        if len(self.batteries) < 2:
+        soh_values = [b.soh for b in self.batteries if b.soh is not None]
+        if len(soh_values) < 2:
             return None
-        soh_values = [b.soh for b in self.batteries]
         return max(soh_values) - min(soh_values)
 
     # ========== Cross-Battery Diagnostics ==========

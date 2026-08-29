@@ -104,7 +104,8 @@ class EG4SlaveProtocol(BatteryProtocol):
             max_cell_temp = float(max_temp)
 
         soc = raw_regs.get(24, 0)
-        soh = raw_regs.get(23, 100)
+        soh_raw = raw_regs.get(23, 0)
+        soh = soh_raw if soh_raw > 0 else None  # 0 = not reported (#309)
         remaining_capacity = float(raw_regs.get(21, 0))
         max_charge_current = float(raw_regs.get(22, 0))
         max_capacity = self.decode_register(capacity_reg, raw_regs.get(capacity_reg.address, 0))

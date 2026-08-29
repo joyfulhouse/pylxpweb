@@ -123,7 +123,9 @@ class Battery(BaseDevice):
             totalVoltage=int(battery_data.voltage * 100),  # Convert back to raw
             current=int(battery_data.current * 10),  # Convert back to raw
             soc=battery_data.soc,
-            soh=battery_data.soh,
+            # soh may be None (unreported, #309); the soh property answers
+            # from transport data, so this placeholder is never surfaced.
+            soh=battery_data.soh if battery_data.soh is not None else 0,
             currentRemainCapacity=int(battery_data.remaining_capacity or 0),
             currentFullCapacity=int(battery_data.max_capacity or 0),
             batMaxCellTemp=int(battery_data.max_cell_temperature * 10),
@@ -289,15 +291,17 @@ class Battery(BaseDevice):
         return self._data.soc
 
     @property
-    def soh(self) -> int:
+    def soh(self) -> int | None:
         """Get battery state of health.
 
         Returns:
-            State of health percentage (0-100).
+            State of health percentage (0-100), or None when the BMS
+            does not report it (issue #309).  Transport-backed batteries
+            answer from transport data directly so an unreported SOH
+            stays None instead of falling back to the schema placeholder.
         """
-        val = self._get_transport_attr("soh")
-        if val is not None:
-            return int(val)
+        if self._transport_data is not None:
+            return self._transport_data.soh
         return self._data.soh
 
     # ========== Capacity Properties ==========

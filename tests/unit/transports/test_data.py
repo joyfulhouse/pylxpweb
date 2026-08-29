@@ -381,7 +381,7 @@ class TestBatteryData:
         assert data.voltage == 0.0
         assert data.current == 0.0
         assert data.soc == 0
-        assert data.soh == 100
+        assert data.soh is None  # unreported by default (#309)
         assert data.cell_voltages == []
         assert data.cell_temperatures == []
 
@@ -978,3 +978,71 @@ class TestFaultWarningCodeMerge:
         data = InverterRuntimeData.from_modbus_registers(regs)
         assert data.fault_code == 0
         assert data.warning_code == 0x02
+
+
+class TestSohUnreportedIsNone:
+    """SOH byte 0 means "not reported" and must surface as None, not 100.
+
+    Regression tests for issue #309: three substitution sites previously
+    rewrote an unreported SOH to a fabricated 100.  Raw packed values
+    (input register 5 / battery slot offset 8: low byte = SOC, high
+    byte = SOH):
+
+    - 0x0064 -> SOC 100, SOH absent -> None
+    - 0x6464 -> SOC 100, SOH 100
+    - 0x0164 -> SOC 100, SOH 1 (low-but-real value must survive)
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected_soh"),
+        [(0x0064, None), (0x6464, 100), (0x0164, 1)],
+    )
+    def test_inverter_runtime_battery_soh(self, raw: int, expected_soh: int | None) -> None:
+        data = InverterRuntimeData.from_modbus_registers({4: 530, 5: raw})
+        assert data.battery_soc == 100
+        assert data.battery_soh == expected_soh
+
+    @pytest.mark.parametrize(
+        ("raw", "expected_soh"),
+        [(0x0064, None), (0x6464, 100), (0x0164, 1)],
+    )
+    def test_battery_bank_soh(self, raw: int, expected_soh: int | None) -> None:
+        bank = BatteryBankData.from_modbus_registers({4: 530, 5: raw})
+        assert bank is not None
+        assert bank.soc == 100
+        assert bank.soh == expected_soh
+        # min_soh falls back to bank-level SOH when no individual batteries
+        assert bank.min_soh == expected_soh
+
+    @pytest.mark.parametrize(
+        ("soh_byte", "expected_soh"),
+        [(0, None), (100, 100), (1, 1)],
+    )
+    def test_individual_battery_soh(self, soh_byte: int, expected_soh: int | None) -> None:
+        base = 5002  # battery slot 0
+        registers = dict.fromkeys(range(base, base + 30), 0)
+        registers[base + 0] = 0xC003  # status header: connected
+        registers[base + 6] = 5305  # voltage 53.05 V
+        registers[base + 8] = (soh_byte << 8) | 85  # SOH / SOC=85
+
+        data = BatteryData.from_modbus_registers(0, registers)
+
+        assert data is not None
+        assert data.soc == 85
+        assert data.soh == expected_soh
+
+    def test_battery_data_none_soh_survives_post_init(self) -> None:
+        """__post_init__ must not rewrite None back to 100 (PR #286 gap)."""
+        data = BatteryData(soh=None)
+        assert data.soh is None
+        assert data._raw_soh is None
+
+    def test_battery_data_none_soh_not_corrupt(self) -> None:
+        """is_corrupt() must tolerate an unreported (None) SOH."""
+        assert BatteryData(voltage=53.0, soc=85, soh=None).is_corrupt() is False
+
+    def test_battery_data_soh_over_100_still_trips_canary(self) -> None:
+        """The >100 corruption canary must survive the Optional change."""
+        data = BatteryData(voltage=53.0, soc=85, soh=150)
+        assert data.soh == 100  # clamped
+        assert data.is_corrupt() is True

@@ -263,7 +263,7 @@ class TestEG4MasterProtocol:
         assert data.voltage == 0.0
         assert data.current == 0.0
         assert data.soc == 0
-        assert data.soh == 100  # Default SOH
+        assert data.soh is None  # SOH 0 = not reported (#309)
         assert data.max_capacity == 0.0
         assert data.firmware_version == ""
 
