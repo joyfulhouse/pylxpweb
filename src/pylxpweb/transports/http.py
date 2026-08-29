@@ -186,7 +186,9 @@ class HTTPTransport(BaseTransport):
                             # current needs /10 scaling (not /100!)
                             current=apply_scale(bat.current, ScaleFactor.SCALE_10),
                             soc=bat.soc or 0,
-                            soh=bat.soh or 100,
+                            # 0 = not reported; surface None, never a
+                            # fabricated 100 (#309)
+                            soh=bat.soh if bat.soh else None,
                             # Temperatures: batMaxCellTemp/batMinCellTemp are /10
                             temperature=apply_scale(bat.batMaxCellTemp, ScaleFactor.SCALE_10),
                             max_capacity=float(bat.currentFullCapacity or 0),

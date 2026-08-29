@@ -570,3 +570,61 @@ class TestHTTPTransport:
 
         with pytest.raises(expected_type, match="CE12345678"):
             await transport.write_named_parameters({"HOLD_AC_CHARGE_POWER_CMD": 75})
+
+
+class TestCloudSohUnreportedIsNone:
+    """Cloud batteryArray SOH 0/absent surfaces as None, not a fabricated 100.
+
+    Regression tests for issue #309 on the HTTP transport path: hybrid mode
+    must not report a fabricated 100 from the cloud baseline where the local
+    transport reports the same battery as unreported.
+    """
+
+    @staticmethod
+    def _mock_battery_module(soh: int | None) -> MagicMock:
+        bat = MagicMock()
+        bat.batIndex = 0
+        bat.batterySn = "BAT001"
+        bat.totalVoltage = 5305  # /100 -> 53.05 V
+        bat.current = 155  # /10 -> 15.5 A
+        bat.soc = 85
+        bat.soh = soh
+        bat.batMaxCellTemp = 250  # /10 -> 25.0 C
+        bat.batMinCellTemp = 240
+        bat.currentFullCapacity = 100
+        bat.currentRemainCapacity = 85
+        bat.cycleCnt = 150
+        bat.batMinCellVoltage = 3317  # /1000
+        bat.batMaxCellVoltage = 3364
+        return bat
+
+    @pytest.mark.parametrize(
+        ("cloud_soh", "expected_soh"),
+        [(0, None), (None, None), (100, 100), (1, 1)],
+    )
+    @pytest.mark.asyncio
+    async def test_battery_array_soh(self, cloud_soh: int | None, expected_soh: int | None) -> None:
+        client = MagicMock()
+        client.login = AsyncMock()
+
+        mock_battery = MagicMock()
+        mock_battery.vBat = 530
+        mock_battery.soc = 85
+        mock_battery.pCharge = 500
+        mock_battery.pDisCharge = 0
+        mock_battery.maxBatteryCharge = 100
+        mock_battery.currentBatteryCharge = 85.0
+        mock_battery.totalNumber = 1
+        mock_battery.batteryArray = [self._mock_battery_module(cloud_soh)]
+
+        client.api.devices.get_battery_info = AsyncMock(return_value=mock_battery)
+
+        transport = HTTPTransport(client, serial="CE12345678")
+        await transport.connect()
+
+        bank = await transport.read_battery()
+
+        assert bank is not None
+        assert len(bank.batteries) == 1
+        assert bank.batteries[0].soc == 85
+        assert bank.batteries[0].soh == expected_soh
