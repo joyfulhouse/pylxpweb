@@ -1789,8 +1789,9 @@ class RegisterDataMixin(_DataMixinBase):
         """Read device serial number.
 
         Input registers 115-119 first; falls back to holding registers 2-6
-        (HOLD_SERIAL_NUM) when the input decode is incomplete — GridBOSS
-        units keep AC-couple energy counters at input 115-119.
+        (HOLD_SERIAL_NUM) when the input decode is not a plausible 10-char
+        alphanumeric serial — GridBOSS units keep AC-couple energy counters
+        at input 115-119.
         """
         segments = self._new_observed_segments()
         holding_segments = self._new_observed_segments()

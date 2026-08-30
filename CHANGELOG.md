@@ -18,10 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unit with those ports unused, so local Modbus TCP discovery failed with
   "Failed to read serial number from device". `read_serial_number()` now falls
   back to holding registers 2-6 (`HOLD_SERIAL_NUM`, documented for every
-  family) whenever the input-register decode yields fewer than 10 characters.
-  This also stops a latent wrong-identity case: a GridBOSS *with* accumulated
-  AC-couple energy at 115-119 could decode those bytes into printable garbage
-  and silently adopt it as the device serial.
+  family) whenever the input-register decode is not a plausible serial —
+  exactly 10 printable ASCII alphanumeric characters. The same plausibility
+  check gates the holding-register result, so a partial or garbage holding
+  decode is never adopted either; the pre-fallback input result is returned
+  unchanged in that case. This also stops a latent wrong-identity case: a
+  GridBOSS *with* accumulated AC-couple energy at 115-119 could decode those
+  bytes into printable garbage and silently adopt it as the device serial.
 
 ## [0.10.0b4] - 2026-08-26
 
