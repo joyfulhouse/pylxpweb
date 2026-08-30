@@ -190,7 +190,10 @@ async def read_serial_number_async(
     an empty, truncated, or garbage-punctuation string — falls back to
     holding registers 2-6 (HOLD_SERIAL_NUM), the canonical location shared
     by all families. A holding decode that is itself not plausible is not
-    adopted; the input-register result is returned unchanged in that case.
+    adopted, and a holding read that fails outright is swallowed — either
+    way the input-register result is returned unchanged, so a device with
+    a restricted register map degrades exactly as it did before the
+    fallback existed instead of turning discovery into a hard failure.
 
     Args:
         read_input: Async function to read input registers
@@ -213,9 +216,17 @@ async def read_serial_number_async(
         result,
         serial,
     )
-    holding_values = await read_holding(
-        SERIAL_NUMBER_HOLDING_START_REGISTER, SERIAL_NUMBER_REGISTER_COUNT
-    )
+    try:
+        holding_values = await read_holding(
+            SERIAL_NUMBER_HOLDING_START_REGISTER, SERIAL_NUMBER_REGISTER_COUNT
+        )
+    except Exception as err:
+        _LOGGER.debug(
+            "Holding-register serial fallback failed for %s, keeping input-register result: %s",
+            serial,
+            err,
+        )
+        return result
     holding_result = decode_serial_from_registers(holding_values)
     if _is_plausible_serial(holding_result):
         _LOGGER.debug(

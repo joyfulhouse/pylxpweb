@@ -1797,7 +1797,17 @@ class RegisterDataMixin(_DataMixinBase):
         holding_segments = self._new_observed_segments()
         reader = _capture_register_reads(self._read_input_registers, segments)
         holding_reader = _capture_register_reads(self._read_holding_registers, holding_segments)
-        result = await read_serial_number_async(reader, self._serial, read_holding=holding_reader)
+
+        async def delayed_holding_reader(address: int, count: int) -> list[int]:
+            # Delay before switching from input (FC 04) to holding (FC 03)
+            # registers — WiFi dongles need time between function code changes
+            # to avoid corrupt reads. Only paid when the fallback fires.
+            await asyncio.sleep(self._inter_register_delay)
+            return await holding_reader(address, count)
+
+        result = await read_serial_number_async(
+            reader, self._serial, read_holding=delayed_holding_reader
+        )
         if segments or holding_segments:
             await self._notify_observed_segments(
                 (RegisterSpace.INPUT, segments),

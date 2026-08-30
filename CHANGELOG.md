@@ -22,7 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly 10 printable ASCII alphanumeric characters. The same plausibility
   check gates the holding-register result, so a partial or garbage holding
   decode is never adopted either; the pre-fallback input result is returned
-  unchanged in that case. This also stops a latent wrong-identity case: a
+  unchanged in that case, and a holding read that fails outright (restricted
+  register map) is swallowed the same way rather than turning discovery into
+  a hard failure. The fallback also honors the transport's
+  `inter_register_delay` before switching from input (FC 04) to holding
+  (FC 03) reads, matching the existing MID mixed-space read pattern — WiFi
+  dongles corrupt payloads without that pause. This also stops a latent
+  wrong-identity case: a
   GridBOSS *with* accumulated AC-couple energy at 115-119 could decode those
   bytes into printable garbage and silently adopt it as the device serial.
 

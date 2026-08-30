@@ -9,7 +9,7 @@ import types
 import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, is_dataclass
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -448,6 +448,20 @@ async def test_canonical_readers_observe_enabled_terminal_segment_without_extra_
             for space, start, count in expected_reads
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_serial_holding_fallback_waits_inter_register_delay() -> None:
+    # Switching from input (FC 04) to holding (FC 03) reads without a pause
+    # corrupts payloads on WiFi dongles (_inter_register_delay = 0.5 there),
+    # so the serial fallback must sleep the transport's delay first.
+    transport = _FakeRegisterTransport()
+    transport._inter_register_delay = 0.25
+    with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+        result = await transport.read_serial_number()
+    assert result == ""
+    assert (RegisterSpace.HOLDING, 2, 5) in transport.reads
+    sleep_mock.assert_awaited_once_with(0.25)
 
 
 @pytest.mark.asyncio

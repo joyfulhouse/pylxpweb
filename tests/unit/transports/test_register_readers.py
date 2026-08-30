@@ -15,6 +15,7 @@ from pylxpweb.transports._register_readers import (
     decode_serial_from_registers,
     read_serial_number_async,
 )
+from pylxpweb.transports.exceptions import TransportReadError
 
 # Reporter's GridBOSS (fw IAAB-1600) holding registers 2-6: ASCII serial,
 # low byte first per register (same byte order as the firmware code regs).
@@ -162,6 +163,20 @@ class TestReadSerialNumberAsync:
 
         result = await read_serial_number_async(read_input, "discovery", read_holding=read_holding)
         assert result == GARBAGE_PRINTABLE_DECODE
+
+    @pytest.mark.asyncio
+    async def test_holding_read_error_keeps_input_result(self) -> None:
+        # Devices with a restricted register map can reject holding reads
+        # 2-6; the fallback must degrade to the pre-fallback input result,
+        # not turn discovery into a hard transport failure.
+        async def read_input(address: int, count: int) -> list[int]:
+            return [0, 0, 0, 0, 0]
+
+        async def read_holding(address: int, count: int) -> list[int]:
+            raise TransportReadError("holding registers rejected")
+
+        result = await read_serial_number_async(read_input, "discovery", read_holding=read_holding)
+        assert result == ""
 
     @pytest.mark.asyncio
     async def test_no_holding_reader_preserves_legacy_behavior(self) -> None:
