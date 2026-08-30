@@ -63,8 +63,8 @@ class DongleCollector:
         inverter_serial: str = "",
         port: int = 8000,
         timeout: float = 10.0,
-        use_ssl: bool | None = None,
         inverter_family: InverterFamily | None = None,
+        use_ssl: bool | None = None,
     ) -> None:
         """Initialize dongle collector.
 
@@ -74,6 +74,7 @@ class DongleCollector:
             inverter_serial: 10-character inverter serial (auto-detected if empty)
             port: TCP port (default 8000)
             timeout: Operation timeout in seconds
+            inverter_family: Inverter family for register mapping
             use_ssl: TLS-PSK policy (True=on, False=off, None=auto-detect).
                 SECURITY: TLS-PSK here hides traffic from passive observers
                 only — the PSK derives from a fixed key published in this
@@ -82,7 +83,6 @@ class DongleCollector:
                 validation. It does not authenticate the peer, does not
                 resist an active man-in-the-middle, and the key cannot be
                 rotated.
-            inverter_family: Inverter family for register mapping
         """
         self._host = host
         self._port = port

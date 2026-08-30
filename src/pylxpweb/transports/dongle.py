@@ -95,6 +95,7 @@ _MAX_PREFIX_SCAN_BYTES = RECV_BUFFER_SIZE
 _SHUTDOWN_CLOSE_TIMEOUT = 0.25
 _SSL_HANDSHAKE_TIMEOUT = 3.0
 _SSL_UNSUPPORTED_TTL = 86400.0
+_SSL_AMBIGUOUS_COOLDOWN = 300.0
 
 # Write resilience settings (joyfulhouse/eg4_web_monitor#201)
 # The dongle drops its TCP connection mid-sequence during parameter writes
@@ -550,20 +551,48 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                                 # TLS capability evidence — ordinary failure.
                                 raise
                             if self._ssl_mode is not None or self._ssl_proven:
-                                # Forced TLS never falls back; an instance
-                                # where TLS has proven is never silently
-                                # downgraded.
+                                # Forced TLS fails fast (outer handler wraps
+                                # it); a proven-TLS instance retries TLS-only
+                                # on the outer ladder — neither ever falls
+                                # back to plaintext.
                                 raise
                             # First AUTO probe: a rejected handshake is a
                             # definitive negative — plaintext for the rest of
                             # this attempt, cached for future connects.
-                            # Generic OSError/timeout is inconclusive and
-                            # propagates to the retry ladder uncached.
                             self._ssl_unsupported_until = time.monotonic() + _SSL_UNSUPPORTED_TTL
                             _LOGGER.info(
                                 "Dongle/firmware does not support TLS-PSK on port %s; "
                                 "will retry SSL detection in 24h",
                                 self._port,
+                            )
+                            ssl_context = None
+                        except (
+                            TimeoutError,
+                            ConnectionAbortedError,
+                            ConnectionResetError,
+                        ):
+                            await self._close_connection()
+                            if not using_ssl or self._ssl_mode is not None or self._ssl_proven:
+                                # Not first-probe evidence: plaintext dials,
+                                # forced modes, and proven-TLS instances take
+                                # the ordinary retry ladder (which never
+                                # downgrades a proven or forced channel).
+                                raise
+                            # First AUTO probe: the peer neither completed nor
+                            # rejected the handshake (e.g. firmware that
+                            # silently discards the ClientHello) — an
+                            # ambiguous negative. Fall back to plaintext for
+                            # this attempt with a short re-probe cooldown; the
+                            # 24h TTL is reserved for the definitive SSLError.
+                            # Other OSErrors (e.g. connection refused) fail
+                            # TLS and plaintext alike, so they stay on the
+                            # retry ladder uncached.
+                            self._ssl_unsupported_until = time.monotonic() + _SSL_AMBIGUOUS_COOLDOWN
+                            _LOGGER.info(
+                                "TLS-PSK probe to port %s got no handshake answer; "
+                                "using plaintext and re-probing in %.0fs",
+                                self._port,
+                                _SSL_AMBIGUOUS_COOLDOWN,
                             )
                             ssl_context = None
                     self._raise_if_shutdown()
@@ -572,6 +601,23 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     if using_ssl:
                         self._ssl_proven = True
                         self._ssl_unsupported_until = None
+                    elif (
+                        self._link_probe_active
+                        and self._ssl_mode is None
+                        and not self._ssl_proven
+                        and self._ssl_unsupported_until is None
+                    ):
+                        # A link probe forced this plaintext dial before TLS
+                        # auto-detection ever ran; the connection may be kept
+                        # past the health check, so leave a trail. Detection
+                        # runs on the next fresh (non-probe) dial.
+                        _LOGGER.info(
+                            "Link probe connected to %s:%s in plaintext before TLS "
+                            "auto-detection ran; TLS will be probed on the next "
+                            "fresh connection",
+                            self._host,
+                            self._port,
+                        )
                     self._connected = True
                     _LOGGER.info(
                         "Dongle transport connected to %s:%s (dongle=%s, inverter=%s)%s",
@@ -587,20 +633,35 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     last_error = err
                     await self._close_connection()
                     self._raise_if_shutdown()
+                    if using_ssl and self._ssl_mode is True:
+                        # Forced TLS: a handshake rejection is deterministic —
+                        # fail fast, wrapped to connect()'s documented type.
+                        raise TransportConnectionError(
+                            f"TLS connection to {self._host}:{self._port} failed: {err}"
+                        ) from err
                     if using_ssl:
-                        # Only forced-TLS and proven-TLS re-raise out of the
-                        # inner loop with a TLS socket: the failure is
-                        # deterministic (or a forbidden downgrade), so
-                        # retrying cannot help — propagate to the caller.
-                        raise
-                    _LOGGER.warning(
-                        "Connection failed to %s:%s: %s (attempt %d/%d)",
-                        self._host,
-                        self._port,
-                        err,
-                        attempt + 1,
-                        self._connection_retries,
-                    )
+                        # Proven-TLS regression: retry TLS-only on the ladder,
+                        # never falling back to plaintext; exhaustion wraps in
+                        # TransportConnectionError below.
+                        _LOGGER.warning(
+                            "TLS regression on %s:%s (previously negotiated "
+                            "successfully): %s — retrying TLS, never plaintext "
+                            "(attempt %d/%d)",
+                            self._host,
+                            self._port,
+                            err,
+                            attempt + 1,
+                            self._connection_retries,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "Connection failed to %s:%s: %s (attempt %d/%d)",
+                            self._host,
+                            self._port,
+                            err,
+                            attempt + 1,
+                            self._connection_retries,
+                        )
                 except TimeoutError as err:
                     last_error = err
                     await self._close_connection()
