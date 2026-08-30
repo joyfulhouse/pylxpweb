@@ -22,14 +22,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejection is treated as a definitive "no SSL support" — the same attempt
   falls back to plaintext and the negative verdict is cached per-instance
   for 24 hours (re-probed afterward, since dongle firmware can be updated
-  in the field). Generic socket errors and timeouts are inconclusive: they
-  stay on the existing retry/backoff ladder and cache no verdict (a
-  5-minute cooldown covers ambiguous TLS handshake timeouts). Once TLS has
-  negotiated on an instance it is never downgraded silently — a regression
-  is retried and logged as a warning before any fallback. On Python < 3.13
-  (stdlib `ssl` lacks TLS-PSK) AUTO uses plaintext without error; only
-  forced `use_ssl=True` raises. `eg4-modbus-diag` gained `--use-ssl` /
-  `--no-ssl` flags (default: auto-detect).
+  in the field). Generic socket errors and timeouts — including TLS
+  handshake timeouts — are inconclusive: they stay on the existing
+  retry/backoff ladder and cache no verdict, so a downgrade can never be
+  forced by stalling or dropping the handshake. Once TLS has negotiated on
+  an instance it is never downgraded: a later `ssl.SSLError` fails the
+  `connect()` call instead of falling back to plaintext. The cheap
+  `check_link()` health probe reuses the last-known channel state
+  (plaintext until TLS has proven) rather than TLS-probing inside its
+  short budget. TLS is capped at 1.2 (`ssl` PSK callbacks do not apply to
+  TLS 1.3). On Python < 3.13 (stdlib `ssl` lacks TLS-PSK) AUTO uses
+  plaintext without error; only forced `use_ssl=True` raises.
+  `eg4-modbus-diag` gained `--use-ssl` / `--no-ssl` flags (default:
+  auto-detect). `use_ssl` sits after `timeout` in the `DongleTransport`
+  signature, so pre-#314 positional callers are unaffected.
+
+  **SECURITY NOTE**: the dongle's TLS-PSK scheme derives its key from a
+  fixed value published in this source tree (and in vendor firmware)
+  plus the dongle serial, which is printed on the device and broadcast
+  in plaintext frames, with no certificate validation. It hides register
+  traffic from passive on-path observers ONLY — it does not authenticate
+  the peer, does not resist an active man-in-the-middle, and the key
+  cannot be rotated. Do not treat `use_ssl=True` as making the link
+  trustworthy.
 
 ### Changed
 

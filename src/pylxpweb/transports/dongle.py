@@ -95,7 +95,6 @@ _MAX_PREFIX_SCAN_BYTES = RECV_BUFFER_SIZE
 _SHUTDOWN_CLOSE_TIMEOUT = 0.25
 _SSL_HANDSHAKE_TIMEOUT = 3.0
 _SSL_UNSUPPORTED_TTL = 86400.0
-_SSL_AMBIGUOUS_COOLDOWN = 300.0
 
 # Write resilience settings (joyfulhouse/eg4_web_monitor#201)
 # The dongle drops its TCP connection mid-sequence during parameter writes
@@ -204,8 +203,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         dongle_serial: str,
         inverter_serial: str,
         port: int = DEFAULT_PORT,
-        use_ssl: bool | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        use_ssl: bool | None = None,
         inverter_family: InverterFamily | None = None,
         connection_retries: int = 3,
         write_retries: int = DEFAULT_WRITE_RETRIES,
@@ -221,9 +220,19 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             dongle_serial: 10-character dongle serial number (e.g., "BA12345678")
             inverter_serial: 10-character inverter serial number (e.g., "CE12345678")
             port: TCP port (default 8000)
+            timeout: Connection and operation timeout in seconds
             use_ssl: TLS-PSK policy: True forces TLS, False disables it, and
                 None auto-detects support (default).
-            timeout: Connection and operation timeout in seconds
+
+                SECURITY: the dongle's TLS-PSK uses a fixed key that is
+                published in this source tree (and in the vendor firmware),
+                mixed with the dongle serial — which is printed on the
+                device and broadcast in plaintext frames — and performs no
+                certificate validation. It hides register traffic from
+                passive on-path observers ONLY: it does not authenticate
+                the peer, does not resist an active man-in-the-middle, and
+                the key cannot be rotated. Do not treat ``use_ssl=True`` as
+                making the link trustworthy or the credentials secret.
             inverter_family: Inverter model family for correct register mapping.
                 If None, defaults to PV_SERIES (EG4-18KPV) for backward
                 compatibility.
@@ -264,6 +273,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._ssl_proven = False
         self._ssl_unsupported_until: float | None = None
         self._ssl_unavailable_logged = False
+        self._link_probe_active = False
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._receive_buffer = bytearray()
@@ -424,6 +434,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
+        # PSK client callbacks only apply to TLS <= 1.2 (CPython docs), so a
+        # TLS 1.3 negotiation would bypass the PSK entirely — cap it.
+        ssl_ctx.maximum_version = ssl.TLSVersion.TLSv1_2
         ssl_ctx.options |= ssl.OP_NO_TLSv1
         ssl_ctx.options |= ssl.OP_NO_TLSv1_1
         ssl_ctx.set_psk_client_callback(get_psk)
@@ -433,18 +446,20 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
     def _auto_ssl_context(self) -> ssl.SSLContext | None:
         """Return a probe context unless AUTO has a cached negative verdict."""
-        if (
-            self._ssl_mode is None
-            and self._ssl_unsupported_until is not None
-            and time.monotonic() < self._ssl_unsupported_until
-        ):
-            return None
+        if self._ssl_mode is None:
+            if self._link_probe_active and not self._ssl_proven:
+                # The cheap link-down probe (check_link) runs on a ~5s
+                # budget: never spend it TLS-probing an undetermined
+                # channel.  Reuse the last-known state — plaintext until
+                # TLS has proven — and let a real connect() resolve
+                # capability under its full budget.
+                return None
+            if (
+                self._ssl_unsupported_until is not None
+                and time.monotonic() < self._ssl_unsupported_until
+            ):
+                return None
         return self._ssl_ctx()
-
-    @staticmethod
-    def _is_ssl_handshake_timeout(err: OSError) -> bool:
-        """Identify asyncio's dedicated SSL handshake timeout failure."""
-        return isinstance(err, ConnectionAbortedError) and "SSL handshake" in str(err)
 
     async def _open_connection(
         self, ssl_context: ssl.SSLContext | None
@@ -454,7 +469,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         if ssl_context is not None:
             kwargs = {
                 "ssl": ssl_context,
-                "ssl_handshake_timeout": _SSL_HANDSHAKE_TIMEOUT,
+                "ssl_handshake_timeout": min(self._timeout, _SSL_HANDSHAKE_TIMEOUT),
             }
         return await asyncio.wait_for(
             asyncio.open_connection(self._host, self._port, **kwargs),
@@ -514,6 +529,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         self._raise_if_shutdown()
                         retry_delay *= 2  # Exponential backoff
 
+                    using_ssl = False
                     ssl_context = self._auto_ssl_context()
                     while True:
                         using_ssl = ssl_context is not None
@@ -529,42 +545,27 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                             break
                         except ssl.SSLError:
                             await self._close_connection()
-                            if self._ssl_mode is not None:
+                            if not using_ssl:
+                                # An SSLError off a plaintext socket is not
+                                # TLS capability evidence — ordinary failure.
                                 raise
-                            if self._ssl_proven and attempt < self._connection_retries - 1:
+                            if self._ssl_mode is not None or self._ssl_proven:
+                                # Forced TLS never falls back; an instance
+                                # where TLS has proven is never silently
+                                # downgraded.
                                 raise
-                            now = time.monotonic()
-                            if self._ssl_proven:
-                                self._ssl_unsupported_until = now + _SSL_AMBIGUOUS_COOLDOWN
-                                _LOGGER.warning(
-                                    "TLS previously negotiated successfully but this "
-                                    "connection fell back to plaintext"
-                                )
-                            else:
-                                self._ssl_unsupported_until = now + _SSL_UNSUPPORTED_TTL
-                                _LOGGER.info(
-                                    "Dongle/firmware does not support TLS-PSK on port %s; "
-                                    "will retry SSL detection in 24h",
-                                    self._port,
-                                )
+                            # First AUTO probe: a rejected handshake is a
+                            # definitive negative — plaintext for the rest of
+                            # this attempt, cached for future connects.
+                            # Generic OSError/timeout is inconclusive and
+                            # propagates to the retry ladder uncached.
+                            self._ssl_unsupported_until = time.monotonic() + _SSL_UNSUPPORTED_TTL
+                            _LOGGER.info(
+                                "Dongle/firmware does not support TLS-PSK on port %s; "
+                                "will retry SSL detection in 24h",
+                                self._port,
+                            )
                             ssl_context = None
-                        except OSError as err:
-                            await self._close_connection()
-                            if (
-                                using_ssl
-                                and self._ssl_mode is None
-                                and self._is_ssl_handshake_timeout(err)
-                            ):
-                                self._ssl_unsupported_until = (
-                                    time.monotonic() + _SSL_AMBIGUOUS_COOLDOWN
-                                )
-                                _LOGGER.warning(
-                                    "TLS handshake timed out; this connection fell back "
-                                    "to plaintext"
-                                )
-                                ssl_context = None
-                                continue
-                            raise
                     self._raise_if_shutdown()
 
                     self._ssl_active = using_ssl
@@ -586,10 +587,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     last_error = err
                     await self._close_connection()
                     self._raise_if_shutdown()
-                    if self._ssl_mode is True:
+                    if using_ssl:
+                        # Only forced-TLS and proven-TLS re-raise out of the
+                        # inner loop with a TLS socket: the failure is
+                        # deterministic (or a forbidden downgrade), so
+                        # retrying cannot help — propagate to the caller.
                         raise
                     _LOGGER.warning(
-                        "TLS connection failed to %s:%s: %s (attempt %d/%d)",
+                        "Connection failed to %s:%s: %s (attempt %d/%d)",
                         self._host,
                         self._port,
                         err,
@@ -1498,6 +1503,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             register_count=1,
         )
         try:
+            # A probe dial must reuse the last-known channel state instead of
+            # AUTO TLS-probing (see _auto_ssl_context): a TLS-silent peer
+            # would otherwise burn the handshake timeout inside this budget
+            # and report a working plaintext dongle as down.
+            self._link_probe_active = True
             await asyncio.wait_for(
                 self._send_receive(
                     packet,
@@ -1518,6 +1528,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         except (TransportError, OSError) as err:
             _LOGGER.debug("[%s] Link probe failed: %s", self._serial, err)
             return False
+        finally:
+            self._link_probe_active = False
         return True
 
     async def _read_input_registers(

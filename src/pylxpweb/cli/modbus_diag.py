@@ -110,7 +110,12 @@ Examples:
         dest="use_ssl",
         action="store_const",
         const=True,
-        help="Force TLS-PSK for dongle transport",
+        help=(
+            "Force TLS-PSK for dongle transport. NOTE: hides traffic from "
+            "passive observers only — the PSK derives from a fixed published "
+            "key plus the dongle serial, with no peer authentication and no "
+            "protection against an active man-in-the-middle"
+        ),
     )
     ssl_group.add_argument(
         "--no-ssl",
@@ -387,7 +392,7 @@ async def run_collection(args: argparse.Namespace) -> int:
                     dongle_serial=dongle_serial,
                     inverter_serial=args.serial or "",
                     port=args.port if args.transport == "dongle" else 8000,
-                    use_ssl=args.use_ssl if args.transport == "dongle" else False,
+                    use_ssl=args.use_ssl,
                 )
                 await dongle_collector.connect()
 
