@@ -176,14 +176,14 @@ class TestDiscoverDeviceInfo:
         GridBOSS input registers 112-113 are the ac_couple3_energy_total_l1
         lifetime counter, not parallel config (eg4_web_monitor#596). A unit
         past 6553.6 kWh has a nonzero high word (0x0001 would decode as
-        "slave"), so discovery must not read register 113 at all and must
-        report standalone defaults.
+        "master" with parallel number 0), so discovery must not read
+        register 113 at all and must report standalone defaults.
         """
         transport = MagicMock()
         transport.serial = "GB12345678"
         transport.read_device_type = AsyncMock(return_value=50)
         transport.is_midbox_device = MagicMock(return_value=True)
-        # ac_couple3 energy high word nonzero — would decode as slave/group A
+        # ac_couple3 energy high word nonzero — would decode as master, number 0
         transport.read_parallel_config = AsyncMock(return_value=0x0001)
         transport.read_parameters = AsyncMock(
             return_value={

@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ac_couple3_energy_total_l1` 32-bit lifetime counter
   (`registers/gridboss.py`), not parallel config. Once that counter passes
   6553.6 kWh the high word (113) goes nonzero and discovery decoded a bogus
-  parallel role/phase/group (raw `0x0001` → "slave").
+  parallel role/phase/group (raw `0x0001` → "master", parallel number 0).
   `discover_device_info()` now leaves parallel fields at standalone
   defaults for GridBOSS and skips the holding 107-108 fallback as well.
 
