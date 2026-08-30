@@ -161,6 +161,7 @@ class TestDiscoverDeviceInfo:
 
         info = await discover_device_info(transport)
 
+        transport.read_parallel_config.assert_awaited_once()
         assert info.parallel_master_slave == 1  # Master
         assert info.parallel_number == 1
         assert info.parallel_phase == 2  # T
@@ -170,13 +171,20 @@ class TestDiscoverDeviceInfo:
 
     @pytest.mark.asyncio
     async def test_discovers_gridboss(self) -> None:
-        """Test discovering a GridBOSS/MID device."""
+        """Test discovering a GridBOSS/MID device.
+
+        GridBOSS input registers 112-113 are the ac_couple3_energy_total_l1
+        lifetime counter, not parallel config (eg4_web_monitor#596). A unit
+        past 6553.6 kWh has a nonzero high word (0x0001 would decode as
+        "master" with parallel number 0), so discovery must not read
+        register 113 at all and must report standalone defaults.
+        """
         transport = MagicMock()
         transport.serial = "GB12345678"
         transport.read_device_type = AsyncMock(return_value=50)
         transport.is_midbox_device = MagicMock(return_value=True)
-        # Register 113 = 0x0101: master=1, phase=0, number=1
-        transport.read_parallel_config = AsyncMock(return_value=0x0101)
+        # ac_couple3 energy high word nonzero — would decode as master, number 0
+        transport.read_parallel_config = AsyncMock(return_value=0x0001)
         transport.read_parameters = AsyncMock(
             return_value={
                 HOLD_PARALLEL_NUMBER: 1,
@@ -189,7 +197,36 @@ class TestDiscoverDeviceInfo:
 
         assert info.device_type_code == 50
         assert info.is_gridboss is True
-        assert info.parallel_master_slave == 1
+        transport.read_parallel_config.assert_not_awaited()
+        transport.read_parameters.assert_not_awaited()
+        assert info.parallel_master_slave == 0
+        assert info.parallel_number == 0
+        assert info.parallel_phase == 0
+        assert info.is_standalone is True
+        assert info.parallel_group_name is None
+        assert info.parallel_role_name == "standalone"
+
+    @pytest.mark.asyncio
+    async def test_gridboss_skips_parallel_fallback_on_reg113_failure(self) -> None:
+        """GridBOSS discovery must not touch holding 107-108 either."""
+        transport = MagicMock()
+        transport.serial = "GB12345678"
+        transport.read_device_type = AsyncMock(return_value=50)
+        transport.is_midbox_device = MagicMock(return_value=True)
+        transport.read_parallel_config = AsyncMock(side_effect=Exception("read failed"))
+        transport.read_parameters = AsyncMock(
+            return_value={
+                HOLD_PARALLEL_NUMBER: 1,
+                HOLD_PARALLEL_PHASE: 2,
+            }
+        )
+        transport.read_firmware_version = AsyncMock(return_value="GB-1234")
+
+        info = await discover_device_info(transport)
+
+        transport.read_parallel_config.assert_not_awaited()
+        transport.read_parameters.assert_not_awaited()
+        assert info.is_standalone is True
 
     @pytest.mark.asyncio
     async def test_handles_firmware_read_failure(self) -> None:

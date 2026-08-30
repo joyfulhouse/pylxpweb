@@ -32,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GridBOSS *with* accumulated AC-couple energy at 115-119 could decode those
   bytes into printable garbage and silently adopt it as the device serial.
 
+- **GridBOSS Modbus discovery: skip the parallel-config read (input
+  register 113)**
+  ([eg4_web_monitor#596](https://github.com/joyfulhouse/eg4_web_monitor/issues/596)):
+  on MID/GridBOSS devices input registers 112-113 are the
+  `ac_couple3_energy_total_l1` 32-bit lifetime counter
+  (`registers/gridboss.py`), not parallel config. Once that counter passes
+  6553.6 kWh the high word (113) goes nonzero and discovery decoded a bogus
+  parallel role/phase/group (raw `0x0001` → "master", parallel number 0).
+  `discover_device_info()` now leaves parallel fields at standalone
+  defaults for GridBOSS and skips the holding 107-108 fallback as well.
+
 ## [0.10.0b4] - 2026-08-26
 
 ### Fixed
