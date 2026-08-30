@@ -63,6 +63,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fell back to plaintext still validates the TCP function byte of every
   response frame.
 
+- **Dongle serial auto-detection no longer crashes on a garbage frame**:
+  when the inverter serial is auto-detected from the first response, a
+  frame whose serial bytes are not valid ASCII raised an uncaught
+  `UnicodeDecodeError` instead of the transport's mismatch error, and an
+  accepted serial kept its NUL padding (leaking into logs and outbound
+  frames). The detected serial is now decoded defensively and must be 10
+  printable ASCII characters; anything else rejects through the normal
+  response-mismatch path.
+
 ## [0.10.0b5] - 2026-08-29
 
 ### Fixed

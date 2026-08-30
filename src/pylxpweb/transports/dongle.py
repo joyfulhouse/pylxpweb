@@ -1417,7 +1417,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     f"got {resp_serial_str} ({mismatch_context})"
                 )
         else:
-            self._serial = response_serial.decode()
+            # A garbage frame must reject through the mismatch path, not
+            # crash with UnicodeDecodeError, and NUL padding must not leak
+            # into logs or outbound frames via the stored serial.
+            detected = response_serial.decode("ascii", errors="replace").rstrip("\x00")
+            if len(detected) != 10 or not detected.isascii() or not detected.isprintable():
+                _raise_mismatch(f"Unparseable response serial {detected!r} ({mismatch_context})")
+            self._serial = detected
             _LOGGER.debug("Detected inverter serial: %s", self._serial)
 
         # 2. Function code must match (mask high bit for exception responses)

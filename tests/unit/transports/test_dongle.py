@@ -1243,6 +1243,41 @@ class TestDongleResponseValidation:
         with pytest.raises(TransportReadError, match="serial mismatch"):
             transport._parse_response(response)
 
+    def test_garbage_serial_in_detection_frame_rejected(self) -> None:
+        """Serial auto-detection rejects a garbage frame instead of crashing.
+
+        A frame whose serial bytes are not valid ASCII must raise the
+        normal mismatch error, not an uncaught UnicodeDecodeError, and
+        must not be stored as the detected serial.
+        """
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="",
+        )
+        response = bytearray(_build_mock_response())
+        # Serial field lives at data-frame offset 2:12 (response 22:32);
+        # recompute the CRC over the spliced data frame.
+        response[22:32] = b"\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a"
+        response[-2:] = struct.pack("<H", compute_crc16(bytes(response[20:-2])))
+
+        with pytest.raises(TransportReadError, match="Unparseable response serial"):
+            transport._parse_response(bytes(response))
+        assert transport.serial == ""
+
+    def test_detected_serial_strips_nul_padding_rejected_if_short(self) -> None:
+        """A NUL-padded (short) serial is rejected, never stored with padding."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="",
+        )
+        response = bytearray(_build_mock_response(inverter_serial="CE123"))
+
+        with pytest.raises(TransportReadError, match="Unparseable response serial"):
+            transport._parse_response(bytes(response))
+        assert transport.serial == ""
+
     def test_serial_always_checked(self) -> None:
         """Serial is validated even when expected_func/expected_register are None."""
         transport = self._make_transport()
