@@ -19,6 +19,7 @@ from .exceptions import (
     TransportTimeoutError,
     TransportWriteError,
 )
+from .observation import RegisterObserver
 from .protocol import BaseTransport
 
 if TYPE_CHECKING:
@@ -29,6 +30,11 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+def _monotonic() -> float:
+    """Return monotonic time through a transport-local test seam."""
+    return time.monotonic()
 
 
 class HybridTransport(BaseTransport):
@@ -107,7 +113,7 @@ class HybridTransport(BaseTransport):
         if self._local_failed_at is None:
             return True
         # Check if retry interval has passed
-        return time.monotonic() - self._local_failed_at >= self._local_retry_interval
+        return _monotonic() - self._local_failed_at >= self._local_retry_interval
 
     @property
     def local_transport(self) -> ModbusTransport | DongleTransport:
@@ -124,9 +130,13 @@ class HybridTransport(BaseTransport):
         """Return the local transport's redacted observer-error count."""
         return self._local.register_observation_error_count
 
+    def set_register_observer(self, observer: RegisterObserver | None) -> None:
+        """Delegate runtime observer replacement to the local transport only."""
+        self._local.set_register_observer(observer)
+
     def _mark_local_failed(self) -> None:
         """Mark local transport as failed, enabling HTTP fallback."""
-        self._local_failed_at = time.monotonic()
+        self._local_failed_at = _monotonic()
         self._using_local = False
         _LOGGER.warning(
             "Local transport failed for %s, using HTTP fallback for %.0f seconds",
@@ -163,7 +173,7 @@ class HybridTransport(BaseTransport):
         self._ensure_connected()
         self._check_local_recovery()
 
-        if self._using_local and self._local.is_connected:
+        if self._using_local:
             try:
                 return await local_op()
             except (
@@ -245,6 +255,16 @@ class HybridTransport(BaseTransport):
 
         self._connected = False
         _LOGGER.debug("Hybrid transport shut down for %s", self._serial)
+
+    # NOTE: HybridTransport deliberately does NOT expose ``check_link()``
+    # (the cheap dead-endpoint probe the direct local transports offer for
+    # eg4_web_monitor#587).  Devices built from a HybridTransport have no
+    # cloud client of their own — this transport IS the HTTP fallback — so
+    # a failed cheap probe would skip read_runtime() and with it the
+    # internal ``_with_fallback`` HTTP path, freezing data whenever the
+    # local side is down.  The full-read probe stays cheap here anyway:
+    # ``_with_fallback`` marks the local side failed and routes straight to
+    # HTTP until ``local_retry_interval`` expires.
 
     async def read_runtime(self) -> InverterRuntimeData:
         """Read runtime data, preferring local transport.

@@ -1,121 +1,1160 @@
 name: Publish to PyPI
 
-# Triggered when a GitHub Release is published (created manually via gh CLI or UI)
-# Workflow: gh release create v0.6.5 ... → This workflow builds and publishes to PyPI
-
 on:
   release:
     types: [published]
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Environment to publish to (skip-publish, testpypi, or pypi)'
-        required: true
-        type: choice
-        options:
-          - skip-publish
-          - testpypi
-          - pypi
 
-# Only one release at a time
 concurrency:
-  group: release-publish
+  group: release-publish-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
 permissions:
   contents: read
-  id-token: write  # Required for OIDC PyPI publishing
+
+env:
+  BUILD_IMAGE: ghcr.io/astral-sh/uv:0.9.30-python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
 
 jobs:
-  build:
-    name: Build Package
+  bind-build-attest:
+    name: Bind, build once, and attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      checks: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      artifact-digest: ${{ steps.upload-release-artifact.outputs.artifact-digest }}
+      artifact-name: ${{ steps.bind-source.outputs.artifact-name }}
+      commit: ${{ steps.bind-source.outputs.commit }}
+      head: ${{ steps.bind-source.outputs.head }}
+      pr: ${{ steps.bind-source.outputs.pr }}
+      project-name: ${{ steps.bind-source.outputs.project-name }}
+      tag: ${{ steps.bind-source.outputs.tag }}
+      tree: ${{ steps.bind-source.outputs.tree }}
+      version: ${{ steps.bind-source.outputs.version }}
+      workflow-ref: ${{ steps.bind-source.outputs.workflow-ref }}
+      workflow-sha: ${{ steps.bind-source.outputs.workflow-sha }}
+    steps:
+      - id: checkout-source
+        name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
+        with:
+          fetch-depth: 2
+          fetch-tags: false
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name }}
+
+      - id: bind-source
+        name: Bind the event, workflow, merge, and CI identity
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+
+          die() {
+            echo "$1" >&2
+            exit 1
+          }
+
+          [[ "$EVENT_NAME" == "release" ]] || die "event must be a release"
+          [[ "$RELEASE_DRAFT" == "false" ]] || die "release must be published"
+          tag="$RELEASE_TAG"
+          [[ "$tag" =~ ^v[0-9] ]] || die "release tag is malformed"
+          expected_workflow_ref="$REPOSITORY/.github/workflows/release.yml@refs/tags/$tag"
+          [[ "$WORKFLOW_REF" == "$expected_workflow_ref" ]] || \
+            die "workflow ref must be the release tag"
+
+          main_refspec="+refs/heads/main:refs/remotes/origin/main"
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            git fetch --no-tags --force --unshallow origin "$main_refspec"
+          else
+            git fetch --no-tags --force origin "$main_refspec"
+          fi
+          git show-ref --verify --quiet "refs/tags/$tag" || die "release tag does not exist"
+          commit=$(git rev-parse "refs/tags/$tag^{commit}")
+          tree=$(git rev-parse "refs/tags/$tag^{tree}")
+          [[ "$commit" == "$EVENT_SHA" ]] || die "event commit does not match tag commit"
+          [[ "$commit" == "$WORKFLOW_SHA" ]] || die "workflow SHA does not match tag commit"
+          [[ "$commit" == "$(git rev-parse HEAD)" ]] || die "checkout does not match tag commit"
+          [[ "$tree" == "$(git rev-parse 'HEAD^{tree}')" ]] || die "checkout tree mismatch"
+          [[ "$commit" == "$(git rev-parse 'refs/remotes/origin/main^{commit}')" ]] || \
+            die "release commit is not current main"
+
+          project_name=$(python3 -c \
+            'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["name"])')
+          version=$(python3 -c \
+            'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          [[ "$project_name" == "pylxpweb" ]] || die "unexpected project name"
+          [[ "$tag" == "v$version" ]] || die "release tag does not match project version"
+
+          read -r -a lineage <<< "$(git rev-list --parents -n 1 "$commit")"
+          [[ "${#lineage[@]}" == 3 ]] || die "tag commit must have exactly two parents"
+          first_parent="${lineage[1]}"
+          second_parent="${lineage[2]}"
+          git merge-base --is-ancestor "$first_parent" "$second_parent" || \
+            die "release candidate was not up to date with its merge base"
+          [[ "$tree" == "$(git rev-parse "$second_parent^{tree}")" ]] || \
+            die "merge tree does not match the CI-tested PR head tree"
+
+          api_dir=$(mktemp -d)
+          trap 'rm -rf "$api_dir"' EXIT
+          gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
+            "repos/$REPOSITORY/commits/$commit/pulls" > "$api_dir/pulls.json"
+          mapfile -t pr_identity < <(
+            python3 - "$api_dir/pulls.json" "$commit" "$first_parent" "$second_parent" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          pages = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          pulls = [pull for page in pages for pull in page]
+          commit, first_parent, second_parent = sys.argv[2:]
+          assert len(pulls) == 1, "tag commit must have exactly one associated PR"
+          pull = pulls[0]
+          assert pull["state"] == "closed" and pull["merged_at"], "PR is not merged"
+          assert pull["merge_commit_sha"] == commit, "PR merge commit mismatch"
+          assert pull["base"]["ref"] == "main", "PR base is not main"
+          assert pull["head"]["sha"] == second_parent, "PR head is not second parent"
+          print(pull["number"])
+          print(pull["head"]["sha"])
+          PY
+          )
+          pr="${pr_identity[0]}"
+          head="${pr_identity[1]}"
+
+          gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
+            "repos/$REPOSITORY/commits/$head/check-runs" > "$api_dir/checks.json"
+          ci_run_id=$(
+            python3 - "$api_dir/checks.json" "$head" "$REPOSITORY" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+          import urllib.parse
+
+          pages = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          checks = [check for page in pages for check in page["check_runs"]]
+          head, repository = sys.argv[2:]
+          required = [check for check in checks if check["name"] == "CI Success"]
+          assert len(required) == 1, "required CI result is missing or ambiguous"
+          check = required[0]
+          assert check["head_sha"] == head, "required CI covers the wrong head"
+          assert check["conclusion"] == "success", "required CI did not succeed"
+          assert check["app"]["slug"] == "github-actions", "required CI app mismatch"
+          assert check["app"]["owner"]["login"] == "github", "required CI owner mismatch"
+          details = urllib.parse.urlparse(check["details_url"])
+          assert details.scheme == "https" and details.hostname == "github.com"
+          match = re.fullmatch(
+              rf"/{re.escape(repository)}/actions/runs/([0-9]+)/job/[0-9]+",
+              details.path,
+          )
+          assert match, "required CI details URL mismatch"
+          print(match.group(1))
+          PY
+          )
+          gh api -H "Accept: application/vnd.github+json" \
+            "repos/$REPOSITORY/actions/runs/$ci_run_id" > "$api_dir/ci-run.json"
+          python3 - "$api_dir/ci-run.json" "$head" "$REPOSITORY" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          run = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          head, repository = sys.argv[2:]
+          assert run["repository"]["full_name"] == repository, "CI repository mismatch"
+          assert run["path"] == ".github/workflows/ci.yml", "CI workflow path mismatch"
+          assert run["head_sha"] == head, "CI workflow run covers the wrong head"
+          assert run["event"] == "pull_request", "CI workflow event mismatch"
+          assert run["conclusion"] == "success", "CI workflow run did not succeed"
+          PY
+
+          artifact_name="pylxpweb-release-$version-${commit:0:12}"
+          {
+            echo "artifact-name=$artifact_name"
+            echo "commit=$commit"
+            echo "head=$head"
+            echo "pr=$pr"
+            echo "project-name=$project_name"
+            echo "tag=$tag"
+            echo "tree=$tree"
+            echo "version=$version"
+            echo "workflow-ref=$WORKFLOW_REF"
+            echo "workflow-sha=$WORKFLOW_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - id: assert-clean-source
+        name: Require the checkout bytes to equal the bound tree
+        run: |
+          set -euo pipefail
+          git diff --quiet HEAD -- || {
+            echo "tracked or staged source tree changes are forbidden" >&2
+            exit 1
+          }
+          [[ -z "$(git ls-files --others --exclude-standard)" ]] || {
+            echo "untracked build inputs outside the source tree are forbidden" >&2
+            exit 1
+          }
+
+      - id: build-distributions
+        name: Build once in the pinned offline container
+        env:
+          EXPECTED_COMMIT: ${{ steps.bind-source.outputs.commit }}
+          OUTPUT_DIR: ${{ github.workspace }}/release-bundle/dist
+        run: |
+          set -euo pipefail
+          rm -rf "$OUTPUT_DIR"
+          mkdir -p "$OUTPUT_DIR"
+          epoch=$(git show -s --format=%ct "$EXPECTED_COMMIT")
+          docker pull "$BUILD_IMAGE"
+          docker run --rm \
+            --platform linux/amd64 \
+            --network none \
+            --read-only \
+            --user "$(id -u):$(id -g)" \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            --tmpfs /cache:rw,noexec,nosuid,nodev,size=64m \
+            -e HOME=/tmp \
+            -e UV_CACHE_DIR=/cache \
+            -e SOURCE_DATE_EPOCH="$epoch" \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -v "$OUTPUT_DIR:/out:rw" \
+            -w /src \
+            "$BUILD_IMAGE" \
+            sh -euc '
+              test "$(uv --version)" = "uv 0.9.30"
+              case "$(python --version)" in "Python 3.13"*) ;; *) exit 1 ;; esac
+              python - <<"PY"
+          import tomllib
+          with open("pyproject.toml", "rb") as file:
+              build = tomllib.load(file)["build-system"]
+          assert build["build-backend"] == "uv_build"
+          assert build["requires"] == ["uv_build==0.9.30"]
+          PY
+              python - <<"PY"
+          import socket
+          try:
+              socket.create_connection(("1.1.1.1", 443), timeout=1)
+          except OSError:
+              pass
+          else:
+              raise AssertionError("build container unexpectedly has network access")
+          PY
+              uv build --offline --no-python-downloads --no-sources \
+                --python /usr/local/bin/python --out-dir /out /src
+            '
+          rm -f "$OUTPUT_DIR/.gitignore"
+
+      - id: validate-distributions
+        name: Validate the exact distribution set and metadata
+        env:
+          EXPECTED_PROJECT_NAME: ${{ steps.bind-source.outputs.project-name }}
+          EXPECTED_VERSION: ${{ steps.bind-source.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import email
+          import hashlib
+          import os
+          import pathlib
+          import tarfile
+          import zipfile
+
+          dist = pathlib.Path("release-bundle/dist")
+          wheels = list(dist.glob("*.whl"))
+          sdists = list(dist.glob("*.tar.gz"))
+          files = sorted(path for path in dist.iterdir() if path.is_file())
+          assert len(wheels) == 1, wheels
+          assert len(sdists) == 1, sdists
+          assert len(files) == 2, files
+          with zipfile.ZipFile(wheels[0]) as archive:
+              members = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+              assert len(members) == 1, members
+              wheel_metadata = email.message_from_bytes(archive.read(members[0]))
+          with tarfile.open(sdists[0], "r:gz") as archive:
+              members = [
+                  member for member in archive.getmembers()
+                  if member.name.count("/") == 1 and member.name.endswith("/PKG-INFO")
+              ]
+              assert len(members) == 1, members
+              extracted = archive.extractfile(members[0])
+              assert extracted is not None
+              sdist_metadata = email.message_from_binary_file(extracted)
+          for metadata in (wheel_metadata, sdist_metadata):
+              assert metadata["Name"] == os.environ["EXPECTED_PROJECT_NAME"]
+              assert metadata["Version"] == os.environ["EXPECTED_VERSION"]
+          manifest = pathlib.Path("release-bundle/DIST_SHA256SUMS")
+          manifest.write_text("".join(
+              f"{hashlib.sha256(path.read_bytes()).hexdigest()}  dist/{path.name}\n"
+              for path in files
+          ))
+          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              for kind, path in (("wheel", wheels[0]), ("sdist", sdists[0])):
+                  print(f"{kind}-name={path.name}", file=output)
+                  print(f"{kind}-sha256={hashlib.sha256(path.read_bytes()).hexdigest()}", file=output)
+          PY
+
+      - id: write-source-manifest
+        name: Record the bound source identity
+        env:
+          ARTIFACT_NAME: ${{ steps.bind-source.outputs.artifact-name }}
+          COMMIT: ${{ steps.bind-source.outputs.commit }}
+          CONTAINER_IMAGE: ${{ env.BUILD_IMAGE }}
+          HEAD: ${{ steps.bind-source.outputs.head }}
+          PR: ${{ steps.bind-source.outputs.pr }}
+          PROJECT_NAME: ${{ steps.bind-source.outputs.project-name }}
+          TAG: ${{ steps.bind-source.outputs.tag }}
+          TREE: ${{ steps.bind-source.outputs.tree }}
+          VERSION: ${{ steps.bind-source.outputs.version }}
+          WORKFLOW_REF: ${{ steps.bind-source.outputs.workflow-ref }}
+          WORKFLOW_SHA: ${{ steps.bind-source.outputs.workflow-sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          keys = (
+              "ARTIFACT_NAME", "COMMIT", "CONTAINER_IMAGE", "HEAD", "PR",
+              "PROJECT_NAME", "TAG", "TREE", "VERSION", "WORKFLOW_REF", "WORKFLOW_SHA",
+          )
+          manifest = {key.lower(): os.environ[key] for key in keys}
+          manifest["pr"] = int(manifest["pr"])
+          manifest["schema_version"] = 2
+          pathlib.Path("release-bundle/release-source.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+
+      - id: seal-source
+        name: Seal only while the candidate is still current main
+        env:
+          EXPECTED_COMMIT: ${{ steps.bind-source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git diff --quiet HEAD -- || {
+            echo "tracked or staged source tree changes are forbidden at sealing" >&2
+            exit 1
+          }
+          unexpected_untracked=$(git ls-files --others --exclude-standard | \
+            grep -Ev '^release-bundle/' || true)
+          [[ -z "$unexpected_untracked" ]] || {
+            echo "untracked build inputs outside the source tree are forbidden at sealing" >&2
+            exit 1
+          }
+          git fetch --no-tags --force origin \
+            "+refs/heads/main:refs/remotes/origin/main"
+          [[ "$(git rev-parse 'refs/remotes/origin/main^{commit}')" == "$EXPECTED_COMMIT" ]] || {
+            echo "release commit is not current main at artifact sealing" >&2
+            exit 1
+          }
+
+      - id: attest-source
+        name: Attest the bound source identity
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release-bundle/release-source.json
+
+      - id: attest-build
+        name: Attest the wheel and sdist build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: release-bundle/DIST_SHA256SUMS
+
+      - id: assemble-sealed-bundle
+        name: Assemble the sealed release artifact
+        env:
+          BUILD_BUNDLE: ${{ steps.attest-build.outputs.bundle-path }}
+          SOURCE_BUNDLE: ${{ steps.attest-source.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir release-bundle/attestations
+          cp "$SOURCE_BUNDLE" release-bundle/attestations/source.jsonl
+          cp "$BUILD_BUNDLE" release-bundle/attestations/build.jsonl
+          (
+            cd release-bundle
+            sha256sum release-source.json DIST_SHA256SUMS dist/* > SHA256SUMS
+          )
+
+      - id: release-summary
+        name: Write reviewer-facing release identity summary
+        env:
+          COMMIT: ${{ steps.bind-source.outputs.commit }}
+          HEAD: ${{ steps.bind-source.outputs.head }}
+          PR: ${{ steps.bind-source.outputs.pr }}
+          TAG: ${{ steps.bind-source.outputs.tag }}
+          TREE: ${{ steps.bind-source.outputs.tree }}
+          WHEEL_NAME: ${{ steps.validate-distributions.outputs.wheel-name }}
+          WHEEL_SHA256: ${{ steps.validate-distributions.outputs.wheel-sha256 }}
+          SDIST_NAME: ${{ steps.validate-distributions.outputs.sdist-name }}
+          SDIST_SHA256: ${{ steps.validate-distributions.outputs.sdist-sha256 }}
+          WORKFLOW_REF: ${{ steps.bind-source.outputs.workflow-ref }}
+          WORKFLOW_SHA: ${{ steps.bind-source.outputs.workflow-sha }}
+        run: |
+          {
+            echo "## Sealed release candidate"
+            echo "- Tag: \`$TAG\`"
+            echo "- Commit: \`$COMMIT\`"
+            echo "- Tree: \`$TREE\`"
+            echo "- Final PR/head: \`#$PR\` / \`$HEAD\`"
+            echo "- Workflow ref/SHA: \`$WORKFLOW_REF\` / \`$WORKFLOW_SHA\`"
+            echo "- Container: \`$BUILD_IMAGE\`"
+            echo "- Wheel: \`$WHEEL_NAME\` — \`sha256:$WHEEL_SHA256\`"
+            echo "- Sdist: \`$SDIST_NAME\` — \`sha256:$SDIST_SHA256\`"
+            echo "- Source and build attestations: generated separately; cryptographic verification is required in both prepare jobs."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - id: upload-release-artifact
+        name: Upload the sealed release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ${{ steps.bind-source.outputs.artifact-name }}
+          path: release-bundle/
+          if-no-files-found: error
+          retention-days: 30
+
+  prepare-testpypi:
+    name: Verify and stage for TestPyPI
+    needs: bind-build-attest
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      staging-artifact: ${{ steps.stage.outputs.artifact-name }}
     steps:
-      - uses: actions/checkout@v7
+      - id: download-release-artifact
+        name: Download the sealed release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
-          ref: ${{ github.event.release.tag_name || github.ref }}
+          name: ${{ needs.bind-build-attest.outputs.artifact-name }}
+          path: release-bundle/
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
+      - id: verify-release-bundle
+        name: Verify checksums, identity, and attestations
+        env: &bundle-identity
+          ARTIFACT_NAME: ${{ needs.bind-build-attest.outputs.artifact-name }}
+          EXPECTED_COMMIT: ${{ needs.bind-build-attest.outputs.commit }}
+          EXPECTED_CONTAINER_IMAGE: ${{ env.BUILD_IMAGE }}
+          EXPECTED_HEAD: ${{ needs.bind-build-attest.outputs.head }}
+          EXPECTED_PR: ${{ needs.bind-build-attest.outputs.pr }}
+          EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
+          EXPECTED_TAG: ${{ needs.bind-build-attest.outputs.tag }}
+          EXPECTED_TREE: ${{ needs.bind-build-attest.outputs.tree }}
+          EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
+          EXPECTED_WORKFLOW_REF: ${{ needs.bind-build-attest.outputs.workflow-ref }}
+          EXPECTED_WORKFLOW_SHA: ${{ needs.bind-build-attest.outputs.workflow-sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: &verify-release-bundle |
+          set -euo pipefail
+          (cd release-bundle && sha256sum --check SHA256SUMS)
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          bundle = pathlib.Path("release-bundle")
+          source = json.loads(bundle.joinpath("release-source.json").read_text())
+          expected = {
+              "artifact_name": os.environ["ARTIFACT_NAME"],
+              "commit": os.environ["EXPECTED_COMMIT"],
+              "container_image": os.environ["EXPECTED_CONTAINER_IMAGE"],
+              "head": os.environ["EXPECTED_HEAD"],
+              "pr": int(os.environ["EXPECTED_PR"]),
+              "project_name": os.environ["EXPECTED_PROJECT_NAME"],
+              "tag": os.environ["EXPECTED_TAG"],
+              "tree": os.environ["EXPECTED_TREE"],
+              "version": os.environ["EXPECTED_VERSION"],
+              "workflow_ref": os.environ["EXPECTED_WORKFLOW_REF"],
+              "workflow_sha": os.environ["EXPECTED_WORKFLOW_SHA"],
+          }
+          assert {key: source[key] for key in expected} == expected
+          assert source["schema_version"] == 2
+          wheels = list(bundle.glob("dist/*.whl"))
+          sdists = list(bundle.glob("dist/*.tar.gz"))
+          assert len(wheels) == len(sdists) == 1
+          dist_files = sorted([wheels[0], sdists[0]])
+          dist_hashes = {}
+          for line in bundle.joinpath("DIST_SHA256SUMS").read_text().splitlines():
+              digest, name = line.split("  ", 1)
+              dist_hashes[name] = digest
+          assert set(dist_hashes) == {
+              path.relative_to(bundle).as_posix() for path in dist_files
+          }
+          assert all(
+              hashlib.sha256(path.read_bytes()).hexdigest()
+              == dist_hashes[path.relative_to(bundle).as_posix()]
+              for path in dist_files
+          )
+          expected_files = {
+              "SHA256SUMS", "DIST_SHA256SUMS", "release-source.json",
+              "attestations/source.jsonl", "attestations/build.jsonl",
+              *(path.relative_to(bundle).as_posix() for path in dist_files),
+          }
+          actual_files = {
+              path.relative_to(bundle).as_posix()
+              for path in bundle.rglob("*") if path.is_file()
+          }
+          assert actual_files == expected_files
+          PY
+          signer="$REPOSITORY/.github/workflows/release.yml"
+          common=(
+            --repo "$REPOSITORY"
+            --signer-workflow "$signer"
+            --signer-digest "$EXPECTED_WORKFLOW_SHA"
+            --source-ref "refs/tags/$EXPECTED_TAG"
+            --source-digest "$EXPECTED_COMMIT"
+          )
+          gh attestation verify release-bundle/release-source.json \
+            --bundle release-bundle/attestations/source.jsonl "${common[@]}"
+          while read -r _ path; do
+            gh attestation verify "release-bundle/$path" \
+              --bundle release-bundle/attestations/build.jsonl "${common[@]}"
+          done < release-bundle/DIST_SHA256SUMS
+          {
+            echo "## Attestation verification"
+            echo "Source and both distribution attestations verified for \`$EXPECTED_WORKFLOW_REF\`, signer digest \`$EXPECTED_WORKFLOW_SHA\`, source ref \`refs/tags/$EXPECTED_TAG\`, and source digest \`$EXPECTED_COMMIT\`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Set up Python
-        run: uv python install 3.13
-
-      - name: Install dependencies
-        run: uv sync --all-extras
-
-      - name: Build package
-        run: uv build
-
-      - name: Check package
-        run: uv run twine check dist/*
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: python-package-distributions
-          path: dist/
-          retention-days: 7
-
-      - name: Create build summary
+      - id: stage
+        name: Stage the verified distributions
+        env:
+          COMMIT: ${{ needs.bind-build-attest.outputs.commit }}
         run: |
-          echo "## Package Built" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Built packages:" >> $GITHUB_STEP_SUMMARY
-          ls -lh dist/ >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
+          mkdir testpypi-upload
+          cp release-bundle/dist/* testpypi-upload/
+          echo "artifact-name=pylxpweb-testpypi-${COMMIT}" >> "$GITHUB_OUTPUT"
+
+      - id: upload-staging-artifact
+        name: Upload the TestPyPI staging artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ${{ steps.stage.outputs.artifact-name }}
+          path: testpypi-upload/
+          if-no-files-found: error
+          retention-days: 30
 
   publish-testpypi:
-    name: Publish to TestPyPI
+    name: Publish staged artifact to TestPyPI
+    needs: prepare-testpypi
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: build
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'skip-publish')
     environment: testpypi
     permissions:
+      contents: read
       id-token: write
     steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
-          name: python-package-distributions
-          path: dist/
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+          name: ${{ needs.prepare-testpypi.outputs.staging-artifact }}
+          path: upload/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
+          packages-dir: upload/
           repository-url: https://test.pypi.org/legacy/
-          print-hash: true
+          skip-existing: true
 
-  publish-pypi:
-    name: Publish to PyPI
+  verify-testpypi:
+    name: Verify TestPyPI publication
+    needs: [bind-build-attest, publish-testpypi]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: [build, publish-testpypi]
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'pypi')
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - id: download-release-artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: ${{ needs.bind-build-attest.outputs.artifact-name }}
+          path: release-bundle/
+      - id: verify-release-bundle
+        env: *bundle-identity
+        run: *verify-release-bundle
+      - id: verify-testpypi-files
+        name: Poll TestPyPI and verify the exact remote bytes
+        env:
+          EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
+          EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
+          INDEX_JSON_BASE: https://test.pypi.org/pypi
+          ALLOWED_FILE_HOST: test-files.pythonhosted.org
+          DOWNLOAD_TOTAL_SECONDS: '60'
+          INDEX_TOTAL_SECONDS: '30'
+          MAX_ATTEMPTS: '12'
+          REQUIRED_FILE_SCHEME: https
+          RETRY_BASE_SECONDS: '5'
+          SOCKET_TIMEOUT_SECONDS: '10'
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import signal
+          import time
+          import urllib.parse
+          import urllib.request
+
+          bundle = pathlib.Path("release-bundle")
+          expected = {}
+          for line in bundle.joinpath("DIST_SHA256SUMS").read_text().splitlines():
+              digest, path = line.split("  ", 1)
+              expected[pathlib.PurePosixPath(path).name] = digest
+          assert len(expected) == 2
+          project = os.environ["EXPECTED_PROJECT_NAME"]
+          version = os.environ["EXPECTED_VERSION"]
+          request = urllib.request.Request(
+              f'{os.environ["INDEX_JSON_BASE"]}/{project}/{version}/json',
+              headers={"User-Agent": "pylxpweb-release-verifier"},
+          )
+          def timeout_handler(_signum, _frame):
+              raise TimeoutError("total HTTP transfer deadline exceeded")
+          signal.signal(signal.SIGALRM, timeout_handler)
+          socket_timeout = float(os.environ["SOCKET_TIMEOUT_SECONDS"])
+          def fetch(url, total_seconds):
+              signal.setitimer(signal.ITIMER_REAL, total_seconds)
+              try:
+                  with urllib.request.urlopen(url, timeout=socket_timeout) as response:
+                      return response.geturl(), response.read()
+              finally:
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+          def validate(payload):
+              assert payload["info"]["name"] == project
+              assert payload["info"]["version"] == version
+              releases = payload["urls"]
+              assert {item["filename"] for item in releases} == set(expected)
+              assert len(releases) == 2
+              assert all(not item["yanked"] for item in releases)
+              assert all(
+                  item["digests"]["sha256"] == expected[item["filename"]]
+                  for item in releases
+              )
+              return releases
+          attempts = int(os.environ["MAX_ATTEMPTS"])
+          retry_base = int(os.environ["RETRY_BASE_SECONDS"])
+          index_total = float(os.environ["INDEX_TOTAL_SECONDS"])
+          download_total = float(os.environ["DOWNLOAD_TOTAL_SECONDS"])
+          for attempt in range(1, attempts + 1):
+              try:
+                  _, content = fetch(request, index_total)
+                  payload = json.loads(content)
+                  releases = validate(payload)
+                  break
+              except (AssertionError, KeyError, OSError, TypeError, ValueError):
+                  if attempt == attempts:
+                      raise
+                  time.sleep(min(attempt * retry_base, 30))
+          for item in releases:
+              parsed = urllib.parse.urlparse(item["url"])
+              assert parsed.scheme == os.environ["REQUIRED_FILE_SCHEME"]
+              assert parsed.hostname == os.environ["ALLOWED_FILE_HOST"]
+              final_url, content = fetch(item["url"], download_total)
+              final = urllib.parse.urlparse(final_url)
+              assert final.scheme == os.environ["REQUIRED_FILE_SCHEME"]
+              assert final.hostname == os.environ["ALLOWED_FILE_HOST"]
+              assert hashlib.sha256(content).hexdigest() == expected[item["filename"]]
+          _, content = fetch(request, index_total)
+          validate(json.loads(content))
+          PY
+
+  prepare-pypi:
+    name: Classify, verify, and conditionally stage for PyPI
+    needs: [bind-build-attest, verify-testpypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: pypi
     permissions:
+      actions: read
+      contents: read
+    outputs:
+      staging-artifact: ${{ steps.stage.outputs.artifact-name }}
+      state: ${{ steps.resolve-prepare-state.outputs.state }}
+    steps:
+      - id: resolve-release-artifact
+        name: Rediscover the immutable sealed artifact from this run
+        continue-on-error: true
+        env: &artifact-identity
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.bind-build-attest.outputs.artifact-digest }}
+          EXPECTED_ARTIFACT_NAME: ${{ needs.bind-build-attest.outputs.artifact-name }}
+          EXPECTED_COMMIT: ${{ needs.bind-build-attest.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: &resolve-release-artifact |
+          set -euo pipefail
+          evidence=$(mktemp -d)
+          trap 'rm -rf "$evidence"' EXIT
+          gh api -H "Accept: application/vnd.github+json" \
+            "repos/$REPOSITORY/actions/runs/$RUN_ID" > "$evidence/run.json"
+          gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
+            "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" > "$evidence/artifacts.json"
+          python3 - "$evidence/run.json" "$evidence/artifacts.json" <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+
+          run = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          pages = json.loads(pathlib.Path(sys.argv[2]).read_text())
+          assert isinstance(pages, list) and pages, "artifact response pages are missing"
+          assert all(
+              isinstance(page, dict)
+              and isinstance(page.get("total_count"), int)
+              and isinstance(page.get("artifacts"), list)
+              for page in pages
+          ), "artifact response has the wrong shape"
+          artifacts = [artifact for page in pages for artifact in page["artifacts"]]
+          assert pages[0]["total_count"] == len(artifacts), "artifact pagination mismatch"
+          repository = os.environ["REPOSITORY"]
+          run_id = int(os.environ["RUN_ID"])
+          commit = os.environ["EXPECTED_COMMIT"]
+          expected_digest = os.environ["EXPECTED_ARTIFACT_DIGEST"]
+          assert re.fullmatch(r"[0-9a-f]{64}", expected_digest), (
+              "upload artifact digest has the wrong format"
+          )
+          assert run["id"] == run_id, "workflow run id mismatch"
+          assert run["repository"]["full_name"] == repository, "workflow repository mismatch"
+          assert run["head_repository"]["full_name"] == repository, "head repository mismatch"
+          assert run["event"] == "release", "workflow event mismatch"
+          assert run["path"] == ".github/workflows/release.yml", "workflow path mismatch"
+          assert run["head_sha"] == commit, "workflow head mismatch"
+          matches = [
+              artifact
+              for artifact in artifacts
+              if artifact["name"] == os.environ["EXPECTED_ARTIFACT_NAME"]
+          ]
+          assert len(matches) == 1, "sealed artifact is missing or duplicated"
+          artifact = matches[0]
+          assert not artifact["expired"], "sealed artifact is expired"
+          assert artifact["digest"] == f"sha256:{expected_digest}", (
+              "sealed artifact digest mismatch"
+          )
+          owner = artifact["workflow_run"]
+          assert owner["id"] == run_id, "artifact workflow run mismatch"
+          assert owner["head_sha"] == commit, "artifact head mismatch"
+          assert owner["repository_id"] == run["repository"]["id"], (
+              "artifact repository mismatch"
+          )
+          assert owner["head_repository_id"] == run["head_repository"]["id"], (
+              "artifact head repository mismatch"
+          )
+          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f'artifact-id={artifact["id"]}', file=output)
+              print(f'artifact-name={artifact["name"]}', file=output)
+              print(f'artifact-digest={artifact["digest"]}', file=output)
+          with pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              print("## Rediscovered sealed artifact", file=summary)
+              print(f'- Run/head: `{run_id}` / `{commit}`', file=summary)
+              print(f'- Artifact ID/name: `{artifact["id"]}` / `{artifact["name"]}`', file=summary)
+              print(f'- Artifact digest: `{artifact["digest"]}`', file=summary)
+          PY
+      - id: download-release-artifact
+        if: steps.resolve-release-artifact.outcome == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          artifact-ids: ${{ steps.resolve-release-artifact.outputs.artifact-id }}
+          digest-mismatch: error
+          github-token: ${{ github.token }}
+          path: release-bundle/
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+      - id: verify-release-bundle
+        if: steps.download-release-artifact.outcome == 'success'
+        continue-on-error: true
+        env: *bundle-identity
+        run: *verify-release-bundle
+      - id: classify-pypi-state
+        name: Classify stable PyPI state against the sealed bytes
+        if: steps.verify-release-bundle.outcome == 'success'
+        continue-on-error: true
+        env: &pypi-classifier-env
+          # Prepare-time classification is a single stability pair: absence is a
+          # publishable state here, so it must never be retried away.
+          ABSENT_RECHECK_BASE_SECONDS: '0'
+          ABSENT_RECHECK_MAX_ATTEMPTS: '1'
+          ALLOWED_FILE_HOST: files.pythonhosted.org
+          ALLOWED_INDEX_HOST: pypi.org
+          DOWNLOAD_TOTAL_SECONDS: '60'
+          EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
+          EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
+          INDEX_JSON_BASE: https://pypi.org/pypi
+          INDEX_TOTAL_SECONDS: '30'
+          REQUIRED_FILE_SCHEME: https
+          REQUIRED_INDEX_SCHEME: https
+          SNAPSHOT_DELAY_SECONDS: '5'
+          SOCKET_TIMEOUT_SECONDS: '10'
+        run: &classify-pypi-state |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import signal
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          bundle = pathlib.Path("release-bundle")
+          expected = {}
+          for line in bundle.joinpath("DIST_SHA256SUMS").read_text().splitlines():
+              digest, path = line.split("  ", 1)
+              expected[pathlib.PurePosixPath(path).name] = digest
+          assert len(expected) == 2
+          project = os.environ["EXPECTED_PROJECT_NAME"]
+          version = os.environ["EXPECTED_VERSION"]
+          request = urllib.request.Request(
+              f'{os.environ["INDEX_JSON_BASE"]}/{project}/{version}/json',
+              headers={"User-Agent": "pylxpweb-release-classifier"},
+          )
+          socket_timeout = float(os.environ["SOCKET_TIMEOUT_SECONDS"])
+
+          def timeout_handler(_signum, _frame):
+              raise TimeoutError("total HTTP transfer deadline exceeded")
+
+          signal.signal(signal.SIGALRM, timeout_handler)
+
+          def fetch(url, total_seconds):
+              signal.setitimer(signal.ITIMER_REAL, total_seconds)
+              try:
+                  with urllib.request.urlopen(url, timeout=socket_timeout) as response:
+                      return response.geturl(), response.read()
+              finally:
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+
+          def require_index_origin(url):
+              parsed = urllib.parse.urlparse(url)
+              if (
+                  parsed.scheme != os.environ["REQUIRED_INDEX_SCHEME"]
+                  or parsed.hostname != os.environ["ALLOWED_INDEX_HOST"]
+              ):
+                  raise ValueError("index response final URL is not the pinned index origin")
+
+          def snapshot():
+              try:
+                  final_url, content = fetch(request, float(os.environ["INDEX_TOTAL_SECONDS"]))
+              except urllib.error.HTTPError as error:
+                  if error.code == 404:
+                      require_index_origin(error.url)
+                      return "absent", None, None
+                  raise
+              require_index_origin(final_url)
+              payload = json.loads(content)
+              if not isinstance(payload, dict):
+                  raise TypeError("index response is not an object")
+              info = payload["info"]
+              urls = payload["urls"]
+              if not isinstance(info, dict) or not isinstance(urls, list):
+                  raise TypeError("index response has the wrong shape")
+              canonical = json.dumps(
+                  {
+                      "name": info.get("name"),
+                      "version": info.get("version"),
+                      "urls": sorted(
+                          (
+                              item.get("filename"),
+                              item.get("digests", {}).get("sha256"),
+                              item.get("url"),
+                              item.get("yanked"),
+                          )
+                          for item in urls
+                          if isinstance(item, dict)
+                      ),
+                  },
+                  separators=(",", ":"),
+              )
+              return "present", payload, canonical
+
+          def shape_state(payload):
+              if payload["info"].get("name") != project or payload["info"].get(
+                  "version"
+              ) != version:
+                  return "MISMATCH"
+              releases = payload["urls"]
+              if not all(isinstance(item, dict) for item in releases):
+                  return "MISMATCH"
+              filenames = [item.get("filename") for item in releases]
+              if len(filenames) != len(set(filenames)):
+                  return "COMPETING"
+              if any(item.get("yanked") is not False for item in releases):
+                  return "YANKED"
+              for item in releases:
+                  filename = item.get("filename")
+                  if filename not in expected:
+                      continue
+                  if item.get("digests", {}).get("sha256") != expected[filename]:
+                      return "MISMATCH"
+                  advertised = urllib.parse.urlparse(item.get("url", ""))
+                  if (
+                      advertised.scheme != os.environ["REQUIRED_FILE_SCHEME"]
+                      or advertised.hostname != os.environ["ALLOWED_FILE_HOST"]
+                  ):
+                      return "MISMATCH"
+              remote = set(filenames)
+              wanted = set(expected)
+              if remote == wanted:
+                  return "candidate-exact"
+              if remote and remote < wanted:
+                  return "PARTIAL"
+              if wanted < remote:
+                  return "EXTRA"
+              return "COMPETING"
+
+          # An ABSENT pair of snapshots is re-taken up to ABSENT_RECHECK_MAX_ATTEMPTS
+          # times with capped backoff so routine index-propagation lag right after a
+          # publish cannot fail terminal verification. Only ABSENT retries: every
+          # other state (including UNCERTAIN) returns after one stability pair, and
+          # prepare-time classification pins the attempt budget to a single pass.
+          recheck_attempts = int(os.environ.get("ABSENT_RECHECK_MAX_ATTEMPTS", "1"))
+          recheck_base = int(os.environ.get("ABSENT_RECHECK_BASE_SECONDS", "0"))
+          assert recheck_attempts >= 1
+          for recheck in range(1, recheck_attempts + 1):
+              state = "UNCERTAIN"
+              reason = "remote evidence could not be classified"
+              first_kind = "unavailable"
+              first_canonical = None
+              second_kind = "unavailable"
+              second_canonical = None
+              try:
+                  first_kind, first_payload, first_canonical = snapshot()
+                  first_state = None
+                  downloaded_state = None
+                  if first_kind == "present":
+                      first_state = shape_state(first_payload)
+                      if first_state in {"candidate-exact", "PARTIAL", "EXTRA"}:
+                          downloaded_state = "downloads-exact"
+                          for item in first_payload["urls"]:
+                              filename = item.get("filename")
+                              if filename not in expected:
+                                  continue
+                              final_url, content = fetch(
+                                  item["url"], float(os.environ["DOWNLOAD_TOTAL_SECONDS"])
+                              )
+                              final = urllib.parse.urlparse(final_url)
+                              if (
+                                  final.scheme != os.environ["REQUIRED_FILE_SCHEME"]
+                                  or final.hostname != os.environ["ALLOWED_FILE_HOST"]
+                                  or hashlib.sha256(content).hexdigest()
+                                  != expected[filename]
+                              ):
+                                  downloaded_state = "MISMATCH"
+                                  break
+                  time.sleep(float(os.environ["SNAPSHOT_DELAY_SECONDS"]))
+                  second_kind, second_payload, second_canonical = snapshot()
+                  if first_kind != second_kind or first_canonical != second_canonical:
+                      state = "UNCERTAIN"
+                      reason = "PyPI snapshots were inconsistent"
+                  elif first_kind == "absent":
+                      state = "ABSENT"
+                      reason = "two clean PyPI snapshots report version absence"
+                  else:
+                      second_state = shape_state(second_payload)
+                      if first_state != second_state:
+                          state = "UNCERTAIN"
+                          reason = "PyPI classifications changed between snapshots"
+                      elif downloaded_state == "MISMATCH":
+                          state = "MISMATCH"
+                          reason = "downloaded PyPI bytes do not match the sealed set"
+                      elif first_state != "candidate-exact":
+                          state = first_state
+                          reason = "stable PyPI metadata conflicts with the sealed set"
+                      else:
+                          state = "EXACT_COMPLETE"
+                          reason = "stable PyPI metadata and downloaded bytes exactly match"
+              except (
+                  json.JSONDecodeError,
+                  KeyError,
+                  OSError,
+                  TimeoutError,
+                  TypeError,
+                  ValueError,
+              ) as error:
+                  state = "UNCERTAIN"
+                  reason = f"remote evidence error: {type(error).__name__}"
+              if state != "ABSENT" or recheck == recheck_attempts:
+                  break
+              time.sleep(min(recheck * recheck_base, 30))
+
+          guidance = {
+              "ABSENT": "Publisher may upload the full sealed wheel and sdist once.",
+              "EXACT_COMPLETE": "Do not republish; verifier-only completion is required.",
+              "PARTIAL": "Burn this immutable version and prepare a new version; never top up.",
+              "MISMATCH": "Stop, preserve evidence, investigate compromise, and use a new version.",
+              "YANKED": "Stop, preserve evidence, and use the compromise/new-version runbook.",
+              "EXTRA": "Stop, preserve evidence, and use the compromise/new-version runbook.",
+              "COMPETING": "Stop, preserve evidence, and use the compromise/new-version runbook.",
+              "UNCERTAIN": "Do not publish; retry only prepare-pypi and its dependent jobs.",
+          }
+          assert state in guidance
+          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f"state={state}", file=output)
+              print(f"reason={reason}", file=output)
+          with pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              print("## PyPI publication state", file=summary)
+              print(f"- State: `{state}`", file=summary)
+              print(f"- Evidence: {reason}", file=summary)
+              print(
+                  f"- Expected sealed files: `{json.dumps(expected, sort_keys=True)}`",
+                  file=summary,
+              )
+              print(f"- First snapshot: `{first_canonical or first_kind}`", file=summary)
+              print(f"- Second snapshot: `{second_canonical or second_kind}`", file=summary)
+              print(f"- Required action: {guidance[state]}", file=summary)
+          PY
+      - id: resolve-prepare-state
+        name: Funnel missing prerequisite evidence into an UNCERTAIN result
+        env:
+          CLASSIFIED_REASON: ${{ steps.classify-pypi-state.outputs.reason }}
+          CLASSIFIED_STATE: ${{ steps.classify-pypi-state.outputs.state }}
+          CLASSIFY_OUTCOME: ${{ steps.classify-pypi-state.outcome }}
+          DOWNLOAD_OUTCOME: ${{ steps.download-release-artifact.outcome }}
+          RESOLVE_OUTCOME: ${{ steps.resolve-release-artifact.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify-release-bundle.outcome }}
+        run: |
+          set -euo pipefail
+          state="UNCERTAIN"
+          reason="artifact, bundle, or attestation evidence failed before classification"
+          if [[ "$RESOLVE_OUTCOME" == "success" && "$DOWNLOAD_OUTCOME" == "success" && \
+                "$VERIFY_OUTCOME" == "success" && "$CLASSIFY_OUTCOME" == "success" && \
+                -n "$CLASSIFIED_STATE" ]]; then
+            state="$CLASSIFIED_STATE"
+            reason="$CLASSIFIED_REASON"
+          fi
+          {
+            echo "state=$state"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Prepare result"
+            echo "- State: \`$state\`"
+            echo "- Evidence: $reason"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - id: stage
+        name: Stage the verified distributions
+        if: steps.resolve-prepare-state.outputs.state == 'ABSENT'
+        env:
+          COMMIT: ${{ needs.bind-build-attest.outputs.commit }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir pypi-upload
+          cp release-bundle/dist/* pypi-upload/
+          echo "artifact-name=pylxpweb-pypi-${COMMIT}-attempt-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - id: upload-staging-artifact
+        if: steps.resolve-prepare-state.outputs.state == 'ABSENT'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: ${{ steps.stage.outputs.artifact-name }}
+          path: pypi-upload/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-pypi:
+    name: Publish staged artifact to PyPI
+    needs: prepare-pypi
+    if: needs.prepare-pypi.outputs.state == 'ABSENT'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      contents: read
       id-token: write
     steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
         with:
-          name: python-package-distributions
-          path: dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+          name: ${{ needs.prepare-pypi.outputs.staging-artifact }}
+          path: upload/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
-          print-hash: true
+          packages-dir: upload/
 
-      - name: Create PyPI summary
+  verify-pypi:
+    name: Define terminal PyPI completion
+    needs: [bind-build-attest, prepare-pypi, publish-pypi]
+    if: ${{ always() && !cancelled() && needs.prepare-pypi.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - id: resolve-release-artifact
+        name: Rediscover the immutable sealed artifact from this run
+        env: *artifact-identity
+        run: *resolve-release-artifact
+      - id: download-release-artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          artifact-ids: ${{ steps.resolve-release-artifact.outputs.artifact-id }}
+          digest-mismatch: error
+          github-token: ${{ github.token }}
+          path: release-bundle/
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+      - id: verify-release-bundle
+        env: *bundle-identity
+        run: *verify-release-bundle
+      - id: classify-pypi-state
+        name: Reclassify PyPI from stable remote bytes
+        # Same script and identity/host/deadline values as prepare-pypi, but the
+        # terminal reclassification may re-take an ABSENT snapshot pair with the
+        # TestPyPI-verifier retry envelope (12 attempts, 5s base, 30s backoff cap)
+        # so index-propagation lag after publish-pypi cannot fail the happy path.
+        env:
+          ABSENT_RECHECK_BASE_SECONDS: '5'
+          ABSENT_RECHECK_MAX_ATTEMPTS: '12'
+          ALLOWED_FILE_HOST: files.pythonhosted.org
+          ALLOWED_INDEX_HOST: pypi.org
+          DOWNLOAD_TOTAL_SECONDS: '60'
+          EXPECTED_PROJECT_NAME: ${{ needs.bind-build-attest.outputs.project-name }}
+          EXPECTED_VERSION: ${{ needs.bind-build-attest.outputs.version }}
+          INDEX_JSON_BASE: https://pypi.org/pypi
+          INDEX_TOTAL_SECONDS: '30'
+          REQUIRED_FILE_SCHEME: https
+          REQUIRED_INDEX_SCHEME: https
+          SNAPSHOT_DELAY_SECONDS: '5'
+          SOCKET_TIMEOUT_SECONDS: '10'
+        run: *classify-pypi-state
+      - id: require-exact-complete
+        name: Require exact-complete terminal state
+        env:
+          STATE: ${{ steps.classify-pypi-state.outputs.state }}
         run: |
-          echo "## Published to PyPI" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Package: pylxpweb" >> $GITHUB_STEP_SUMMARY
-          echo "Install: \`pip install pylxpweb\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "View on PyPI: https://pypi.org/project/pylxpweb/" >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
+          case "$STATE" in
+            EXACT_COMPLETE)
+              echo "PyPI exactly contains the sealed wheel and sdist."
+              ;;
+            ABSENT)
+              echo "PyPI is still absent; retry prepare-pypi and its dependent jobs only." >&2
+              exit 1
+              ;;
+            PARTIAL)
+              echo "PyPI is partial; burn this version and prepare a new version. Never top up." >&2
+              exit 1
+              ;;
+            UNCERTAIN)
+              echo "PyPI evidence is uncertain; do not publish. Retry prepare-pypi and its dependent jobs only." >&2
+              exit 1
+              ;;
+            MISMATCH|YANKED|EXTRA|COMPETING)
+              echo "PyPI state is $STATE; preserve evidence and follow the compromise/new-version runbook." >&2
+              exit 1
+              ;;
+            *)
+              echo "Unknown PyPI state: $STATE" >&2
+              exit 1
+              ;;
+          esac

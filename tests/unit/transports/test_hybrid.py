@@ -150,6 +150,21 @@ class TestHybridTransportProperties:
         transport = HybridTransport(mock_local_transport, mock_http_transport)
         assert transport.http_transport is mock_http_transport
 
+    def test_register_observer_control_delegates_to_local_only(
+        self, mock_local_transport: MagicMock, mock_http_transport: MagicMock
+    ) -> None:
+        observer = MagicMock()
+        transport = HybridTransport(mock_local_transport, mock_http_transport)
+
+        transport.set_register_observer(observer)
+        transport.set_register_observer(None)
+
+        assert mock_local_transport.set_register_observer.call_args_list == [
+            ((observer,), {}),
+            ((None,), {}),
+        ]
+        mock_http_transport.set_register_observer.assert_not_called()
+
 
 class TestHybridTransportConnect:
     """Tests for HybridTransport connect/disconnect."""

@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
+import types
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import asdict, is_dataclass
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -14,7 +19,9 @@ from pylxpweb.transports._register_data import (
     DEFAULT_INPUT_BLOCK_SIZE,
     INPUT_REGISTER_GROUPS,
     RegisterDataMixin,
+    _append_observed_segment,
     _ReadBlock,
+    _RegisterCapture,
 )
 from pylxpweb.transports.exceptions import TransportReadError
 from pylxpweb.transports.protocol import BaseTransport
@@ -133,24 +140,26 @@ PUBLIC_OBSERVATION_READS: tuple[object, ...] = (
 )
 
 CANONICAL_OBSERVATION_READS: tuple[object, ...] = (
+    # The fake transport reads all-zero registers, so read_serial_number's
+    # holding-register fallback (GridBOSS, eg4_web_monitor#593) also fires.
     pytest.param(
         lambda transport: transport.read_serial_number(),
-        (RegisterSpace.INPUT, 115, 5),
+        ((RegisterSpace.INPUT, 115, 5), (RegisterSpace.HOLDING, 2, 5)),
         id="serial",
     ),
     pytest.param(
         lambda transport: transport.read_firmware_version(),
-        (RegisterSpace.HOLDING, 7, 4),
+        ((RegisterSpace.HOLDING, 7, 4),),
         id="firmware",
     ),
     pytest.param(
         lambda transport: transport.read_device_type(),
-        (RegisterSpace.HOLDING, 19, 1),
+        ((RegisterSpace.HOLDING, 19, 1),),
         id="device-type",
     ),
     pytest.param(
         lambda transport: transport.read_parallel_config(),
-        (RegisterSpace.INPUT, 113, 1),
+        ((RegisterSpace.INPUT, 113, 1),),
         id="parallel",
     ),
 )
@@ -182,6 +191,40 @@ def _observed_addresses(observed: list[ObservationBatch]) -> list[int]:
     ]
 
 
+def _without_timestamps(value: object) -> object:
+    """Normalize generated model timestamps while preserving parsed payloads."""
+    if isinstance(value, tuple):
+        return tuple(_without_timestamps(item) for item in value)
+    if is_dataclass(value) and not isinstance(value, type):
+        payload = asdict(value)
+        payload.pop("timestamp", None)
+        return payload
+    return value
+
+
+def _gate_observer_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    transport: _FakeRegisterTransport,
+    observations: ObservationBatch,
+) -> tuple[asyncio.Task[None], asyncio.Event, asyncio.Event]:
+    """Delay the observer task while leaving its caller runnable."""
+    scheduled = asyncio.Event()
+    release = asyncio.Event()
+    original_create_task = asyncio.create_task
+
+    def gated_create_task(coro: Awaitable[None]) -> asyncio.Task[None]:
+        async def gated() -> None:
+            scheduled.set()
+            await release.wait()
+            await coro
+
+        return original_create_task(gated())
+
+    monkeypatch.setattr(asyncio, "create_task", gated_create_task)
+    dispatch = original_create_task(transport._notify_register_observer(observations))
+    return dispatch, scheduled, release
+
+
 def test_register_observation_repr_redacts_raw_words_from_diagnostics(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -200,10 +243,14 @@ def test_register_observation_repr_redacts_raw_words_from_diagnostics(
         str(assertion.value),
         caplog.text,
     )
-    assert all(str(raw_sentinel) not in diagnostic for diagnostic in rendered)
+    raw_word_spellings = (str(raw_sentinel), "48879", "0xdead", "0xbeef")
+    assert all(
+        spelling not in diagnostic.lower()
+        for diagnostic in rendered
+        for spelling in raw_word_spellings
+    )
     assert all("123" in diagnostic for diagnostic in rendered[:3])
     assert all("word_count=2" in diagnostic for diagnostic in rendered[:3])
-    assert "word_count=2" in str(assertion.value)
     assert "word_count=2" in caplog.text
 
 
@@ -375,12 +422,12 @@ async def test_observer_adds_zero_reads_and_preserves_request_order() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("public_read", "expected_read"),
+    ("public_read", "expected_reads"),
     CANONICAL_OBSERVATION_READS,
 )
 async def test_canonical_readers_observe_enabled_terminal_segment_without_extra_reads(
     public_read: PublicRead,
-    expected_read: tuple[RegisterSpace, int, int],
+    expected_reads: tuple[tuple[RegisterSpace, int, int], ...],
 ) -> None:
     baseline = _FakeRegisterTransport()
     observed: list[ObservationBatch] = []
@@ -389,28 +436,48 @@ async def test_canonical_readers_observe_enabled_terminal_segment_without_extra_
     baseline_result = await public_read(baseline)
     enabled_result = await public_read(enabled)
 
-    space, start, count = expected_read
     assert enabled_result == baseline_result
-    assert baseline.reads == [expected_read]
-    assert enabled.reads == [expected_read]
+    assert baseline.reads == list(expected_reads)
+    assert enabled.reads == list(expected_reads)
     assert observed == [
-        (
+        tuple(
             RegisterObservation(
                 space,
                 (RegisterSegment(start, (0,) * count),),
-            ),
+            )
+            for space, start, count in expected_reads
         )
     ]
 
 
 @pytest.mark.asyncio
+async def test_serial_holding_fallback_waits_inter_register_delay() -> None:
+    # Switching from input (FC 04) to holding (FC 03) reads without a pause
+    # corrupts payloads on WiFi dongles (_inter_register_delay = 0.5 there),
+    # so the serial fallback must sleep the transport's delay first.
+    transport = _FakeRegisterTransport()
+    transport._inter_register_delay = 0.25
+    with patch("asyncio.sleep", new=AsyncMock()) as sleep_mock:
+        result = await transport.read_serial_number()
+    assert result == ""
+    assert (RegisterSpace.HOLDING, 2, 5) in transport.reads
+    sleep_mock.assert_awaited_once_with(0.25)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("public_read", PUBLIC_OBSERVATION_READS)
-async def test_default_observer_skips_capture_on_every_public_read(
+@pytest.mark.parametrize("detach_after_init", [False, True], ids=["default", "detached"])
+async def test_disabled_observer_skips_capture_on_every_public_read(
     monkeypatch: pytest.MonkeyPatch,
     public_read: PublicRead,
+    detach_after_init: bool,
 ) -> None:
     baseline = _FakeRegisterTransport()
-    await public_read(baseline)
+    baseline_result = await public_read(baseline)
+    observed: list[ObservationBatch] = []
+    disabled = _FakeRegisterTransport(observer=observed.append if detach_after_init else None)
+    if detach_after_init:
+        disabled.set_register_observer(None)
     capture_calls = 0
     publication_calls = 0
     capture_states: list[list[RegisterSegment] | None] = []
@@ -443,14 +510,15 @@ async def test_default_observer_skips_capture_on_every_public_read(
     monkeypatch.setattr(register_data_module, "_append_observed_segment", count_capture_calls)
     monkeypatch.setattr(RegisterDataMixin, "_new_observed_segments", record_capture_state)
     monkeypatch.setattr(RegisterDataMixin, "_notify_observed_segments", count_publication_calls)
-    disabled = _FakeRegisterTransport()
 
-    await public_read(disabled)
+    disabled_result = await public_read(disabled)
 
+    assert _without_timestamps(disabled_result) == _without_timestamps(baseline_result)
     assert disabled.reads == baseline.reads
     assert capture_states and all(state is None for state in capture_states)
     assert capture_calls == 0
     assert publication_calls == 0
+    assert observed == []
 
 
 @pytest.mark.asyncio
@@ -466,3 +534,333 @@ async def test_large_sequential_parameter_capture_is_linear() -> None:
     assert len(transport.reads) == chunk_count
     assert len(observed[0][0].segments) == chunk_count
     assert _CountingAddress.additions_of_chunk_size <= chunk_count * 3
+
+
+@pytest.mark.asyncio
+async def test_detach_during_unlocked_modbus_read_revokes_capture_before_append() -> None:
+    """A direct mixin read can finish, but its detached capture cannot publish."""
+    observed: list[ObservationBatch] = []
+    transport = _BlockingRegisterTransport(observer=observed.append)
+    task = asyncio.create_task(RegisterDataMixin.read_parameters(transport, 10, 1))
+    await transport.read_started.wait()
+
+    transport.set_register_observer(None)
+    transport.release_read.set()
+
+    assert await task == {10: 0}
+    assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_scheduled_dispatch_rereads_observer_after_detach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A callback task queued before detach must consult the slot when it runs."""
+    observed: list[ObservationBatch] = []
+    transport = _FakeRegisterTransport(observer=observed.append)
+    observation = (RegisterObservation(RegisterSpace.HOLDING, (RegisterSegment(10, (0,)),)),)
+    dispatch, scheduled, release = _gate_observer_dispatch(monkeypatch, transport, observation)
+    await scheduled.wait()
+
+    transport.set_register_observer(None)
+    release.set()
+    await dispatch
+
+    assert observed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reuse_observer", [False, True], ids=["replacement", "same-identity"])
+async def test_scheduled_dispatch_rejects_detach_reattach_aba(
+    monkeypatch: pytest.MonkeyPatch,
+    reuse_observer: bool,
+) -> None:
+    old_observer = MagicMock()
+    new_observer = old_observer if reuse_observer else MagicMock()
+    transport = _FakeRegisterTransport(observer=old_observer)
+    observation = (RegisterObservation(RegisterSpace.HOLDING, (RegisterSegment(10, (0,)),)),)
+    dispatch, scheduled, release = _gate_observer_dispatch(monkeypatch, transport, observation)
+    await scheduled.wait()
+
+    transport.set_register_observer(None)
+    transport.set_register_observer(new_observer)
+    release.set()
+    await dispatch
+
+    old_observer.assert_not_called()
+    if not reuse_observer:
+        new_observer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_detach_releases_callback_while_dispatch_is_gated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[ObservationBatch] = []
+
+    class Observer:
+        def __call__(self, observations: ObservationBatch) -> None:
+            observed.append(observations)
+
+    observer = Observer()
+    observer_ref = weakref.ref(observer)
+    transport = _FakeRegisterTransport(observer=observer)
+    observation = (RegisterObservation(RegisterSpace.HOLDING, (RegisterSegment(10, (0,)),)),)
+    dispatch, scheduled, release = _gate_observer_dispatch(monkeypatch, transport, observation)
+    await scheduled.wait()
+
+    transport.set_register_observer(None)
+    del observer
+    try:
+        gc.collect()
+        assert observer_ref() is None
+    finally:
+        release.set()
+        await dispatch
+
+    assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_coroutine_return_is_closed_and_counted_once(
+    recwarn: pytest.WarningsRecorder,
+) -> None:
+    ran = False
+
+    async def malformed_return() -> None:
+        nonlocal ran
+        ran = True
+
+    def observer(observations: ObservationBatch) -> object:
+        return malformed_return()
+
+    transport = _FakeRegisterTransport(observer=observer)
+
+    result = await transport.read_parameters(10, 1)
+    await asyncio.sleep(0)
+    gc.collect()
+    await asyncio.sleep(0)
+
+    assert result == {10: 0}
+    assert ran is False
+    assert transport.register_observation_error_count == 1
+    assert not [warning for warning in recwarn if issubclass(warning.category, RuntimeWarning)]
+
+
+@pytest.mark.parametrize("return_task", [False, True], ids=["future", "task"])
+@pytest.mark.asyncio
+async def test_pending_borrowed_future_return_is_not_cancelled(return_task: bool) -> None:
+    async def wait_forever() -> None:
+        await asyncio.Event().wait()
+
+    borrowed: asyncio.Future[None]
+    if return_task:
+        borrowed = asyncio.create_task(wait_forever())
+    else:
+        borrowed = asyncio.get_running_loop().create_future()
+    transport = _FakeRegisterTransport(observer=lambda observations: borrowed)
+
+    try:
+        result = await transport.read_parameters(10, 1)
+
+        assert result == {10: 0}
+        assert transport.register_observation_error_count == 1
+        assert not borrowed.done()
+    finally:
+        borrowed.cancel()
+        if return_task:
+            with pytest.raises(asyncio.CancelledError):
+                await borrowed
+
+
+@pytest.mark.asyncio
+async def test_pending_public_read_task_return_is_not_cancelled() -> None:
+    polling_task: asyncio.Task[dict[int, int]] | None = None
+
+    def return_polling_task(observations: ObservationBatch) -> object:
+        assert polling_task is not None
+        return polling_task
+
+    transport = _FakeRegisterTransport(observer=return_polling_task)
+
+    async def public_read() -> dict[int, int]:
+        nonlocal polling_task
+        polling_task = asyncio.current_task()
+        assert polling_task is not None
+        return await transport.read_parameters(10, 1)
+
+    task = asyncio.create_task(public_read())
+
+    assert await task == {10: 0}
+    assert not task.cancelled()
+    assert task.cancelling() == 0
+    assert transport.register_observation_error_count == 1
+
+
+@pytest.mark.parametrize("return_task", [False, True], ids=["future", "task"])
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancelled"])
+@pytest.mark.asyncio
+async def test_completed_future_return_is_retrieved_and_counted_once(
+    return_task: bool,
+    outcome: str,
+) -> None:
+    loop = asyncio.get_running_loop()
+    loop_errors: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda loop, context: loop_errors.append(context))
+    baseline_tasks = asyncio.all_tasks()
+
+    async def complete() -> None:
+        if outcome == "failure":
+            raise RuntimeError("malformed callback result")
+
+    if return_task:
+        returned: asyncio.Future[None] = asyncio.create_task(complete())
+        if outcome == "cancelled":
+            returned.cancel()
+        await asyncio.sleep(0)
+    else:
+        returned = loop.create_future()
+        if outcome == "success":
+            returned.set_result(None)
+        elif outcome == "failure":
+            returned.set_exception(RuntimeError("malformed callback result"))
+        else:
+            returned.cancel()
+    holder = [returned]
+
+    def observer(observations: ObservationBatch) -> object:
+        return holder.pop()
+
+    transport = _FakeRegisterTransport(observer=observer)
+    try:
+        result = await transport.read_parameters(10, 1)
+
+        assert result == {10: 0}
+        assert transport.register_observation_error_count == 1
+        assert returned.done()
+
+        del returned
+        gc.collect()
+        await asyncio.sleep(0)
+        assert loop_errors == []
+        assert asyncio.all_tasks() == baseline_tasks
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
+@pytest.mark.asyncio
+async def test_generic_awaitable_return_is_discarded_without_execution() -> None:
+    started = False
+
+    class GenericAwaitable:
+        def __await__(self):
+            nonlocal started
+            started = True
+            yield
+
+    awaitable = GenericAwaitable()
+    awaitable_ref = weakref.ref(awaitable)
+    holder = [awaitable]
+    baseline_tasks = asyncio.all_tasks()
+
+    def observer(observations: ObservationBatch) -> object:
+        return holder.pop()
+
+    transport = _FakeRegisterTransport(observer=observer)
+
+    result = await transport.read_parameters(10, 1)
+    await asyncio.sleep(0)
+    del awaitable
+    gc.collect()
+
+    assert result == {10: 0}
+    assert started is False
+    assert awaitable_ref() is None
+    assert transport.register_observation_error_count == 1
+    assert asyncio.all_tasks() == baseline_tasks
+
+
+@pytest.mark.asyncio
+async def test_generator_awaitable_return_uses_standard_close_hook() -> None:
+    closed = False
+
+    @types.coroutine
+    def generator_awaitable():
+        nonlocal closed
+        try:
+            yield
+        finally:
+            closed = True
+
+    awaitable = generator_awaitable()
+    next(awaitable)
+    transport = _FakeRegisterTransport(observer=lambda observations: awaitable)
+
+    result = await transport.read_parameters(10, 1)
+
+    assert result == {10: 0}
+    assert closed is True
+    assert transport.register_observation_error_count == 1
+
+
+@pytest.mark.parametrize("malformed", [0, "value", object()], ids=["zero", "string", "object"])
+@pytest.mark.asyncio
+async def test_non_none_return_is_counted_once(malformed: object) -> None:
+    transport = _FakeRegisterTransport(observer=lambda observations: malformed)
+
+    result = await transport.read_parameters(10, 1)
+
+    assert result == {10: 0}
+    assert transport.register_observation_error_count == 1
+
+
+def test_detach_revokes_clears_and_rejects_late_capture_appends() -> None:
+    observed: list[ObservationBatch] = []
+    transport = _FakeRegisterTransport(observer=observed.append)
+    capture = transport._new_observed_segments()
+    assert isinstance(capture, _RegisterCapture)
+    _append_observed_segment(capture, 10, [1])
+
+    transport.set_register_observer(None)
+    _append_observed_segment(capture, 11, [2])
+
+    assert capture == []
+    assert capture.active is False
+
+
+@pytest.mark.asyncio
+async def test_detach_reattach_is_idempotent_preserves_counter_and_does_not_reconnect() -> None:
+    old_observer = MagicMock(side_effect=RuntimeError("old observer"))
+    new_observer = MagicMock(return_value=None)
+    transport = _FakeRegisterTransport(observer=old_observer)
+    transport.connect = AsyncMock()
+    transport.disconnect = AsyncMock()
+    await transport.read_parameters(10, 1)
+    assert transport.register_observation_error_count == 1
+
+    transport.set_register_observer(None)
+    transport.set_register_observer(None)
+    transport.set_register_observer(new_observer)
+    transport.set_register_observer(new_observer)
+    await transport.read_parameters(11, 1)
+
+    assert transport.register_observation_error_count == 1
+    old_observer.assert_called_once()
+    new_observer.assert_called_once()
+    transport.connect.assert_not_awaited()
+    transport.disconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reattach_dispatches_only_to_replacement_observer() -> None:
+    old_observer = MagicMock(return_value=None)
+    new_observer = MagicMock(return_value=None)
+    transport = _FakeRegisterTransport(observer=old_observer)
+
+    transport.set_register_observer(None)
+    transport.set_register_observer(new_observer)
+    await transport.read_parameters(10, 1)
+
+    old_observer.assert_not_called()
+    new_observer.assert_called_once()

@@ -22,8 +22,15 @@ DEVICE_TYPE_MIDBOX = 50
 DEVICE_TYPE_REGISTER = 19
 
 # Serial number is stored in input registers 115-119 (5 registers, 10 ASCII chars)
+# on inverter-family devices. On MID/GridBOSS devices those input registers are
+# AC-couple lifetime-energy counters (see registers/gridboss.py), so when the
+# input decode is not a plausible serial the read falls back to holding
+# registers 2-6 (HOLD_SERIAL_NUM), which hold the serial on every documented
+# family (eg4_web_monitor#593).
 SERIAL_NUMBER_START_REGISTER = 115
 SERIAL_NUMBER_REGISTER_COUNT = 5
+SERIAL_NUMBER_HOLDING_START_REGISTER = 2
+SERIAL_NUMBER_LENGTH = 10
 
 # Firmware version is in holding registers 7-10
 FIRMWARE_REGISTER_START = 7
@@ -68,6 +75,19 @@ def is_midbox_device(device_type_code: int) -> bool:
         True if device is a MID/GridBOSS, False for inverters
     """
     return device_type_code == DEVICE_TYPE_MIDBOX
+
+
+def _is_plausible_serial(candidate: str) -> bool:
+    """Return True when candidate looks like a genuine device serial.
+
+    Serials across every documented family are exactly 10 ASCII alphanumeric
+    characters — letters can appear anywhere (e.g. "BA12345678",
+    "52842P0581"), so digits-only must not be assumed.
+    decode_serial_from_registers only emits printable ASCII, so a decode of
+    non-serial data (e.g. GridBOSS AC-couple energy counters at input
+    115-119) is rejected here as too short or as containing punctuation.
+    """
+    return len(candidate) == SERIAL_NUMBER_LENGTH and candidate.isascii() and candidate.isalnum()
 
 
 def decode_serial_from_registers(values: list[int]) -> str:
@@ -160,19 +180,67 @@ async def read_device_type_async(
 async def read_serial_number_async(
     read_input: Callable[[int, int], Coroutine[None, None, list[int]]],
     serial: str,
+    read_holding: Callable[[int, int], Coroutine[None, None, list[int]]] | None = None,
 ) -> str:
-    """Read inverter serial number from input registers 115-119.
+    """Read device serial number.
+
+    Tries input registers 115-119 first (inverter-family layout). If the
+    decoded result is not a plausible 10-character alphanumeric serial —
+    GridBOSS units keep AC-couple energy counters there, which decode to
+    an empty, truncated, or garbage-punctuation string — falls back to
+    holding registers 2-6 (HOLD_SERIAL_NUM), the canonical location shared
+    by all families. A holding decode that is itself not plausible is not
+    adopted, and a holding read that fails outright is swallowed — either
+    way the input-register result is returned unchanged, so a device with
+    a restricted register map degrades exactly as it did before the
+    fallback existed instead of turning discovery into a hard failure.
 
     Args:
         read_input: Async function to read input registers
         serial: Device serial for logging
+        read_holding: Optional async function to read holding registers,
+            enabling the holding-register fallback
 
     Returns:
         10-character serial number string (e.g., "BA12345678")
     """
     values = await read_input(SERIAL_NUMBER_START_REGISTER, SERIAL_NUMBER_REGISTER_COUNT)
     result = decode_serial_from_registers(values)
-    _LOGGER.debug("Read serial number from device %s: %s", serial, result)
+    if _is_plausible_serial(result) or read_holding is None:
+        _LOGGER.debug("Read serial number from device %s: %s", serial, result)
+        return result
+
+    _LOGGER.debug(
+        "Input registers 115-119 decoded to %r for %s, not a plausible serial; "
+        "falling back to holding registers 2-6",
+        result,
+        serial,
+    )
+    try:
+        holding_values = await read_holding(
+            SERIAL_NUMBER_HOLDING_START_REGISTER, SERIAL_NUMBER_REGISTER_COUNT
+        )
+    except Exception as err:
+        _LOGGER.debug(
+            "Holding-register serial fallback failed for %s, keeping input-register result: %s",
+            serial,
+            err,
+        )
+        return result
+    holding_result = decode_serial_from_registers(holding_values)
+    if _is_plausible_serial(holding_result):
+        _LOGGER.debug(
+            "Read serial number from holding registers for device %s: %s",
+            serial,
+            holding_result,
+        )
+        return holding_result
+    _LOGGER.debug(
+        "Holding registers 2-6 decoded to %r for %s, not a plausible serial; "
+        "keeping input-register result",
+        holding_result,
+        serial,
+    )
     return result
 
 

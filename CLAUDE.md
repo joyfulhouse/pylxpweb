@@ -612,12 +612,18 @@ Store Claude Code session documentation in `docs/claude/` (gitignored):
 
 ## Release Process
 
-1. Update version in `src/pylxpweb/__init__.py` and `pyproject.toml`
+1. Update version in `pyproject.toml` (and `uv lock`; `__init__.py` derives the
+   version via importlib metadata)
 2. Update `CHANGELOG.md` with version notes
-3. Ensure all tests pass (`pytest tests/unit/`)
-4. Ensure all quality checks pass (mypy, ruff)
-5. Create GitHub release (triggers publish workflow)
-6. Workflow: Build → TestPyPI → PyPI (OIDC authentication)
+3. Open a release PR and wait for `CI Success`
+4. **Merge the release PR with "Create a merge commit" — NEVER squash or
+   rebase.** The publish workflow's provenance binding requires the tagged
+   commit to be a two-parent merge commit whose second parent is the CI-tested
+   PR head (see `.github/WORKFLOWS.md`); a squashed release PR fails the
+   `bind-build-attest` job with "tag commit must have exactly two parents".
+5. Tag the merge commit (`git tag vX.Y.Z && git push origin vX.Y.Z`)
+6. Create/publish the GitHub release for the tag (triggers publish workflow)
+7. Workflow: Build → TestPyPI → PyPI (OIDC authentication)
 
 ## Security & Privacy
 

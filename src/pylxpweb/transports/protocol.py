@@ -8,11 +8,15 @@ implementations must follow. Using Protocol allows for structural subtyping
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import inspect
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
+import weakref
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast, runtime_checkable
 
-from .observation import RegisterObservation, RegisterObserver
+from .observation import RegisterObservation, RegisterObserver, _RegisterCapture
 
 if TYPE_CHECKING:
     from .capabilities import TransportCapabilities
@@ -20,11 +24,27 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Response budget (seconds) for the cheap link-down probe (``check_link``).
+# A deaf endpoint — TCP accepts but never answers — must be detectable in a
+# bounded couple of seconds, never the transport's full read timeout chain,
+# because devices probe from inside every coordinator refresh while the link
+# is down (eg4_web_monitor#587).
+LINK_PROBE_TIMEOUT_SECONDS = 2.0
+
 # FUNC_<register>_BIT<n> keys name bit positions whose function has never been
 # hardware-verified. They exist so reads decode the whole register honestly
 # rather than mislabelling unknown bits — writing one would flip an unknown
 # device setting, which is the failure mode of eg4_web_monitor #476.
 _PLACEHOLDER_PARAM_RE = re.compile(r"FUNC_\d+_BIT\d+")
+
+
+@runtime_checkable
+class RegisterObserverControl(Protocol):
+    """Optional capability for synchronous runtime observer replacement."""
+
+    def set_register_observer(self, observer: RegisterObserver | None) -> None:
+        """Replace or detach the synchronous, non-blocking observer callback."""
+        ...
 
 
 class _ReentrantAsyncLock:
@@ -297,6 +317,11 @@ class BaseTransport:
         self._connected = False
         self._op_lock = _ReentrantAsyncLock()
         self._register_observer = register_observer
+        self._register_observer_generation = 0
+        # Captures inherit list and are unhashable, so WeakSet cannot track them.
+        self._register_observer_captures: weakref.WeakValueDictionary[int, _RegisterCapture] = (
+            weakref.WeakValueDictionary()
+        )
         self._register_observation_error_count = 0
 
     @property
@@ -314,17 +339,55 @@ class BaseTransport:
         """Return the monotonic count of suppressed register-observer errors."""
         return self._register_observation_error_count
 
+    def set_register_observer(self, observer: RegisterObserver | None) -> None:
+        """Synchronously replace or detach the non-blocking register observer.
+
+        The callback must complete synchronously and must not return awaitable
+        work. Passing ``None`` detaches observation without reconnecting or
+        otherwise changing transport operation.
+        """
+        if observer is self._register_observer:
+            return
+        for capture in tuple(self._register_observer_captures.values()):
+            capture.revoke()
+        self._register_observer_captures.clear()
+        self._register_observer = observer
+        self._register_observer_generation += 1
+
+    def _new_register_capture(self) -> _RegisterCapture:
+        """Create and track an enabled capture for synchronous revocation."""
+        capture = _RegisterCapture()
+        self._register_observer_captures[id(capture)] = capture
+        return capture
+
     async def _notify_register_observer(
         self,
         observations: tuple[RegisterObservation, ...],
     ) -> None:
         """Notify the observer without affecting transport behavior."""
-        observer = self._register_observer
-        if observer is None or not observations:
+        if self._register_observer is None or not observations:
             return
+        generation = self._register_observer_generation
 
         async def invoke_observer() -> None:
-            observer(observations)
+            observer = self._register_observer
+            if observer is None or generation != self._register_observer_generation:
+                return
+            runtime_observer = cast(Callable[[tuple[RegisterObservation, ...]], object], observer)
+            result = runtime_observer(observations)
+            if result is None:
+                return
+            if inspect.iscoroutine(result):
+                result.close()
+            elif isinstance(result, asyncio.Future):
+                if result.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        result.exception()
+            elif isinstance(result, Coroutine) or (
+                inspect.isawaitable(result) and inspect.isgenerator(result)
+            ):
+                result.close()
+            raise TypeError("register observer must return None")
 
         try:
             await asyncio.create_task(invoke_observer())

@@ -6,12 +6,17 @@ Register map sourced from ricardocello's eg4_waveshare.py.
 Register layout:
   - Regs 0-38: Runtime state (voltage, current, cells, temps, SOC, etc.)
   - Regs 33-35: Packed per-cell NTC temperatures (2 per register, high/low byte)
-  - Regs 105-127: Device info block (read but empty on EG4-LL WP-16/280 firmware)
+  - Regs 105-116, 120-127: Model and serial fields (no serial data on observed
+    EG4-LL WP-16/280 firmware; Z02T11 returns ``0x41F4`` then ``0xFFFF`` padding)
+  - Regs 117-119: BMS firmware; observed Z02T11 units return ASCII ``Z02T11``
 
-Note on device info: Firmware RE confirmed that the Modbus buffer positions for
-regs 105-127 are never populated with ASCII data by the slave code path.
-Device info (model, FW, serial) is only available via CAN bus.
-The info block is still read in case other EG4 battery models do populate it.
+Note on device info: Firmware RE of one WP-16/280 firmware found that its slave
+code path never populates the Modbus buffer positions for regs 105-127 with
+ASCII data. That finding is hardware- and firmware-specific: captures from
+Z02T11 units populate the firmware field at regs 117-119. Their serial-specific
+regs 120-127 contain ``0x41F4`` followed by ``0xFFFF`` padding rather than serial
+data. The full info block is read because other EG4 battery models and firmware
+may populate additional fields.
 """
 
 from __future__ import annotations
@@ -60,10 +65,12 @@ class EG4SlaveProtocol(BatteryProtocol):
     Decodes runtime registers (0-38) and device info registers (105-127)
     into a BatteryData object with all values properly scaled.
 
-    Note: On EG4-LL WP-16/280 firmware, device info registers (105-127)
-    return all zeros. The firmware's Modbus register lookup (FUN_2CDB4)
-    serves from a flat buffer that the slave code path never populates
-    with ASCII data. Device info is only available via CAN bus (cloud API).
+    Note: Reverse engineering of one EG4-LL WP-16/280 firmware found that its
+    Modbus register lookup (FUN_2CDB4) serves regs 105-127 from a flat buffer
+    that the slave code path does not populate with ASCII device info. This is
+    not universal: observed Z02T11 units return their ASCII BMS firmware version
+    in regs 117-119. Their serial-specific regs 120-127 contain ``0x41F4`` then
+    ``0xFFFF`` padding, not a battery serial number.
     """
 
     name = "eg4_slave"

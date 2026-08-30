@@ -47,6 +47,21 @@ type RegisterObserver = Callable[[tuple[RegisterObservation, ...]], None]
 """Observer callback for successful local raw-register reads."""
 
 
+class _RegisterCapture(list[RegisterSegment]):
+    """Revocable enabled-only staging buffer for one public register read."""
+
+    __slots__ = ("active", "__weakref__")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active = True
+
+    def revoke(self) -> None:
+        """Synchronously clear the capture and reject subsequent appends."""
+        self.active = False
+        self.clear()
+
+
 __all__ = [
     "RegisterObservation",
     "RegisterObserver",

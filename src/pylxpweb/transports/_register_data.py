@@ -52,7 +52,13 @@ from .exceptions import (
     TransportResponseMismatchError,
     TransportTimeoutError,
 )
-from .observation import RegisterObservation, RegisterObserver, RegisterSegment, RegisterSpace
+from .observation import (
+    RegisterObservation,
+    RegisterObserver,
+    RegisterSegment,
+    RegisterSpace,
+    _RegisterCapture,
+)
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
@@ -207,7 +213,7 @@ def _append_observed_segment(
     values: Sequence[int],
 ) -> None:
     """Merge a terminal segment, making later overlapping reads authoritative."""
-    if not values:
+    if (isinstance(segments, _RegisterCapture) and not segments.active) or not values:
         return
 
     new_segment = RegisterSegment(start, tuple(values))
@@ -310,6 +316,8 @@ if TYPE_CHECKING:
         _input_coalescing_latched_off: bool
         _register_observer: RegisterObserver | None
 
+        def _new_register_capture(self) -> _RegisterCapture: ...
+
         async def _read_input_registers(self, start: int, count: int) -> list[int]: ...
 
         async def _read_holding_registers(self, start: int, count: int) -> list[int]: ...
@@ -391,9 +399,9 @@ class RegisterDataMixin(_DataMixinBase):
         )
         await self._notify_register_observer(observations)
 
-    def _new_observed_segments(self) -> list[RegisterSegment] | None:
+    def _new_observed_segments(self) -> _RegisterCapture | None:
         """Allocate capture state only when an observer was configured."""
-        return [] if self._register_observer is not None else None
+        return self._new_register_capture() if self._register_observer is not None else None
 
     async def _read_individual_battery_registers(
         self,
@@ -1778,12 +1786,33 @@ class RegisterDataMixin(_DataMixinBase):
     # ------------------------------------------------------------------
 
     async def read_serial_number(self) -> str:
-        """Read inverter serial number from input registers 115-119."""
+        """Read device serial number.
+
+        Input registers 115-119 first; falls back to holding registers 2-6
+        (HOLD_SERIAL_NUM) when the input decode is not a plausible 10-char
+        alphanumeric serial — GridBOSS units keep AC-couple energy counters
+        at input 115-119.
+        """
         segments = self._new_observed_segments()
+        holding_segments = self._new_observed_segments()
         reader = _capture_register_reads(self._read_input_registers, segments)
-        result = await read_serial_number_async(reader, self._serial)
-        if segments:
-            await self._notify_observed_segments((RegisterSpace.INPUT, segments))
+        holding_reader = _capture_register_reads(self._read_holding_registers, holding_segments)
+
+        async def delayed_holding_reader(address: int, count: int) -> list[int]:
+            # Delay before switching from input (FC 04) to holding (FC 03)
+            # registers — WiFi dongles need time between function code changes
+            # to avoid corrupt reads. Only paid when the fallback fires.
+            await asyncio.sleep(self._inter_register_delay)
+            return await holding_reader(address, count)
+
+        result = await read_serial_number_async(
+            reader, self._serial, read_holding=delayed_holding_reader
+        )
+        if segments or holding_segments:
+            await self._notify_observed_segments(
+                (RegisterSpace.INPUT, segments),
+                (RegisterSpace.HOLDING, holding_segments),
+            )
         return result
 
     async def read_firmware_version(self) -> str:

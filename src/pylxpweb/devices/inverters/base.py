@@ -804,7 +804,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             # probe needed to detect link recovery — not the full
             # all-input-groups read.
             if runtime_expired:
-                tasks.append(self._fetch_runtime())
+                if link_down:
+                    # Cheap check_link gate first (when the transport offers
+                    # it): a dead endpoint must not cost the full runtime
+                    # read timeout chain every refresh (eg4_web_monitor#587).
+                    tasks.append(self._probe_link_then_fetch_runtime())
+                else:
+                    tasks.append(self._fetch_runtime())
 
             if energy_expired:
                 tasks.append(self._fetch_energy())
@@ -905,6 +911,23 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         if not skip_runtime:
             fetches.append(self._fetch_runtime_http())
         await asyncio.gather(*fetches, return_exceptions=True)
+
+    async def _probe_link_then_fetch_runtime(self) -> None:
+        """Link-down probe: cheap ``check_link`` gate before the runtime read.
+
+        When the transport offers ``check_link()`` (single-attempt, short
+        timeout), a dead endpoint costs only that bounded probe instead of
+        the full runtime-read timeout chain — which Home Assistant would
+        otherwise absorb into every coordinator refresh, degrading the
+        user-visible poll interval (eg4_web_monitor#587).  A failed probe
+        counts as a failed read (growing the probe backoff window); a
+        passing probe falls through to the normal runtime read.
+        """
+        check_link = getattr(self._transport, "check_link", None)
+        if check_link is not None and not await check_link():
+            self._record_transport_read_failure()
+            return
+        await self._fetch_runtime()
 
     async def _fetch_runtime(self) -> None:
         """Fetch runtime data with caching.

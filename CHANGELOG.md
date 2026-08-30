@@ -5,6 +5,156 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **GridBOSS Modbus discovery: serial number falls back to holding
+  registers 2-6**
+  ([eg4_web_monitor#593](https://github.com/joyfulhouse/eg4_web_monitor/issues/593)):
+  the "serial at input registers 115-119" layout is inverter-family-specific —
+  on MID/GridBOSS devices those registers are AC-couple ports 3-4
+  lifetime-energy counters (`registers/gridboss.py`), which read as zeros on a
+  unit with those ports unused, so local Modbus TCP discovery failed with
+  "Failed to read serial number from device". `read_serial_number()` now falls
+  back to holding registers 2-6 (`HOLD_SERIAL_NUM`, documented for every
+  family) whenever the input-register decode is not a plausible serial —
+  exactly 10 printable ASCII alphanumeric characters. The same plausibility
+  check gates the holding-register result, so a partial or garbage holding
+  decode is never adopted either; the pre-fallback input result is returned
+  unchanged in that case, and a holding read that fails outright (restricted
+  register map) is swallowed the same way rather than turning discovery into
+  a hard failure. The fallback also honors the transport's
+  `inter_register_delay` before switching from input (FC 04) to holding
+  (FC 03) reads, matching the existing MID mixed-space read pattern — WiFi
+  dongles corrupt payloads without that pause. This also stops a latent
+  wrong-identity case: a
+  GridBOSS *with* accumulated AC-couple energy at 115-119 could decode those
+  bytes into printable garbage and silently adopt it as the device serial.
+
+- **GridBOSS Modbus discovery: skip the parallel-config read (input
+  register 113)**
+  ([eg4_web_monitor#596](https://github.com/joyfulhouse/eg4_web_monitor/issues/596)):
+  on MID/GridBOSS devices input registers 112-113 are the
+  `ac_couple3_energy_total_l1` 32-bit lifetime counter
+  (`registers/gridboss.py`), not parallel config. Once that counter passes
+  6553.6 kWh the high word (113) goes nonzero and discovery decoded a bogus
+  parallel role/phase/group (raw `0x0001` → "master", parallel number 0).
+  `discover_device_info()` now leaves parallel fields at standalone
+  defaults for GridBOSS and skips the holding 107-108 fallback as well.
+
+## [0.10.0b4] - 2026-08-26
+
+### Fixed
+
+- **Bounded dead-link probe cost — poll interval no longer degrades to ~30s
+  against a deaf local endpoint**
+  ([eg4_web_monitor#587](https://github.com/joyfulhouse/eg4_web_monitor/issues/587),
+  PR [#310](https://github.com/joyfulhouse/pylxpweb/pull/310)):
+  when a local endpoint goes deaf (TCP accepts but never answers — the wedged
+  dongle / Waveshare gateway failure mode), every coordinator refresh paid the
+  transport's full read timeout chain (10s dongle response timeout; up to ~30s
+  Modbus retry chain) as its link-down probe, which Home Assistant absorbs into
+  the effective poll interval. Now: the probe rate-limit window is stamped at
+  probe completion and backs off exponentially (4s base, 60s cap, reset on any
+  success), and the Modbus/dongle transports expose a cheap single-attempt
+  `check_link()` probe with a 2s budget that devices use while the link is
+  down — the HTTP fallback keeps data flowing meanwhile. `HybridTransport`
+  deliberately does not expose `check_link()`: it is its devices' HTTP
+  fallback, and its own local-failure gating already keeps probes cheap.
+- **Restored the hermetic `uv_build` release pin**
+  (PR [#311](https://github.com/joyfulhouse/pylxpweb/pull/311)): Dependabot
+  bumped `uv_build` past the version bundled in the digest-pinned offline
+  build container, which would have broken the release build. The pin is
+  reverted to match the container and Dependabot now ignores it; `main` is
+  branch-protected requiring the `CI Success` check so red PRs can no longer
+  merge.
+
+## [0.10.0b3] - 2026-08-16
+
+### Added
+
+- **Runtime register-observer replacement and detach control**
+  ([#284](https://github.com/joyfulhouse/pylxpweb/issues/284), PR
+  [#285](https://github.com/joyfulhouse/pylxpweb/pull/285), release issue
+  [#287](https://github.com/joyfulhouse/pylxpweb/issues/287)):
+  the new runtime-checkable `RegisterObserverControl` capability lets callers
+  use `set_register_observer(...)` on concrete local transports to replace or
+  detach their synchronous register observer without reconnecting. Hybrid
+  transports apply the change only to their local transport. Observations
+  still being captured or queued for delivery are not sent to the previous
+  observer after a change. Existing structural transport protocols remain
+  unchanged, and observers remain synchronous callbacks that return `None`.
+
+### Changed
+
+- **EG4 slave register documentation and Z02T11 characterization coverage**
+  (PR [#283](https://github.com/joyfulhouse/pylxpweb/pull/283)):
+  corrects EG4 slave device-information register documentation and adds
+  characterization coverage for existing Z02T11 decoding. There is no runtime
+  behavior change.
+
+- **Build backend pinned to `uv_build==0.9.30`**
+  (PR [#297](https://github.com/joyfulhouse/pylxpweb/pull/297)):
+  source builds require that exact PEP 517 backend, matching the release
+  container's bundled uv version so the offline build cannot resolve a
+  different builder. The pin was restored after a dependency-bump regression
+  in PR [#304](https://github.com/joyfulhouse/pylxpweb/pull/304). Runtime
+  dependencies and supported Python versions are unchanged.
+
+### Fixed
+
+- **Aging Modbus TCP sessions are proactively recycled**
+  ([#288](https://github.com/joyfulhouse/pylxpweb/issues/288), PR
+  [#290](https://github.com/joyfulhouse/pylxpweb/pull/290), forward-port PR
+  [#295](https://github.com/joyfulhouse/pylxpweb/pull/295)):
+  `ModbusTransport(..., session_max_age=...)` defaults to 3600 seconds with
+  deterministic ±10% per-transport jitter; callers can choose another interval
+  or `None` to disable age recycling. At each outer public operation boundary,
+  the operation lock permits at most one reconnect and keeps a multi-read or
+  read-modify-write operation on one session generation. Reconnects report
+  `age-recycle`, `error-recycle`, or `disconnected-reconnect`; a failed dial
+  imposes a 60-second cooldown. Terminal `async_shutdown()` closes without
+  waiting on the operation lock and rejects later reuse. HYBRID falls back to
+  HTTP after local failure, then retries and resumes local routing after its
+  configured recovery interval.
+
+### Security
+
+- **Tag-bound, build-once release artifact promotion**
+  ([#291](https://github.com/joyfulhouse/pylxpweb/issues/291), PR
+  [#292](https://github.com/joyfulhouse/pylxpweb/pull/292)):
+  the release workflow builds the wheel and sdist once, binds them to the
+  source commit/tree and their SHA-256 digests, and requires TestPyPI
+  project/version identity, exact filenames and index hashes, downloaded-byte
+  rehashing, and a second index snapshot before promoting the same artifacts
+  to PyPI from a published release tag. Default permissions are read-only;
+  trusted-publishing OIDC is limited to the TestPyPI and PyPI publisher jobs
+  declared against their respective repository environments.
+
+- **Reviewed-merge release provenance binding**
+  ([#296](https://github.com/joyfulhouse/pylxpweb/issues/296), PR
+  [#297](https://github.com/joyfulhouse/pylxpweb/pull/297)):
+  the tag-resident workflow requires current main's reviewed two-parent release
+  commit and a tree matching the CI-tested PR head. Its digest-pinned uv/Python
+  container builds from a read-only source mount without network access; source
+  and distribution attestations are verified before package-index staging.
+
+- **Provenance-bound PyPI recovery for closed publications**
+  ([#299](https://github.com/joyfulhouse/pylxpweb/issues/299), PR
+  [#303](https://github.com/joyfulhouse/pylxpweb/pull/303)):
+  when the release workflow finds the version already on PyPI, it classifies
+  the closed publication state as exact-complete, partial, mismatch, yanked,
+  extra, competing, or uncertain instead of failing opaquely. Recovery
+  rediscovers the run-scoped sealed artifacts and verifies their attestations,
+  and publishes the full sealed wheel/sdist set only when the version is
+  wholly absent from the index — never topping up a partial publication
+  (partial is terminal), rebuilding, republishing exact-complete state, using
+  production `skip-existing`, or broadening publisher authority; evidence gaps
+  and remote conflicts fail closed through uncertain. An unprivileged terminal
+  verify-pypi job confirms the final index state, and the recovery runbook is
+  documented in `.github/WORKFLOWS.md`.
+
 ## [0.10.0b2] - 2026-08-15
 
 ### Added
@@ -2660,7 +2810,8 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
-[Unreleased]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b2...HEAD
+[Unreleased]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b3...HEAD
+[0.10.0b3]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b2...v0.10.0b3
 [0.10.0b2]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b1...v0.10.0b2
 [0.10.0b1]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.39b11...v0.10.0b1
 [0.9.32]: https://github.com/joyfulhouse/pylxpweb/compare/v0.9.29...v0.9.32
