@@ -188,6 +188,24 @@ class TestEG4MasterProtocol:
         data = self.protocol.decode(raw)
         assert data.soh == 100
 
+    @pytest.mark.parametrize(
+        ("raw_soh", "expected_soh"),
+        [(0, None), (100, 100), (1, 1)],
+    )
+    def test_decode_soh_zero_is_unreported(self, raw_soh: int, expected_soh: int | None) -> None:
+        """SOH reg 32 = 0 means not reported → None, never a fabricated value (#309)."""
+        raw = self._base_regs()
+        raw[32] = raw_soh
+        data = self.protocol.decode(raw)
+        assert data.soh == expected_soh
+
+    def test_decode_soh_absent_register_is_none(self) -> None:
+        """A missing SOH register decodes as unreported (None), not 100 (#309)."""
+        raw = self._base_regs()
+        del raw[32]
+        data = self.protocol.decode(raw)
+        assert data.soh is None
+
     def test_decode_designed_capacity(self) -> None:
         """Designed capacity: reg 33 /20."""
         raw = self._base_regs()

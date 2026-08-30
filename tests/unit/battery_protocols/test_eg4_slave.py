@@ -77,6 +77,25 @@ class TestEG4SlaveProtocol:
         assert data.soh == 100
         assert data.soc == 76
 
+    @pytest.mark.parametrize(
+        ("raw_soh", "expected_soh"),
+        [(0, None), (100, 100), (1, 1)],
+    )
+    def test_decode_soh_zero_is_unreported(self, raw_soh: int, expected_soh: int | None) -> None:
+        """SOH reg 23 = 0 means not reported → None, never a fabricated value (#309)."""
+        raw: dict[int, int] = dict.fromkeys(range(39), 0)
+        raw[23] = raw_soh
+        raw[24] = 76
+        data = self.protocol.decode(raw, battery_index=0)
+        assert data.soh == expected_soh
+
+    def test_decode_soh_absent_register_is_none(self) -> None:
+        """A missing SOH register decodes as unreported (None), not 100 (#309)."""
+        raw: dict[int, int] = dict.fromkeys(range(39), 0)
+        del raw[23]
+        data = self.protocol.decode(raw, battery_index=0)
+        assert data.soh is None
+
     def test_decode_temperatures_fallback(self) -> None:
         """Without packed temps, falls back to PCB (min) and max (max)."""
         raw: dict[int, int] = dict.fromkeys(range(39), 0)
