@@ -976,6 +976,7 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
             dongle_serial=dongle_serial,
             inverter_serial=args.serial or "",
             port=args.port,
+            use_ssl=getattr(args, "use_ssl", None),
         )
     else:
         collector = ModbusCollector(

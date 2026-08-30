@@ -155,12 +155,22 @@ class TestDongleConnection:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "error",
-        [OSError("unreachable"), ConnectionRefusedError("refused")],
+        [
+            OSError("unreachable"),
+            ConnectionRefusedError("refused"),
+            TimeoutError("timeout"),
+            ConnectionAbortedError(
+                "SSL handshake is taking longer than 3.0 seconds: aborting the connection"
+            ),
+            ConnectionResetError("reset during handshake"),
+        ],
     )
     async def test_auto_generic_failure_keeps_retry_ladder_and_no_verdict(
         self, error: OSError
     ) -> None:
-        """Failures that hit TLS and plaintext alike cache no verdict."""
+        """Every non-SSLError probe failure is inconclusive: ordinary retry
+        ladder, TLS re-probed on the next attempt, no verdict cached — a
+        disrupted handshake must never trigger a plaintext downgrade."""
         transport = DongleTransport("host", "BA12345678", "CE12345678", connection_retries=2)
         context = MagicMock()
         socket = self._successful_socket()
@@ -184,80 +194,11 @@ class TestDongleConnection:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "error",
-        [
-            TimeoutError("timeout"),
-            ConnectionAbortedError(
-                "SSL handshake is taking longer than 3.0 seconds: aborting the connection"
-            ),
-            ConnectionResetError("reset during handshake"),
-        ],
-    )
-    async def test_auto_ambiguous_probe_failure_falls_back_with_short_cooldown(
-        self, error: OSError
-    ) -> None:
-        """A TLS probe the peer neither completes nor rejects is an ambiguous
-        negative: same-attempt plaintext fallback, short re-probe cooldown."""
-        transport = DongleTransport("host", "BA12345678", "CE12345678")
-        context = MagicMock()
-        socket = self._successful_socket()
-        open_connection = AsyncMock(side_effect=[error, socket])
-        sleep = AsyncMock()
-
-        with (
-            patch.object(transport, "_ssl_ctx", return_value=context),
-            patch("asyncio.open_connection", open_connection),
-            patch("asyncio.sleep", sleep),
-            patch("pylxpweb.transports.dongle.time.monotonic", return_value=10.0),
-        ):
-            await transport.connect()
-
-        assert [call.kwargs.get("ssl") for call in open_connection.await_args_list] == [
-            context,
-            None,
-        ]
-        sleep.assert_not_awaited()
-        assert transport._ssl_unsupported_until == 310.0
-        assert transport._ssl_active is False
-
-    @pytest.mark.asyncio
-    async def test_auto_ambiguous_cooldown_reprobes_after_expiry(self) -> None:
-        """The ambiguous verdict re-probes after ~300s, not the 24h TTL."""
-        transport = DongleTransport("host", "BA12345678", "CE12345678")
-        context = MagicMock()
-        first_socket = self._successful_socket()
-        second_socket = self._successful_socket()
-        open_connection = AsyncMock(
-            side_effect=[TimeoutError("timeout"), first_socket, second_socket]
-        )
-        monotonic = MagicMock(return_value=10.0)
-
-        with (
-            patch.object(transport, "_ssl_ctx", return_value=context),
-            patch("asyncio.open_connection", open_connection),
-            patch("pylxpweb.transports.dongle.time.monotonic", monotonic),
-        ):
-            await transport.connect()
-            assert transport._ssl_unsupported_until == 310.0
-
-            await transport.disconnect()
-            monotonic.return_value = 311.0
-            await transport.connect()
-
-        assert [call.kwargs.get("ssl") for call in open_connection.await_args_list] == [
-            context,
-            None,
-            context,
-        ]
-        assert transport._ssl_proven is True
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
         ("use_ssl", "proven"),
         [(None, True), (True, False)],
         ids=["proven", "forced"],
     )
-    async def test_ambiguous_fallback_never_fires_for_proven_or_forced(
+    async def test_probe_timeout_never_downgrades_proven_or_forced(
         self, use_ssl: bool | None, proven: bool
     ) -> None:
         """Proven and forced instances retry TLS-only; no plaintext, no cache."""

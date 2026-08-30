@@ -18,31 +18,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handshake rejection fails fast as `TransportConnectionError` instead of
   burning the retry ladder on a doomed handshake), `False` forces
   plaintext (pre-#314 behavior, never probes), and `None` (the new
-  default) auto-detects: the first connection attempt probes TLS, and an
-  `ssl.SSLError` handshake rejection is treated as a definitive "no SSL
-  support" — the same attempt falls back to plaintext and the negative
-  verdict is cached per-instance for 24 hours (re-probed afterward, since
-  dongle firmware can be updated in the field). A TLS probe the peer
-  neither completes nor rejects (timeout, abort, or reset — e.g. firmware
-  that silently discards the ClientHello) is an ambiguous negative: the
-  same attempt falls back to plaintext with a short ~300s re-probe
-  cooldown, and only on a never-proven instance. Failures that hit TLS
-  and plaintext alike (e.g. connection refused) stay on the existing
-  retry/backoff ladder and cache no verdict. Once TLS has negotiated on
-  an instance it is never downgraded: a later `ssl.SSLError` retries
-  TLS-only across the ladder (logged as warnings) and, if exhausted,
-  fails the `connect()` call as `TransportConnectionError` — never
-  falling back to plaintext. The cheap `check_link()` health probe
-  reuses the last-known channel state (plaintext until TLS has proven)
-  rather than TLS-probing inside its short budget, and logs when it
-  connects plaintext before auto-detection has run. TLS is capped at 1.2
-  (`ssl` PSK callbacks do not apply to TLS 1.3). On Python < 3.13
-  (stdlib `ssl` lacks TLS-PSK) AUTO uses plaintext without error; only
-  forced `use_ssl=True` raises. `eg4-modbus-diag` gained `--use-ssl` /
-  `--no-ssl` flags (default: auto-detect). `use_ssl` sits after
-  `timeout` in the `DongleTransport` signature and after
-  `inverter_family` in `DongleCollector`, so pre-#314 positional callers
-  are unaffected.
+  default) auto-detects: the first connection attempt probes TLS, and
+  ONLY a definitive `ssl.SSLError` handshake rejection is treated as "no
+  TLS support" — the same attempt falls back to plaintext and the
+  negative verdict is cached per-instance for 24 hours, re-probed after
+  the TTL expires (this re-probe is also the upgrade pin: a
+  plaintext-only dongle whose firmware is later upgraded to add TLS is
+  picked up on the next re-probe). Any other TLS-probe failure —
+  timeout, connection abort, connection reset, or any other `OSError` —
+  is fully inconclusive: it stays on the ordinary retry/backoff ladder
+  with NO cached verdict and NO plaintext fallback, so an active
+  on-path attacker cannot force a downgrade by disrupting the
+  handshake. This deliberately means firmware that silently discards
+  the TLS ClientHello (rather than cleanly rejecting it) cannot be
+  safely auto-detected — configure such a dongle explicitly with
+  `use_ssl=False` / `--no-ssl` (per the design ruling on
+  [#320](https://github.com/joyfulhouse/pylxpweb/issues/320)). Once TLS
+  has negotiated on an instance it is never downgraded: a later
+  `ssl.SSLError` retries TLS-only across the ladder (logged as
+  warnings) and, if exhausted, fails the `connect()` call as
+  `TransportConnectionError` — never falling back to plaintext. The
+  cheap `check_link()` health probe reuses the last-known channel state
+  (plaintext until TLS has proven) rather than TLS-probing inside its
+  short budget, and logs when it connects plaintext before
+  auto-detection has run. TLS is capped at 1.2 (`ssl` PSK callbacks do
+  not apply to TLS 1.3). On Python < 3.13 (stdlib `ssl` lacks TLS-PSK)
+  AUTO uses plaintext without error; only forced `use_ssl=True` raises.
+  `pylxpweb-modbus-diag` gained `--use-ssl` / `--no-ssl` flags (default:
+  auto-detect), honored by both the default collection mode and
+  `--battery-probe`.
+  `use_ssl` sits after `timeout` in the `DongleTransport` signature and
+  after `inverter_family` in `DongleCollector`, so pre-#314 positional
+  callers are unaffected.
 
   **SECURITY NOTE**: the dongle's TLS-PSK scheme derives its key from a
   fixed value published in this source tree (and in vendor firmware)

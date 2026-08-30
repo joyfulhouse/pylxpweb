@@ -95,7 +95,6 @@ _MAX_PREFIX_SCAN_BYTES = RECV_BUFFER_SIZE
 _SHUTDOWN_CLOSE_TIMEOUT = 0.25
 _SSL_HANDSHAKE_TIMEOUT = 3.0
 _SSL_UNSUPPORTED_TTL = 86400.0
-_SSL_AMBIGUOUS_COOLDOWN = 300.0
 
 # Write resilience settings (joyfulhouse/eg4_web_monitor#201)
 # The dongle drops its TCP connection mid-sequence during parameter writes
@@ -558,41 +557,20 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                                 raise
                             # First AUTO probe: a rejected handshake is a
                             # definitive negative — plaintext for the rest of
-                            # this attempt, cached for future connects.
+                            # this attempt, cached for future connects (the
+                            # TTL re-probe also picks up a later firmware
+                            # upgrade that adds TLS). Every other probe
+                            # failure — timeout, abort, reset, refused — is
+                            # inconclusive and propagates to the outer retry
+                            # ladder uncached: never treat a disrupted
+                            # handshake as capability evidence, or an on-path
+                            # attacker could force a plaintext downgrade by
+                            # stalling it.
                             self._ssl_unsupported_until = time.monotonic() + _SSL_UNSUPPORTED_TTL
                             _LOGGER.info(
                                 "Dongle/firmware does not support TLS-PSK on port %s; "
                                 "will retry SSL detection in 24h",
                                 self._port,
-                            )
-                            ssl_context = None
-                        except (
-                            TimeoutError,
-                            ConnectionAbortedError,
-                            ConnectionResetError,
-                        ):
-                            await self._close_connection()
-                            if not using_ssl or self._ssl_mode is not None or self._ssl_proven:
-                                # Not first-probe evidence: plaintext dials,
-                                # forced modes, and proven-TLS instances take
-                                # the ordinary retry ladder (which never
-                                # downgrades a proven or forced channel).
-                                raise
-                            # First AUTO probe: the peer neither completed nor
-                            # rejected the handshake (e.g. firmware that
-                            # silently discards the ClientHello) — an
-                            # ambiguous negative. Fall back to plaintext for
-                            # this attempt with a short re-probe cooldown; the
-                            # 24h TTL is reserved for the definitive SSLError.
-                            # Other OSErrors (e.g. connection refused) fail
-                            # TLS and plaintext alike, so they stay on the
-                            # retry ladder uncached.
-                            self._ssl_unsupported_until = time.monotonic() + _SSL_AMBIGUOUS_COOLDOWN
-                            _LOGGER.info(
-                                "TLS-PSK probe to port %s got no handshake answer; "
-                                "using plaintext and re-probing in %.0fs",
-                                self._port,
-                                _SSL_AMBIGUOUS_COOLDOWN,
                             )
                             ssl_context = None
                     self._raise_if_shutdown()
