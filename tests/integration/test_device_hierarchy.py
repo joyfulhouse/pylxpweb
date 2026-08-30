@@ -256,7 +256,8 @@ class TestBatteryData:
             # Check battery properties
             assert battery.voltage > 0
             assert battery.soc >= 0
-            assert battery.soh >= 0
+            # SOH is None when the BMS does not report it (#309)
+            assert battery.soh is None or battery.soh >= 0
             assert battery.cycle_count >= 0
 
     async def test_battery_entity_generation(self, client: LuxpowerClient) -> None:

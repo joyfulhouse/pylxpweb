@@ -370,7 +370,10 @@ class TestDataConsistency:
 
             # Validate ranges
             assert 0 <= battery.soc <= 100, f"SOC {battery.soc}% out of range"
-            assert 0 <= battery.soh <= 100, f"SOH {battery.soh}% out of range"
+            # SOH is None when the BMS does not report it (#309)
+            assert battery.soh is None or 0 <= battery.soh <= 100, (
+                f"SOH {battery.soh}% out of range"
+            )
             assert 30 < battery.voltage < 80, (
                 f"Voltage {battery.voltage}V seems wrong for 48V system"
             )

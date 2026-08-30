@@ -123,8 +123,12 @@ class Battery(BaseDevice):
             totalVoltage=int(battery_data.voltage * 100),  # Convert back to raw
             current=int(battery_data.current * 10),  # Convert back to raw
             soc=battery_data.soc,
-            # soh may be None (unreported, #309); the soh property answers
-            # from transport data, so this placeholder is never surfaced.
+            # soh may be None (unreported, #309). BatteryModule.soh is
+            # non-nullable, so absence is encoded as 0 here (#249 convention).
+            # The normalized .soh property answers from transport data and
+            # never reads this placeholder — but the raw module is public via
+            # .data, so .data.soh does read 0 on an unreported battery. Use
+            # .soh, not .data.soh, for a measurement.
             soh=battery_data.soh if battery_data.soh is not None else 0,
             currentRemainCapacity=int(battery_data.remaining_capacity or 0),
             currentFullCapacity=int(battery_data.max_capacity or 0),
