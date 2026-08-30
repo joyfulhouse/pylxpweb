@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **TLS-PSK support for the WiFi dongle transport, with automatic detection
+  and plaintext fallback** (extends PR
+  [#314](https://github.com/joyfulhouse/pylxpweb/pull/314) by
+  [@dpw13](https://github.com/dpw13), who authored the underlying TLS-PSK
+  implementation): dongle firmware V3.02 encrypts port 8000 with TLS-PSK.
+  `DongleTransport(use_ssl=...)` is now tri-state — `True` forces TLS (a
+  handshake failure propagates immediately instead of burning the retry
+  ladder on a doomed handshake), `False` forces plaintext (pre-#314
+  behavior, never probes), and `None` (the new default) auto-detects:
+  the first connection attempt probes TLS, and an `ssl.SSLError` handshake
+  rejection is treated as a definitive "no SSL support" — the same attempt
+  falls back to plaintext and the negative verdict is cached per-instance
+  for 24 hours (re-probed afterward, since dongle firmware can be updated
+  in the field). Generic socket errors and timeouts are inconclusive: they
+  stay on the existing retry/backoff ladder and cache no verdict (a
+  5-minute cooldown covers ambiguous TLS handshake timeouts). Once TLS has
+  negotiated on an instance it is never downgraded silently — a regression
+  is retried and logged as a warning before any fallback. On Python < 3.13
+  (stdlib `ssl` lacks TLS-PSK) AUTO uses plaintext without error; only
+  forced `use_ssl=True` raises. `eg4-modbus-diag` gained `--use-ssl` /
+  `--no-ssl` flags (default: auto-detect).
+
 ### Changed
 
 - **Minimum supported Python raised to 3.13**: required for TLS-PSK dongle
@@ -14,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uses `ssl.SSLContext.set_psk_client_callback` (Python 3.13+ only). This also
   raises the minimum Home Assistant version for consumers, since HA bundles
   its own Python runtime per release.
+
+### Fixed
+
+- **Dongle response validation keyed off the negotiated channel instead of
+  the requested SSL policy**: PR #314 skipped the TCP-function byte
+  cross-check whenever SSL was *requested*; it is now skipped only when TLS
+  actually negotiated on the current connection, so an AUTO connection that
+  fell back to plaintext still validates the TCP function byte of every
+  response frame.
 
 ## [0.10.0b5] - 2026-08-29
 

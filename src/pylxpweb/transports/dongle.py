@@ -32,6 +32,8 @@ import hmac
 import logging
 import ssl
 import struct
+import sys
+import time
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from ._register_data import (
@@ -91,6 +93,9 @@ _MIN_ADVERTISED_FRAME_LENGTH = _FRAME_FIXED_FIELDS_SIZE + _FRAME_CRC_SIZE
 _MAX_PACKET_SIZE = RECV_BUFFER_SIZE
 _MAX_PREFIX_SCAN_BYTES = RECV_BUFFER_SIZE
 _SHUTDOWN_CLOSE_TIMEOUT = 0.25
+_SSL_HANDSHAKE_TIMEOUT = 3.0
+_SSL_UNSUPPORTED_TTL = 86400.0
+_SSL_AMBIGUOUS_COOLDOWN = 300.0
 
 # Write resilience settings (joyfulhouse/eg4_web_monitor#201)
 # The dongle drops its TCP connection mid-sequence during parameter writes
@@ -199,7 +204,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         dongle_serial: str,
         inverter_serial: str,
         port: int = DEFAULT_PORT,
-        use_ssl: bool = False,
+        use_ssl: bool | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         inverter_family: InverterFamily | None = None,
         connection_retries: int = 3,
@@ -216,7 +221,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             dongle_serial: 10-character dongle serial number (e.g., "BA12345678")
             inverter_serial: 10-character inverter serial number (e.g., "CE12345678")
             port: TCP port (default 8000)
-            use_ssl: Use TLS-PSK over TCP. Set to true for newer firmwares
+            use_ssl: TLS-PSK policy: True forces TLS, False disables it, and
+                None auto-detects support (default).
             timeout: Connection and operation timeout in seconds
             inverter_family: Inverter model family for correct register mapping.
                 If None, defaults to PV_SERIES (EG4-18KPV) for backward
@@ -253,7 +259,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._write_retries = write_retries
         self._write_step_delay = write_step_delay
         self._verify_writes = verify_writes
-        self._use_ssl = use_ssl
+        self._ssl_mode = use_ssl
+        self._ssl_active = False
+        self._ssl_proven = False
+        self._ssl_unsupported_until: float | None = None
+        self._ssl_unavailable_logged = False
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._receive_buffer = bytearray()
@@ -376,14 +386,29 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         )
 
     def _ssl_ctx(self) -> ssl.SSLContext | None:
-        """Create the SSL context for TLS-PSK encrypted channels."""
+        """Create the SSL context for TLS-PSK encrypted channels.
 
-        if not self._use_ssl:
+        Security: the PSK uses the fixed, source-committed key
+        ``4c7578506f77657254656b21`` HMAC'd with the non-secret dongle serial,
+        which is printed on the device and broadcast in plaintext frames.
+        With ``CERT_NONE`` and no certificate validation, this provides only
+        confidentiality from passive on-path observers; it does not
+        authenticate the peer or resist an active MITM.
+        """
+
+        if self._ssl_mode is False:
             return None
 
-        if not getattr(ssl, "HAS_PSK", False):
-            # Requires an OpenSSL build with PSK support
-            raise NotImplementedError("SSL was requested but PSK support is missing")
+        if sys.version_info < (3, 13) or not getattr(ssl, "HAS_PSK", False):
+            # ssl.SSLContext.set_psk_client_callback requires Python 3.13+
+            # (ssl.HAS_PSK) and an OpenSSL build with PSK support; the
+            # version check also lets mypy see the 3.13-only API below.
+            if self._ssl_mode is True:
+                raise NotImplementedError("SSL was requested but PSK support is missing")
+            if not self._ssl_unavailable_logged:
+                _LOGGER.debug("TLS-PSK auto-detection skipped: Python lacks PSK support")
+                self._ssl_unavailable_logged = True
+            return None
 
         # Compute PSK from the key and the dongle serial
         psk = hmac.digest(
@@ -405,6 +430,36 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         ssl_ctx.set_ciphers("DHE-PSK-AES128-GCM-SHA256")
 
         return ssl_ctx
+
+    def _auto_ssl_context(self) -> ssl.SSLContext | None:
+        """Return a probe context unless AUTO has a cached negative verdict."""
+        if (
+            self._ssl_mode is None
+            and self._ssl_unsupported_until is not None
+            and time.monotonic() < self._ssl_unsupported_until
+        ):
+            return None
+        return self._ssl_ctx()
+
+    @staticmethod
+    def _is_ssl_handshake_timeout(err: OSError) -> bool:
+        """Identify asyncio's dedicated SSL handshake timeout failure."""
+        return isinstance(err, ConnectionAbortedError) and "SSL handshake" in str(err)
+
+    async def _open_connection(
+        self, ssl_context: ssl.SSLContext | None
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        """Dial once, applying the short timeout only to TLS handshakes."""
+        kwargs: dict[str, Any] = {}
+        if ssl_context is not None:
+            kwargs = {
+                "ssl": ssl_context,
+                "ssl_handshake_timeout": _SSL_HANDSHAKE_TIMEOUT,
+            }
+        return await asyncio.wait_for(
+            asyncio.open_connection(self._host, self._port, **kwargs),
+            timeout=self._timeout,
+        )
 
     async def connect(self) -> None:
         """Establish TCP connection to the WiFi dongle with retry and backoff.
@@ -459,31 +514,63 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         self._raise_if_shutdown()
                         retry_delay *= 2  # Exponential backoff
 
-                    # Only pass the ssl kwarg when TLS is enabled so the
-                    # plain-TCP path keeps the original
-                    # open_connection(host, port) call signature.
-                    ssl_ctx = self._ssl_ctx()
-                    if ssl_ctx is not None:
-                        open_conn = asyncio.open_connection(self._host, self._port, ssl=ssl_ctx)
-                    else:
-                        open_conn = asyncio.open_connection(self._host, self._port)
-                    self._reader, self._writer = await asyncio.wait_for(
-                        open_conn,
-                        timeout=self._timeout,
-                    )
-                    if self._shutdown_requested:
-                        await self._close_connection()
-                        self._raise_if_shutdown()
+                    ssl_context = self._auto_ssl_context()
+                    while True:
+                        using_ssl = ssl_context is not None
+                        try:
+                            self._reader, self._writer = await self._open_connection(ssl_context)
+                            if self._shutdown_requested:
+                                await self._close_connection()
+                                self._raise_if_shutdown()
 
-                    # Discard any initial data the dongle sends after
-                    # connection (some dongles send unsolicited packets that
-                    # can confuse subsequent reads) BEFORE declaring the
-                    # connection usable — an OSError here fails this attempt
-                    # instead of leaking a connected-looking transport with
-                    # a broken socket.
-                    await self._discard_initial_data()
+                            # The first read can surface a deferred TLS error,
+                            # so it is part of capability detection.
+                            await self._discard_initial_data()
+                            break
+                        except ssl.SSLError:
+                            await self._close_connection()
+                            if self._ssl_mode is not None:
+                                raise
+                            if self._ssl_proven and attempt < self._connection_retries - 1:
+                                raise
+                            now = time.monotonic()
+                            if self._ssl_proven:
+                                self._ssl_unsupported_until = now + _SSL_AMBIGUOUS_COOLDOWN
+                                _LOGGER.warning(
+                                    "TLS previously negotiated successfully but this "
+                                    "connection fell back to plaintext"
+                                )
+                            else:
+                                self._ssl_unsupported_until = now + _SSL_UNSUPPORTED_TTL
+                                _LOGGER.info(
+                                    "Dongle/firmware does not support TLS-PSK on port %s; "
+                                    "will retry SSL detection in 24h",
+                                    self._port,
+                                )
+                            ssl_context = None
+                        except OSError as err:
+                            await self._close_connection()
+                            if (
+                                using_ssl
+                                and self._ssl_mode is None
+                                and self._is_ssl_handshake_timeout(err)
+                            ):
+                                self._ssl_unsupported_until = (
+                                    time.monotonic() + _SSL_AMBIGUOUS_COOLDOWN
+                                )
+                                _LOGGER.warning(
+                                    "TLS handshake timed out; this connection fell back "
+                                    "to plaintext"
+                                )
+                                ssl_context = None
+                                continue
+                            raise
                     self._raise_if_shutdown()
 
+                    self._ssl_active = using_ssl
+                    if using_ssl:
+                        self._ssl_proven = True
+                        self._ssl_unsupported_until = None
                     self._connected = True
                     _LOGGER.info(
                         "Dongle transport connected to %s:%s (dongle=%s, inverter=%s)%s",
@@ -495,6 +582,20 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     )
                     return  # Success!
 
+                except ssl.SSLError as err:
+                    last_error = err
+                    await self._close_connection()
+                    self._raise_if_shutdown()
+                    if self._ssl_mode is True:
+                        raise
+                    _LOGGER.warning(
+                        "TLS connection failed to %s:%s: %s (attempt %d/%d)",
+                        self._host,
+                        self._port,
+                        err,
+                        attempt + 1,
+                        self._connection_retries,
+                    )
                 except TimeoutError as err:
                     last_error = err
                     await self._close_connection()
@@ -574,6 +675,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         """
         self._shutdown_requested = True
         self._connected = False
+        self._ssl_active = False
         self._reader = None
         self._receive_buffer.clear()
         writer = self._writer
@@ -974,7 +1076,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         expected_func,
                         expected_register,
                         expected_count,
-                        expected_tcp_func=None if self._use_ssl else packet[7],
+                        expected_tcp_func=None if self._ssl_active else packet[7],
                     )
 
                 except _DongleFrameError as err:

@@ -63,7 +63,7 @@ class DongleCollector:
         inverter_serial: str = "",
         port: int = 8000,
         timeout: float = 10.0,
-        use_ssl: bool = False,
+        use_ssl: bool | None = None,
         inverter_family: InverterFamily | None = None,
     ) -> None:
         """Initialize dongle collector.
@@ -74,6 +74,7 @@ class DongleCollector:
             inverter_serial: 10-character inverter serial (auto-detected if empty)
             port: TCP port (default 8000)
             timeout: Operation timeout in seconds
+            use_ssl: TLS-PSK policy (True=on, False=off, None=auto-detect)
             inverter_family: Inverter family for register mapping
         """
         self._host = host
