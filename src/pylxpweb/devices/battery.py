@@ -299,10 +299,13 @@ class Battery(BaseDevice):
             does not report it (issue #309).  Transport-backed batteries
             answer from transport data directly so an unreported SOH
             stays None instead of falling back to the schema placeholder.
+            Cloud-backed batteries normalize here: BatteryModule.soh is
+            non-nullable, so the portal relays an unreported SOH as 0 —
+            surface that as None, never as a real 0% health measurement.
         """
         if self._transport_data is not None:
             return self._transport_data.soh
-        return self._data.soh
+        return self._data.soh if self._data.soh else None
 
     # ========== Capacity Properties ==========
 

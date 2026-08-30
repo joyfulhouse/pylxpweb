@@ -1288,3 +1288,58 @@ class TestCapacityPercentFakeZeroFallback:
         )
 
         assert bank.capacity_percent == 0  # round(1/500*100)
+
+
+class TestBankSohUnreportedIsNone:
+    """Bank SOH aggregation excludes cloud-unreported (0 → None) batteries.
+
+    Regression tests for issue #309: a battery whose portal-relayed SOH is
+    0 (unreported) must not be counted as the weakest pack — min_soh 0
+    would read as a dead battery, and it previously was.
+    """
+
+    def test_min_soh_excludes_unreported(self, mock_client, sample_battery_info):
+        bank = _make_bank(
+            mock_client,
+            sample_battery_info,
+            [
+                _make_battery(mock_client, 85, soh=0),  # unreported
+                _make_battery(mock_client, 90, soh=98),
+                _make_battery(mock_client, 80, soh=95),
+            ],
+        )
+        assert bank.min_soh == 95
+
+    def test_min_soh_all_unreported_is_none(self, mock_client, sample_battery_info):
+        bank = _make_bank(
+            mock_client,
+            sample_battery_info,
+            [
+                _make_battery(mock_client, 85, soh=0),
+                _make_battery(mock_client, 90, soh=0),
+            ],
+        )
+        assert bank.min_soh is None
+
+    def test_soh_delta_excludes_unreported(self, mock_client, sample_battery_info):
+        bank = _make_bank(
+            mock_client,
+            sample_battery_info,
+            [
+                _make_battery(mock_client, 85, soh=0),  # unreported
+                _make_battery(mock_client, 90, soh=98),
+                _make_battery(mock_client, 80, soh=92),
+            ],
+        )
+        assert bank.soh_delta == 6
+
+    def test_soh_delta_one_reporting_is_none(self, mock_client, sample_battery_info):
+        bank = _make_bank(
+            mock_client,
+            sample_battery_info,
+            [
+                _make_battery(mock_client, 85, soh=0),
+                _make_battery(mock_client, 90, soh=98),
+            ],
+        )
+        assert bank.soh_delta is None

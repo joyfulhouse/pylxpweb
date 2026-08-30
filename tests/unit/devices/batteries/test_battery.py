@@ -418,3 +418,59 @@ class TestCellNumberCrossPathConsistency:
         # Voltage numbers land in voltage fields on BOTH paths
         assert reg_parsed.max_cell_num_voltage == cloud_battery.max_cell_voltage_num == 7
         assert reg_parsed.min_cell_num_voltage == cloud_battery.min_cell_voltage_num == 1
+
+
+class TestCloudSohUnreportedIsNone:
+    """Cloud-backed Battery.soh: portal-relayed 0 means unreported → None.
+
+    Regression tests for issue #309 on the cloud/BatteryModule path:
+    BatteryModule.soh is non-nullable, so the portal relays an unreported
+    SOH as 0.  Battery.soh must surface that as None, never as a real 0%
+    health measurement.
+    """
+
+    @pytest.mark.parametrize(
+        ("cloud_soh", "expected_soh"),
+        [(0, None), (100, 100), (1, 1)],
+    )
+    def test_cloud_module_soh(
+        self, mock_client: LuxpowerClient, cloud_soh: int, expected_soh: int | None
+    ) -> None:
+        module = BatteryModule.model_construct(
+            batteryKey="test_bat",
+            batterySn="test_sn",
+            batIndex=0,
+            lost=False,
+            totalVoltage=5305,
+            current=100,
+            soc=85,
+            soh=cloud_soh,
+            currentRemainCapacity=100,
+            currentFullCapacity=200,
+            batMaxCellTemp=250,
+            batMinCellTemp=240,
+            batMaxCellVoltage=3364,
+            batMinCellVoltage=3317,
+            cycleCnt=150,
+            fwVersionText="1.0",
+        )
+        battery = Battery(client=mock_client, battery_data=module)
+
+        assert battery.soh == expected_soh
+
+    def test_transport_backed_soh_not_double_normalized(self, mock_client: LuxpowerClient) -> None:
+        """Transport-backed batteries answer from transport data unchanged."""
+        battery = Battery.from_transport_data(
+            mock_client,
+            BatteryData(voltage=53.0, soc=85, soh=97),
+            "1234567890",
+        )
+        assert battery.soh == 97
+
+    def test_transport_backed_unreported_soh_is_none(self, mock_client: LuxpowerClient) -> None:
+        battery = Battery.from_transport_data(
+            mock_client,
+            BatteryData(voltage=53.0, soc=85, soh=None),
+            "1234567890",
+        )
+        assert battery.soh is None
