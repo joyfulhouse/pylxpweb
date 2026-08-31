@@ -683,6 +683,7 @@ class TestDongleConnection:
             host="192.168.1.100",
             dongle_serial="BA12345678",
             inverter_serial="CE12345678",
+            use_ssl=False,
         )
         open_started = asyncio.Event()
         release_open = asyncio.Event()
@@ -860,6 +861,7 @@ class TestDongleConnection:
             host="192.168.1.100",
             dongle_serial="BA12345678",
             inverter_serial="CE12345678",
+            use_ssl=False,
         )
         open_started = asyncio.Event()
         release_open = asyncio.Event()
@@ -899,6 +901,7 @@ class TestDongleConnection:
             host="192.168.1.100",
             dongle_serial="BA12345678",
             inverter_serial="CE12345678",
+            use_ssl=False,
         )
         close_started = asyncio.Event()
         release_close = asyncio.Event()
@@ -3035,6 +3038,7 @@ class TestDongleSilentPathLoss:
             port=port,
             timeout=timeout,
             connection_retries=1,
+            use_ssl=False,
         )
 
     @pytest.mark.asyncio
