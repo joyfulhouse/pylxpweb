@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **TLS-PSK support for the WiFi dongle transport, with automatic detection
+  and plaintext fallback** (extends PR
+  [#314](https://github.com/joyfulhouse/pylxpweb/pull/314) by
+  [@dpw13](https://github.com/dpw13), who authored the underlying TLS-PSK
+  implementation): dongle firmware V3.02 encrypts port 8000 with TLS-PSK.
+  `DongleTransport(use_ssl=...)` is now tri-state — `True` forces TLS (a
+  handshake rejection fails fast as `TransportConnectionError` instead of
+  burning the retry ladder on a doomed handshake), `False` forces
+  plaintext (pre-#314 behavior, never probes), and `None` (the new
+  default) auto-detects: the first connection attempt probes TLS, and
+  ONLY a definitive `ssl.SSLError` handshake rejection is treated as "no
+  TLS support" — the same attempt falls back to plaintext and the
+  negative verdict is cached per-instance for 24 hours, re-probed after
+  the TTL expires (this re-probe is also the upgrade pin: a
+  plaintext-only dongle whose firmware is later upgraded to add TLS is
+  picked up on the next re-probe). Any other TLS-probe failure —
+  timeout, connection abort, connection reset, or any other `OSError` —
+  is fully inconclusive: it stays on the ordinary retry/backoff ladder
+  with NO cached verdict and NO plaintext fallback, so an active
+  on-path attacker cannot force a downgrade by disrupting the
+  handshake. This deliberately means firmware that silently discards
+  the TLS ClientHello (rather than cleanly rejecting it) cannot be
+  safely auto-detected — configure such a dongle explicitly with
+  `use_ssl=False` / `--no-ssl` (per the design ruling on
+  [#320](https://github.com/joyfulhouse/pylxpweb/issues/320)). Once TLS
+  has negotiated on an instance it is never downgraded: a later
+  `ssl.SSLError` retries TLS-only across the ladder (logged as
+  warnings) and, if exhausted, fails the `connect()` call as
+  `TransportConnectionError` — never falling back to plaintext. The
+  cheap `check_link()` health probe reuses the last-known channel state
+  (plaintext until TLS has proven) rather than TLS-probing inside its
+  short budget, and logs when it connects plaintext before
+  auto-detection has run. TLS is capped at 1.2 (`ssl` PSK callbacks do
+  not apply to TLS 1.3). On Python < 3.13 (stdlib `ssl` lacks TLS-PSK)
+  AUTO uses plaintext without error; only forced `use_ssl=True` raises.
+  `pylxpweb-modbus-diag` gained `--use-ssl` / `--no-ssl` flags (default:
+  auto-detect), honored by both the default collection mode and
+  `--battery-probe`.
+  `use_ssl` sits after `timeout` in the `DongleTransport` signature and
+  after `inverter_family` in `DongleCollector`, so pre-#314 positional
+  callers are unaffected.
+
+  **SECURITY NOTE**: the dongle's TLS-PSK scheme derives its key from a
+  fixed value published in this source tree (and in vendor firmware)
+  plus the dongle serial, which is printed on the device and broadcast
+  in plaintext frames, with no certificate validation. It hides register
+  traffic from passive on-path observers ONLY — it does not authenticate
+  the peer, does not resist an active man-in-the-middle, and the key
+  cannot be rotated. Do not treat `use_ssl=True` as making the link
+  trustworthy.
+
 ### Changed
 
 - **Minimum supported Python raised to 3.13**: required for TLS-PSK dongle
@@ -14,6 +67,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uses `ssl.SSLContext.set_psk_client_callback` (Python 3.13+ only). This also
   raises the minimum Home Assistant version for consumers, since HA bundles
   its own Python runtime per release.
+
+### Fixed
+
+- **Dongle response validation keyed off the negotiated channel instead of
+  the requested SSL policy**: PR #314 skipped the TCP-function byte
+  cross-check whenever SSL was *requested*; it is now skipped only when TLS
+  actually negotiated on the current connection, so an AUTO connection that
+  fell back to plaintext still validates the TCP function byte of every
+  response frame.
+
+- **Dongle serial auto-detection no longer crashes on a garbage frame**:
+  when the inverter serial is auto-detected from the first response, a
+  frame whose serial bytes are not valid ASCII raised an uncaught
+  `UnicodeDecodeError` instead of the transport's mismatch error, and an
+  accepted serial kept its NUL padding (leaking into logs and outbound
+  frames). The detected serial is now decoded defensively and must be 10
+  printable ASCII characters; anything else rejects through the normal
+  response-mismatch path.
 
 ## [0.10.0b5] - 2026-08-29
 

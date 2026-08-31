@@ -104,10 +104,25 @@ Examples:
         "--dongle-serial",
         help="WiFi dongle serial number (required for dongle transport)",
     )
-    conn_group.add_argument(
+    ssl_group = conn_group.add_mutually_exclusive_group()
+    ssl_group.add_argument(
         "--use-ssl",
-        action="store_true",
-        help="Encrypt the local connection (only relevant for dongle transport)",
+        dest="use_ssl",
+        action="store_const",
+        const=True,
+        help=(
+            "Force TLS-PSK for dongle transport. NOTE: hides traffic from "
+            "passive observers only — the PSK derives from a fixed published "
+            "key plus the dongle serial, with no peer authentication and no "
+            "protection against an active man-in-the-middle"
+        ),
+    )
+    ssl_group.add_argument(
+        "--no-ssl",
+        dest="use_ssl",
+        action="store_const",
+        const=False,
+        help="Disable TLS-PSK for dongle transport (default: auto-detect)",
     )
 
     # Cloud API options
@@ -377,7 +392,7 @@ async def run_collection(args: argparse.Namespace) -> int:
                     dongle_serial=dongle_serial,
                     inverter_serial=args.serial or "",
                     port=args.port if args.transport == "dongle" else 8000,
-                    use_ssl=args.use_ssl if args.transport == "dongle" else False,
+                    use_ssl=args.use_ssl,
                 )
                 await dongle_collector.connect()
 
@@ -961,6 +976,7 @@ async def run_battery_probe(args: argparse.Namespace) -> int:
             dongle_serial=dongle_serial,
             inverter_serial=args.serial or "",
             port=args.port,
+            use_ssl=getattr(args, "use_ssl", None),
         )
     else:
         collector = ModbusCollector(

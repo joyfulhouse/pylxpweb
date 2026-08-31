@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
+import ssl
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pylxpweb.cli.collectors.dongle import DongleCollector
 from pylxpweb.registers import PV4_6_INPUT_REGISTER_GROUP
 from pylxpweb.transports.capabilities import DONGLE_CAPABILITIES
 from pylxpweb.transports.dongle import (
@@ -115,6 +118,403 @@ class TestDongleTransport:
 
 class TestDongleConnection:
     """Tests for dongle connection handling."""
+
+    @staticmethod
+    def _successful_socket() -> tuple[AsyncMock, MagicMock]:
+        reader = AsyncMock()
+        reader.read = AsyncMock(side_effect=TimeoutError())
+        writer = MagicMock()
+        writer.close = MagicMock()
+        writer.wait_closed = AsyncMock()
+        return reader, writer
+
+    @pytest.mark.asyncio
+    async def test_auto_ssl_error_falls_back_without_backoff_and_caches(self) -> None:
+        transport = DongleTransport("host", "BA12345678", "CE12345678")
+        context = MagicMock()
+        socket = self._successful_socket()
+        open_connection = AsyncMock(side_effect=[ssl.SSLError("wrong version"), socket])
+        sleep = AsyncMock()
+
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch("asyncio.open_connection", open_connection),
+            patch("asyncio.sleep", sleep),
+            patch("pylxpweb.transports.dongle.time.monotonic", return_value=10.0),
+        ):
+            await transport.connect()
+
+        assert [call.kwargs.get("ssl") for call in open_connection.await_args_list] == [
+            context,
+            None,
+        ]
+        sleep.assert_not_awaited()
+        assert transport._ssl_unsupported_until == 86410.0
+        assert transport._ssl_active is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [
+            OSError("unreachable"),
+            ConnectionRefusedError("refused"),
+            TimeoutError("timeout"),
+            ConnectionAbortedError(
+                "SSL handshake is taking longer than 3.0 seconds: aborting the connection"
+            ),
+            ConnectionResetError("reset during handshake"),
+        ],
+    )
+    async def test_auto_generic_failure_keeps_retry_ladder_and_no_verdict(
+        self, error: OSError
+    ) -> None:
+        """Every non-SSLError probe failure is inconclusive: ordinary retry
+        ladder, TLS re-probed on the next attempt, no verdict cached — a
+        disrupted handshake must never trigger a plaintext downgrade."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678", connection_retries=2)
+        context = MagicMock()
+        socket = self._successful_socket()
+        open_connection = AsyncMock(side_effect=[error, socket])
+        sleep = AsyncMock()
+
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch("asyncio.open_connection", open_connection),
+            patch("asyncio.sleep", sleep),
+        ):
+            await transport.connect()
+
+        assert [call.kwargs.get("ssl") for call in open_connection.await_args_list] == [
+            context,
+            context,
+        ]
+        sleep.assert_awaited_once_with(1.0)
+        assert transport._ssl_unsupported_until is None
+        assert transport._ssl_active is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("use_ssl", "proven"),
+        [(None, True), (True, False)],
+        ids=["proven", "forced"],
+    )
+    async def test_probe_timeout_never_downgrades_proven_or_forced(
+        self, use_ssl: bool | None, proven: bool
+    ) -> None:
+        """Proven and forced instances retry TLS-only; no plaintext, no cache."""
+        transport = DongleTransport(
+            "host", "BA12345678", "CE12345678", use_ssl=use_ssl, connection_retries=2
+        )
+        transport._ssl_proven = proven
+        context = MagicMock()
+        socket = self._successful_socket()
+        open_connection = AsyncMock(side_effect=[TimeoutError("timeout"), socket])
+        sleep = AsyncMock()
+
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch("asyncio.open_connection", open_connection),
+            patch("asyncio.sleep", sleep),
+        ):
+            await transport.connect()
+
+        assert [call.kwargs.get("ssl") for call in open_connection.await_args_list] == [
+            context,
+            context,
+        ]
+        assert transport._ssl_unsupported_until is None
+        assert transport._ssl_active is True
+
+    @pytest.mark.asyncio
+    async def test_auto_cached_negative_skips_tls(self) -> None:
+        transport = DongleTransport("host", "BA12345678", "CE12345678")
+        transport._ssl_unsupported_until = 100.0
+        socket = self._successful_socket()
+
+        with (
+            patch.object(transport, "_ssl_ctx") as ssl_ctx,
+            patch("asyncio.open_connection", return_value=socket) as open_connection,
+            patch("pylxpweb.transports.dongle.time.monotonic", return_value=50.0),
+        ):
+            await transport.connect()
+
+        ssl_ctx.assert_not_called()
+        assert "ssl" not in open_connection.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_auto_expired_negative_reprobes_tls(self) -> None:
+        transport = DongleTransport("host", "BA12345678", "CE12345678")
+        transport._ssl_unsupported_until = 100.0
+        context = MagicMock()
+        socket = self._successful_socket()
+
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch("asyncio.open_connection", return_value=socket) as open_connection,
+            patch("pylxpweb.transports.dongle.time.monotonic", return_value=101.0),
+        ):
+            await transport.connect()
+
+        assert open_connection.await_args.kwargs["ssl"] is context
+        assert transport._ssl_proven is True
+        assert transport._ssl_unsupported_until is None
+
+    @pytest.mark.asyncio
+    async def test_forced_ssl_never_falls_back(self) -> None:
+        """Forced TLS fails fast, wrapped to connect()'s documented type."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678", use_ssl=True)
+        context = MagicMock()
+        open_connection = AsyncMock(side_effect=ssl.SSLError("wrong version"))
+
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch("asyncio.open_connection", open_connection),
+            pytest.raises(TransportConnectionError, match="TLS connection") as exc_info,
+        ):
+            await transport.connect()
+
+        assert isinstance(exc_info.value.__cause__, ssl.SSLError)
+        open_connection.assert_awaited_once()
+        assert open_connection.await_args.kwargs["ssl"] is context
+
+    @pytest.mark.asyncio
+    async def test_forced_plaintext_never_probes(self) -> None:
+        transport = DongleTransport("host", "BA12345678", "CE12345678", use_ssl=False)
+        assert transport._ssl_ctx() is None
+        socket = self._successful_socket()
+
+        with patch("asyncio.open_connection", return_value=socket) as open_connection:
+            await transport.connect()
+
+        assert "ssl" not in open_connection.await_args.kwargs
+        assert transport._ssl_active is False
+
+    @pytest.mark.asyncio
+    async def test_auto_plaintext_fallback_validates_tcp_function(self) -> None:
+        transport = DongleTransport("host", "BA12345678", "CE12345678")
+        context = MagicMock()
+        socket = self._successful_socket()
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch(
+                "asyncio.open_connection",
+                side_effect=[ssl.SSLError("wrong version"), socket],
+            ),
+        ):
+            await transport.connect()
+
+        packet = bytearray(18)
+        packet[7] = TCP_FUNC_TRANSLATED
+        socket[1].drain = AsyncMock()
+        transport._drain_buffer = AsyncMock()
+        transport._receive_frame = AsyncMock(return_value=b"response")
+        transport._parse_response = MagicMock(return_value=[])
+        await transport._send_receive(bytes(packet))
+
+        assert transport._parse_response.call_args.kwargs["expected_tcp_func"] == (
+            TCP_FUNC_TRANSLATED
+        )
+
+    @pytest.mark.asyncio
+    async def test_tls_connection_skips_tcp_function_validation(self) -> None:
+        """The dongle omits the plaintext TCP function semantics on TLS channels."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678")
+        context = MagicMock()
+        socket = self._successful_socket()
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch("asyncio.open_connection", return_value=socket),
+        ):
+            await transport.connect()
+        assert transport._ssl_active is True
+
+        packet = bytearray(18)
+        packet[7] = TCP_FUNC_TRANSLATED
+        socket[1].drain = AsyncMock()
+        transport._drain_buffer = AsyncMock()
+        transport._receive_frame = AsyncMock(return_value=b"response")
+        transport._parse_response = MagicMock(return_value=[])
+        await transport._send_receive(bytes(packet))
+
+        assert transport._parse_response.call_args.kwargs["expected_tcp_func"] is None
+
+    @pytest.mark.asyncio
+    async def test_check_link_probe_skips_auto_tls_probing(self) -> None:
+        """The budgeted link probe never TLS-probes an undetermined channel."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678")
+        socket = self._successful_socket()
+        socket[1].drain = AsyncMock()
+
+        with (
+            patch.object(transport, "_ssl_ctx") as ssl_ctx,
+            patch("asyncio.open_connection", return_value=socket) as open_connection,
+        ):
+            assert await transport.check_link() is False
+
+        ssl_ctx.assert_not_called()
+        assert "ssl" not in open_connection.await_args.kwargs
+        assert transport._link_probe_active is False
+
+    @pytest.mark.asyncio
+    async def test_check_link_plaintext_dial_logs_deferred_detection(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A probe-forced plaintext dial on an undetermined channel leaves a
+        log trail, since the connection may be kept past the health check."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678")
+        socket = self._successful_socket()
+        socket[1].drain = AsyncMock()
+        caplog.set_level(logging.INFO)
+
+        with (
+            patch.object(transport, "_ssl_ctx") as ssl_ctx,
+            patch("asyncio.open_connection", return_value=socket),
+        ):
+            await transport.check_link()
+
+        ssl_ctx.assert_not_called()
+        assert any("before TLS auto-detection ran" in record.message for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_handshake_timeout_capped_by_transport_timeout(self) -> None:
+        """A caller timeout below 3s must still bound the TLS handshake."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678", timeout=1.0, use_ssl=True)
+        context = MagicMock()
+        socket = self._successful_socket()
+
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch("asyncio.open_connection", return_value=socket) as open_connection,
+        ):
+            await transport.connect()
+
+        assert open_connection.await_args.kwargs["ssl_handshake_timeout"] == 1.0
+
+    def test_positional_timeout_backward_compatible(self) -> None:
+        """Pre-#314 callers pass timeout as the fifth positional argument."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678", 8000, 5.0)
+
+        assert transport._timeout == 5.0
+        assert transport._ssl_mode is None
+
+    def test_collector_positional_inverter_family_backward_compatible(self) -> None:
+        """Pre-#314 DongleCollector callers pass inverter_family positionally.
+
+        Lives here (not a CLI test module) because the regression came in
+        with the transport's use_ssl plumbing and shares its fixtures.
+        """
+        from pylxpweb.devices.inverters._features import InverterFamily
+
+        collector = DongleCollector(
+            "host", "BA12345678", "CE12345678", 8000, 5.0, InverterFamily.LXP
+        )
+
+        assert collector._timeout == 5.0
+        assert collector._inverter_family is InverterFamily.LXP
+        assert collector._use_ssl is None
+
+    @pytest.mark.asyncio
+    async def test_proven_ssl_regression_retries_tls_only_and_recovers(self) -> None:
+        """A proven-TLS instance retries the SSLError on the ladder, TLS-only."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678", connection_retries=2)
+        transport._ssl_proven = True
+        context = MagicMock()
+        socket = self._successful_socket()
+        open_connection = AsyncMock(side_effect=[ssl.SSLError("regression"), socket])
+        sleep = AsyncMock()
+
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch("asyncio.open_connection", open_connection),
+            patch("asyncio.sleep", sleep),
+        ):
+            await transport.connect()
+
+        assert [call.kwargs.get("ssl") for call in open_connection.await_args_list] == [
+            context,
+            context,
+        ]
+        sleep.assert_awaited_once_with(1.0)
+        assert transport._ssl_active is True
+        assert transport._ssl_unsupported_until is None
+
+    @pytest.mark.asyncio
+    async def test_proven_ssl_regression_exhausts_wrapped_never_plaintext(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Exhausted TLS regression wraps in TransportConnectionError with
+        warnings, having never opened a plaintext socket or cached a verdict."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678", connection_retries=2)
+        transport._ssl_proven = True
+        context = MagicMock()
+        open_connection = AsyncMock(side_effect=ssl.SSLError("regression"))
+        sleep = AsyncMock()
+        caplog.set_level(logging.WARNING)
+
+        with (
+            patch.object(transport, "_ssl_ctx", return_value=context),
+            patch("asyncio.open_connection", open_connection),
+            patch("asyncio.sleep", sleep),
+            pytest.raises(TransportConnectionError) as exc_info,
+        ):
+            await transport.connect()
+
+        assert isinstance(exc_info.value.__cause__, ssl.SSLError)
+        assert [call.kwargs.get("ssl") for call in open_connection.await_args_list] == [
+            context,
+            context,
+        ]
+        assert transport._ssl_unsupported_until is None
+        assert sum("TLS regression" in record.message for record in caplog.records) == 2
+
+    @pytest.mark.asyncio
+    async def test_plaintext_ssl_error_retries_like_ordinary_failure(self) -> None:
+        """An SSLError off a plaintext socket is not TLS capability evidence."""
+        transport = DongleTransport("host", "BA12345678", "CE12345678", connection_retries=2)
+        transport._ssl_unsupported_until = 100.0
+        socket = self._successful_socket()
+        open_connection = AsyncMock(side_effect=[ssl.SSLError("stray"), socket])
+        sleep = AsyncMock()
+
+        with (
+            patch.object(transport, "_ssl_ctx") as ssl_ctx,
+            patch("asyncio.open_connection", open_connection),
+            patch("asyncio.sleep", sleep),
+            patch("pylxpweb.transports.dongle.time.monotonic", return_value=50.0),
+        ):
+            await transport.connect()
+
+        ssl_ctx.assert_not_called()
+        assert all("ssl" not in call.kwargs for call in open_connection.await_args_list)
+        sleep.assert_awaited_once_with(1.0)
+        assert transport._ssl_unsupported_until == 100.0
+
+    @pytest.mark.asyncio
+    async def test_auto_without_python_psk_uses_plaintext(self) -> None:
+        transport = DongleTransport("host", "BA12345678", "CE12345678")
+        socket = self._successful_socket()
+
+        with (
+            patch.object(ssl, "HAS_PSK", False, create=True),
+            patch("asyncio.open_connection", return_value=socket) as open_connection,
+        ):
+            await transport.connect()
+
+        assert "ssl" not in open_connection.await_args.kwargs
+        assert transport._ssl_active is False
+
+    @pytest.mark.asyncio
+    async def test_forced_ssl_without_python_psk_raises(self) -> None:
+        transport = DongleTransport("host", "BA12345678", "CE12345678", use_ssl=True)
+
+        with (
+            patch.object(ssl, "HAS_PSK", False, create=True),
+            patch("asyncio.open_connection", AsyncMock()) as open_connection,
+            pytest.raises(NotImplementedError, match="PSK support is missing"),
+        ):
+            await transport.connect()
+
+        open_connection.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_connect_success(self) -> None:
@@ -283,6 +683,7 @@ class TestDongleConnection:
             host="192.168.1.100",
             dongle_serial="BA12345678",
             inverter_serial="CE12345678",
+            use_ssl=False,
         )
         open_started = asyncio.Event()
         release_open = asyncio.Event()
@@ -460,6 +861,7 @@ class TestDongleConnection:
             host="192.168.1.100",
             dongle_serial="BA12345678",
             inverter_serial="CE12345678",
+            use_ssl=False,
         )
         open_started = asyncio.Event()
         release_open = asyncio.Event()
@@ -499,6 +901,7 @@ class TestDongleConnection:
             host="192.168.1.100",
             dongle_serial="BA12345678",
             inverter_serial="CE12345678",
+            use_ssl=False,
         )
         close_started = asyncio.Event()
         release_close = asyncio.Event()
@@ -952,6 +1355,41 @@ class TestDongleResponseValidation:
 
         with pytest.raises(TransportReadError, match="serial mismatch"):
             transport._parse_response(response)
+
+    def test_garbage_serial_in_detection_frame_rejected(self) -> None:
+        """Serial auto-detection rejects a garbage frame instead of crashing.
+
+        A frame whose serial bytes are not valid ASCII must raise the
+        normal mismatch error, not an uncaught UnicodeDecodeError, and
+        must not be stored as the detected serial.
+        """
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="",
+        )
+        response = bytearray(_build_mock_response())
+        # Serial field lives at data-frame offset 2:12 (response 22:32);
+        # recompute the CRC over the spliced data frame.
+        response[22:32] = b"\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a"
+        response[-2:] = struct.pack("<H", compute_crc16(bytes(response[20:-2])))
+
+        with pytest.raises(TransportReadError, match="Unparseable response serial"):
+            transport._parse_response(bytes(response))
+        assert transport.serial == ""
+
+    def test_detected_serial_strips_nul_padding_rejected_if_short(self) -> None:
+        """A NUL-padded (short) serial is rejected, never stored with padding."""
+        transport = DongleTransport(
+            host="192.168.1.100",
+            dongle_serial="BA12345678",
+            inverter_serial="",
+        )
+        response = bytearray(_build_mock_response(inverter_serial="CE123"))
+
+        with pytest.raises(TransportReadError, match="Unparseable response serial"):
+            transport._parse_response(bytes(response))
+        assert transport.serial == ""
 
     def test_serial_always_checked(self) -> None:
         """Serial is validated even when expected_func/expected_register are None."""
@@ -2600,6 +3038,7 @@ class TestDongleSilentPathLoss:
             port=port,
             timeout=timeout,
             connection_retries=1,
+            use_ssl=False,
         )
 
     @pytest.mark.asyncio
