@@ -63,6 +63,7 @@ class DongleCollector:
         inverter_serial: str = "",
         port: int = 8000,
         timeout: float = 10.0,
+        use_ssl: bool = False,
         inverter_family: InverterFamily | None = None,
     ) -> None:
         """Initialize dongle collector.
@@ -82,6 +83,7 @@ class DongleCollector:
         self._timeout = timeout
         self._inverter_family = inverter_family
         self._transport: DongleTransport | None = None
+        self._use_ssl = use_ssl
         self._connected = False
 
     @property
@@ -99,6 +101,7 @@ class DongleCollector:
             dongle_serial=self._dongle_serial,
             inverter_serial=self._inverter_serial,
             timeout=self._timeout,
+            use_ssl=self._use_ssl,
             inverter_family=self._inverter_family,
         )
 

@@ -104,6 +104,11 @@ Examples:
         "--dongle-serial",
         help="WiFi dongle serial number (required for dongle transport)",
     )
+    conn_group.add_argument(
+        "--use-ssl",
+        action="store_true",
+        help="Encrypt the local connection (only relevant for dongle transport)",
+    )
 
     # Cloud API options
     cloud_group = parser.add_argument_group("Cloud API Options")
@@ -372,6 +377,7 @@ async def run_collection(args: argparse.Namespace) -> int:
                     dongle_serial=dongle_serial,
                     inverter_serial=args.serial or "",
                     port=args.port if args.transport == "dongle" else 8000,
+                    use_ssl=args.use_ssl if args.transport == "dongle" else False,
                 )
                 await dongle_collector.connect()
 

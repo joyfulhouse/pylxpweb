@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Minimum supported Python raised to 3.13**: required for TLS-PSK dongle
+  support ([#314](https://github.com/joyfulhouse/pylxpweb/pull/314)), which
+  uses `ssl.SSLContext.set_psk_client_callback` (Python 3.13+ only). This also
+  raises the minimum Home Assistant version for consumers, since HA bundles
+  its own Python runtime per release.
+
 ## [0.10.0b5] - 2026-08-29
 
 ### Fixed

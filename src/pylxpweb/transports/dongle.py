@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import logging
+import ssl
 import struct
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -196,6 +199,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         dongle_serial: str,
         inverter_serial: str,
         port: int = DEFAULT_PORT,
+        use_ssl: bool = False,
         timeout: float = DEFAULT_TIMEOUT,
         inverter_family: InverterFamily | None = None,
         connection_retries: int = 3,
@@ -212,6 +216,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             dongle_serial: 10-character dongle serial number (e.g., "BA12345678")
             inverter_serial: 10-character inverter serial number (e.g., "CE12345678")
             port: TCP port (default 8000)
+            use_ssl: Use TLS-PSK over TCP. Set to true for newer firmwares
             timeout: Connection and operation timeout in seconds
             inverter_family: Inverter model family for correct register mapping.
                 If None, defaults to PV_SERIES (EG4-18KPV) for backward
@@ -248,6 +253,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._write_retries = write_retries
         self._write_step_delay = write_step_delay
         self._verify_writes = verify_writes
+        self._use_ssl = use_ssl
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._receive_buffer = bytearray()
@@ -369,6 +375,37 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             initial_data.hex()[:100],  # Log first 50 bytes
         )
 
+    def _ssl_ctx(self) -> ssl.SSLContext | None:
+        """Create the SSL context for TLS-PSK encrypted channels."""
+
+        if not self._use_ssl:
+            return None
+
+        if not getattr(ssl, "HAS_PSK", False):
+            # Requires an OpenSSL build with PSK support
+            raise NotImplementedError("SSL was requested but PSK support is missing")
+
+        # Compute PSK from the key and the dongle serial
+        psk = hmac.digest(
+            bytes.fromhex("4c7578506f77657254656b21"),
+            self._dongle_serial.encode("utf-8"),
+            digest=hashlib.sha256,
+        )
+
+        def get_psk(_hint: str | None) -> tuple[str, bytes]:
+            # Only the first 16 bytes are used for the PSK
+            return ("Client_identity", psk[:16])
+
+        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        ssl_ctx.options |= ssl.OP_NO_TLSv1
+        ssl_ctx.options |= ssl.OP_NO_TLSv1_1
+        ssl_ctx.set_psk_client_callback(get_psk)
+        ssl_ctx.set_ciphers("DHE-PSK-AES128-GCM-SHA256")
+
+        return ssl_ctx
+
     async def connect(self) -> None:
         """Establish TCP connection to the WiFi dongle with retry and backoff.
 
@@ -422,8 +459,16 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         self._raise_if_shutdown()
                         retry_delay *= 2  # Exponential backoff
 
+                    # Only pass the ssl kwarg when TLS is enabled so the
+                    # plain-TCP path keeps the original
+                    # open_connection(host, port) call signature.
+                    ssl_ctx = self._ssl_ctx()
+                    if ssl_ctx is not None:
+                        open_conn = asyncio.open_connection(self._host, self._port, ssl=ssl_ctx)
+                    else:
+                        open_conn = asyncio.open_connection(self._host, self._port)
                     self._reader, self._writer = await asyncio.wait_for(
-                        asyncio.open_connection(self._host, self._port),
+                        open_conn,
                         timeout=self._timeout,
                     )
                     if self._shutdown_requested:
@@ -920,12 +965,16 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # expected response function, so an unsolicited heartbeat
                     # or proxied param frame is rejected as a mismatch rather
                     # than mis-parsed as this reply (#320).
+
+                    # If TLS-PSK is used, the dongle does not respond with the
+                    # tcp_func header, so the expected tcp_func is only set if
+                    # we are not using TLS-PSK.
                     return self._parse_response(
                         response,
                         expected_func,
                         expected_register,
                         expected_count,
-                        expected_tcp_func=packet[7],
+                        expected_tcp_func=None if self._use_ssl else packet[7],
                     )
 
                 except _DongleFrameError as err:
@@ -1252,13 +1301,17 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
         # 1. Inverter serial must match (always checked)
         response_serial = data_frame[2:12]
-        expected_serial = self._serial.encode("ascii").ljust(10, b"\x00")[:10]
-        if response_serial != expected_serial:
-            resp_serial_str = response_serial.decode("ascii", errors="replace").rstrip("\x00")
-            _raise_mismatch(
-                f"Response serial mismatch: expected {self._serial}, "
-                f"got {resp_serial_str} ({mismatch_context})"
-            )
+        if self._serial:
+            expected_serial = self._serial.encode("ascii").ljust(10, b"\x00")[:10]
+            if response_serial != expected_serial:
+                resp_serial_str = response_serial.decode("ascii", errors="replace").rstrip("\x00")
+                _raise_mismatch(
+                    f"Response serial mismatch: expected {self._serial}, "
+                    f"got {resp_serial_str} ({mismatch_context})"
+                )
+        else:
+            self._serial = response_serial.decode()
+            _LOGGER.debug("Detected inverter serial: %s", self._serial)
 
         # 2. Function code must match (mask high bit for exception responses)
         if expected_func is not None:

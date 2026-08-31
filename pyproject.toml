@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Bryan Li", email = "bryan.li@gmail.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "aiohttp>=3.13.2",
     "pydantic>=2.12.0",
@@ -18,7 +18,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Home Automation",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -79,7 +78,7 @@ ignore = []
 "utils/**/*" = ["E501", "SIM101"]  # Allow long lines and simplified conditions in utility scripts
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
