@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0b8] - 2026-09-02
+
 ### Added
 
 - **Complete Grid Peak Shaving library surface** (companion to
