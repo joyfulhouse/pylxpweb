@@ -3139,6 +3139,408 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         """
         return self._param_float("_12K_HOLD_GRID_PEAK_SHAVING_POWER")
 
+    async def set_grid_peak_shaving_power_2(self, power_kw: float) -> bool:
+        """Set grid peak shaving power limit, time period 2 (register 232).
+
+        Universal control: Most inverters support peak shaving.
+
+        Transport-attached (LOCAL/HYBRID) devices write the raw deci-kW value
+        (``round(power_kw * 10)``) directly to holding register 232 while the
+        local link is up, falling back to the cloud named-parameter write when
+        no transport is attached, the link is down, or the local write fails.
+        The register location is portal-correlated (a 2026-06-12 two-device
+        cloud window sweep named this key at (232,1)); the deci-kW raw
+        encoding is same-family inference from register 206, whose encoding
+        is VERIFIED (pylxpweb#158, eg4_web_monitor#328).
+
+        Mode-off behavior (handled by the integration UX, NOT gated here):
+        the NAK/zeroing behavior is proven only for register 206 — the
+        firmware rejects writes (DATAFRAME_TIMEOUT) while
+        FUNC_GRID_PEAK_SHAVING (register 179 bit 7) is OFF and zeroes that
+        setpoint when the mode deactivates.  The same behavior is expected
+        for register 232 (hardware observation shows both power registers
+        zeroed on mode-off) but is unverified for this register's write path.
+
+        Args:
+            power_kw: Power limit in kilowatts (0.0 to 25.5)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If power_kw is out of valid range
+
+        Example:
+            >>> await inverter.set_grid_peak_shaving_power_2(4.5)
+            True
+        """
+        if not 0.0 <= power_kw <= 25.5:
+            raise ValueError(
+                f"Grid peak shaving power must be between 0.0 and 25.5 kW, got {power_kw}"
+            )
+
+        from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_POWER_2
+
+        # Local transport path (LOCAL/HYBRID): write the raw deci-kW value
+        # straight to register 232 when the link is up. write_transport_register
+        # invalidates the parameter cache on success.
+        if self._transport is not None and not self.transport_link_down:
+            raw = round(power_kw * 10)
+            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_POWER_2, raw):
+                return True
+            # Local write failed — fall back to cloud if a client is available.
+            if self._client is None:
+                return False
+
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                "Grid peak shaving power write requires a transport or a cloud client"
+            )
+
+        # Cloud path: the API accepts kW values directly.
+        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_POWER_2", power_kw)
+
+    @property
+    def grid_peak_shaving_power_2_limit(self) -> float | None:
+        """Get current grid peak shaving power 2 limit from cached parameters.
+
+        Universal control: Most inverters support peak shaving.
+
+        Works across all transports: the local name map includes register
+        232 (``_12K_HOLD_GRID_PEAK_SHAVING_POWER_2``, portal-correlated
+        location; deci-kW raw encoding is same-family inference from
+        register 206), and the transport decode scales the raw value to the
+        cloud kW string, so a LOCAL/HYBRID parameter refresh feeds this
+        property the same kW value the cloud path does.
+
+        Returns None — never a fabricated 0.0 — when the parameter key is
+        absent (parameters not yet loaded, or a partial read that missed the
+        register), so a key-miss reads as "value unavailable", not "setpoint is
+        0 kW".
+
+        Returns:
+            Current power limit in kilowatts, or None if parameters are not
+            loaded or do not contain the key.
+
+        Example:
+            >>> power = inverter.grid_peak_shaving_power_2_limit
+            >>> power
+            4.5
+        """
+        return self._param_float("_12K_HOLD_GRID_PEAK_SHAVING_POWER_2")
+
+    async def set_grid_peak_shaving_soc(self, percent: int) -> bool:
+        """Set grid peak shaving SOC threshold, time period 1 (register 207).
+
+        Universal control: Most inverters support peak shaving.
+
+        Transport-attached (LOCAL/HYBRID) devices write the raw 1:1 percent
+        directly to holding register 207 while the local link is up, falling
+        back to the cloud named-parameter write when no transport is attached,
+        the link is down, or the local write fails.  The register location and
+        raw 1:1 encoding are portal-correlated (2026-06-12 two-device cloud
+        window sweep, raw-vs-named cross-check raw 80 -> "80").
+
+        Mode-off behavior (handled by the integration UX, NOT gated here):
+        whether the firmware rejects SOC writes while FUNC_GRID_PEAK_SHAVING
+        (register 179 bit 7) is OFF is unverified — the NAK/zeroing behavior
+        is proven only for the power register 206.
+
+        Args:
+            percent: SOC percentage (0 to 100)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If percent is out of valid range
+
+        Example:
+            >>> await inverter.set_grid_peak_shaving_soc(80)
+            True
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError(f"Grid peak shaving SOC must be between 0 and 100%, got {percent}")
+
+        from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_SOC
+
+        # Local transport path (LOCAL/HYBRID): write the raw 1:1 percent
+        # straight to register 207 when the link is up. write_transport_register
+        # invalidates the parameter cache on success.
+        if self._transport is not None and not self.transport_link_down:
+            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_SOC, percent):
+                return True
+            # Local write failed — fall back to cloud if a client is available.
+            if self._client is None:
+                return False
+
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                "Grid peak shaving SOC write requires a transport or a cloud client"
+            )
+
+        # Cloud path: the API accepts percent values directly.
+        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_SOC", percent)
+
+    @property
+    def grid_peak_shaving_soc(self) -> int | None:
+        """Get current grid peak shaving SOC threshold from cached parameters.
+
+        Universal control: Most inverters support peak shaving.
+
+        Register 207 is raw 1:1 percent (portal-correlated, 2026-06-12
+        sweep), so cloud and LOCAL/HYBRID reads feed this property the same
+        value.
+
+        Returns:
+            Current SOC threshold percentage (0-100), or None if parameters
+            are not loaded or do not contain the key.
+
+        Example:
+            >>> soc = inverter.grid_peak_shaving_soc
+            >>> soc
+            80
+        """
+        return self._param_int_in_range("_12K_HOLD_GRID_PEAK_SHAVING_SOC", 0, 100)
+
+    async def set_grid_peak_shaving_soc_2(self, percent: int) -> bool:
+        """Set grid peak shaving SOC threshold, time period 2 (register 218).
+
+        Universal control: Most inverters support peak shaving.
+
+        Transport-attached (LOCAL/HYBRID) devices write the raw 1:1 percent
+        directly to holding register 218 while the local link is up, falling
+        back to the cloud named-parameter write when no transport is attached,
+        the link is down, or the local write fails.  The register location and
+        raw 1:1 encoding are portal-correlated (2026-06-12 two-device cloud
+        window sweep, raw-vs-named cross-check raw 50 -> "50").
+
+        Mode-off behavior (handled by the integration UX, NOT gated here):
+        whether the firmware rejects SOC writes while FUNC_GRID_PEAK_SHAVING
+        (register 179 bit 7) is OFF is unverified — the NAK/zeroing behavior
+        is proven only for the power register 206.
+
+        Args:
+            percent: SOC percentage (0 to 100)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If percent is out of valid range
+
+        Example:
+            >>> await inverter.set_grid_peak_shaving_soc_2(50)
+            True
+        """
+        if not 0 <= percent <= 100:
+            raise ValueError(f"Grid peak shaving SOC must be between 0 and 100%, got {percent}")
+
+        from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_SOC_2
+
+        # Local transport path (LOCAL/HYBRID): write the raw 1:1 percent
+        # straight to register 218 when the link is up. write_transport_register
+        # invalidates the parameter cache on success.
+        if self._transport is not None and not self.transport_link_down:
+            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_SOC_2, percent):
+                return True
+            # Local write failed — fall back to cloud if a client is available.
+            if self._client is None:
+                return False
+
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                "Grid peak shaving SOC write requires a transport or a cloud client"
+            )
+
+        # Cloud path: the API accepts percent values directly.
+        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", percent)
+
+    @property
+    def grid_peak_shaving_soc_2(self) -> int | None:
+        """Get current grid peak shaving SOC 2 threshold from cached parameters.
+
+        Universal control: Most inverters support peak shaving.
+
+        Register 218 is raw 1:1 percent (portal-correlated, 2026-06-12
+        sweep), so cloud and LOCAL/HYBRID reads feed this property the same
+        value.
+
+        Returns:
+            Current SOC threshold percentage (0-100), or None if parameters
+            are not loaded or do not contain the key.
+
+        Example:
+            >>> soc = inverter.grid_peak_shaving_soc_2
+            >>> soc
+            50
+        """
+        return self._param_int_in_range("_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", 0, 100)
+
+    async def set_grid_peak_shaving_volt(self, volts: float) -> bool:
+        """Set grid peak shaving voltage threshold, time period 1 (register 208).
+
+        Universal control: Most inverters support peak shaving.
+
+        Transport-attached (LOCAL/HYBRID) devices write the raw decivolt value
+        (``round(volts * 10)``) directly to holding register 208 while the
+        local link is up, falling back to the cloud named-parameter write when
+        no transport is attached, the link is down, or the local write fails.
+        The register location and decivolt encoding are portal-correlated
+        (2026-06-12 two-device cloud window sweep, raw-vs-named cross-check
+        raw 520 -> "52" V).
+
+        The 40.0-64.0 V range is a maintainer-chosen guard bracketing typical
+        battery operating voltages; the firmware/portal bound is unknown (no
+        bound was captured in the sweep).
+
+        Mode-off behavior (handled by the integration UX, NOT gated here):
+        whether the firmware rejects voltage writes while
+        FUNC_GRID_PEAK_SHAVING (register 179 bit 7) is OFF is unverified —
+        the NAK/zeroing behavior is proven only for the power register 206.
+
+        Args:
+            volts: Voltage threshold in volts (40.0 to 64.0)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If volts is out of valid range
+
+        Example:
+            >>> await inverter.set_grid_peak_shaving_volt(52.3)
+            True
+        """
+        if not 40.0 <= volts <= 64.0:
+            raise ValueError(
+                f"Grid peak shaving voltage must be between 40.0 and 64.0 V, got {volts}"
+            )
+
+        from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_VOLT
+
+        # Local transport path (LOCAL/HYBRID): write the raw decivolt value
+        # straight to register 208 when the link is up. write_transport_register
+        # invalidates the parameter cache on success.
+        if self._transport is not None and not self.transport_link_down:
+            raw = round(volts * 10)
+            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_VOLT, raw):
+                return True
+            # Local write failed — fall back to cloud if a client is available.
+            if self._client is None:
+                return False
+
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                "Grid peak shaving voltage write requires a transport or a cloud client"
+            )
+
+        # Cloud path: the API accepts volt values directly.
+        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_VOLT", volts)
+
+    @property
+    def grid_peak_shaving_volt(self) -> float | None:
+        """Get current grid peak shaving voltage threshold from cached parameters.
+
+        Universal control: Most inverters support peak shaving.
+
+        Register 208 is raw decivolts (portal-correlated, 2026-06-12 sweep)
+        and the transport decode scales it to the cloud volt string, so
+        cloud and LOCAL/HYBRID reads feed this property the same volt value.
+
+        Returns:
+            Current voltage threshold in volts, or None if parameters are
+            not loaded or do not contain the key.
+
+        Example:
+            >>> volt = inverter.grid_peak_shaving_volt
+            >>> volt
+            52.3
+        """
+        return self._param_float("_12K_HOLD_GRID_PEAK_SHAVING_VOLT")
+
+    async def set_grid_peak_shaving_volt_2(self, volts: float) -> bool:
+        """Set grid peak shaving voltage threshold, time period 2 (register 219).
+
+        Universal control: Most inverters support peak shaving.
+
+        Transport-attached (LOCAL/HYBRID) devices write the raw decivolt value
+        (``round(volts * 10)``) directly to holding register 219 while the
+        local link is up, falling back to the cloud named-parameter write when
+        no transport is attached, the link is down, or the local write fails.
+        The register location and decivolt encoding are portal-correlated
+        (2026-06-12 two-device cloud window sweep, raw-vs-named cross-check
+        raw 520 -> "52" V).
+
+        The 40.0-64.0 V range is a maintainer-chosen guard bracketing typical
+        battery operating voltages; the firmware/portal bound is unknown (no
+        bound was captured in the sweep).
+
+        Mode-off behavior (handled by the integration UX, NOT gated here):
+        whether the firmware rejects voltage writes while
+        FUNC_GRID_PEAK_SHAVING (register 179 bit 7) is OFF is unverified —
+        the NAK/zeroing behavior is proven only for the power register 206.
+
+        Args:
+            volts: Voltage threshold in volts (40.0 to 64.0)
+
+        Returns:
+            True if successful
+
+        Raises:
+            ValueError: If volts is out of valid range
+
+        Example:
+            >>> await inverter.set_grid_peak_shaving_volt_2(51.2)
+            True
+        """
+        if not 40.0 <= volts <= 64.0:
+            raise ValueError(
+                f"Grid peak shaving voltage must be between 40.0 and 64.0 V, got {volts}"
+            )
+
+        from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_VOLT_2
+
+        # Local transport path (LOCAL/HYBRID): write the raw decivolt value
+        # straight to register 219 when the link is up. write_transport_register
+        # invalidates the parameter cache on success.
+        if self._transport is not None and not self.transport_link_down:
+            raw = round(volts * 10)
+            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_VOLT_2, raw):
+                return True
+            # Local write failed — fall back to cloud if a client is available.
+            if self._client is None:
+                return False
+
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                "Grid peak shaving voltage write requires a transport or a cloud client"
+            )
+
+        # Cloud path: the API accepts volt values directly.
+        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2", volts)
+
+    @property
+    def grid_peak_shaving_volt_2(self) -> float | None:
+        """Get current grid peak shaving voltage 2 threshold from cached parameters.
+
+        Universal control: Most inverters support peak shaving.
+
+        Register 219 is raw decivolts (portal-correlated, 2026-06-12 sweep)
+        and the transport decode scales it to the cloud volt string, so
+        cloud and LOCAL/HYBRID reads feed this property the same volt value.
+
+        Returns:
+            Current voltage threshold in volts, or None if parameters are
+            not loaded or do not contain the key.
+
+        Example:
+            >>> volt = inverter.grid_peak_shaving_volt_2
+            >>> volt
+            51.2
+        """
+        return self._param_float("_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2")
+
     # ============================================================================
     # AC Charge SOC Limit Control (Issue #12)
     # ============================================================================
@@ -4880,8 +5282,12 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             self._features.quick_charge_minute = True
 
         # Check for PV series registers (volt-watt curve parameters)
-        if "_12K_HOLD_GRID_PEAK_SHAVING_POWER" in self.parameters:
+        has_ps1 = "_12K_HOLD_GRID_PEAK_SHAVING_POWER" in self.parameters
+        if has_ps1:
             self._features.has_pv_series_registers = True
+        # A device exposing only the time-period-2 register still supports
+        # grid peak shaving; has_pv_series_registers stays keyed on PS1.
+        if has_ps1 or "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2" in self.parameters:
             self._features.grid_peak_shaving = True
 
         # Check for volt-watt curve support

@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Complete Grid Peak Shaving library surface** (companion to
+  [joyfulhouse/eg4_web_monitor#592](https://github.com/joyfulhouse/eg4_web_monitor/issues/592)):
+  - New register constants `HOLD_GRID_PEAK_SHAVING_SOC` (207),
+    `HOLD_GRID_PEAK_SHAVING_VOLT` (208), `HOLD_GRID_PEAK_SHAVING_SOC_2` (218),
+    and `HOLD_GRID_PEAK_SHAVING_VOLT_2` (219), exported from
+    `pylxpweb.constants` alongside the existing power constants.
+  - New `BaseInverter` setters/properties, mirroring
+    `set_grid_peak_shaving_power` / `grid_peak_shaving_power_limit` with the
+    same transport-first-then-cloud-named routing:
+    `set_grid_peak_shaving_power_2` / `grid_peak_shaving_power_2_limit`
+    (register 232, deci-kW, 0.0-25.5 kW),
+    `set_grid_peak_shaving_soc` / `grid_peak_shaving_soc` and
+    `set_grid_peak_shaving_soc_2` / `grid_peak_shaving_soc_2`
+    (registers 207/218, raw 1:1 percent, 0-100), and
+    `set_grid_peak_shaving_volt` / `grid_peak_shaving_volt` and
+    `set_grid_peak_shaving_volt_2` / `grid_peak_shaving_volt_2`
+    (registers 208/219, raw decivolts, cloud volts; the 40.0-64.0 V range
+    check is a maintainer-chosen guard — the firmware/portal bound is
+    unknown).
+  - The five existing holding-register rows (207/208/218/219/232) now carry
+    `ha_entity_key` values, and the two voltage rows carry the
+    maintainer-chosen 40.0-64.0 V guard range.
+  - Feature detection now treats the presence of
+    `_12K_HOLD_GRID_PEAK_SHAVING_POWER_2` alone as `grid_peak_shaving`
+    support (any-of with the PS1 register), so a device exposing only the
+    time-period-2 register is not mis-detected; `has_pv_series_registers`
+    remains keyed on the PS1 register only.
+
 ## [0.10.0b7] - 2026-09-02
 
 _0.10.0b6 was tagged but never published (the release workflow rejected a squash-merged release commit); this is the same content._
@@ -2265,6 +2297,7 @@ else:
 # Start firmware update
 await device.start_firmware_update()
 
+
 # Monitor progress with synchronous properties
 async def monitor_update():
     while True:
@@ -2280,10 +2313,12 @@ async def monitor_update():
 
         await asyncio.sleep(30)
 
+
 # Home Assistant Update Entity example
 @property
 def in_progress(self) -> bool:
     return self.device.firmware_update_in_progress  # Synchronous!
+
 
 @property
 def update_percentage(self) -> int | None:

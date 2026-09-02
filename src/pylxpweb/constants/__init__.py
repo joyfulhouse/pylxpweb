@@ -193,9 +193,14 @@ from .registers import (
     HOLD_GEN_TIME_1_START,
     HOLD_GRID_FREQ_HIGH_1,
     HOLD_GRID_FREQ_LOW_1,
-    # Grid peak shaving power setpoints (regs 206/232, deci-kW)
+    # Grid peak shaving setpoints (regs 206/232 power deci-kW, 207/218 SOC
+    # raw 1:1 %, 208/219 voltage decivolts)
     HOLD_GRID_PEAK_SHAVING_POWER,
     HOLD_GRID_PEAK_SHAVING_POWER_2,
+    HOLD_GRID_PEAK_SHAVING_SOC,
+    HOLD_GRID_PEAK_SHAVING_SOC_2,
+    HOLD_GRID_PEAK_SHAVING_VOLT,
+    HOLD_GRID_PEAK_SHAVING_VOLT_2,
     # Grid protection parameters
     HOLD_GRID_VOLT_HIGH_1,
     HOLD_GRID_VOLT_LOW_1,
@@ -471,6 +476,10 @@ __all__ = [
     # Peak Shaving time schedule (regs 209-212)
     "HOLD_GRID_PEAK_SHAVING_POWER",
     "HOLD_GRID_PEAK_SHAVING_POWER_2",
+    "HOLD_GRID_PEAK_SHAVING_SOC",
+    "HOLD_GRID_PEAK_SHAVING_SOC_2",
+    "HOLD_GRID_PEAK_SHAVING_VOLT",
+    "HOLD_GRID_PEAK_SHAVING_VOLT_2",
     "HOLD_PEAK_SHAVING_TIME_0_START",
     "HOLD_PEAK_SHAVING_TIME_0_END",
     "HOLD_PEAK_SHAVING_TIME_1_START",
