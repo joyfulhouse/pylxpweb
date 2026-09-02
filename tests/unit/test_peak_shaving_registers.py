@@ -515,6 +515,16 @@ class TestPeakShavingFamilyProperties:
         assert getattr(inverter, prop) is None
 
 
+# (setter, value, cloud key, cloud string) for every new setter's cloud route.
+CLOUD_WRITE_CASES = [
+    ("set_grid_peak_shaving_power_2", 4.5, "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2", "4.5"),
+    ("set_grid_peak_shaving_soc", 80, "_12K_HOLD_GRID_PEAK_SHAVING_SOC", "80"),
+    ("set_grid_peak_shaving_soc_2", 80, "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", "80"),
+    ("set_grid_peak_shaving_volt", 52.3, "_12K_HOLD_GRID_PEAK_SHAVING_VOLT", "52.3"),
+    ("set_grid_peak_shaving_volt_2", 52.3, "_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2", "52.3"),
+]
+
+
 class TestSetPeakShavingFamily:
     """Every new setter mirrors set_grid_peak_shaving_power's routing."""
 
@@ -584,26 +594,7 @@ class TestSetPeakShavingFamily:
         inverter.write_transport_register.assert_awaited_once_with(register, raw)
         client.api.control.write_parameter.assert_not_called()
 
-    @pytest.mark.parametrize(
-        ("setter", "value", "cloud_key", "cloud_value"),
-        [
-            (
-                "set_grid_peak_shaving_power_2",
-                4.5,
-                "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2",
-                "4.5",
-            ),
-            ("set_grid_peak_shaving_soc", 80, "_12K_HOLD_GRID_PEAK_SHAVING_SOC", "80"),
-            ("set_grid_peak_shaving_soc_2", 80, "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", "80"),
-            ("set_grid_peak_shaving_volt", 52.3, "_12K_HOLD_GRID_PEAK_SHAVING_VOLT", "52.3"),
-            (
-                "set_grid_peak_shaving_volt_2",
-                52.3,
-                "_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2",
-                "52.3",
-            ),
-        ],
-    )
+    @pytest.mark.parametrize(("setter", "value", "cloud_key", "cloud_value"), CLOUD_WRITE_CASES)
     async def test_cloud_fallback_when_no_transport(
         self, setter: str, value: float, cloud_key: str, cloud_value: str
     ) -> None:
@@ -621,26 +612,7 @@ class TestSetPeakShavingFamily:
             "4512670118", cloud_key, cloud_value
         )
 
-    @pytest.mark.parametrize(
-        ("setter", "value", "cloud_key", "cloud_value"),
-        [
-            (
-                "set_grid_peak_shaving_power_2",
-                4.5,
-                "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2",
-                "4.5",
-            ),
-            ("set_grid_peak_shaving_soc", 80, "_12K_HOLD_GRID_PEAK_SHAVING_SOC", "80"),
-            ("set_grid_peak_shaving_soc_2", 80, "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", "80"),
-            ("set_grid_peak_shaving_volt", 52.3, "_12K_HOLD_GRID_PEAK_SHAVING_VOLT", "52.3"),
-            (
-                "set_grid_peak_shaving_volt_2",
-                52.3,
-                "_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2",
-                "52.3",
-            ),
-        ],
-    )
+    @pytest.mark.parametrize(("setter", "value", "cloud_key", "cloud_value"), CLOUD_WRITE_CASES)
     async def test_local_failure_falls_back_to_cloud(
         self, setter: str, value: float, cloud_key: str, cloud_value: str
     ) -> None:
