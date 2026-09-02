@@ -1516,6 +1516,7 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=207,
         canonical_name="grid_peak_shaving_soc",
         api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_SOC",  # verified at 207
+        ha_entity_key="grid_peak_shaving_soc",
         unit="%",
         min_value=0,
         max_value=100,
@@ -1533,8 +1534,13 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=208,
         canonical_name="grid_peak_shaving_volt",
         api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_VOLT",  # verified at 208
+        ha_entity_key="grid_peak_shaving_volt",
         scale=ScaleFactor.DIV_10,
         unit="V",
+        # min/max are a maintainer-chosen guard bracketing typical battery
+        # operating voltages — no firmware/portal bound has been captured.
+        min_value=40.0,
+        max_value=64.0,
         category=HoldingCategory.GRID,
         description=(
             "Grid peak shaving battery voltage threshold, time period 1.  "
@@ -1549,6 +1555,7 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=218,
         canonical_name="grid_peak_shaving_soc_2",
         api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_SOC_2",  # verified at 218
+        ha_entity_key="grid_peak_shaving_soc_2",
         unit="%",
         min_value=0,
         max_value=100,
@@ -1565,8 +1572,13 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=219,
         canonical_name="grid_peak_shaving_volt_2",
         api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2",  # verified at 219
+        ha_entity_key="grid_peak_shaving_volt_2",
         scale=ScaleFactor.DIV_10,
         unit="V",
+        # min/max are a maintainer-chosen guard bracketing typical battery
+        # operating voltages — no firmware/portal bound has been captured.
+        min_value=40.0,
+        max_value=64.0,
         category=HoldingCategory.GRID,
         description=(
             "Grid peak shaving battery voltage threshold, time period 2.  "
@@ -1581,6 +1593,7 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         address=232,
         canonical_name="grid_peak_shaving_power_2",
         api_param_key="_12K_HOLD_GRID_PEAK_SHAVING_POWER_2",  # verified at 232
+        ha_entity_key="grid_peak_shaving_power_2",
         unit="kW",
         min_value=0,
         max_value=25.5,

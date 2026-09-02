@@ -7,6 +7,12 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from pylxpweb import LuxpowerClient
+from pylxpweb.constants import (
+    HOLD_GRID_PEAK_SHAVING_SOC,
+    HOLD_GRID_PEAK_SHAVING_SOC_2,
+    HOLD_GRID_PEAK_SHAVING_VOLT,
+    HOLD_GRID_PEAK_SHAVING_VOLT_2,
+)
 from pylxpweb.endpoints.control import ControlEndpoints
 from pylxpweb.models import ParameterReadResponse, SuccessResponse
 
@@ -324,6 +330,12 @@ class TestCacheInvalidation:
             # LOCAL_PARAM_SCALE_DIV10 peak-shaving power regs (raw deci-kW).
             (206, 120, "_12K_HOLD_GRID_PEAK_SHAVING_POWER", "12"),
             (232, 41, "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2", "4.1"),
+            # Peak-shaving voltage regs are decivolts (canonical DIV_10 scale).
+            (HOLD_GRID_PEAK_SHAVING_VOLT, 523, "_12K_HOLD_GRID_PEAK_SHAVING_VOLT", "52.3"),
+            (HOLD_GRID_PEAK_SHAVING_VOLT_2, 512, "_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2", "51.2"),
+            # Peak-shaving SOC regs are raw 1:1 — no scaling.
+            (HOLD_GRID_PEAK_SHAVING_SOC, 80, "_12K_HOLD_GRID_PEAK_SHAVING_SOC", "80"),
+            (HOLD_GRID_PEAK_SHAVING_SOC_2, 50, "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", "50"),
             # 1:1 (NONE) registers pass the raw value straight through.
             (67, 90, "HOLD_AC_CHARGE_SOC_LIMIT", "90"),
         ],
