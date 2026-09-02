@@ -2463,6 +2463,31 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             self._invalidate_parameters_cache()
         return result.success
 
+    async def _write_peak_shaving_setpoint(
+        self, register: int, raw: int, param_key: str, value: float, label: str
+    ) -> bool:
+        """Write a peak-shaving setpoint: local register first, cloud fallback.
+
+        Transport-attached (LOCAL/HYBRID) devices write ``raw`` straight to
+        ``register`` while the link is up (write_transport_register invalidates
+        the parameter cache on success).  When no transport is attached, the
+        link is down, or the local write fails, fall back to the cloud
+        named-parameter write of ``value`` — the API accepts the engineering
+        unit directly.  A failed local write with no client returns False.
+        """
+        if self._transport is not None and not self.transport_link_down:
+            if await self.write_transport_register(register, raw):
+                return True
+            if self._client is None:
+                return False
+
+        if self._client is None:
+            raise LuxpowerDeviceError(
+                f"Grid peak shaving {label} write requires a transport or a cloud client"
+            )
+
+        return await self._write_named_parameter(param_key, value)
+
     async def set_standby_mode(self, standby: bool) -> bool:
         """Enable or disable standby mode.
 
@@ -3091,24 +3116,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_POWER
 
-        # Local transport path (LOCAL/HYBRID): write the raw deci-kW value
-        # straight to register 206 when the link is up. write_transport_register
-        # invalidates the parameter cache on success.
-        if self._transport is not None and not self.transport_link_down:
-            raw = round(power_kw * 10)
-            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_POWER, raw):
-                return True
-            # Local write failed — fall back to cloud if a client is available.
-            if self._client is None:
-                return False
-
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                "Grid peak shaving power write requires a transport or a cloud client"
-            )
-
-        # Cloud path: the API accepts kW values directly.
-        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_POWER", power_kw)
+        return await self._write_peak_shaving_setpoint(
+            HOLD_GRID_PEAK_SHAVING_POWER,
+            round(power_kw * 10),
+            "_12K_HOLD_GRID_PEAK_SHAVING_POWER",
+            power_kw,
+            "power",
+        )
 
     @property
     def grid_peak_shaving_power_limit(self) -> float | None:
@@ -3181,24 +3195,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_POWER_2
 
-        # Local transport path (LOCAL/HYBRID): write the raw deci-kW value
-        # straight to register 232 when the link is up. write_transport_register
-        # invalidates the parameter cache on success.
-        if self._transport is not None and not self.transport_link_down:
-            raw = round(power_kw * 10)
-            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_POWER_2, raw):
-                return True
-            # Local write failed — fall back to cloud if a client is available.
-            if self._client is None:
-                return False
-
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                "Grid peak shaving power write requires a transport or a cloud client"
-            )
-
-        # Cloud path: the API accepts kW values directly.
-        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_POWER_2", power_kw)
+        return await self._write_peak_shaving_setpoint(
+            HOLD_GRID_PEAK_SHAVING_POWER_2,
+            round(power_kw * 10),
+            "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2",
+            power_kw,
+            "power",
+        )
 
     @property
     def grid_peak_shaving_power_2_limit(self) -> float | None:
@@ -3264,23 +3267,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_SOC
 
-        # Local transport path (LOCAL/HYBRID): write the raw 1:1 percent
-        # straight to register 207 when the link is up. write_transport_register
-        # invalidates the parameter cache on success.
-        if self._transport is not None and not self.transport_link_down:
-            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_SOC, percent):
-                return True
-            # Local write failed — fall back to cloud if a client is available.
-            if self._client is None:
-                return False
-
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                "Grid peak shaving SOC write requires a transport or a cloud client"
-            )
-
-        # Cloud path: the API accepts percent values directly.
-        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_SOC", percent)
+        return await self._write_peak_shaving_setpoint(
+            HOLD_GRID_PEAK_SHAVING_SOC,
+            percent,
+            "_12K_HOLD_GRID_PEAK_SHAVING_SOC",
+            percent,
+            "SOC",
+        )
 
     @property
     def grid_peak_shaving_soc(self) -> int | None:
@@ -3338,23 +3331,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_SOC_2
 
-        # Local transport path (LOCAL/HYBRID): write the raw 1:1 percent
-        # straight to register 218 when the link is up. write_transport_register
-        # invalidates the parameter cache on success.
-        if self._transport is not None and not self.transport_link_down:
-            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_SOC_2, percent):
-                return True
-            # Local write failed — fall back to cloud if a client is available.
-            if self._client is None:
-                return False
-
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                "Grid peak shaving SOC write requires a transport or a cloud client"
-            )
-
-        # Cloud path: the API accepts percent values directly.
-        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", percent)
+        return await self._write_peak_shaving_setpoint(
+            HOLD_GRID_PEAK_SHAVING_SOC_2,
+            percent,
+            "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2",
+            percent,
+            "SOC",
+        )
 
     @property
     def grid_peak_shaving_soc_2(self) -> int | None:
@@ -3419,24 +3402,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_VOLT
 
-        # Local transport path (LOCAL/HYBRID): write the raw decivolt value
-        # straight to register 208 when the link is up. write_transport_register
-        # invalidates the parameter cache on success.
-        if self._transport is not None and not self.transport_link_down:
-            raw = round(volts * 10)
-            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_VOLT, raw):
-                return True
-            # Local write failed — fall back to cloud if a client is available.
-            if self._client is None:
-                return False
-
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                "Grid peak shaving voltage write requires a transport or a cloud client"
-            )
-
-        # Cloud path: the API accepts volt values directly.
-        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_VOLT", volts)
+        return await self._write_peak_shaving_setpoint(
+            HOLD_GRID_PEAK_SHAVING_VOLT,
+            round(volts * 10),
+            "_12K_HOLD_GRID_PEAK_SHAVING_VOLT",
+            volts,
+            "voltage",
+        )
 
     @property
     def grid_peak_shaving_volt(self) -> float | None:
@@ -3501,24 +3473,13 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
 
         from pylxpweb.constants import HOLD_GRID_PEAK_SHAVING_VOLT_2
 
-        # Local transport path (LOCAL/HYBRID): write the raw decivolt value
-        # straight to register 219 when the link is up. write_transport_register
-        # invalidates the parameter cache on success.
-        if self._transport is not None and not self.transport_link_down:
-            raw = round(volts * 10)
-            if await self.write_transport_register(HOLD_GRID_PEAK_SHAVING_VOLT_2, raw):
-                return True
-            # Local write failed — fall back to cloud if a client is available.
-            if self._client is None:
-                return False
-
-        if self._client is None:
-            raise LuxpowerDeviceError(
-                "Grid peak shaving voltage write requires a transport or a cloud client"
-            )
-
-        # Cloud path: the API accepts volt values directly.
-        return await self._write_named_parameter("_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2", volts)
+        return await self._write_peak_shaving_setpoint(
+            HOLD_GRID_PEAK_SHAVING_VOLT_2,
+            round(volts * 10),
+            "_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2",
+            volts,
+            "voltage",
+        )
 
     @property
     def grid_peak_shaving_volt_2(self) -> float | None:
