@@ -2297,7 +2297,6 @@ else:
 # Start firmware update
 await device.start_firmware_update()
 
-
 # Monitor progress with synchronous properties
 async def monitor_update():
     while True:
@@ -2313,12 +2312,10 @@ async def monitor_update():
 
         await asyncio.sleep(30)
 
-
 # Home Assistant Update Entity example
 @property
 def in_progress(self) -> bool:
     return self.device.firmware_update_in_progress  # Synchronous!
-
 
 @property
 def update_percentage(self) -> int | None:
