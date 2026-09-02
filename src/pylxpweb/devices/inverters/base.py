@@ -3171,9 +3171,8 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         the NAK/zeroing behavior is proven only for register 206 — the
         firmware rejects writes (DATAFRAME_TIMEOUT) while
         FUNC_GRID_PEAK_SHAVING (register 179 bit 7) is OFF and zeroes that
-        setpoint when the mode deactivates.  The same behavior is expected
-        for register 232 (hardware observation shows both power registers
-        zeroed on mode-off) but is unverified for this register's write path.
+        setpoint when the mode deactivates.  The same behaviour is expected
+        for register 232 but has not been observed.
 
         Args:
             power_kw: Power limit in kilowatts (0.0 to 25.5)
