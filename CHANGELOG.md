@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.10.0b6] - 2026-09-02
+## [0.10.0b7] - 2026-09-02
+
+_0.10.0b6 was tagged but never published (the release workflow rejected a squash-merged release commit); this is the same content._
 
 ### Added
 
