@@ -70,6 +70,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On-grid discharge SOC cutoff (H105) accepts 91-100%** (fixes
+  [eg4_web_monitor #603](https://github.com/joyfulhouse/eg4_web_monitor/issues/603)):
+  the canonical register definition, `set_battery_soc_limits` (cloud) and
+  `set_on_grid_cutoff_soc` (Modbus) all capped the value at 90, which was
+  the portal's arrow-button hint, not a firmware bound — the portal accepts
+  a typed 95, the inverter stores it (reporter diagnostics, LXP-LB-US 10K)
+  and rejects 101; the 96-100 span is inferred from that pair. Evidence is
+  one model — other families are unconfirmed and the firmware exception
+  remains the authoritative reject path. Users keeping batteries full ahead of outages could
+  no longer set it from the integration. The 10% floor is unchanged (also a
+  portal hint; unproven either way).
+
 - **Dongle response validation keyed off the negotiated channel instead of
   the requested SSL policy**: PR #314 skipped the TCP-function byte
   cross-check whenever SSL was *requested*; it is now skipped only when TLS

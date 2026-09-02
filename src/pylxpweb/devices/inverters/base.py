@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 from pylxpweb.constants import (
     DEVICE_TYPE_CODE_GRIDBOSS,
     MAX_REGISTERS_PER_READ,
+    ONGRID_DISCHARGE_CUTOFF_SOC_MAX,
+    ONGRID_DISCHARGE_CUTOFF_SOC_MIN,
     SOC_MAX_PERCENT,
     SOC_MIN_PERCENT,
 )
@@ -2507,7 +2509,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters have SOC limits.
 
         Returns:
-            Dictionary with on_grid_limit and off_grid_limit (0-100%),
+            Dictionary with on_grid_limit (10-100%) and off_grid_limit (0-100%),
             or None if parameters haven't been loaded yet
 
         Example:
@@ -2534,7 +2536,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters have SOC protection.
 
         Args:
-            on_grid_limit: On-grid discharge cutoff SOC (10-90%)
+            on_grid_limit: On-grid discharge cutoff SOC (10-100%)
             off_grid_limit: Off-grid/EPS discharge cutoff SOC (0-100%)
 
         Returns:
@@ -2544,34 +2546,60 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             >>> await inverter.set_battery_soc_limits(on_grid_limit=15, off_grid_limit=20)
             True
         """
-        # Write each parameter individually using parameter names
+        # Validate BOTH inputs before any I/O so an invalid pair never
+        # half-applies (the on-grid write used to land before the off-grid
+        # value was checked).
+        if on_grid_limit is not None and not (
+            ONGRID_DISCHARGE_CUTOFF_SOC_MIN <= on_grid_limit <= ONGRID_DISCHARGE_CUTOFF_SOC_MAX
+        ):
+            raise ValueError(
+                "on_grid_limit must be between "
+                f"{ONGRID_DISCHARGE_CUTOFF_SOC_MIN} and {ONGRID_DISCHARGE_CUTOFF_SOC_MAX}%"
+            )
+        if off_grid_limit is not None and not SOC_MIN_PERCENT <= off_grid_limit <= SOC_MAX_PERCENT:
+            raise ValueError(
+                f"off_grid_limit must be between {SOC_MIN_PERCENT} and {SOC_MAX_PERCENT}%"
+            )
+
+        # Write each parameter individually using parameter names. The cache
+        # is marked stale as soon as a write has been ATTEMPTED — including
+        # when the call raises, times out or is cancelled, since the device
+        # may have applied the value before the response was lost — so the
+        # next refresh re-reads the device whatever happened. Per
+        # _invalidate_parameters_cache this does NOT drop the in-memory
+        # snapshot — the pre-write value is served until that refresh lands.
         success = True
-
-        if on_grid_limit is not None:
-            if not 10 <= on_grid_limit <= 90:
-                raise ValueError("on_grid_limit must be between 10 and 90%")
-            result = await self._client.api.control.write_parameter(
-                self.serial_number,
-                "HOLD_DISCHG_CUT_OFF_SOC_EOD",
-                str(on_grid_limit),
-            )
-            success = success and result.success
-
-        if off_grid_limit is not None:
-            if not SOC_MIN_PERCENT <= off_grid_limit <= SOC_MAX_PERCENT:
-                raise ValueError(
-                    f"off_grid_limit must be between {SOC_MIN_PERCENT} and {SOC_MAX_PERCENT}%"
+        attempted = False
+        try:
+            if on_grid_limit is not None:
+                attempted = True
+                result = await self._client.api.control.write_parameter(
+                    self.serial_number,
+                    "HOLD_DISCHG_CUT_OFF_SOC_EOD",
+                    str(on_grid_limit),
                 )
-            result = await self._client.api.control.write_parameter(
-                self.serial_number,
-                "HOLD_SOC_LOW_LIMIT_EPS_DISCHG",
-                str(off_grid_limit),
-            )
-            success = success and result.success
+                success = success and result.success
 
-        # Invalidate parameter cache on successful write
-        if success:
-            self._invalidate_parameters_cache()
+            if off_grid_limit is not None:
+                attempted = True
+                result = await self._client.api.control.write_parameter(
+                    self.serial_number,
+                    "HOLD_SOC_LOW_LIMIT_EPS_DISCHG",
+                    str(off_grid_limit),
+                )
+                success = success and result.success
+        finally:
+            if attempted:
+                # Both cache layers: the inverter's parameter snapshot AND the
+                # client's short-lived response cache. The control endpoint
+                # clears the latter only on an acknowledged write; a write
+                # that applied but whose response was lost would otherwise
+                # let the next refresh promote the pre-write response. The
+                # None guard keeps a local-only placeholder client from
+                # masking the original error with a second AttributeError.
+                if self._client is not None:
+                    self._client.invalidate_cache_for_device(self.serial_number)
+                self._invalidate_parameters_cache()
 
         return success
 

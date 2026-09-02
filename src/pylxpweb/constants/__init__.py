@@ -46,6 +46,8 @@ from .api import (
 from .devices import (
     # Register limits
     MAX_REGISTERS_PER_READ,
+    ONGRID_DISCHARGE_CUTOFF_SOC_MAX,
+    ONGRID_DISCHARGE_CUTOFF_SOC_MIN,
     SCALE_MID_FREQUENCY,
     # MID device scaling
     SCALE_MID_VOLTAGE,
@@ -668,5 +670,7 @@ __all__ = [
     "scale_mid_frequency",
     "SOC_MIN_PERCENT",
     "SOC_MAX_PERCENT",
+    "ONGRID_DISCHARGE_CUTOFF_SOC_MIN",
+    "ONGRID_DISCHARGE_CUTOFF_SOC_MAX",
     "MAX_REGISTERS_PER_READ",
 ]

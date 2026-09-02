@@ -30,6 +30,17 @@ SCALE_MID_FREQUENCY = 100  # Frequency values are scaled by 100
 SOC_MIN_PERCENT = 0
 SOC_MAX_PERCENT = 100
 
+# On-grid discharge cutoff SOC (holding register 105) write bounds — the ONE
+# place both setters and the canonical register definition read them from.
+# Ceiling 100, not the portal's 90 arrow-button hint: a portal-typed 95 is
+# stored on a Luxpower LXP-LB-US 10K and 101 is rejected (eg4 #603); 96-100
+# are inferred from that pair, not individually tested.
+# That evidence is a single model; other families are unconfirmed, and the
+# firmware exception remains the authoritative reject path. The 10 floor is
+# the same portal hint — unproven either way — kept as shipped.
+ONGRID_DISCHARGE_CUTOFF_SOC_MIN = 10
+ONGRID_DISCHARGE_CUTOFF_SOC_MAX = 100
+
 # ==============================================================================
 # Register Reading Limits
 # ==============================================================================

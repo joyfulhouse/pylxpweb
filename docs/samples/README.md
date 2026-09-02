@@ -116,7 +116,7 @@ Range 3 (240-366): 127 registers - Advanced settings (overlaps with Range 2)
 
 **Key parameters discovered:**
 - Register 21: Function enable flags (FUNC_EN_REGISTER)
-- Register 105-106: Battery SoC limits
+- Registers 105 and 125: Battery SoC limits (on-grid / off-grid discharge cutoff)
 - Register 150: Grid charge enable/disable
 - Many more documented in `docs/PARAMETER_REFERENCE.md`
 
