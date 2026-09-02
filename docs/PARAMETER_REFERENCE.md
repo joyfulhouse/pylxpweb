@@ -123,15 +123,15 @@ response = await client.write_parameter(
 - **Use Case**: Prevent full charge from grid during TOU high-rate periods
 
 #### On-Grid SOC Cut-Off
-- **Parameter Name**: `HOLD_ON_GRID_DISCHG_CUT_OFF_SOC_EOD`
+- **Parameter Name**: `HOLD_DISCHG_CUT_OFF_SOC_EOD`
 - **Type**: Write
-- **Range**: 0-100 %
+- **Range**: 10-100 % (the portal's arrow buttons stop at 90, but a typed 95 is stored and 101 is rejected on an LXP-LB-US 10K; 96-100 are inferred from that pair)
 - **Unit**: Percent
 - **Purpose**: Minimum SOC before stopping discharge when grid is available
 - **Default**: Typically 10-20%
 
 #### Off-Grid SOC Cut-Off
-- **Parameter Name**: `HOLD_OFF_GRID_DISCHG_CUT_OFF_SOC_EOD`
+- **Parameter Name**: `HOLD_SOC_LOW_LIMIT_EPS_DISCHG`
 - **Type**: Write
 - **Range**: 0-100 %
 - **Unit**: Percent

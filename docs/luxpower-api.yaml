@@ -770,7 +770,7 @@ paths:
         - **59-62**: Reactive power control
         - **66-73**: AC charge configuration (power, SOC limit, schedules)
         - **74-89**: Discharge configuration
-        - **99-109**: Battery protection (voltage/current limits, SOC cutoffs)
+        - **99-109**: Battery protection (voltage/current limits; H105 on-grid SOC cutoff — the off-grid/EPS cutoff is H125)
 
         **Critical Register 21 (FuncEn)** - Function Enable Bit Field:
         - Bit 0: EPSEn (Off-grid mode)
@@ -815,7 +815,7 @@ paths:
         **Option 3: Logical Grouping** (optimized for use cases):
         ```
         AC Charge Settings: startRegister=66, pointNumber=8
-        Battery Protection: startRegister=99, pointNumber=11
+        Battery Protection: startRegister=99, pointNumber=11   (99-109; the off-grid SOC cutoff is H125 — read separately)
         Grid Protection:    startRegister=25, pointNumber=34
         Function Control:   startRegister=21, pointNumber=1
         ```
@@ -838,8 +838,8 @@ paths:
         | 21 | FuncEn | Function enable bit field | 0-65535 | R/W |
         | 66 | ACChgPowerCMD | AC charge power | 0-100% | R/W |
         | 67 | ACChgSOCLimit | AC charge SOC limit | 0-101% | R/W |
-        | 105 | EOD | On-grid discharge cutoff | 10-90% | R/W |
-        | 106 | SOC_Low_Limit_EPS | Off-grid SOC limit | 0-100% | R/W |
+        | 105 | EOD | On-grid discharge cutoff | 10-100% | R/W |
+        | 125 | SOC_Low_Limit_EPS | Off-grid SOC limit | 0-100% | R/W |
 
         **See Also**:
         - `/web/maintain/remoteSet/write` - Write parameters
@@ -929,7 +929,7 @@ paths:
         | 72 | ACChgEnable1 | Time period 1 enable | 0-1 | 1 |
         | 73 | ACChgEnable2 | Time period 2 enable | 0-1 | 0 |
 
-        ### Battery Protection (Registers 99-109)
+        ### Battery Protection (Registers 99-109, plus H125)
 
         | Register | Name | Description | Range | Example |
         |----------|------|-------------|-------|---------|
@@ -937,8 +937,8 @@ paths:
         | 100 | BatVoltMinChg | Min charge voltage | 40-55V (×100) | 4800 (48.00V) |
         | 103 | MaxChgCurr | Max charge current | 0-200A (×10) | 1000 (100.0A) |
         | 104 | MaxDisChgCurr | Max discharge current | 0-200A (×10) | 1000 (100.0A) |
-        | 105 | EOD | On-grid discharge cutoff | 10-90% | 15 |
-        | 106 | SOC_Low_Limit_EPS | Off-grid SOC limit | 0-100% | 10 |
+        | 105 | EOD | On-grid discharge cutoff | 10-100% | 15 |
+        | 125 | SOC_Low_Limit_EPS | Off-grid SOC limit | 0-100% | 10 |
 
         ### Grid Protection (Registers 25-28)
 

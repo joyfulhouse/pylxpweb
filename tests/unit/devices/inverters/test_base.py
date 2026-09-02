@@ -12,7 +12,7 @@ from pylxpweb import LuxpowerClient
 from pylxpweb.devices.inverters.base import BaseInverter
 from pylxpweb.devices.inverters.hybrid import HybridInverter
 from pylxpweb.devices.models import DeviceInfo, Entity
-from pylxpweb.exceptions import LuxpowerDeviceError
+from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 from pylxpweb.models import EnergyInfo, InverterRuntime, SuccessResponse
 from pylxpweb.transports.http import HTTPTransport
 from pylxpweb.transports.hybrid import HybridTransport
@@ -959,6 +959,112 @@ class TestInverterControlOperations:
         assert calls[1][0] == ("1234567890", "HOLD_SOC_LOW_LIMIT_EPS_DISCHG", "15")
 
         assert result is True
+        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_invalid_off_grid_writes_nothing(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """Both inputs are validated BEFORE any I/O: an invalid off-grid value
+        must not let the (valid) on-grid write land first."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        mock_client.api.control = Mock()
+        mock_client.api.control.write_parameter = AsyncMock()
+
+        with pytest.raises(ValueError, match="off_grid_limit"):
+            await inverter.set_battery_soc_limits(on_grid_limit=95, off_grid_limit=101)
+
+        mock_client.api.control.write_parameter.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_partial_failure_still_invalidates_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A pair where one write fails returns False but still marks the
+        parameter cache stale, so the next refresh re-reads the applied half."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        ok, failed = Mock(), Mock()
+        ok.success, failed.success = True, False
+        mock_client.api.control = Mock()
+        mock_client.api.control.write_parameter = AsyncMock(side_effect=[ok, failed])
+        with patch.object(inverter, "_invalidate_parameters_cache") as invalidate:
+            result = await inverter.set_battery_soc_limits(on_grid_limit=20, off_grid_limit=15)
+
+        assert result is False
+        invalidate.assert_called_once()
+        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_no_args_writes_nothing_and_keeps_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """No limits requested -> no write attempted -> the cache is NOT marked
+        stale (it used to be, as a side effect of the unconditional call)."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        mock_client.api.control = Mock()
+        mock_client.api.control.write_parameter = AsyncMock()
+
+        with patch.object(inverter, "_invalidate_parameters_cache") as invalidate:
+            assert await inverter.set_battery_soc_limits() is True
+
+        mock_client.api.control.write_parameter.assert_not_awaited()
+        invalidate.assert_not_called()
+        mock_client.invalidate_cache_for_device.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_first_write_raising_still_invalidates_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A write whose response is lost (timeout/disconnect/cancel) may have
+        been applied by the device, so the cache is marked stale on ANY
+        attempted write, not only on an acknowledged one."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        mock_client.api.control = Mock()
+        mock_client.api.control.write_parameter = AsyncMock(
+            side_effect=LuxpowerConnectionError("lost")
+        )
+
+        with (
+            patch.object(inverter, "_invalidate_parameters_cache") as invalidate,
+            pytest.raises(LuxpowerConnectionError),
+        ):
+            await inverter.set_battery_soc_limits(on_grid_limit=20)
+
+        invalidate.assert_called_once()
+        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
+
+    @pytest.mark.asyncio
+    async def test_set_battery_soc_limits_second_write_raising_still_invalidates_cache(
+        self, mock_client: LuxpowerClient
+    ) -> None:
+        """A second write that RAISES still leaves the cache marked stale, so
+        the next refresh re-reads the half that landed."""
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        ok = Mock()
+        ok.success = True
+        mock_client.api.control = Mock()
+        mock_client.api.control.write_parameter = AsyncMock(
+            side_effect=[ok, LuxpowerAPIError("boom")]
+        )
+
+        with (
+            patch.object(inverter, "_invalidate_parameters_cache") as invalidate,
+            pytest.raises(LuxpowerAPIError),
+        ):
+            await inverter.set_battery_soc_limits(on_grid_limit=20, off_grid_limit=15)
+
+        invalidate.assert_called_once()
+        mock_client.invalidate_cache_for_device.assert_called_once_with("1234567890")
 
     @pytest.mark.asyncio
     async def test_set_battery_soc_limits_on_grid_only(self, mock_client: LuxpowerClient) -> None:
@@ -1016,7 +1122,7 @@ class TestInverterControlOperations:
         )
 
         # Try to set on-grid limit below 10%
-        with pytest.raises(ValueError, match="on_grid_limit must be between 10 and 90%"):
+        with pytest.raises(ValueError, match="on_grid_limit must be between 10 and 100%"):
             await inverter.set_battery_soc_limits(on_grid_limit=5)
 
     @pytest.mark.asyncio
@@ -1028,9 +1134,32 @@ class TestInverterControlOperations:
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        # Try to set on-grid limit above 90%
-        with pytest.raises(ValueError, match="on_grid_limit must be between 10 and 90%"):
-            await inverter.set_battery_soc_limits(on_grid_limit=95)
+        # Try to set on-grid limit above 100%
+        with pytest.raises(ValueError, match="on_grid_limit must be between 10 and 100%"):
+            await inverter.set_battery_soc_limits(on_grid_limit=101)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("limit", [91, 95, 100])
+    async def test_set_battery_soc_limits_on_grid_accepts_above_90(
+        self, mock_client: LuxpowerClient, limit: int
+    ) -> None:
+        """Client-side range: 91-100 is forwarded to the cloud writer, no ValueError.
+
+        Pins the client no longer refusing the value; firmware evidence is
+        one LXP-LB-US 10K (95 stored, 101 rejected — eg4 #603).
+        """
+        inverter = ConcreteInverter(
+            client=mock_client, serial_number="1234567890", model="TestModel"
+        )
+        mock_client.api.control = Mock()
+        mock_response = Mock()
+        mock_response.success = True
+        mock_client.api.control.write_parameter = AsyncMock(return_value=mock_response)
+
+        assert await inverter.set_battery_soc_limits(on_grid_limit=limit) is True
+        mock_client.api.control.write_parameter.assert_awaited_once_with(
+            "1234567890", "HOLD_DISCHG_CUT_OFF_SOC_EOD", str(limit)
+        )
 
     @pytest.mark.asyncio
     async def test_set_battery_soc_limits_validation_off_grid_too_low(

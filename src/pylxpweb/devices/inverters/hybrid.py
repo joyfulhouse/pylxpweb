@@ -1510,7 +1510,7 @@ class HybridInverter(GenericInverter):
         this level while grid-connected.
 
         Returns:
-            Cutoff SOC percentage (10-90)
+            Cutoff SOC percentage (10-100)
 
         Example:
             >>> soc = await inverter.get_on_grid_cutoff_soc()
@@ -1525,7 +1525,7 @@ class HybridInverter(GenericInverter):
         """Set on-grid discharge cutoff SOC via Modbus.
 
         Args:
-            soc_percent: Cutoff SOC percentage (10-90)
+            soc_percent: Cutoff SOC percentage (10-100)
 
         Returns:
             True if successful
@@ -1537,10 +1537,18 @@ class HybridInverter(GenericInverter):
             >>> await inverter.set_on_grid_cutoff_soc(20)
             True
         """
-        from pylxpweb.constants import HOLD_DISCHG_CUT_OFF_SOC_EOD
+        from pylxpweb.constants import (
+            HOLD_DISCHG_CUT_OFF_SOC_EOD,
+            ONGRID_DISCHARGE_CUTOFF_SOC_MAX,
+            ONGRID_DISCHARGE_CUTOFF_SOC_MIN,
+        )
 
-        if not 10 <= soc_percent <= 90:
-            raise ValueError(f"soc_percent must be 10-90, got {soc_percent}")
+        if not ONGRID_DISCHARGE_CUTOFF_SOC_MIN <= soc_percent <= ONGRID_DISCHARGE_CUTOFF_SOC_MAX:
+            raise ValueError(
+                "soc_percent must be "
+                f"{ONGRID_DISCHARGE_CUTOFF_SOC_MIN}-{ONGRID_DISCHARGE_CUTOFF_SOC_MAX}, "
+                f"got {soc_percent}"
+            )
         return await self._write_modbus_register(HOLD_DISCHG_CUT_OFF_SOC_EOD, soc_percent)
 
     async def get_off_grid_cutoff_soc(self) -> int:

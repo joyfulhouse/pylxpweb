@@ -1443,11 +1443,29 @@ class TestModbusOnlyChargeDischargeOperations:
     ) -> None:
         inverter = self._inverter(mock_client)
 
-        with pytest.raises(ValueError, match="soc_percent must be 10-90"):
+        with pytest.raises(ValueError, match="soc_percent must be 10-100"):
             await inverter.set_on_grid_cutoff_soc(9)
 
-        with pytest.raises(ValueError, match="soc_percent must be 10-90"):
-            await inverter.set_on_grid_cutoff_soc(91)
+        with pytest.raises(ValueError, match="soc_percent must be 10-100"):
+            await inverter.set_on_grid_cutoff_soc(101)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("soc", [91, 95, 100])
+    async def test_set_on_grid_cutoff_soc_forwards_91_to_100(
+        self, mock_client: LuxpowerClient, soc: int
+    ) -> None:
+        """Client-side range: 91-100 (inclusive) is forwarded to the reg-105 write.
+
+        The ceiling of 100 is portal-correlated on one LXP-LB-US 10K (eg4
+        #603: a portal-typed 95 stored; >100 rejected) — this pins the
+        client no longer refusing it, not firmware semantics.
+        """
+        inverter = self._inverter(mock_client)
+        inverter.write_transport_register = AsyncMock(return_value=True)
+
+        assert await inverter.set_on_grid_cutoff_soc(soc) is True
+
+        inverter.write_transport_register.assert_awaited_once_with(105, soc)
 
     @pytest.mark.asyncio
     async def test_get_on_grid_cutoff_voltage(self, mock_client: LuxpowerClient) -> None:

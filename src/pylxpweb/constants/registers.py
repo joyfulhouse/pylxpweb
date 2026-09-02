@@ -318,7 +318,7 @@ HOLD_BAT_VOLT_MAX_DISCHG = HOLD_LEAD_ACID_CHARGE_RATE
 HOLD_BAT_VOLT_MIN_DISCHG = HOLD_LEAD_ACID_DISCHARGE_RATE
 HOLD_MAX_CHG_CURR = 103  # Max charge current (A, /10)
 HOLD_MAX_DISCHG_CURR = 104  # Max discharge current (A, /10)
-HOLD_DISCHG_CUT_OFF_SOC_EOD = 105  # On-grid discharge cutoff SOC (10-90%)
+HOLD_DISCHG_CUT_OFF_SOC_EOD = 105  # On-grid discharge cutoff SOC (10-100%)
 HOLD_SOC_LOW_LIMIT_EPS_DISCHG = 125  # Off-grid SOC low limit (0-100%) - verified 2026-01-27
 
 # On-Grid Discharge Cutoff Voltage
@@ -772,7 +772,7 @@ REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
     # there is no plausible alternative scale for a 0-100 percent field.
     103: ["HOLD_FEED_IN_GRID_POWER_PERCENT"],
     # SOC limits
-    105: ["HOLD_DISCHG_CUT_OFF_SOC_EOD"],  # On-grid discharge cutoff SOC (10-90%)
+    105: ["HOLD_DISCHG_CUT_OFF_SOC_EOD"],  # On-grid discharge cutoff SOC (10-100%)
     116: ["HOLD_PTOUSER_START_DISCHARGE"],  # Power-to-user start-discharge threshold (W)
     # System functions (Register 110: 16 bit fields, lineage-wide layout).
     # See REGISTER_110_PARAM_KEYS above for the per-bit evidence trail; the
