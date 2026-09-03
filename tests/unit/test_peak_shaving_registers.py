@@ -35,6 +35,7 @@ from pylxpweb.constants.registers import (
 )
 from pylxpweb.devices.inverters.base import BaseInverter
 from pylxpweb.devices.models import Entity
+from pylxpweb.exceptions import LuxpowerDeviceError
 from pylxpweb.registers.inverter_holding import (
     BY_ADDRESS,
     BY_NAME,
@@ -115,6 +116,33 @@ class TestPeakShavingCanonicalRows:
         """231 is a real but unknown field (even-quantized writes, raw 0);
         it must stay unmapped until identified."""
         assert 231 not in BY_ADDRESS
+
+    def test_family_rows_carry_ha_entity_keys(self) -> None:
+        for canonical in PEAK_SHAVING_FAMILY:
+            assert BY_NAME[canonical].ha_entity_key == canonical
+
+    @pytest.mark.parametrize(
+        ("canonical", "setter"),
+        [
+            ("grid_peak_shaving_volt", "set_grid_peak_shaving_volt"),
+            ("grid_peak_shaving_volt_2", "set_grid_peak_shaving_volt_2"),
+        ],
+    )
+    async def test_volt_members_have_maintainer_guard_range(
+        self, canonical: str, setter: str
+    ) -> None:
+        """40.0-64.0 V is a maintainer-chosen guard; no firmware/portal bound
+        has been captured for the peak-shaving voltage thresholds.  The row
+        bounds and the setter's range check must agree."""
+        reg = BY_NAME[canonical]
+        assert reg.min_value == 40.0
+        assert reg.max_value == 64.0
+        assert reg.min_value is not None and reg.max_value is not None
+        inverter = _make_inverter()
+        with pytest.raises(ValueError):
+            await getattr(inverter, setter)(round(reg.min_value - 0.1, 1))
+        with pytest.raises(ValueError):
+            await getattr(inverter, setter)(round(reg.max_value + 0.1, 1))
 
 
 class TestPeakShavingTransportMap:
@@ -357,3 +385,302 @@ class TestSetGridPeakShavingPower:
 
         assert await inverter.set_grid_peak_shaving_power(7.0) is True
         client.api.control.write_parameter.assert_awaited_once()
+
+
+class TestPeakShavingConstants:
+    """Named HOLD_* constants for the SOC/VOLT members, exported publicly."""
+
+    def test_register_addresses(self) -> None:
+        from pylxpweb.constants import (
+            HOLD_GRID_PEAK_SHAVING_SOC,
+            HOLD_GRID_PEAK_SHAVING_SOC_2,
+            HOLD_GRID_PEAK_SHAVING_VOLT,
+            HOLD_GRID_PEAK_SHAVING_VOLT_2,
+        )
+
+        assert HOLD_GRID_PEAK_SHAVING_SOC == 207
+        assert HOLD_GRID_PEAK_SHAVING_VOLT == 208
+        assert HOLD_GRID_PEAK_SHAVING_SOC_2 == 218
+        assert HOLD_GRID_PEAK_SHAVING_VOLT_2 == 219
+
+    def test_exported_from_constants_package(self) -> None:
+        import pylxpweb.constants as constants
+
+        for name, address in (
+            ("HOLD_GRID_PEAK_SHAVING_SOC", 207),
+            ("HOLD_GRID_PEAK_SHAVING_VOLT", 208),
+            ("HOLD_GRID_PEAK_SHAVING_SOC_2", 218),
+            ("HOLD_GRID_PEAK_SHAVING_VOLT_2", 219),
+        ):
+            assert getattr(constants, name) == address
+            assert name in constants.__all__
+
+    def test_constants_match_register_map(self) -> None:
+        """Each new constant's address names the matching cloud key."""
+        from pylxpweb.constants import (
+            HOLD_GRID_PEAK_SHAVING_SOC,
+            HOLD_GRID_PEAK_SHAVING_SOC_2,
+            HOLD_GRID_PEAK_SHAVING_VOLT,
+            HOLD_GRID_PEAK_SHAVING_VOLT_2,
+        )
+
+        assert REGISTER_TO_PARAM_KEYS[HOLD_GRID_PEAK_SHAVING_SOC] == [
+            "_12K_HOLD_GRID_PEAK_SHAVING_SOC"
+        ]
+        assert REGISTER_TO_PARAM_KEYS[HOLD_GRID_PEAK_SHAVING_VOLT] == [
+            "_12K_HOLD_GRID_PEAK_SHAVING_VOLT"
+        ]
+        assert REGISTER_TO_PARAM_KEYS[HOLD_GRID_PEAK_SHAVING_SOC_2] == [
+            "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2"
+        ]
+        assert REGISTER_TO_PARAM_KEYS[HOLD_GRID_PEAK_SHAVING_VOLT_2] == [
+            "_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2"
+        ]
+
+
+class TestPeakShavingFamilyProperties:
+    """The PS2/SOC/VOLT properties mirror grid_peak_shaving_power_limit."""
+
+    @pytest.mark.parametrize(
+        ("prop", "key", "stored", "expected"),
+        [
+            (
+                "grid_peak_shaving_power_2_limit",
+                "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2",
+                "4.5",
+                4.5,
+            ),
+            ("grid_peak_shaving_soc", "_12K_HOLD_GRID_PEAK_SHAVING_SOC", 80, 80),
+            ("grid_peak_shaving_soc_2", "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", 50, 50),
+            # Cloud/local decode stores strings; the getter must cast them.
+            ("grid_peak_shaving_soc", "_12K_HOLD_GRID_PEAK_SHAVING_SOC", "80", 80),
+            ("grid_peak_shaving_soc_2", "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", "50", 50),
+            ("grid_peak_shaving_volt", "_12K_HOLD_GRID_PEAK_SHAVING_VOLT", "52.3", 52.3),
+            (
+                "grid_peak_shaving_volt_2",
+                "_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2",
+                "51.2",
+                51.2,
+            ),
+        ],
+    )
+    def test_value_when_key_present(
+        self, prop: str, key: str, stored: object, expected: float
+    ) -> None:
+        inverter = _make_inverter()
+        inverter.parameters = {key: stored}
+        assert getattr(inverter, prop) == expected
+
+    @pytest.mark.parametrize(
+        "prop",
+        [
+            "grid_peak_shaving_power_2_limit",
+            "grid_peak_shaving_soc",
+            "grid_peak_shaving_soc_2",
+            "grid_peak_shaving_volt",
+            "grid_peak_shaving_volt_2",
+        ],
+    )
+    def test_none_when_parameters_not_loaded(self, prop: str) -> None:
+        inverter = _make_inverter()
+        inverter.parameters = None
+        assert getattr(inverter, prop) is None
+
+    @pytest.mark.parametrize(
+        "prop",
+        [
+            "grid_peak_shaving_power_2_limit",
+            "grid_peak_shaving_soc",
+            "grid_peak_shaving_soc_2",
+            "grid_peak_shaving_volt",
+            "grid_peak_shaving_volt_2",
+        ],
+    )
+    def test_none_when_key_absent(self, prop: str) -> None:
+        inverter = _make_inverter()
+        inverter.parameters = {"HOLD_SYSTEM_CHARGE_SOC_LIMIT": 80}
+        assert getattr(inverter, prop) is None
+
+    @pytest.mark.parametrize(
+        ("prop", "key"),
+        [
+            ("grid_peak_shaving_soc", "_12K_HOLD_GRID_PEAK_SHAVING_SOC"),
+            ("grid_peak_shaving_soc_2", "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2"),
+        ],
+    )
+    def test_soc_out_of_range_reads_none(self, prop: str, key: str) -> None:
+        """The SOC properties range-clamp like ac_charge_soc_limit."""
+        inverter = _make_inverter()
+        inverter.parameters = {key: 150}
+        assert getattr(inverter, prop) is None
+
+
+# (setter, value, cloud key, cloud string) for every new setter's cloud route.
+CLOUD_WRITE_CASES = [
+    ("set_grid_peak_shaving_power_2", 4.5, "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2", "4.5"),
+    ("set_grid_peak_shaving_soc", 80, "_12K_HOLD_GRID_PEAK_SHAVING_SOC", "80"),
+    ("set_grid_peak_shaving_soc_2", 80, "_12K_HOLD_GRID_PEAK_SHAVING_SOC_2", "80"),
+    ("set_grid_peak_shaving_volt", 52.3, "_12K_HOLD_GRID_PEAK_SHAVING_VOLT", "52.3"),
+    ("set_grid_peak_shaving_volt_2", 52.3, "_12K_HOLD_GRID_PEAK_SHAVING_VOLT_2", "52.3"),
+]
+
+
+class TestSetPeakShavingFamily:
+    """Every new setter mirrors set_grid_peak_shaving_power's routing."""
+
+    @pytest.mark.parametrize(
+        ("setter", "bad_value", "match"),
+        [
+            ("set_grid_peak_shaving_power_2", 26.0, "between 0.0 and 25.5"),
+            ("set_grid_peak_shaving_power_2", -0.1, "between 0.0 and 25.5"),
+            ("set_grid_peak_shaving_soc", 101, "between 0 and 100"),
+            ("set_grid_peak_shaving_soc", -1, "between 0 and 100"),
+            ("set_grid_peak_shaving_soc_2", 101, "between 0 and 100"),
+            ("set_grid_peak_shaving_soc_2", -1, "between 0 and 100"),
+            ("set_grid_peak_shaving_volt", 39.9, "between 40.0 and 64.0"),
+            ("set_grid_peak_shaving_volt", 64.1, "between 40.0 and 64.0"),
+            ("set_grid_peak_shaving_volt_2", 39.9, "between 40.0 and 64.0"),
+            ("set_grid_peak_shaving_volt_2", 64.1, "between 40.0 and 64.0"),
+        ],
+    )
+    async def test_out_of_range_raises(self, setter: str, bad_value: float, match: str) -> None:
+        inverter = _make_inverter()
+        with pytest.raises(ValueError, match=match):
+            await getattr(inverter, setter)(bad_value)
+
+    @pytest.mark.parametrize(
+        ("setter", "value", "register", "raw"),
+        [
+            # 4.5 kW -> raw 45 (deci-kW) at register 232.
+            ("set_grid_peak_shaving_power_2", 4.5, 232, 45),
+            # SOC thresholds are raw 1:1 at registers 207/218.
+            ("set_grid_peak_shaving_soc", 80, 207, 80),
+            ("set_grid_peak_shaving_soc_2", 80, 218, 80),
+            # 52.3 V -> raw 523 (decivolts) at registers 208/219.
+            ("set_grid_peak_shaving_volt", 52.3, 208, 523),
+            ("set_grid_peak_shaving_volt_2", 52.3, 219, 523),
+            # Accepted range boundaries write their exact raw encodings.
+            ("set_grid_peak_shaving_power_2", 0.0, 232, 0),
+            ("set_grid_peak_shaving_power_2", 25.5, 232, 255),
+            ("set_grid_peak_shaving_soc", 0, 207, 0),
+            ("set_grid_peak_shaving_soc", 100, 207, 100),
+            ("set_grid_peak_shaving_soc_2", 0, 218, 0),
+            ("set_grid_peak_shaving_soc_2", 100, 218, 100),
+            ("set_grid_peak_shaving_volt", 40.0, 208, 400),
+            ("set_grid_peak_shaving_volt", 64.0, 208, 640),
+            ("set_grid_peak_shaving_volt_2", 40.0, 219, 400),
+            ("set_grid_peak_shaving_volt_2", 64.0, 219, 640),
+        ],
+    )
+    async def test_local_write_uses_raw_register(
+        self, setter: str, value: float, register: int, raw: int
+    ) -> None:
+        """LOCAL/HYBRID: write the raw value to the register, no cloud call."""
+        client = Mock(spec=LuxpowerClient)
+        client.api = Mock()
+        client.api.control = Mock()
+        client.api.control.write_parameter = AsyncMock()
+        inverter = _make_inverter(client=client)
+
+        transport = Mock()
+        transport.transport_type = "modbus"
+        inverter._transport = transport
+        inverter.write_transport_register = AsyncMock(return_value=True)
+        # A fresh inverter has 0 consecutive failures, so transport_link_down
+        # is False (link up).
+        assert inverter.transport_link_down is False
+
+        assert await getattr(inverter, setter)(value) is True
+        inverter.write_transport_register.assert_awaited_once_with(register, raw)
+        client.api.control.write_parameter.assert_not_called()
+
+    @pytest.mark.parametrize(("setter", "value", "cloud_key", "cloud_value"), CLOUD_WRITE_CASES)
+    async def test_cloud_fallback_when_no_transport(
+        self, setter: str, value: float, cloud_key: str, cloud_value: str
+    ) -> None:
+        client = Mock(spec=LuxpowerClient)
+        client.api = Mock()
+        client.api.control = Mock()
+        result = Mock()
+        result.success = True
+        client.api.control.write_parameter = AsyncMock(return_value=result)
+        inverter = _make_inverter(client=client)
+        inverter._transport = None
+
+        assert await getattr(inverter, setter)(value) is True
+        client.api.control.write_parameter.assert_awaited_once_with(
+            "4512670118", cloud_key, cloud_value
+        )
+
+    @pytest.mark.parametrize(("setter", "value", "cloud_key", "cloud_value"), CLOUD_WRITE_CASES)
+    async def test_local_failure_falls_back_to_cloud(
+        self, setter: str, value: float, cloud_key: str, cloud_value: str
+    ) -> None:
+        client = Mock(spec=LuxpowerClient)
+        client.api = Mock()
+        client.api.control = Mock()
+        result = Mock()
+        result.success = True
+        client.api.control.write_parameter = AsyncMock(return_value=result)
+        inverter = _make_inverter(client=client)
+
+        transport = Mock()
+        transport.transport_type = "modbus"
+        inverter._transport = transport
+        inverter.write_transport_register = AsyncMock(return_value=False)
+
+        assert await getattr(inverter, setter)(value) is True
+        client.api.control.write_parameter.assert_awaited_once_with(
+            "4512670118", cloud_key, cloud_value
+        )
+
+    @pytest.mark.parametrize(
+        ("setter", "value"),
+        [
+            ("set_grid_peak_shaving_power", 7.0),
+            ("set_grid_peak_shaving_power_2", 4.5),
+            ("set_grid_peak_shaving_soc", 80),
+            ("set_grid_peak_shaving_soc_2", 80),
+            ("set_grid_peak_shaving_volt", 52.3),
+            ("set_grid_peak_shaving_volt_2", 52.3),
+        ],
+    )
+    async def test_local_failure_without_client_returns_false(
+        self, setter: str, value: float
+    ) -> None:
+        """A failed local write with no cloud client returns False, no raise."""
+        inverter = _make_inverter()
+        inverter._client = None
+
+        transport = Mock()
+        transport.transport_type = "modbus"
+        inverter._transport = transport
+        inverter.write_transport_register = AsyncMock(return_value=False)
+
+        assert await getattr(inverter, setter)(value) is False
+        inverter.write_transport_register.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        ("setter", "value", "label"),
+        [
+            ("set_grid_peak_shaving_power", 7.0, "power"),
+            ("set_grid_peak_shaving_power_2", 4.5, "power"),
+            ("set_grid_peak_shaving_soc", 80, "SOC"),
+            ("set_grid_peak_shaving_soc_2", 80, "SOC"),
+            ("set_grid_peak_shaving_volt", 52.3, "voltage"),
+            ("set_grid_peak_shaving_volt_2", 52.3, "voltage"),
+        ],
+    )
+    async def test_no_transport_and_no_client_raises(
+        self, setter: str, value: float, label: str
+    ) -> None:
+        """Neither route available: LuxpowerDeviceError names the setpoint."""
+        inverter = _make_inverter()
+        inverter._client = None
+        inverter._transport = None
+
+        with pytest.raises(
+            LuxpowerDeviceError,
+            match=f"Grid peak shaving {label} write requires a transport or a cloud client",
+        ):
+            await getattr(inverter, setter)(value)

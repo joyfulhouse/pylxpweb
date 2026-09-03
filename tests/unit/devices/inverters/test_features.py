@@ -729,6 +729,41 @@ class TestBaseInverterFeatureDetection:
         assert features.quick_charge_minute is True
 
     @pytest.mark.asyncio
+    async def test_grid_peak_shaving_detected_from_ps2_only(
+        self, sna_inverter: ConcreteInverter
+    ) -> None:
+        """A device exposing only the PS2 register still gets grid_peak_shaving.
+
+        Uses the SNA fixture because its family default leaves
+        grid_peak_shaving False, so the flag can only come from the
+        parameter probe.  has_pv_series_registers stays keyed on PS1 only.
+        """
+        assert "_12K_HOLD_GRID_PEAK_SHAVING_POWER" not in sna_inverter.parameters
+        sna_inverter.parameters["_12K_HOLD_GRID_PEAK_SHAVING_POWER_2"] = 4.1
+
+        features = await sna_inverter.detect_features()
+
+        assert features.grid_peak_shaving is True
+        assert features.has_pv_series_registers is False
+
+    @pytest.mark.asyncio
+    async def test_grid_peak_shaving_detected_from_ps1_only(
+        self, sna_inverter: ConcreteInverter
+    ) -> None:
+        """PS1 alone still sets both flags after the PS2 any-of widening.
+
+        Same SNA fixture as the PS2-only case (family default off), so this
+        guards the PS1 branch of the any-of, not the family default.
+        """
+        assert "_12K_HOLD_GRID_PEAK_SHAVING_POWER_2" not in sna_inverter.parameters
+        sna_inverter.parameters["_12K_HOLD_GRID_PEAK_SHAVING_POWER"] = 7.0
+
+        features = await sna_inverter.detect_features()
+
+        assert features.grid_peak_shaving is True
+        assert features.has_pv_series_registers is True
+
+    @pytest.mark.asyncio
     async def test_detect_features_caching(self, sna_inverter: ConcreteInverter) -> None:
         """Test that feature detection is cached."""
         features1 = await sna_inverter.detect_features()

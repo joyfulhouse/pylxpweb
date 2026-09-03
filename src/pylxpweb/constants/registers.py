@@ -273,6 +273,13 @@ HOLD_AC_FIRST_TIME_2_END = 157  # Period 2 end
 # time-period-2 (PS2), same family/encoding.
 HOLD_GRID_PEAK_SHAVING_POWER = 206  # PS1 power, deci-kW (0-255 = 0.0-25.5 kW)
 HOLD_GRID_PEAK_SHAVING_POWER_2 = 232  # PS2 power, deci-kW (0-255 = 0.0-25.5 kW)
+# SOC thresholds are % raw 1:1 (0-100); voltage thresholds are decivolts.
+# Locations/encodings portal-correlated (2026-06-12 two-device cloud window
+# sweep, commit 2b2b32f); unlike register 206, no live write has been done.
+HOLD_GRID_PEAK_SHAVING_SOC = 207  # PS1 SOC threshold, %, raw 1:1 (0-100)
+HOLD_GRID_PEAK_SHAVING_VOLT = 208  # PS1 voltage threshold, decivolts
+HOLD_GRID_PEAK_SHAVING_SOC_2 = 218  # PS2 SOC threshold, %, raw 1:1 (0-100)
+HOLD_GRID_PEAK_SHAVING_VOLT_2 = 219  # PS2 voltage threshold, decivolts
 
 # Peak Shaving time schedule (regs 209-212, 2 windows, packed hour|minute per
 # register). Live write-verified on a FlexBOSS21 (FAAB-2525): writeTime 01:05 ->
