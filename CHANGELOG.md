@@ -25,8 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lease set: `connect()` takes an idempotent lease, `disconnect()` /
   `async_shutdown()` release it, and the last release closes the socket
   (bounded) and retires the channel. `async_shutdown()` stays bounded and
-  only tears the shared stream down when the shutting-down transport owns
-  the in-flight transaction. Multi-step operations are serialized per
+  tears the shared stream down in exactly three cases: the shutting-down
+  transport owns the active dial; it owns the in-flight transaction; or it
+  held the last lease with nothing in flight — the latter two under the
+  connect lock and only when that lock is provably free (nobody holds it,
+  nobody is queued for it). Otherwise it releases its lease and returns at
+  once, never blocking behind another lock taker. Multi-step operations are
+  serialized per
   channel, so two devices on one dongle can no longer interleave steps.
   New keyword-only `DongleTransport(..., shared_channel=False)` keeps the
   previous private-socket behaviour. Attaching to an endpoint with a
