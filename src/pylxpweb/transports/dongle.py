@@ -972,8 +972,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         Shared socket: the stream is torn down (generation bumped, siblings'
         next transaction reconnects) only when THIS transport owns the active
         dial, or owns the in-flight transaction while no sibling holds or is
-        queued for the connect lock, or when nothing is in flight, no lease
-        remains and no sibling is dialing.  If a sibling owns the in-flight
+        queued for the connect lock (then under that lock, held through the
+        bounded close), or when nothing is in flight, no lease remains and no
+        sibling is dialing.  If a sibling owns the in-flight
         transaction, holds the connect lock, or is queued for it, this lease
         is just released and the socket (or the dongle's single slot) is
         theirs — shutdown never blocks behind a sibling's dial.  Owning the
@@ -1004,8 +1005,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 # unless a sibling holds or is queued for the connect lock,
                 # in which case the stream is (or is about to be) theirs and
                 # our queued connect() raises on resume instead.
+                # With no sibling holding or queued, the connect lock is
+                # taken and held through the bounded close so a sibling that
+                # sees the stream go down cannot dial before the old socket
+                # is gone; the only possible waiter is our own queued
+                # connect(), which raises on resume within one loop turn.
                 if not channel.sibling_dialing(self):
-                    await channel.close(timeout=close_timeout)
+                    async with channel.connect_lock:
+                        await channel.close(timeout=close_timeout)
             elif (
                 owner is None
                 and channel.lease_count == 0
@@ -1248,7 +1255,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         del self._receive_buffer[:packet_size]
         return packet
 
-    async def _teardown_connection(self) -> None:
+    async def _teardown_connection(self, *, expected_generation: int | None = None) -> None:
         """Tear down the shared socket, serialised on the channel's connect lock.
 
         For callers that do NOT already hold the connect lock (``_send_receive``
@@ -1261,10 +1268,17 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         ``_dial()`` already holds the connect lock and calls ``channel.close()``
         directly to avoid re-entrant acquisition.  Bumps the channel generation,
         so every lease sees the loss.
+
+        ``expected_generation`` scopes the teardown to the stream the caller
+        ran on: if the generation already advanced (a sibling re-dialed while
+        the caller waited for the connect lock) nothing is closed — a
+        transaction never tears down a stream it did not run on.  ``None``
+        (``_force_reconnect``, direct callers) keeps the unconditional
+        semantics.
         """
         channel = self._channel
         if channel is not None:
-            await channel.teardown()
+            await channel.teardown(expected_generation=expected_generation)
 
     async def _force_reconnect(self) -> None:
         """Tear down the (possibly broken) connection for a fresh start.
@@ -1335,6 +1349,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._raise_if_shutdown()
         async with self._transaction() as channel:
             self._raise_if_shutdown()
+            # Generation of the stream this attempt ran on (None until a
+            # stream was in use); error handlers scope their teardown to it.
+            generation: int | None = None
             for attempt in range(max_retries + 1):
                 self._raise_if_shutdown()
                 try:
@@ -1430,7 +1447,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # exhausted prefix scan leaves stream alignment unusable.
                     # Retry only after a fresh connection.
                     last_error = err
-                    await self._teardown_connection()
+                    # A shut-down transport exits here instead of repairing:
+                    # its own shutdown closed the stream and a sibling may
+                    # already be dialing the replacement — never tear down a
+                    # stream this transaction did not run on.
+                    self._raise_if_shutdown()
+                    await self._teardown_connection(expected_generation=generation)
                     self._raise_if_shutdown()
                     if attempt < max_retries:
                         _LOGGER.debug(
@@ -1452,7 +1474,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # unconditionally so the next request — or the resend
                     # below — dials a fresh connection instead of polling
                     # the dead flow forever (#226).
-                    await self._teardown_connection()
+                    # A shut-down transport exits here instead of repairing:
+                    # its own shutdown closed the stream and a sibling may
+                    # already be dialing the replacement — never tear down a
+                    # stream this transaction did not run on.
+                    self._raise_if_shutdown()
+                    await self._teardown_connection(expected_generation=generation)
                     self._raise_if_shutdown()
                     if retry_on_timeout and attempt < max_retries:
                         _LOGGER.warning(
@@ -1473,7 +1500,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 except OSError as err:
                     # Tear down the broken connection; next iteration
                     # will reconnect via the top-of-loop guard.
-                    await self._teardown_connection()
+                    # A shut-down transport exits here instead of repairing:
+                    # its own shutdown closed the stream and a sibling may
+                    # already be dialing the replacement — never tear down a
+                    # stream this transaction did not run on.
+                    self._raise_if_shutdown()
+                    await self._teardown_connection(expected_generation=generation)
                     self._raise_if_shutdown()
 
                     if attempt < max_retries:

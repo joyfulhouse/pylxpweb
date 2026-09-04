@@ -213,9 +213,19 @@ class DongleChannel:
                 writer.close()
                 await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
 
-    async def teardown(self) -> None:
-        """Close under ``connect_lock`` so no lease dials while it drains."""
+    async def teardown(self, *, expected_generation: int | None = None) -> None:
+        """Close under ``connect_lock`` so no lease dials while it drains.
+
+        With ``expected_generation`` the teardown is stream-scoped: it closes
+        only if the stream the caller ran on is still the current one.  If
+        ``generation`` has already moved past it, someone else replaced the
+        stream (a sibling's dial, a terminal shutdown) and the caller's
+        failure says nothing about the new socket — leave it alone.  Without
+        it the teardown is unconditional.
+        """
         async with self.connect_lock:
+            if expected_generation is not None and self.generation != expected_generation:
+                return
             await self.close()
 
     @contextlib.asynccontextmanager

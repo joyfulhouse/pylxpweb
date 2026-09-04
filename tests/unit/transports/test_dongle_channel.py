@@ -1139,3 +1139,89 @@ async def test_last_lease_shutdown_does_not_queue_behind_a_woken_dialer(
         assert await b._read_input_registers(0, 1) == [0]
     finally:
         await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_error_path_does_not_tear_down_sibling_stream(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A's own transaction, woken by A's shutdown, must not repair over B's new socket.
+
+    Sequence: A owns an in-flight transaction; A's shutdown closes the
+    stream (``wait_closed`` held open); B connects.  B must not dial until
+    the close completes, A's transaction must exit promptly with the
+    shutdown error instead of queuing a teardown behind B's dial, and B's
+    socket must survive A's error path (no redial on B's next read).
+    """
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    release_close = asyncio.Event()
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None and channel.writer is not None
+        original_wait_closed = channel.writer.wait_closed
+
+        async def blocked_wait_closed() -> None:
+            await release_close.wait()
+            await original_wait_closed()
+
+        fake.hold = True
+        read_a = asyncio.create_task(a._read_input_registers(0, 1))
+        await asyncio.wait_for(fake.frame_received.wait(), timeout=1.0)
+        assert channel.transaction_owner is a
+
+        with patch.object(channel.writer, "wait_closed", blocked_wait_closed):
+            shutdown_a = asyncio.create_task(a.async_shutdown())
+            await asyncio.sleep(0)  # parked inside close(): writer detached, wait_closed blocked
+            assert not shutdown_a.done()
+
+            connect_b = asyncio.create_task(b.connect())
+            await asyncio.sleep(0.05)
+            assert fake.dials == 1  # B is ordered after the close
+            assert not connect_b.done()
+
+            release_close.set()
+            await asyncio.wait_for(shutdown_a, timeout=0.5)
+
+        # B is now dialing (initial-data window).  A's transaction must exit
+        # with the shutdown error NOW — not after queuing a teardown behind
+        # B's dial and running it over B's fresh socket.
+        with pytest.raises(TransportConnectionError, match="shut down"):
+            await asyncio.wait_for(read_a, timeout=0.3)
+
+        await connect_b
+        fake.release()  # A's parked handler can now observe A's EOF
+        await fake.wait_for_connections(1)
+        assert b.is_connected is True
+        assert fake.dials == 2
+        assert await b._read_input_registers(0, 1) == [0]
+        assert fake.dials == 2  # B's socket survived; no redial
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_teardown_is_scoped_to_the_stream_it_ran_on(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A teardown for a stale generation leaves the current stream alone."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    try:
+        await a.connect()
+        await b.connect()
+        channel = a.channel
+        assert channel is not None
+        current = channel.generation
+
+        await a._teardown_connection(expected_generation=current - 1)  # someone re-dialed since
+        assert a.is_connected is True and b.is_connected is True
+        assert fake.open_connections == 1
+        assert channel.generation == current
+
+        await a._teardown_connection(expected_generation=current)
+        assert a.is_connected is False and b.is_connected is False
+        await fake.wait_for_connections(0)
+    finally:
+        await _shutdown_all(a, b)
