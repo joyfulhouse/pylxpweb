@@ -6,11 +6,14 @@ register read/write logic with retry handling and adaptive inter-group delays.
 Data interpretation methods (read_runtime, read_energy, etc.) are inherited
 from ``RegisterDataMixin`` in ``_register_data.py``.
 
+Wire I/O goes through the backend-neutral ``RegisterClient`` seam in
+``_modbus_client.py`` (pymodbus, or Home Assistant's ``modbus-connection``),
+so nothing here depends on a particular Modbus library.
+
 Subclasses must implement:
 - connect() / disconnect() — protocol-specific connection management
 - _reconnect() — protocol-specific reconnection with logging
 - capabilities property — transport capability flags
-- _create_client() — optional, for client initialization
 """
 
 from __future__ import annotations
@@ -21,8 +24,13 @@ import logging
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
-from pymodbus.exceptions import ModbusException
-
+from ._modbus_client import (
+    RegisterClient,
+    RegisterClientError,
+    RegisterExceptionResponse,
+    RegisterLinkError,
+    RegisterTimeoutError,
+)
 from ._register_data import (
     DEFAULT_INPUT_BLOCK_SIZE,
     INPUT_REGISTER_GROUPS,
@@ -52,6 +60,16 @@ _LOGGER = logging.getLogger(__name__)
 __all__ = ["BaseModbusTransport", "INPUT_REGISTER_GROUPS"]
 
 
+def _backend_cause(err: RegisterClientError) -> BaseException:
+    """Return the backend exception behind a seam error, for ``__cause__`` chains.
+
+    Callers historically saw the raw backend exception (for example pymodbus'
+    ``ConnectionException``) as the cause of a typed transport error; the
+    seam wrapper is transparent to that contract.
+    """
+    return err.__cause__ if err.__cause__ is not None else err
+
+
 class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     """Base class for Modbus-based transports (TCP and Serial).
 
@@ -60,8 +78,9 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
 
     Data interpretation methods are inherited from ``RegisterDataMixin``.
 
-    Subclasses must set ``self._client`` to a pymodbus async client
-    and implement ``connect()``, ``disconnect()``, and ``_reconnect()``.
+    Subclasses must set ``self._client`` to the raw backend handle and
+    ``self._unit`` to the :class:`RegisterClient` adapter over it, and
+    implement ``connect()``, ``disconnect()``, and ``_reconnect()``.
     """
 
     def __init__(
@@ -117,10 +136,19 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._pymodbus_retries = pymodbus_retries
         self._session_max_age = session_max_age
         self._init_input_coalescing(max_input_block_size)
+        # Raw backend handle (pymodbus client or modbus_connection
+        # connection) — lifecycle only, never used for I/O directly.
         self._client: Any = None
+        # Backend-neutral I/O surface over ``_client``.
+        self._unit: RegisterClient | None = None
         self._lock = asyncio.Lock()
         self._consecutive_errors: int = 0
         self._max_consecutive_errors: int = 3
+        # Errors that implicate the *link* (timeouts, connection/protocol
+        # failures) since the last success. Exception responses — the device
+        # answered — are excluded, so a shared link is never recycled for
+        # other units' sake because one unit refused a read.
+        self._consecutive_link_errors: int = 0
         self._last_read_retried: bool = False
         self._op_guard_depth: int = 0
         self._shutdown_requested = False
@@ -175,11 +203,16 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     # Register Read/Write (with retry and error tracking)
     # ------------------------------------------------------------------
 
-    def _require_active_client(self) -> Any:
-        """Return the active client or raise a typed connection error."""
-        if self._client is None or self._shutdown_requested:
+    def _require_active_unit(self) -> RegisterClient:
+        """Return the active register client or raise a typed connection error."""
+        if self._unit is None or self._shutdown_requested:
             raise TransportConnectionError(f"Transport not connected for {self._serial}")
-        return self._client
+        return self._unit
+
+    @property
+    def backend_shares_link(self) -> bool:
+        """Whether the wire link is shared with (owned by) a host, not this transport."""
+        return self._unit is not None and not self._unit.owns_link
 
     async def check_link(self) -> bool:
         """Cheap link-down probe: one read, bounded by a short timeout.
@@ -197,20 +230,21 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         """
         try:
             async with self._op_guard(), self._lock:
-                client = self._require_active_client()
-                await asyncio.wait_for(
-                    client.read_input_registers(
-                        address=0,
-                        count=1,
-                        device_id=self._unit_id,
-                    ),
-                    timeout=LINK_PROBE_TIMEOUT_SECONDS,
-                )
-        except (TimeoutError, OSError, ModbusException, TransportError) as err:
+                unit = self._require_active_unit()
+                # An exception response means the device decoded and refused
+                # the request: the link is alive.
+                with contextlib.suppress(RegisterExceptionResponse):
+                    await asyncio.wait_for(
+                        unit.read_input_registers(0, 1),
+                        timeout=LINK_PROBE_TIMEOUT_SECONDS,
+                    )
+        except (TimeoutError, OSError, RegisterClientError, TransportError) as err:
             self._consecutive_errors += 1
+            self._consecutive_link_errors += 1
             _LOGGER.debug("[%s] Link probe failed: %s", self._serial, err)
             return False
         self._consecutive_errors = 0
+        self._consecutive_link_errors = 0
         return True
 
     async def _read_registers(
@@ -243,33 +277,17 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         for attempt in range(self._retries + 1):
             async with self._lock:
                 try:
-                    client = self._require_active_client()
+                    unit = self._require_active_unit()
                     read_fn = (
-                        client.read_input_registers
+                        unit.read_input_registers
                         if input_registers
-                        else client.read_holding_registers
+                        else unit.read_holding_registers
                     )
-                    result = await read_fn(
-                        address=address,
-                        count=count,
-                        device_id=self._unit_id,
-                    )
-                    self._require_active_client()
+                    registers = await read_fn(address, count)
+                    self._require_active_unit()
 
-                    if result.isError():
-                        raise TransportReadError(
-                            f"Modbus read error at address {address}: {result}"
-                        )
-
-                    if not hasattr(result, "registers") or result.registers is None:
-                        raise TransportReadError(
-                            f"Invalid Modbus response at address {address}: "
-                            "no registers in response"
-                        )
-
-                    registers = list(result.registers)
-                    # pymodbus decodes registers from the response's own
-                    # byte_count and never checks it against the requested
+                    # A backend decodes registers from the response's own
+                    # byte count and may not check it against the requested
                     # count, so a device reporting fewer registers than asked
                     # returns a short list without error.  On the holding /
                     # parameter path that silently drops registers (skipping
@@ -285,36 +303,47 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                         )
 
                     self._consecutive_errors = 0
+                    self._consecutive_link_errors = 0
                     return registers
 
-                except ModbusException as err:
-                    # Catch the pymodbus BASE class: ConnectionException
-                    # ("Not connected") is a SIBLING of ModbusIOException,
-                    # not a subclass.  Before this, a fast-fail disconnected
-                    # client bypassed the consecutive-error accounting, so
-                    # the _reconnect() gate never fired and the transport
-                    # stayed dead even after the network recovered (eg4-57g).
+                except RegisterExceptionResponse as err:
+                    # The device answered with an exception response.  Reads
+                    # keep counting it (a refused read yields no data, and
+                    # the historical accounting was the same), unlike writes.
                     self._consecutive_errors += 1
-                    if "timeout" in str(err).lower():
-                        last_err = TransportTimeoutError(
-                            f"Timeout reading {reg_type} registers at {address}"
-                        )
-                    else:
-                        last_err = TransportReadError(
-                            f"Failed to read {reg_type} registers at {address}: {err}"
-                        )
-                    last_err.__cause__ = err
+                    last_err = TransportReadError(str(err))
+                    last_err.__cause__ = _backend_cause(err)
+                except RegisterTimeoutError as err:
+                    self._consecutive_errors += 1
+                    self._consecutive_link_errors += 1
+                    last_err = TransportTimeoutError(
+                        f"Timeout reading {reg_type} registers at {address}"
+                    )
+                    last_err.__cause__ = _backend_cause(err)
+                except RegisterLinkError as err:
+                    # Covers the backend's "not connected" fast-fail too, so a
+                    # dropped session advances the consecutive-error gate and
+                    # _reconnect() heals it once the network is back (eg4-57g).
+                    self._consecutive_errors += 1
+                    self._consecutive_link_errors += 1
+                    last_err = TransportReadError(
+                        f"Failed to read {reg_type} registers at {address}: {err}"
+                    )
+                    last_err.__cause__ = _backend_cause(err)
                 except TimeoutError as err:
                     self._consecutive_errors += 1
+                    self._consecutive_link_errors += 1
                     last_err = TransportTimeoutError(
                         f"Timeout reading {reg_type} registers at {address}"
                     )
                     last_err.__cause__ = err
                 except (TransportReadError, TransportTimeoutError) as err:
                     self._consecutive_errors += 1
+                    self._consecutive_link_errors += 1
                     last_err = err
                 except OSError as err:
                     self._consecutive_errors += 1
+                    self._consecutive_link_errors += 1
                     last_err = TransportReadError(
                         f"Failed to read {reg_type} registers at {address}: {err}"
                     )
@@ -383,65 +412,59 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
 
         async with self._lock:
             try:
-                client = self._require_active_client()
+                unit = self._require_active_unit()
                 if len(values) == 1:
-                    result = await client.write_register(
-                        address=address,
-                        value=values[0],
-                        device_id=self._unit_id,
-                    )
+                    await unit.write_register(address, values[0])
                 else:
-                    result = await client.write_registers(
-                        address=address,
-                        values=values,
-                        device_id=self._unit_id,
-                    )
-                self._require_active_client()
-
-                if result.isError():
-                    # Functional exception response: the device answered, so
-                    # the link is fine — NOT a transport failure.  Propagates
-                    # untouched (no consecutive-error accounting).
-                    _LOGGER.error(
-                        "[%s] Modbus error writing registers at %d: %s",
-                        self._serial,
-                        address,
-                        result,
-                    )
-                    raise TransportWriteError(f"Modbus write error at address {address}: {result}")
+                    await unit.write_registers(address, values)
+                self._require_active_unit()
 
                 self._consecutive_errors = 0
+                self._consecutive_link_errors = 0
                 return True
 
-            except ModbusException as err:
-                # Catch the pymodbus BASE class, mirroring _read_registers:
-                # ConnectionException ("Not connected") is a SIBLING of
-                # ModbusIOException, not a subclass.  Before this, a write on
-                # a dropped TCP session escaped as a raw ConnectionException
-                # — bypassing the typed TransportWriteError contract that the
-                # upstream write retry/fallback machinery (#201) keys on —
-                # and never advanced the consecutive-error accounting, so the
-                # _reconnect() gate never fired for write-only ops (eg4-1cxn).
+            except RegisterExceptionResponse as err:
+                # Functional exception response: the device answered, so
+                # the link is fine — NOT a transport failure.  Propagates
+                # untouched (no consecutive-error accounting).
+                _LOGGER.error(
+                    "[%s] Modbus error writing registers at %d: %s",
+                    self._serial,
+                    address,
+                    err,
+                )
+                raise TransportWriteError(str(err)) from _backend_cause(err)
+            except RegisterTimeoutError as err:
                 self._consecutive_errors += 1
-                if "timeout" in str(err).lower():
-                    _LOGGER.error("[%s] Timeout writing registers at %d", self._serial, address)
-                    raise TransportTimeoutError(
-                        f"[{self._serial}] Timeout writing registers at {address}"
-                    ) from err
+                self._consecutive_link_errors += 1
+                _LOGGER.error("[%s] Timeout writing registers at %d", self._serial, address)
+                raise TransportTimeoutError(
+                    f"[{self._serial}] Timeout writing registers at {address}"
+                ) from _backend_cause(err)
+            except RegisterLinkError as err:
+                # A write on a dropped session must surface through the typed
+                # TransportWriteError contract the upstream write retry /
+                # fallback machinery (#201) keys on, and must advance the
+                # consecutive-error accounting so the _reconnect() gate fires
+                # for write-only ops too (eg4-1cxn).
+                self._consecutive_errors += 1
+                self._consecutive_link_errors += 1
                 _LOGGER.error(
                     "[%s] Failed to write registers at %d: %s", self._serial, address, err
                 )
                 raise TransportWriteError(
                     f"[{self._serial}] Failed to write registers at {address}: {err}"
-                ) from err
+                ) from _backend_cause(err)
             except TimeoutError as err:
                 self._consecutive_errors += 1
+                self._consecutive_link_errors += 1
                 _LOGGER.error("[%s] Timeout writing registers at %d", self._serial, address)
                 raise TransportTimeoutError(
                     f"[{self._serial}] Timeout writing registers at {address}"
                 ) from err
             except OSError as err:
                 self._consecutive_errors += 1
+                self._consecutive_link_errors += 1
                 _LOGGER.error(
                     "[%s] Failed to write registers at %d: %s", self._serial, address, err
                 )
@@ -589,7 +612,10 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         Uses lock with double-check to prevent concurrent reconnection.
         """
         async with self._lock:
-            if self._consecutive_errors < self._max_consecutive_errors:
+            if self.backend_shares_link:
+                if not self._shared_link_needs_recycle():
+                    return
+            elif self._consecutive_errors < self._max_consecutive_errors:
                 return
 
             _LOGGER.warning(
@@ -597,6 +623,30 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 self._serial,
                 self._consecutive_errors,
             )
-            await self.disconnect()
-            await self.connect()
+            await self._recycle_link()
             self._consecutive_errors = 0
+            self._consecutive_link_errors = 0
+
+    def _shared_link_needs_recycle(self) -> bool:
+        """Whether a host-shared link has failed enough to be recycled.
+
+        Gated on *link* errors only: an exception response proves the device
+        answered, and recycling a shared link disconnects every other unit and
+        host consumer on that endpoint, so a refused read must not do that.
+        """
+        return self._consecutive_link_errors >= self._max_consecutive_errors
+
+    async def _recycle_link(self) -> None:
+        """Heal a wedged link: re-dial an owned link, or recycle a shared one.
+
+        A link shared by a host (Home Assistant's ``async_get_unit``) is never
+        closed here; the unit's own ``disconnect()`` drops it so the host's
+        connection re-dials on the next request, which is that library's
+        documented recovery path.
+        """
+        unit = self._unit
+        if unit is not None and not unit.owns_link:
+            await unit.recycle()
+            return
+        await self.disconnect()
+        await self.connect()

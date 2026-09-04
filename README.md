@@ -60,7 +60,14 @@ The base URL is fully configurable to support regional variations and future end
     are expected — the library detects a response meant for the cloud and retries.
   - Dongles with encryption enabled (label **E-WIFI ENC**) do not work locally; if you
     have one, ask Luxpower support to downgrade its firmware.
-- **Modbus** — a direct Modbus connection to the inverter's RS-485 port.
+- **Modbus** — a direct Modbus connection to the inverter's RS-485 port, over TCP (an
+  RS-485-to-Ethernet gateway) or serial (a USB adapter, or a serial URL such as
+  `socket://`, `rfc2217://`, or `esphome://` for a network / ESPHome serial proxy).
+  - Two wire backends: `backend="pymodbus"` (default) and `backend="modbus_connection"`,
+    Home Assistant's shared-connection library (tmodbus + serialx; install the
+    `pylxpweb[modbus-connection]` extra). `esphome://` ports need the latter and are
+    selected automatically. Both transports also accept a host-provided `unit=` (Home
+    Assistant's `async_get_unit()`) to run over a link the host owns.
 - **Hybrid** — combines one local connection with the cloud API (local polling with cloud
   fallback and cloud-only supplemental data).
 
