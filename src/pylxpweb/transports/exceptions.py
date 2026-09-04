@@ -31,6 +31,45 @@ class TransportTimeoutError(TransportError):
     pass
 
 
+class DongleChannelError(TransportConnectionError):
+    """A ``DongleTransport`` could not attach to its shared endpoint channel.
+
+    Every ``DongleTransport`` that targets the same physical dongle
+    (``host:port`` + ``dongle_serial``) shares ONE serialized TCP socket
+    (pylxpweb#329).  Attaching is refused — before any dial — when the
+    request is incompatible with the channel that already exists for that
+    endpoint.  Subclasses name the incompatibility.
+    """
+
+    pass
+
+
+class DongleChannelMismatchError(DongleChannelError):
+    """Incompatible configuration for an endpoint that already has a channel.
+
+    Raised when a transport asks for a different TLS-PSK mode (``use_ssl``)
+    than the channel already serving its ``host:port``, or for a different
+    ``dongle_serial`` on the same ``host:port``.  Per-operation knobs
+    (timeouts, block sizes, write retries, family) are per-transport and never
+    conflict; only the per-socket facts do.  The existing channel is left
+    untouched.
+    """
+
+    pass
+
+
+class DongleChannelLoopError(DongleChannelError):
+    """A transport tried to attach to a channel owned by another event loop.
+
+    Channels are single-loop objects: their locks, streams and leases belong
+    to the loop that created them.  Attaching from a different *running* loop
+    is a programming error and is refused before any socket work.  (A channel
+    whose loop has already closed is discarded and recreated transparently.)
+    """
+
+    pass
+
+
 class TransportReadError(TransportError):
     """Failed to read data from device."""
 

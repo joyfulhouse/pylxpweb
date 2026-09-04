@@ -70,6 +70,9 @@ from .discovery import (
 )
 from .dongle import DongleTransport
 from .exceptions import (
+    DongleChannelError,
+    DongleChannelLoopError,
+    DongleChannelMismatchError,
     TransportConnectionError,
     TransportError,
     TransportReadError,
@@ -178,5 +181,8 @@ __all__ = [
     "TransportReadError",
     "TransportResponseMismatchError",
     "TransportWriteError",
+    "DongleChannelError",
+    "DongleChannelMismatchError",
+    "DongleChannelLoopError",
     "UnsupportedOperationError",
 ]

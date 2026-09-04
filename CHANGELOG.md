@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One serialized TCP socket per physical dongle** (closes
+  [#329](https://github.com/joyfulhouse/pylxpweb/issues/329)): every
+  `DongleTransport` in a process that targets the same dongle
+  (`host:port` + `dongle_serial`, host normalized by strip + lowercase only)
+  now shares an endpoint-scoped `DongleChannel` — default-on for every
+  construction path (factories, `Station.attach_local_transports`, CLI,
+  direct constructor). A live probe showed a dongle *accepts* a second TCP
+  client but cannot sustain two (38 evictions and 5 cross-routed replies in
+  12 min for the later client, 2× poll-gap for the first), so per-device
+  sockets are no longer opened. The channel owns the streams, the connect /
+  transaction / operation locks, the TLS-PSK detection memo, the single
+  `connected` flag, a monotonic `generation` (a transaction spanning a
+  reconnect fails coherently instead of parsing a stale stream) and the
+  lease set: `connect()` takes an idempotent lease, `disconnect()` /
+  `async_shutdown()` release it, and the last release closes the socket
+  (bounded) and retires the channel. `async_shutdown()` stays bounded and
+  tears the shared stream down in exactly three cases: the shutting-down
+  transport owns the active dial; it owns the in-flight transaction; or it
+  held the last lease with nothing in flight — the latter two under the
+  connect lock and only when that lock is provably free (nobody holds it,
+  nobody is queued for it). Otherwise it releases its lease and returns at
+  once, never blocking behind another lock taker. Multi-step operations are
+  serialized per
+  channel, so two devices on one dongle can no longer interleave steps.
+  New keyword-only `DongleTransport(..., shared_channel=False)` keeps the
+  previous private-socket behaviour. Attaching to an endpoint with a
+  different `use_ssl` mode or a different `dongle_serial` on the same
+  `host:port` raises the new `DongleChannelMismatchError`; attaching from a
+  different running event loop raises `DongleChannelLoopError` (both are
+  `TransportConnectionError` subclasses, exported from `pylxpweb.transports`).
+  Per-operation knobs (timeouts, block size, write retries, family) remain
+  per-transport. `DongleTransport.is_connected` now means "this transport
+  holds a lease on a live socket": a sibling's open socket no longer reports
+  an un-leased transport as connected, and a transport that uses the shared
+  socket without calling `connect()` takes its lease on first use.
+  `check_link()` now runs under the channel operation lock like every other
+  wire-touching operation, so a link probe can never interleave with a
+  sibling device's multi-step read; its single budget covers waiting for that
+  lock too, and a probe that stays queued for the whole budget returns
+  `False` without touching the socket.
+
 ## [0.10.0b8] - 2026-09-02
 
 ### Added
