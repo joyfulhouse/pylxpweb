@@ -414,23 +414,48 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     async def _operation(self) -> AsyncIterator[None]:
         """Serialise one multi-step operation on the channel's operation lock.
 
-        Binding happens here, *before* the lock is taken, so an operation
-        runs start-to-finish on one channel — and a channel whose operation
-        lock is held is never retired, so its lease-less steps cannot be
-        re-homed under a different lock.  Retirement of an idle shared
-        channel is attempted on exit.
+        Binding happens here, *before* the lock is awaited, and the caller is
+        counted as a channel user from that point, so an operation runs
+        start-to-finish on one channel.  Like ``connect()``, the channel is
+        re-checked once the lock is held and re-resolved if it was retired
+        or its loop died in the meantime.
         """
-        channel = self._resolve_channel()
-        try:
-            async with channel.op_lock:
+        while True:
+            channel = self._resolve_channel()
+            async with channel.operation():
+                if channel.retired or channel.loop_is_dead():
+                    continue
                 yield
-        finally:
-            channel.retire_if_idle()
+                return
+
+    @contextlib.asynccontextmanager
+    async def _transaction(self) -> AsyncIterator[DongleChannel]:
+        """Hold the channel transaction lock as its owner (same re-check as above)."""
+        while True:
+            channel = self._resolve_channel()
+            async with channel.transaction(self):
+                if channel.retired or channel.loop_is_dead():
+                    continue
+                yield channel
+                return
 
     @property
     def is_connected(self) -> bool:
-        """Live view of the shared socket; a shut-down transport is never connected."""
-        return not self._shutdown_requested and self._connected
+        """Whether THIS transport holds a lease on a live shared socket.
+
+        A sibling's live socket does not make an un-leased transport
+        connected: callers that gate ``connect()`` on this property must take
+        their own lease, or the last leased sibling's release would close the
+        socket underneath them.  A terminally shut-down transport is never
+        connected.
+        """
+        channel = self._channel
+        return (
+            not self._shutdown_requested
+            and channel is not None
+            and channel.connected
+            and channel.holds_lease(self)
+        )
 
     @property
     def _connected(self) -> bool:
@@ -441,8 +466,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     def _connected(self, value: bool) -> None:
         # BaseTransport.__init__ assigns False before any channel exists; an
         # unbound transport is not connected, so that assignment is a no-op.
+        # Setting True is the test seam for "connect() completed": it marks
+        # the socket live AND records this transport's lease, exactly as
+        # connect() would.  Setting False models a teardown, which keeps
+        # the lease (only disconnect()/async_shutdown() release one).
         if value:
-            self._resolve_channel().connected = True
+            channel = self._resolve_channel()
+            channel.connected = True
+            channel.acquire_lease(self)
         elif self._channel is not None:
             self._channel.connected = False
 
@@ -675,16 +706,25 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._raise_if_shutdown()
         while True:
             channel = self._resolve_channel()
-            async with channel.connect_lock:
-                self._raise_if_shutdown()
-                if channel.retired:
-                    # The last lease released between resolve and acquire:
-                    # re-resolve to the live channel for this endpoint.
-                    continue
-                if not channel.connected:
-                    await self._dial(channel)
-                channel.acquire_lease(self)
-                return
+            try:
+                async with channel.connect_lock:
+                    self._raise_if_shutdown()
+                    if channel.retired:
+                        # The last lease released between resolve and acquire:
+                        # re-resolve to the live channel for this endpoint.
+                        continue
+                    if not channel.connected:
+                        await self._dial(channel)
+                    channel.acquire_lease(self)
+                    return
+            except BaseException:
+                # A failed (or cancelled / shut-down) dial must not leave a
+                # disconnected, lease-less channel registered: it would
+                # answer every later resolve for this endpoint and turn a
+                # transient dial failure into config lock-in (mismatch
+                # errors from a channel nobody uses).
+                channel.retire_if_idle()
+                raise
 
     async def _dial(self, channel: DongleChannel) -> None:
         """Run the connect ladder into ``channel``; caller holds its connect lock."""
@@ -891,10 +931,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             async with channel.transaction_lock:
                 channel.release_lease(self)
                 if channel.lease_count == 0:
-                    await channel.teardown()
-                    # A connect() that raced in during the close leased on
-                    # our behalf (it waits on connect_lock); disconnect wins.
-                    channel.release_lease(self)
+                    async with channel.connect_lock:
+                        # A dial that was in flight has finished by now and
+                        # leased its caller.  If that caller was THIS
+                        # transport (connect() racing this disconnect),
+                        # disconnect wins: drop that lease and close.  If it
+                        # was a sibling, the socket is theirs — leave it.
+                        channel.release_lease(self)
+                        if channel.lease_count == 0:
+                            await channel.close()
             channel.retire_if_idle()
         _LOGGER.debug("Dongle transport disconnected for %s", self._serial)
 
@@ -913,9 +958,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
         Shared socket: the stream is torn down (generation bumped, siblings'
         next transaction reconnects) only when THIS transport owns the
-        in-flight transaction, or when no transaction is in flight and no
-        lease remains.  If a sibling owns the in-flight transaction this
-        lease is just released and the sibling's stream is left intact.
+        in-flight transaction, or when no transaction is in flight, no lease
+        remains and no dial is in progress.  If a sibling owns the in-flight
+        transaction, or is mid-dial, this lease is just released and the
+        sibling's stream is left intact (a dial owned by this transport still
+        closes itself via the post-open terminal check).
         Ordinary reusable disconnects retain the fully serialised
         :meth:`disconnect` contract.
         """
@@ -924,7 +971,9 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         if channel is not None:
             channel.release_lease(self)
             owner = channel.transaction_owner
-            if owner is self or (owner is None and channel.lease_count == 0):
+            if owner is self or (
+                owner is None and channel.lease_count == 0 and not channel.connect_lock.locked()
+            ):
                 await channel.close(timeout=min(self._timeout, _SHUTDOWN_CLOSE_TIMEOUT))
             channel.retire_if_idle()
         _LOGGER.debug("Dongle transport shut down for %s", self._serial)
@@ -1238,15 +1287,17 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         last_error: TransportReadError | None = None
 
         self._raise_if_shutdown()
-        channel = self._resolve_channel()
-        async with channel.transaction(self):
+        async with self._transaction() as channel:
             self._raise_if_shutdown()
             for attempt in range(max_retries + 1):
                 self._raise_if_shutdown()
                 try:
-                    # (Re)connect when there is no live connection: first
+                    # (Re)connect when there is no live connection — first
                     # use, after _teardown_connection(), or an external
-                    # disconnect().  Serialised under self._lock so two
+                    # disconnect() — or when this transport has no lease on
+                    # the live shared socket yet (a sibling brought it up):
+                    # connect() then just records the lease, no dial.
+                    # Serialised under the channel transaction lock so two
                     # concurrent requests can never race parallel connect()
                     # calls at the dongle's single TCP slot.  connect()
                     # already retries internally with backoff — if it still
@@ -1254,7 +1305,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                     # fast instead of burning the remaining attempts on
                     # more connect cycles (keeps link-down probe cycles
                     # bounded to ONE connect sequence).
-                    if self._writer is None or self._reader is None or not self._connected:
+                    if (
+                        self._writer is None
+                        or self._reader is None
+                        or not self._connected
+                        or not channel.holds_lease(self)
+                    ):
                         _LOGGER.info(
                             "[%s] Dongle %s:%s disconnected, attempting reconnect",
                             self._serial,
@@ -1262,6 +1318,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                             self._port,
                         )
                         await self.connect()
+                        if self._channel is not channel:
+                            # Unreachable while this transaction counts as a
+                            # channel user (the channel cannot be retired),
+                            # but never do I/O on a channel whose transaction
+                            # lock this task does not hold.
+                            raise TransportConnectionError(
+                                f"[{self._serial}] Dongle channel was replaced during "
+                                "reconnect; retry the request"
+                            )
                     if self._writer is None or self._reader is None:
                         raise TransportConnectionError("Socket not initialized")
                     # The stream this transaction runs on.  If the channel is

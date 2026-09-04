@@ -35,7 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   different running event loop raises `DongleChannelLoopError` (both are
   `TransportConnectionError` subclasses, exported from `pylxpweb.transports`).
   Per-operation knobs (timeouts, block size, write retries, family) remain
-  per-transport.
+  per-transport. `DongleTransport.is_connected` now means "this transport
+  holds a lease on a live socket": a sibling's open socket no longer reports
+  an un-leased transport as connected, and a transport that uses the shared
+  socket without calling `connect()` takes its lease on first use.
 
 ## [0.10.0b8] - 2026-09-02
 

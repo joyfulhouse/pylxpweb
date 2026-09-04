@@ -14,6 +14,8 @@ import asyncio
 import contextlib
 import ssl
 import struct
+import threading
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +25,8 @@ import pytest
 from pylxpweb.transports import create_dongle_transport
 from pylxpweb.transports.dongle import (
     MODBUS_READ_INPUT,
+    MODBUS_WRITE_MULTI,
+    MODBUS_WRITE_SINGLE,
     PACKET_PREFIX,
     PROTOCOL_VERSION,
     TCP_FUNC_TRANSLATED,
@@ -31,14 +35,17 @@ from pylxpweb.transports.dongle import (
 )
 from pylxpweb.transports.dongle_channel import (
     _REGISTRY,
+    _REGISTRY_LOCK,
     DongleChannel,
     make_channel_key,
-    registered_channel,
+    resolve_shared_channel,
 )
 from pylxpweb.transports.exceptions import (
     DongleChannelLoopError,
     DongleChannelMismatchError,
+    TransportConnectionError,
     TransportReadError,
+    TransportTimeoutError,
 )
 
 DONGLE = "BA12345678"
@@ -51,12 +58,15 @@ _FRAME_HEADER = 6
 def _build_response(
     inverter_serial: str, modbus_func: int, start_register: int, values: list[int]
 ) -> bytes:
-    """Build a read-layout response frame (same layout as the dongle emits)."""
+    """Build a response frame: read layout for FC03/FC04, 16-byte ACK for FC06/FC16."""
     data_frame = bytes([0x01, modbus_func]) + inverter_serial.encode("ascii").ljust(10, b"\x00")
     data_frame += struct.pack("<H", start_register)
-    data_frame += bytes([len(values) * 2])
-    for value in values:
-        data_frame += struct.pack("<H", value & 0xFFFF)
+    if modbus_func in (MODBUS_WRITE_SINGLE, MODBUS_WRITE_MULTI):
+        data_frame += struct.pack("<H", values[0] & 0xFFFF)  # echoed value / register count
+    else:
+        data_frame += bytes([len(values) * 2])
+        for value in values:
+            data_frame += struct.pack("<H", value & 0xFFFF)
     packet = PACKET_PREFIX + struct.pack("<H", PROTOCOL_VERSION)
     packet += struct.pack("<H", 14 + len(data_frame) + 2)
     packet += bytes([0x01, TCP_FUNC_TRANSLATED])
@@ -134,7 +144,12 @@ class FakeDongleServer:
                     self.frame_received.set()
                     if self.hold:
                         await self._release.wait()
-                    values = [register + i for i in range(count)]
+                    if func == MODBUS_WRITE_SINGLE:
+                        values = [count]  # FC06 carries the value where a read carries count
+                    elif func == MODBUS_WRITE_MULTI:
+                        values = [count]  # FC16 ACK echoes the register count
+                    else:
+                        values = [register + i for i in range(count)]
                     writer.write(_build_response(serial, func, register, values))
                     await writer.drain()
         except (ConnectionError, OSError):
@@ -163,6 +178,7 @@ def _make(
     host: str = "127.0.0.1",
     dongle_serial: str = DONGLE,
     use_ssl: bool | None = False,
+    timeout: float = 1.0,
     **kwargs: Any,
 ) -> DongleTransport:
     return DongleTransport(
@@ -170,7 +186,7 @@ def _make(
         dongle_serial=dongle_serial,
         inverter_serial=inverter_serial,
         port=port,
-        timeout=1.0,
+        timeout=timeout,
         connection_retries=1,
         use_ssl=use_ssl,
         **kwargs,
@@ -208,7 +224,7 @@ async def test_same_endpoint_shares_one_dial(server: tuple[FakeDongleServer, int
         assert a.is_connected is True and b.is_connected is True
         assert a.channel is b.channel
         assert a.channel is not None and a.channel.lease_count == 2
-        assert registered_channel(make_channel_key("127.0.0.1", port, DONGLE)) is a.channel
+        assert _REGISTRY.get(make_channel_key("127.0.0.1", port, DONGLE)) is a.channel
 
         # Both devices actually talk over the shared socket, addressed by serial.
         assert await a._read_input_registers(0, 2) == [0, 1]
@@ -259,7 +275,7 @@ async def test_private_channel_opt_out(server: tuple[FakeDongleServer, int]) -> 
         assert fake.dials == 2
         assert private.channel is not shared.channel
         assert private.channel is not None and private.channel.shared is False
-        assert registered_channel(make_channel_key("127.0.0.1", port, DONGLE)) is shared.channel
+        assert _REGISTRY.get(make_channel_key("127.0.0.1", port, DONGLE)) is shared.channel
         assert private.is_connected is True
 
         await private.disconnect()
@@ -323,19 +339,19 @@ async def test_last_lease_release_closes_and_retires(
         await a.disconnect()
         assert b.is_connected is True
         assert fake.open_connections == 1
-        assert registered_channel(key) is first_channel
+        assert _REGISTRY.get(key) is first_channel
         assert first_channel.lease_count == 1
 
         await b.disconnect()
         await fake.wait_for_connections(0)
         assert b.is_connected is False
-        assert registered_channel(key) is None
+        assert _REGISTRY.get(key) is None
         assert first_channel.retired is True
 
         await a.connect()
         assert fake.dials == 2
         assert a.channel is not first_channel
-        assert registered_channel(key) is a.channel
+        assert _REGISTRY.get(key) is a.channel
         assert await a._read_input_registers(3, 1) == [3]
     finally:
         await _shutdown_all(a, b)
@@ -624,3 +640,375 @@ async def test_factory_transports_share_by_default() -> None:
         assert a.is_connected is True and b.is_connected is True
     finally:
         await _shutdown_all(a, b)
+
+
+# ----------------------------------------------------------------------
+# Tribunal round 1 (PR #330): lease membership, retirement races, dials,
+# zombie channels, registry thread-safety, write non-replay, generation.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unleased_sibling_takes_a_lease_before_using_the_socket(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A transport that never called connect() leases the live socket on first use.
+
+    Without that lease the refcount would be 1 for two active devices and
+    A's release would close the socket underneath B.
+    """
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None
+
+        assert await b._read_input_registers(0, 1) == [0]
+        assert channel.holds_lease(b)
+        assert channel.lease_count == 2
+
+        await a.disconnect()
+        assert fake.open_connections == 1
+        assert b.is_connected is True
+        assert await b._read_input_registers(1, 1) == [1]
+        assert fake.dials == 1
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_is_connected_requires_own_lease(server: tuple[FakeDongleServer, int]) -> None:
+    """A sibling's live socket does not make an un-leased transport connected."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    try:
+        await a.connect()
+        assert b.is_connected is False  # bound or not, B holds no lease yet
+
+        await b.connect()
+        await a.disconnect()
+        assert a.is_connected is False
+        assert b.is_connected is True
+
+        # A's next operation re-leases the still-open socket without a dial.
+        assert await a._read_input_registers(2, 1) == [2]
+        assert a.is_connected is True
+        assert a.channel is not None and a.channel.holds_lease(a)
+        assert fake.dials == 1
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_queued_waiter_keeps_its_channel_across_last_lease_release(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A waiter queued on the transaction lock is a user: the channel is not retired under it.
+
+    Otherwise B wakes holding the OLD channel's lock, reconnects on a NEW
+    channel, and does I/O unserialized against C on that new channel.
+    """
+    fake, port = server
+    a, b, c = _make(port, SERIAL_A), _make(port, SERIAL_B), _make(port, "CE00000003")
+    try:
+        await a.connect()
+        old = a.channel
+        assert old is not None
+        assert b._resolve_channel() is old
+
+        release_a = asyncio.create_task(a.disconnect())  # last lease: closes the socket
+        await asyncio.sleep(0)  # parked in wait_closed() holding the transaction lock
+        assert old.transaction_lock.locked()
+
+        read_b = asyncio.create_task(b._read_input_registers(0, 1))
+        await asyncio.sleep(0)  # queued behind A on old.transaction_lock
+        assert old._users == 1
+
+        await release_a
+        assert old.retired is False
+        assert await read_b == [0]
+        assert b.channel is old
+
+        assert await c._read_input_registers(1, 1) == [1]
+        assert c.channel is old
+        assert c.channel.transaction_lock is b.channel.transaction_lock
+        assert fake.dials == 2
+    finally:
+        await _shutdown_all(a, b, c)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_spares_a_sibling_dial(server: tuple[FakeDongleServer, int]) -> None:
+    """A's terminal shutdown must not close the socket B is in the middle of dialing."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None
+        await a._force_reconnect()  # socket torn down, A still leased
+
+        connect_b = asyncio.create_task(b.connect())
+        await asyncio.sleep(0.05)  # B is inside the dial (initial-data window)
+        assert channel.connect_lock.locked()
+
+        await asyncio.wait_for(a.async_shutdown(), timeout=0.5)
+        await connect_b
+
+        assert b.is_connected is True
+        assert fake.open_connections == 1
+        assert await b._read_input_registers(0, 1) == [0]
+        assert fake.dials == 2
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_spares_a_sibling_dial(server: tuple[FakeDongleServer, int]) -> None:
+    """A's last-lease disconnect re-checks under the connect lock: B's fresh socket survives."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None
+        await a._force_reconnect()
+
+        connect_b = asyncio.create_task(b.connect())
+        await asyncio.sleep(0.05)
+        assert channel.connect_lock.locked()
+
+        await a.disconnect()
+        await connect_b
+
+        assert b.is_connected is True
+        assert fake.open_connections == 1
+        assert await b._read_input_registers(0, 1) == [0]
+        assert fake.dials == 2
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_racing_own_connect_leaves_no_lease(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """disconnect() racing this transport's own connect() wins and drops the lease it took."""
+    fake, port = server
+    a = _make(port, SERIAL_A)
+    key = make_channel_key("127.0.0.1", port, DONGLE)
+    try:
+        connect_a = asyncio.create_task(a.connect())
+        await asyncio.sleep(0.05)  # inside the dial
+        channel = a.channel
+        assert channel is not None and channel.connect_lock.locked()
+
+        await a.disconnect()
+        await connect_a
+
+        assert channel.lease_count == 0
+        assert a.is_connected is False
+        assert channel.retired is True
+        assert _REGISTRY.get(key) is None
+        await fake.wait_for_connections(0)
+    finally:
+        await _shutdown_all(a)
+
+
+@pytest.mark.asyncio
+async def test_failed_connect_does_not_pin_endpoint_config(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A failed dial retires its lease-less channel; a corrected config attaches afterwards."""
+    fake, port = server
+    key = make_channel_key("127.0.0.1", port, DONGLE)
+    a = _make(port, SERIAL_A, use_ssl=False)
+    b = _make(port, SERIAL_B, use_ssl=None)
+    try:
+        with (
+            patch("asyncio.open_connection", side_effect=ConnectionRefusedError("refused")),
+            pytest.raises(TransportConnectionError),
+        ):
+            await a.connect()
+
+        assert a.channel is not None and a.channel.retired is True
+        assert _REGISTRY.get(key) is None
+
+        with patch.object(DongleTransport, "_ssl_ctx", return_value=None):
+            await b.connect()
+        assert b.is_connected is True
+        assert fake.dials == 1
+    finally:
+        await _shutdown_all(a, b)
+
+
+def test_registry_lock_serialises_resolve_across_threads() -> None:
+    """resolve_shared_channel() cannot run while another thread holds the registry lock."""
+    key = make_channel_key("registry-lock-host", 8000, DONGLE)
+    resolved = threading.Event()
+
+    def resolve_in_thread() -> None:
+        resolve_shared_channel(key, ssl_mode=False)
+        resolved.set()
+
+    worker = threading.Thread(target=resolve_in_thread, name="resolver")
+    try:
+        with _REGISTRY_LOCK:
+            worker.start()
+            assert resolved.wait(0.2) is False  # blocked behind the lock
+            assert _REGISTRY.get(key) is None
+        assert resolved.wait(2.0) is True
+        assert _REGISTRY.get(key) is not None
+    finally:
+        worker.join(2.0)
+        _REGISTRY.pop(key, None)
+
+
+def test_simultaneous_first_attach_from_two_threads_creates_one_channel() -> None:
+    """Two loops on two threads racing the first attach yield ONE channel, ONE socket.
+
+    Channel creation is slowed so the second thread's lookup lands inside
+    the check-then-create window, and the winner's dial is held until the
+    other thread has resolved, so the winner's loop is provably alive when
+    the loser looks.  The loser must get the single-loop rejection, never a
+    second socket.
+    """
+    host = "two-threads-host"
+    key = make_channel_key(host, 8000, DONGLE)
+    transports = {
+        "a": DongleTransport(host, DONGLE, SERIAL_A, use_ssl=False, connection_retries=1),
+        "b": DongleTransport(host, DONGLE, SERIAL_B, use_ssl=False, connection_retries=1),
+    }
+    start = threading.Barrier(2)
+    resolved = {name: threading.Event() for name in transports}
+    original_init = DongleChannel.__init__
+    original_resolve = DongleTransport._resolve_channel
+
+    def slow_init(self: DongleChannel, *args: Any, **kwargs: Any) -> None:
+        original_init(self, *args, **kwargs)
+        time.sleep(0.05)  # widen the check-then-create window
+
+    def resolve_then_signal(transport: DongleTransport) -> DongleChannel:
+        try:
+            return original_resolve(transport)
+        finally:
+            resolved[threading.current_thread().name].set()
+
+    async def open_connection(*args: Any, **kwargs: Any) -> tuple[AsyncMock, MagicMock]:
+        me = threading.current_thread().name
+        for name, event in resolved.items():
+            if name != me:
+                event.wait(2.0)  # keep this loop alive until the other thread has looked
+        return _mock_socket()
+
+    results: dict[str, object] = {}
+
+    def attach(name: str) -> None:
+        start.wait(2.0)
+        try:
+            asyncio.run(transports[name].connect())
+            results[name] = "ok"
+        except Exception as err:
+            results[name] = err
+
+    threads = [threading.Thread(target=attach, args=(name,), name=name) for name in transports]
+    try:
+        with (
+            patch.object(DongleChannel, "__init__", slow_init),
+            patch.object(DongleTransport, "_resolve_channel", resolve_then_signal),
+            patch.object(DongleTransport, "_ssl_ctx", return_value=None),
+            patch("asyncio.open_connection", side_effect=open_connection) as opened,
+        ):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(5.0)
+
+        outcomes = sorted(results.values(), key=lambda r: isinstance(r, str))
+        assert outcomes[1] == "ok", results
+        assert isinstance(outcomes[0], DongleChannelLoopError), results
+        assert opened.await_count == 1
+        assert len([k for k in _REGISTRY if k == key]) == 1
+    finally:
+        _REGISTRY.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_write_is_never_replayed(server: tuple[FakeDongleServer, int]) -> None:
+    """Cancelling an FC06 write after the frame is on the wire sends it exactly once."""
+    fake, port = server
+    a = _make(port, SERIAL_A)
+    try:
+        await a.connect()
+
+        fake.hold = True
+        pending = asyncio.create_task(a._write_holding_registers(21, [1]))
+        await asyncio.wait_for(fake.frame_received.wait(), timeout=2.0)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        fake.release()
+        await asyncio.sleep(0.05)
+
+        assert fake.frames == [(SERIAL_A, MODBUS_WRITE_SINGLE, 21)]
+        assert await a._read_input_registers(1, 1) == [1]
+        assert fake.frames == [
+            (SERIAL_A, MODBUS_WRITE_SINGLE, 21),
+            (SERIAL_A, MODBUS_READ_INPUT, 1),
+        ]
+    finally:
+        await _shutdown_all(a)
+
+
+@pytest.mark.asyncio
+async def test_write_ack_timeout_is_never_resent(server: tuple[FakeDongleServer, int]) -> None:
+    """An FC06 write whose ACK never arrives is torn down, never resent on the wire."""
+    fake, port = server
+    a = _make(port, SERIAL_A, timeout=0.3)
+    try:
+        await a.connect()
+
+        fake.hold = True
+        with pytest.raises(TransportTimeoutError):
+            await a._write_holding_registers(21, [1])
+        fake.release()
+        await asyncio.sleep(0.05)
+
+        assert fake.frames == [(SERIAL_A, MODBUS_WRITE_SINGLE, 21)]
+        assert a.is_connected is False
+        assert fake.dials == 1
+    finally:
+        await _shutdown_all(a)
+
+
+@pytest.mark.asyncio
+async def test_generation_change_mid_transaction_fails_coherently(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A frame that arrives after the socket was replaced is discarded, not parsed."""
+    fake, port = server
+    a = _make(port, SERIAL_A)
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None
+        stale = _build_response(SERIAL_A, MODBUS_READ_INPUT, 0, [0])
+
+        async def receive_after_replacement() -> bytes:
+            await channel.teardown()  # socket replaced underneath the transaction
+            return stale
+
+        with (
+            patch.object(a, "_receive_frame", receive_after_replacement),
+            pytest.raises(TransportReadError, match="replaced mid-transaction"),
+        ):
+            await a._send_receive(
+                _read_packet(a), max_retries=0, expected_func=MODBUS_READ_INPUT, expected_register=0
+            )
+
+        assert a.is_connected is False
+        assert await a._read_input_registers(0, 1) == [0]  # next request redials cleanly
+        assert fake.dials == 2
+    finally:
+        await _shutdown_all(a)

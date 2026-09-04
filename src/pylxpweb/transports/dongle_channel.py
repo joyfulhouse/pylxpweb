@@ -31,15 +31,18 @@ Model
   the socket was replaced underneath it, instead of parsing a stale stream.
   There is deliberately no callback / observer list for failure propagation:
   siblings observe ``connected`` and ``generation`` directly.
-* **Registry** — one module-level mapping per process.  Check-then-create
-  never suspends (no ``await`` between the lookup and the insert), so it is
-  atomic on the event loop by construction; channels are single-loop objects
-  and an attach from a different running loop is refused.
+* **Registry** — one module-level mapping per process, every lookup /
+  create / retire under one process-wide ``threading.Lock`` (check-then-create
+  never suspends, so it is also atomic on a single loop).  Channels are
+  single-loop objects: an attach from a different running loop is refused.
+* **Users** — a counter of tasks queued on or holding a channel lock.  A
+  channel is retired only when it has no lease, no socket, no user and no
+  lock held, so a task queued on a lock never wakes on a retired channel.
 
 The dial ladder itself (retry/backoff, TLS-PSK auto-detection, initial-data
-discard) stays in ``DongleTransport.connect()`` because it is parameterised by
-that transport's per-operation knobs; it runs under this channel's connection
-lock and writes its result into the channel.
+discard) lives in ``DongleTransport._dial()``, called from ``connect()``
+under this channel's connection lock, because it is parameterised by that
+transport's per-operation knobs.
 """
 
 from __future__ import annotations
@@ -47,6 +50,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
@@ -121,8 +125,9 @@ class DongleChannel:
         self.ssl_proven = False
         self.ssl_unsupported_until: float | None = None
         self.ssl_unavailable_logged = False
-        # --- leases ---
+        # --- leases and in-flight users ---
         self._leases: set[DongleTransport] = set()
+        self._users = 0
         self.retired = False
 
     # ------------------------------------------------------------------
@@ -133,6 +138,10 @@ class DongleChannel:
     def lease_count(self) -> int:
         """Derived refcount: the number of transports currently leasing."""
         return len(self._leases)
+
+    def holds_lease(self, transport: DongleTransport) -> bool:
+        """Whether ``transport`` currently holds a lease on this channel."""
+        return transport in self._leases
 
     def acquire_lease(self, transport: DongleTransport) -> None:
         """Record a lease for ``transport`` (idempotent)."""
@@ -206,9 +215,12 @@ class DongleChannel:
 
         Records ``owner`` so ``async_shutdown()`` can tell whether the
         shutting-down lease owns the in-flight transaction (tear down) or a
-        sibling does (just release).  Retirement of an idle shared channel is
-        attempted once the lock is released.
+        sibling does (just release).  The caller counts as a user from before
+        the lock is awaited until after it is released, so the channel cannot
+        be retired underneath a queued waiter; retirement of an idle shared
+        channel is attempted once the lock is released.
         """
+        self._users += 1
         try:
             async with self.transaction_lock:
                 self.transaction_owner = owner
@@ -217,6 +229,18 @@ class DongleChannel:
                 finally:
                     self.transaction_owner = None
         finally:
+            self._users -= 1
+            self.retire_if_idle()
+
+    @contextlib.asynccontextmanager
+    async def operation(self) -> AsyncIterator[None]:
+        """Hold the operation lock for one multi-step operation (same user rules)."""
+        self._users += 1
+        try:
+            async with self.op_lock:
+                yield
+        finally:
+            self._users -= 1
             self.retire_if_idle()
 
     # ------------------------------------------------------------------
@@ -224,10 +248,11 @@ class DongleChannel:
     # ------------------------------------------------------------------
 
     def is_idle(self) -> bool:
-        """No lease, no socket, no operation or transaction in flight."""
+        """No lease, no socket, nobody queued on or holding a lock, no dial."""
         return (
             not self._leases
             and not self.connected
+            and self._users == 0
             and not self.op_lock.locked()
             and not self.transaction_lock.locked()
             and not self.connect_lock.locked()
@@ -237,15 +262,15 @@ class DongleChannel:
         """Remove an idle shared channel from the registry.
 
         A retired channel is never reused: transports bound to it re-resolve
-        through the registry on their next use.  A channel whose operation
-        lock is held is never retired, so an operation always finishes on the
-        channel it started on (its lease-less steps cannot be re-homed under
-        a different operation lock).
+        through the registry on their next use.  A channel with a user (a task
+        queued on or holding its operation/transaction lock) is never retired,
+        so an operation always finishes on the channel it started on.
         """
         if self.retired or not self.shared or not self.is_idle():
             return False
-        if _REGISTRY.get(self.key) is self:
-            del _REGISTRY[self.key]
+        with _REGISTRY_LOCK:
+            if _REGISTRY.get(self.key) is self:
+                del _REGISTRY[self.key]
         self.retired = True
         return True
 
@@ -255,10 +280,14 @@ class DongleChannel:
 # ----------------------------------------------------------------------
 
 _REGISTRY: dict[DongleChannelKey, DongleChannel] = {}
-"""Live shared channels by key.  Mutated only by synchronous code paths."""
+"""Live shared channels by key.  Every mutation happens under ``_REGISTRY_LOCK``."""
+
+_REGISTRY_LOCK = threading.Lock()
+"""Process-wide guard: loops on other threads must never race check-then-create."""
 
 
 def _prune_dead_loops() -> None:
+    """Drop channels whose loop has closed.  Caller holds ``_REGISTRY_LOCK``."""
     for key, channel in list(_REGISTRY.items()):
         if channel.loop_is_dead():
             del _REGISTRY[key]
@@ -268,9 +297,10 @@ def _prune_dead_loops() -> None:
 def resolve_shared_channel(key: DongleChannelKey, *, ssl_mode: bool | None) -> DongleChannel:
     """Return the live channel for ``key``, creating it if absent.
 
-    Atomic check-then-create: this function never suspends, so two
-    transports resolving the same key on the same loop always get the same
-    object.
+    Atomic check-then-create: the whole lookup/create runs under the
+    process-wide registry lock and never suspends, so two transports
+    resolving the same key — on one loop or on loops in different threads —
+    can never both create a channel.
 
     Raises:
         DongleChannelMismatchError: ``key``'s host:port already has a channel
@@ -279,32 +309,28 @@ def resolve_shared_channel(key: DongleChannelKey, *, ssl_mode: bool | None) -> D
         DongleChannelLoopError: The existing channel belongs to another
             running loop.
     """
-    _prune_dead_loops()
-    channel = _REGISTRY.get(key)
-    if channel is None:
-        for other_key, other in _REGISTRY.items():
-            if other_key[:2] == key[:2] and other_key[2] != key[2]:
-                raise DongleChannelMismatchError(
-                    f"Dongle endpoint {key[0]}:{key[1]} is already attached with "
-                    f"dongle_serial {other.key[2]!r}; refusing dongle_serial {key[2]!r} "
-                    "(one physical dongle has one serial)"
-                )
-        channel = DongleChannel(key, ssl_mode=ssl_mode, shared=True)
+    with _REGISTRY_LOCK:
+        _prune_dead_loops()
+        channel = _REGISTRY.get(key)
+        if channel is None:
+            for other_key, other in _REGISTRY.items():
+                if other_key[:2] == key[:2] and other_key[2] != key[2]:
+                    raise DongleChannelMismatchError(
+                        f"Dongle endpoint {key[0]}:{key[1]} is already attached with "
+                        f"dongle_serial {other.key[2]!r}; refusing dongle_serial {key[2]!r} "
+                        "(one physical dongle has one serial)"
+                    )
+            channel = DongleChannel(key, ssl_mode=ssl_mode, shared=True)
+            channel.bind_loop()
+            _REGISTRY[key] = channel
+            _LOGGER.debug("Created shared dongle channel for %s:%s (%s)", key[0], key[1], key[2])
+            return channel
+
         channel.bind_loop()
-        _REGISTRY[key] = channel
-        _LOGGER.debug("Created shared dongle channel for %s:%s (%s)", key[0], key[1], key[2])
+        if channel.ssl_mode != ssl_mode:
+            raise DongleChannelMismatchError(
+                f"Dongle endpoint {key[0]}:{key[1]} is already attached with "
+                f"use_ssl={channel.ssl_mode!r}; refusing use_ssl={ssl_mode!r} "
+                "(TLS mode is a per-socket fact)"
+            )
         return channel
-
-    channel.bind_loop()
-    if channel.ssl_mode != ssl_mode:
-        raise DongleChannelMismatchError(
-            f"Dongle endpoint {key[0]}:{key[1]} is already attached with "
-            f"use_ssl={channel.ssl_mode!r}; refusing use_ssl={ssl_mode!r} "
-            "(TLS mode is a per-socket fact)"
-        )
-    return channel
-
-
-def registered_channel(key: DongleChannelKey) -> DongleChannel | None:
-    """Return the registered channel for ``key`` without creating one."""
-    return _REGISTRY.get(key)
