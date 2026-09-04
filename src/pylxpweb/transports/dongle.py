@@ -11,11 +11,16 @@ https://github.com/celsworth/lxp-bridge/wiki/TCP-Packet-Spec
 
 IMPORTANT: Single-Client Limitation
 ------------------------------------
-The WiFi dongle supports only ONE concurrent TCP connection.
-Running multiple clients causes connection errors and data loss.
+The WiFi dongle sustains only ONE TCP client.  A second client is accepted
+but repeatedly evicted, sees cross-routed replies, and degrades the first
+client's poll cadence (live probe, pylxpweb#329).
 
-Ensure only ONE integration/script connects to each dongle at a time.
-Disable other integrations (Solar Assistant, lxp-bridge) before using.
+Within one process this is handled for you: every DongleTransport that
+targets the same physical dongle (host:port + dongle serial) shares ONE
+serialized socket through an endpoint-scoped DongleChannel (see
+``dongle_channel.py``), default-on.  Pass ``shared_channel=False`` for a
+private socket.  Across processes the limitation still applies: disable
+other integrations (Solar Assistant, lxp-bridge) before using.
 
 IMPORTANT: Firmware Compatibility
 ---------------------------------
@@ -34,6 +39,7 @@ import ssl
 import struct
 import sys
 import time
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from ._register_data import (
@@ -41,6 +47,7 @@ from ._register_data import (
     RegisterDataMixin,
 )
 from .capabilities import DONGLE_CAPABILITIES, TransportCapabilities
+from .dongle_channel import DongleChannel, make_channel_key, resolve_shared_channel
 from .exceptions import (
     TransportConnectionError,
     TransportError,
@@ -50,7 +57,7 @@ from .exceptions import (
     TransportWriteError,
 )
 from .observation import RegisterObserver
-from .protocol import LINK_PROBE_TIMEOUT_SECONDS, BaseTransport
+from .protocol import LINK_PROBE_TIMEOUT_SECONDS, BaseTransport, _ReentrantAsyncLock
 
 if TYPE_CHECKING:
     from pylxpweb.devices.inverters._features import InverterFamily
@@ -176,8 +183,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
     IMPORTANT: Single-Client Limitation
     ------------------------------------
-    The WiFi dongle supports only ONE concurrent TCP connection.
-    Disable other integrations before using this transport.
+    The WiFi dongle sustains only ONE TCP client, so every transport in this
+    process that targets the same dongle shares one serialized socket
+    (:mod:`pylxpweb.transports.dongle_channel`): ``connect()`` takes a lease
+    on the endpoint's channel, ``disconnect()`` / ``async_shutdown()``
+    release it, and the socket closes when the last lease goes.  The
+    per-socket state (streams, locks, TLS memo, ``connected``) has exactly
+    one owner — the channel — and this class reads it live.  Disable other
+    *processes* (integrations/scripts) before using this transport.
 
     Example:
         transport = DongleTransport(
@@ -212,6 +225,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         verify_writes: bool = True,
         max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
         register_observer: RegisterObserver | None = None,
+        *,
+        shared_channel: bool = True,
     ) -> None:
         """Initialize WiFi Dongle transport.
 
@@ -253,11 +268,26 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 large reads automatically fall back to the plain grouped reads
                 (eg4_web_monitor#254).
             register_observer: Optional callback for terminal raw-register segments.
+            shared_channel: Share one serialized TCP socket with every other
+                transport in this process that targets the same dongle
+                (``host:port`` + ``dongle_serial``) — the default, because a
+                dongle cannot sustain two clients (pylxpweb#329).  ``False``
+                gives this transport a private socket that is never
+                registered for sharing.  Per-operation knobs (timeouts, block
+                size, write retries, family) stay per-transport either way;
+                ``use_ssl`` and ``dongle_serial`` are per-socket facts and
+                must agree across every transport sharing an endpoint.
         """
-        super().__init__(inverter_serial, register_observer=register_observer)
+        # Per-socket state lives on the DongleChannel; the endpoint facts that
+        # identify it must exist before BaseTransport.__init__ assigns the
+        # forwarded ``_connected`` / ``_op_lock`` attributes.
         self._host = host
         self._port = port
         self._dongle_serial = dongle_serial
+        self._ssl_mode = use_ssl
+        self._shared_channel = shared_channel
+        self._channel: DongleChannel | None = None
+        super().__init__(inverter_serial, register_observer=register_observer)
         self._timeout = timeout
         self._inverter_family = inverter_family
         self._split_phase: bool = False
@@ -268,23 +298,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         self._write_retries = write_retries
         self._write_step_delay = write_step_delay
         self._verify_writes = verify_writes
-        self._ssl_mode = use_ssl
-        self._ssl_active = False
-        self._ssl_proven = False
-        self._ssl_unsupported_until: float | None = None
-        self._ssl_unavailable_logged = False
         self._link_probe_active = False
-        self._reader: asyncio.StreamReader | None = None
-        self._writer: asyncio.StreamWriter | None = None
-        self._receive_buffer = bytearray()
-        self._lock = asyncio.Lock()
-        # Serialises connect() itself: _send_receive reconnects under
-        # self._lock, but external callers (e.g. a coordinator write path
-        # doing "if not is_connected: connect()") can race it — and the
-        # dongle has exactly ONE TCP slot, so two parallel dials corrupt
-        # each other.  Lock order is always _lock -> _connect_lock; nothing
-        # under _connect_lock ever takes _lock, so no cycle.
-        self._connect_lock = asyncio.Lock()
         self._transaction_id = 0
         self._shutdown_requested = False
 
@@ -352,6 +366,169 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     def pv_string_count(self, value: int) -> None:
         """Set the PV string count (gates pv4-6 register reads/parsing)."""
         self._pv_string_count = int(value)
+
+    # ------------------------------------------------------------------
+    # Channel binding (pylxpweb#329)
+    # ------------------------------------------------------------------
+    # Everything per-socket lives on a DongleChannel shared by every
+    # transport that targets the same dongle.  The historical private names
+    # (``_reader`` / ``_writer`` / ``_connected`` / ``_lock`` /
+    # ``_connect_lock`` / ``_op_lock`` / ``_ssl_*`` / ``_receive_buffer``)
+    # are kept as forwarding accessors: the state has exactly one owner, the
+    # channel, and every existing call site — including tests that drive
+    # the transport through these seams — reads and writes it live.
+
+    @property
+    def channel(self) -> DongleChannel | None:
+        """The channel this transport is bound to (``None`` before first use)."""
+        return self._channel
+
+    def _resolve_channel(self) -> DongleChannel:
+        """Bind to the live channel for this endpoint, creating it if needed.
+
+        Never suspends, so the registry's check-then-create is atomic on the
+        loop.  A transport re-resolves when its channel was retired (last
+        lease released) or its endpoint changed; a private
+        (``shared_channel=False``) channel is created once and never
+        registered.
+
+        Raises:
+            DongleChannelMismatchError: The endpoint already has a channel
+                with a different ``use_ssl`` or ``dongle_serial``.
+            DongleChannelLoopError: The endpoint's channel belongs to a
+                different running event loop.
+        """
+        channel = self._channel
+        key = make_channel_key(self._host, self._port, self._dongle_serial)
+        if not self._shared_channel:
+            if channel is None or channel.loop_is_dead():
+                channel = DongleChannel(key, ssl_mode=self._ssl_mode, shared=False, loop=None)
+                self._channel = channel
+            channel.bind_loop()
+            return channel
+        if (
+            channel is not None
+            and not channel.retired
+            and channel.key == key
+            and not channel.loop_is_dead()
+        ):
+            channel.bind_loop()
+            return channel
+        channel = resolve_shared_channel(key, ssl_mode=self._ssl_mode)
+        self._channel = channel
+        return channel
+
+    @contextlib.asynccontextmanager
+    async def _operation(self) -> AsyncIterator[None]:
+        """Serialise one multi-step operation on the channel's operation lock.
+
+        Binding happens here, *before* the lock is taken, so an operation
+        runs start-to-finish on one channel — and a channel whose operation
+        lock is held is never retired, so its lease-less steps cannot be
+        re-homed under a different lock.  Retirement of an idle shared
+        channel is attempted on exit.
+        """
+        channel = self._resolve_channel()
+        try:
+            async with channel.op_lock:
+                yield
+        finally:
+            channel.retire_if_idle()
+
+    @property
+    def is_connected(self) -> bool:
+        """Live view of the shared socket; a shut-down transport is never connected."""
+        return not self._shutdown_requested and self._connected
+
+    @property
+    def _connected(self) -> bool:
+        channel = self._channel
+        return channel is not None and channel.connected
+
+    @_connected.setter
+    def _connected(self, value: bool) -> None:
+        # BaseTransport.__init__ assigns False before any channel exists; an
+        # unbound transport is not connected, so that assignment is a no-op.
+        if value:
+            self._resolve_channel().connected = True
+        elif self._channel is not None:
+            self._channel.connected = False
+
+    @property
+    def _op_lock(self) -> _ReentrantAsyncLock:
+        return self._resolve_channel().op_lock
+
+    @_op_lock.setter
+    def _op_lock(self, _value: _ReentrantAsyncLock) -> None:
+        # BaseTransport.__init__ installs a per-instance lock; the dongle
+        # serialises operations per channel instead, so it is not kept.
+        return
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        return self._resolve_channel().transaction_lock
+
+    @property
+    def _connect_lock(self) -> asyncio.Lock:
+        return self._resolve_channel().connect_lock
+
+    @property
+    def _reader(self) -> asyncio.StreamReader | None:
+        channel = self._channel
+        return channel.reader if channel is not None else None
+
+    @_reader.setter
+    def _reader(self, value: asyncio.StreamReader | None) -> None:
+        if value is None and self._channel is None:
+            return
+        self._resolve_channel().reader = value
+
+    @property
+    def _writer(self) -> asyncio.StreamWriter | None:
+        channel = self._channel
+        return channel.writer if channel is not None else None
+
+    @_writer.setter
+    def _writer(self, value: asyncio.StreamWriter | None) -> None:
+        if value is None and self._channel is None:
+            return
+        self._resolve_channel().writer = value
+
+    @property
+    def _receive_buffer(self) -> bytearray:
+        return self._resolve_channel().receive_buffer
+
+    @property
+    def _ssl_active(self) -> bool:
+        return self._resolve_channel().ssl_active
+
+    @_ssl_active.setter
+    def _ssl_active(self, value: bool) -> None:
+        self._resolve_channel().ssl_active = value
+
+    @property
+    def _ssl_proven(self) -> bool:
+        return self._resolve_channel().ssl_proven
+
+    @_ssl_proven.setter
+    def _ssl_proven(self, value: bool) -> None:
+        self._resolve_channel().ssl_proven = value
+
+    @property
+    def _ssl_unsupported_until(self) -> float | None:
+        return self._resolve_channel().ssl_unsupported_until
+
+    @_ssl_unsupported_until.setter
+    def _ssl_unsupported_until(self, value: float | None) -> None:
+        self._resolve_channel().ssl_unsupported_until = value
+
+    @property
+    def _ssl_unavailable_logged(self) -> bool:
+        return self._resolve_channel().ssl_unavailable_logged
+
+    @_ssl_unavailable_logged.setter
+    def _ssl_unavailable_logged(self, value: bool) -> None:
+        self._resolve_channel().ssl_unavailable_logged = value
 
     async def _discard_initial_data(self) -> None:
         """Discard any initial data sent by the dongle after connection.
@@ -477,184 +654,176 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         )
 
     async def connect(self) -> None:
-        """Establish TCP connection to the WiFi dongle with retry and backoff.
+        """Take a lease on the endpoint's channel, dialing it if nobody has.
 
         The dongle only allows one TCP connection at a time. If connection fails,
         retries with exponential backoff (1s, 2s, 4s, ...) to handle cases where
         a previous connection wasn't properly released.
 
-        State guarantee: ``_connected`` is set True only after the connection
-        is fully usable (socket open AND initial data discarded).  Every
-        failure path — including a partially-succeeded attempt where the
-        socket opened but the initial-data read errored — tears the
-        connection down, so connect() can never exit with ``_connected``
-        True on a dead socket (#226 state-corruption guard).
+        State guarantee: the channel is marked connected only after the socket
+        is fully usable (open AND initial data discarded).  Every failure
+        path — including a partially-succeeded attempt where the socket
+        opened but the initial-data read errored — tears the connection
+        down, so connect() can never exit connected on a dead socket (#226
+        state-corruption guard).
 
-        Concurrency: serialised on ``_connect_lock`` (the dongle has ONE
-        TCP slot — two parallel dials corrupt each other).  A caller that
-        lost the race to another task's successful connect returns
-        immediately instead of tearing down the fresh connection.
+        Concurrency: the dial runs behind the channel's connection lock with
+        a re-check after acquire (the dongle has ONE TCP slot — two parallel
+        dials corrupt each other).  A caller that lost the race to another
+        lease's successful connect just takes its lease and returns.
+
+        Leases: idempotent per transport — the lease is recorded once the
+        channel is usable, so a failed connect leaves none behind.
 
         Raises:
             TransportConnectionError: If all connection attempts fail
+            DongleChannelMismatchError: Another transport already holds this
+                endpoint with a different ``use_ssl`` or ``dongle_serial``.
         """
         self._raise_if_shutdown()
-        async with self._connect_lock:
-            self._raise_if_shutdown()
-            if self._connected:
-                return  # another task already (re)connected
-
-            last_error: Exception | None = None
-            retry_delay = 1.0  # Start with 1 second delay
-
-            # Clean slate: drop any stale half-open socket from a previous
-            # session before dialing a new one (the dongle has ONE TCP slot).
-            await self._close_connection()
-
-            for attempt in range(self._connection_retries):
+        while True:
+            channel = self._resolve_channel()
+            async with channel.connect_lock:
                 self._raise_if_shutdown()
-                try:
-                    if attempt > 0:
-                        _LOGGER.info(
-                            "Connection retry %d/%d to %s:%s (waiting %.1fs)...",
-                            attempt,
-                            self._connection_retries - 1,
-                            self._host,
-                            self._port,
-                            retry_delay,
-                        )
-                        await asyncio.sleep(retry_delay)
-                        # Shutdown may arrive while this task is parked in the
-                        # retry backoff. Never start a new TCP dial afterward.
-                        self._raise_if_shutdown()
-                        retry_delay *= 2  # Exponential backoff
+                if channel.retired:
+                    # The last lease released between resolve and acquire:
+                    # re-resolve to the live channel for this endpoint.
+                    continue
+                if not channel.connected:
+                    await self._dial(channel)
+                channel.acquire_lease(self)
+                return
 
-                    using_ssl = False
-                    ssl_context = self._auto_ssl_context()
-                    while True:
-                        using_ssl = ssl_context is not None
-                        try:
-                            self._reader, self._writer = await self._open_connection(ssl_context)
-                            if self._shutdown_requested:
-                                await self._close_connection()
-                                self._raise_if_shutdown()
+    async def _dial(self, channel: DongleChannel) -> None:
+        """Run the connect ladder into ``channel``; caller holds its connect lock."""
+        last_error: Exception | None = None
+        retry_delay = 1.0  # Start with 1 second delay
 
-                            # The first read can surface a deferred TLS error,
-                            # so it is part of capability detection.
-                            await self._discard_initial_data()
-                            break
-                        except ssl.SSLError:
-                            await self._close_connection()
-                            if not using_ssl:
-                                # An SSLError off a plaintext socket is not
-                                # TLS capability evidence — ordinary failure.
-                                raise
-                            if self._ssl_mode is not None or self._ssl_proven:
-                                # Forced TLS fails fast (outer handler wraps
-                                # it); a proven-TLS instance retries TLS-only
-                                # on the outer ladder — neither ever falls
-                                # back to plaintext.
-                                raise
-                            # First AUTO probe: a rejected handshake is a
-                            # definitive negative — plaintext for the rest of
-                            # this attempt, cached for future connects (the
-                            # TTL re-probe also picks up a later firmware
-                            # upgrade that adds TLS). Every other probe
-                            # failure — timeout, abort, reset, refused — is
-                            # inconclusive and propagates to the outer retry
-                            # ladder uncached: never treat a disrupted
-                            # handshake as capability evidence, or an on-path
-                            # attacker could force a plaintext downgrade by
-                            # stalling it.
-                            self._ssl_unsupported_until = time.monotonic() + _SSL_UNSUPPORTED_TTL
-                            _LOGGER.info(
-                                "Dongle/firmware does not support TLS-PSK on port %s; "
-                                "will retry SSL detection in 24h",
-                                self._port,
-                            )
-                            ssl_context = None
-                    self._raise_if_shutdown()
+        # Clean slate: drop any stale half-open socket from a previous
+        # session before dialing a new one (the dongle has ONE TCP slot).
+        await channel.close()
 
-                    self._ssl_active = using_ssl
-                    if using_ssl:
-                        self._ssl_proven = True
-                        self._ssl_unsupported_until = None
-                    elif (
-                        self._link_probe_active
-                        and self._ssl_mode is None
-                        and not self._ssl_proven
-                        and self._ssl_unsupported_until is None
-                    ):
-                        # A link probe forced this plaintext dial before TLS
-                        # auto-detection ever ran; the connection may be kept
-                        # past the health check, so leave a trail. Detection
-                        # runs on the next fresh (non-probe) dial.
-                        _LOGGER.info(
-                            "Link probe connected to %s:%s in plaintext before TLS "
-                            "auto-detection ran; TLS will be probed on the next "
-                            "fresh connection",
-                            self._host,
-                            self._port,
-                        )
-                    self._connected = True
+        for attempt in range(self._connection_retries):
+            self._raise_if_shutdown()
+            try:
+                if attempt > 0:
                     _LOGGER.info(
-                        "Dongle transport connected to %s:%s (dongle=%s, inverter=%s)%s",
+                        "Connection retry %d/%d to %s:%s (waiting %.1fs)...",
+                        attempt,
+                        self._connection_retries - 1,
                         self._host,
                         self._port,
-                        self._dongle_serial,
-                        self._serial,
-                        f" after {attempt} retries" if attempt > 0 else "",
+                        retry_delay,
                     )
-                    return  # Success!
+                    await asyncio.sleep(retry_delay)
+                    # Shutdown may arrive while this task is parked in the
+                    # retry backoff. Never start a new TCP dial afterward.
+                    self._raise_if_shutdown()
+                    retry_delay *= 2  # Exponential backoff
 
-                except ssl.SSLError as err:
-                    last_error = err
-                    await self._close_connection()
-                    self._raise_if_shutdown()
-                    if using_ssl and self._ssl_mode is True:
-                        # Forced TLS: a handshake rejection is deterministic —
-                        # fail fast, wrapped to connect()'s documented type.
-                        raise TransportConnectionError(
-                            f"TLS connection to {self._host}:{self._port} failed: {err}"
-                        ) from err
-                    if using_ssl:
-                        # Proven-TLS regression: retry TLS-only on the ladder,
-                        # never falling back to plaintext; exhaustion wraps in
-                        # TransportConnectionError below.
-                        _LOGGER.warning(
-                            "TLS regression on %s:%s (previously negotiated "
-                            "successfully): %s — retrying TLS, never plaintext "
-                            "(attempt %d/%d)",
-                            self._host,
+                using_ssl = False
+                ssl_context = self._auto_ssl_context()
+                while True:
+                    using_ssl = ssl_context is not None
+                    try:
+                        channel.reader, channel.writer = await self._open_connection(ssl_context)
+                        if self._shutdown_requested:
+                            await channel.close()
+                            self._raise_if_shutdown()
+
+                        # The first read can surface a deferred TLS error,
+                        # so it is part of capability detection.
+                        await self._discard_initial_data()
+                        break
+                    except ssl.SSLError:
+                        await channel.close()
+                        if not using_ssl:
+                            # An SSLError off a plaintext socket is not
+                            # TLS capability evidence — ordinary failure.
+                            raise
+                        if self._ssl_mode is not None or self._ssl_proven:
+                            # Forced TLS fails fast (outer handler wraps
+                            # it); a proven-TLS instance retries TLS-only
+                            # on the outer ladder — neither ever falls
+                            # back to plaintext.
+                            raise
+                        # First AUTO probe: a rejected handshake is a
+                        # definitive negative — plaintext for the rest of
+                        # this attempt, cached for future connects (the
+                        # TTL re-probe also picks up a later firmware
+                        # upgrade that adds TLS). Every other probe
+                        # failure — timeout, abort, reset, refused — is
+                        # inconclusive and propagates to the outer retry
+                        # ladder uncached: never treat a disrupted
+                        # handshake as capability evidence, or an on-path
+                        # attacker could force a plaintext downgrade by
+                        # stalling it.
+                        channel.ssl_unsupported_until = time.monotonic() + _SSL_UNSUPPORTED_TTL
+                        _LOGGER.info(
+                            "Dongle/firmware does not support TLS-PSK on port %s; "
+                            "will retry SSL detection in 24h",
                             self._port,
-                            err,
-                            attempt + 1,
-                            self._connection_retries,
                         )
-                    else:
-                        _LOGGER.warning(
-                            "Connection failed to %s:%s: %s (attempt %d/%d)",
-                            self._host,
-                            self._port,
-                            err,
-                            attempt + 1,
-                            self._connection_retries,
-                        )
-                except TimeoutError as err:
-                    last_error = err
-                    await self._close_connection()
-                    self._raise_if_shutdown()
-                    _LOGGER.warning(
-                        "Timeout connecting to dongle at %s:%s (attempt %d/%d)",
+                        ssl_context = None
+                self._raise_if_shutdown()
+
+                channel.ssl_active = using_ssl
+                if using_ssl:
+                    channel.ssl_proven = True
+                    channel.ssl_unsupported_until = None
+                elif (
+                    self._link_probe_active
+                    and self._ssl_mode is None
+                    and not self._ssl_proven
+                    and self._ssl_unsupported_until is None
+                ):
+                    # A link probe forced this plaintext dial before TLS
+                    # auto-detection ever ran; the connection may be kept
+                    # past the health check, so leave a trail. Detection
+                    # runs on the next fresh (non-probe) dial.
+                    _LOGGER.info(
+                        "Link probe connected to %s:%s in plaintext before TLS "
+                        "auto-detection ran; TLS will be probed on the next "
+                        "fresh connection",
                         self._host,
                         self._port,
+                    )
+                channel.connected = True
+                _LOGGER.info(
+                    "Dongle transport connected to %s:%s (dongle=%s, inverter=%s)%s",
+                    self._host,
+                    self._port,
+                    self._dongle_serial,
+                    self._serial,
+                    f" after {attempt} retries" if attempt > 0 else "",
+                )
+                return  # Success!
+
+            except ssl.SSLError as err:
+                last_error = err
+                await channel.close()
+                self._raise_if_shutdown()
+                if using_ssl and self._ssl_mode is True:
+                    # Forced TLS: a handshake rejection is deterministic —
+                    # fail fast, wrapped to connect()'s documented type.
+                    raise TransportConnectionError(
+                        f"TLS connection to {self._host}:{self._port} failed: {err}"
+                    ) from err
+                if using_ssl:
+                    # Proven-TLS regression: retry TLS-only on the ladder,
+                    # never falling back to plaintext; exhaustion wraps in
+                    # TransportConnectionError below.
+                    _LOGGER.warning(
+                        "TLS regression on %s:%s (previously negotiated "
+                        "successfully): %s — retrying TLS, never plaintext "
+                        "(attempt %d/%d)",
+                        self._host,
+                        self._port,
+                        err,
                         attempt + 1,
                         self._connection_retries,
                     )
-                except OSError as err:
-                    last_error = err
-                    await self._close_connection()
-                    self._raise_if_shutdown()
+                else:
                     _LOGGER.warning(
                         "Connection failed to %s:%s: %s (attempt %d/%d)",
                         self._host,
@@ -663,20 +832,43 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         attempt + 1,
                         self._connection_retries,
                     )
-                except BaseException:
-                    # CancelledError (or any unexpected error) raised between
-                    # installing the reader/writer and setting _connected would
-                    # otherwise leave an orphaned open socket occupying the
-                    # dongle's single TCP slot — invisible to later cleanup
-                    # because _connected stays False. Close before propagating;
-                    # shutdown-triggered TransportConnectionError takes the
-                    # same path (an extra close on an already-closed socket is
-                    # a no-op).
-                    await self._close_connection()
-                    raise
+            except TimeoutError as err:
+                last_error = err
+                await channel.close()
+                self._raise_if_shutdown()
+                _LOGGER.warning(
+                    "Timeout connecting to dongle at %s:%s (attempt %d/%d)",
+                    self._host,
+                    self._port,
+                    attempt + 1,
+                    self._connection_retries,
+                )
+            except OSError as err:
+                last_error = err
+                await channel.close()
+                self._raise_if_shutdown()
+                _LOGGER.warning(
+                    "Connection failed to %s:%s: %s (attempt %d/%d)",
+                    self._host,
+                    self._port,
+                    err,
+                    attempt + 1,
+                    self._connection_retries,
+                )
+            except BaseException:
+                # CancelledError (or any unexpected error) raised between
+                # installing the reader/writer and setting _connected would
+                # otherwise leave an orphaned open socket occupying the
+                # dongle's single TCP slot — invisible to later cleanup
+                # because _connected stays False. Close before propagating;
+                # shutdown-triggered TransportConnectionError takes the
+                # same path (an extra close on an already-closed socket is
+                # a no-op).
+                await channel.close()
+                raise
 
-            # All retries exhausted
-            await self._close_connection()
+        # All retries exhausted
+        await channel.close()
         if isinstance(last_error, TimeoutError):
             raise TransportConnectionError(
                 f"Timeout connecting to {self._host}:{self._port} after "
@@ -693,44 +885,56 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             ) from last_error
 
     async def disconnect(self) -> None:
-        """Close TCP connection to the dongle.
+        """Release this transport's lease; close the socket if it was the last.
 
-        Serialises with both in-flight transactions and connection lifecycle
+        Serialises with in-flight transactions and connection lifecycle
         changes.  If a connect is already establishing a socket, disconnect
         waits and closes that result; if disconnect starts first, a later
         connect waits until the old socket is fully closed before dialing.
+        While sibling leases remain the shared socket stays open for them.
+        Idempotent: a second call releases nothing.
         """
-        async with self._lock:
-            await self._teardown_connection()
+        channel = self._channel
+        if channel is not None:
+            async with channel.transaction_lock:
+                channel.release_lease(self)
+                if channel.lease_count == 0:
+                    await channel.teardown()
+                    # A connect() that raced in during the close leased on
+                    # our behalf (it waits on connect_lock); disconnect wins.
+                    channel.release_lease(self)
+            channel.retire_if_idle()
         _LOGGER.debug("Dongle transport disconnected for %s", self._serial)
 
     async def async_shutdown(self) -> None:
-        """Terminally close the socket without waiting for a held transaction lock.
+        """Terminally release this transport without waiting for a held transaction lock.
 
         Home Assistant unloads must close the stream before cancelling the task
-        that owns ``_lock``; otherwise a muted dongle can hold shutdown behind
-        the full response timeout.  This method is deliberately terminal.  It
-        marks the transport first, detaches and closes the current writer, and
-        makes an in-flight or later ``connect()`` close its result instead of
-        resurrecting the socket. Retry and I/O boundaries re-check the terminal
-        flag after awaited backoffs, drains, writes, and reads, so shutdown does
-        not permit another dial or sequence retry. Ordinary reusable disconnects
-        retain the fully serialised :meth:`disconnect` contract.
+        that owns the transaction lock; otherwise a muted dongle can hold
+        shutdown behind the full response timeout.  This method is
+        deliberately terminal and bounded (``min(timeout, 0.25s)`` on the
+        close): it marks the transport first, releases its lease, and makes an
+        in-flight or later ``connect()`` close its result instead of
+        resurrecting the socket.  Retry and I/O boundaries re-check the
+        terminal flag after awaited backoffs, drains, writes, and reads, so
+        shutdown does not permit another dial or sequence retry.
+
+        Shared socket: the stream is torn down (generation bumped, siblings'
+        next transaction reconnects) only when THIS transport owns the
+        in-flight transaction, or when no transaction is in flight and no
+        lease remains.  If a sibling owns the in-flight transaction this
+        lease is just released and the sibling's stream is left intact.
+        Ordinary reusable disconnects retain the fully serialised
+        :meth:`disconnect` contract.
         """
         self._shutdown_requested = True
-        self._connected = False
-        self._ssl_active = False
-        self._reader = None
-        self._receive_buffer.clear()
-        writer = self._writer
-        self._writer = None
-        if writer is not None:
-            with contextlib.suppress(Exception):
-                writer.close()
-                await asyncio.wait_for(
-                    writer.wait_closed(),
-                    timeout=min(self._timeout, _SHUTDOWN_CLOSE_TIMEOUT),
-                )
+        channel = self._channel
+        if channel is not None:
+            channel.release_lease(self)
+            owner = channel.transaction_owner
+            if owner is self or (owner is None and channel.lease_count == 0):
+                await channel.close(timeout=min(self._timeout, _SHUTDOWN_CLOSE_TIMEOUT))
+            channel.retire_if_idle()
         _LOGGER.debug("Dongle transport shut down for %s", self._serial)
 
     def _raise_if_shutdown(self) -> None:
@@ -958,39 +1162,22 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         return packet
 
     async def _teardown_connection(self) -> None:
-        """Tear down the connection, serialised on ``_connect_lock``.
+        """Tear down the shared socket, serialised on the channel's connect lock.
 
-        For callers that do NOT already hold ``_connect_lock`` (``_send_receive``
-        and ``_force_reconnect``, which hold the per-transaction ``_lock``).
-        Holding ``_connect_lock`` for the whole close — including the awaited
+        For callers that do NOT already hold the connect lock (``_send_receive``
+        and ``_force_reconnect``, which hold the per-transaction lock).
+        Holding the connect lock for the whole close — including the awaited
         ``wait_closed()`` — prevents a concurrent ``connect()`` from dialing the
         dongle's single TCP slot while this socket is still closing (the async
         ``wait_closed()`` yields control, so without the lock ``connect()`` could
         interleave and hit the very reconnect failure this teardown prevents).
-        ``connect()`` already holds ``_connect_lock`` and calls
-        :meth:`_close_connection` directly to avoid re-entrant acquisition.
+        ``_dial()`` already holds the connect lock and calls ``channel.close()``
+        directly to avoid re-entrant acquisition.  Bumps the channel generation,
+        so every lease sees the loss.
         """
-        async with self._connect_lock:
-            await self._close_connection()
-
-    async def _close_connection(self) -> None:
-        """Mark the connection broken and close the socket without handshake.
-
-        Caller must hold ``_connect_lock`` (``connect()`` does; other callers go
-        through :meth:`_teardown_connection`). Awaits ``wait_closed()`` (bounded
-        by a timeout) so the transport is flushed before the next dial — the
-        dongle only allows one connection at a time, so a half-closed socket
-        would block reconnection.
-        """
-        self._connected = False
-        self._reader = None
-        self._receive_buffer.clear()
-        writer = self._writer
-        self._writer = None
-        if writer is not None:
-            with contextlib.suppress(Exception):
-                writer.close()
-                await asyncio.wait_for(writer.wait_closed(), timeout=5.0)
+        channel = self._channel
+        if channel is not None:
+            await channel.teardown()
 
     async def _force_reconnect(self) -> None:
         """Tear down the (possibly broken) connection for a fresh start.
@@ -1059,7 +1246,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         last_error: TransportReadError | None = None
 
         self._raise_if_shutdown()
-        async with self._lock:
+        channel = self._resolve_channel()
+        async with channel.transaction(self):
             self._raise_if_shutdown()
             for attempt in range(max_retries + 1):
                 self._raise_if_shutdown()
@@ -1084,6 +1272,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         await self.connect()
                     if self._writer is None or self._reader is None:
                         raise TransportConnectionError("Socket not initialized")
+                    # The stream this transaction runs on.  If the channel is
+                    # torn down and re-dialed underneath us, the reply we are
+                    # waiting for belongs to a dead socket: fail coherently
+                    # (retry on the fresh one) rather than parse a stale frame.
+                    generation = channel.generation
 
                     # Drain any pending data before sending (handles unsolicited packets)
                     await self._drain_buffer()
@@ -1105,6 +1298,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         timeout=timeout_override if timeout_override is not None else self._timeout,
                     )
                     self._raise_if_shutdown()
+                    if channel.generation != generation:
+                        raise _DongleFrameError(
+                            f"[{self._serial}] Connection replaced mid-transaction "
+                            f"(generation {generation} -> {channel.generation}); "
+                            "discarding the stale frame"
+                        )
 
                     # Parse response with cross-request validation.  The
                     # request's own TCP function (packet byte 7) is the
@@ -1537,7 +1736,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
         The outer budget is not a strict wall-clock bound: ``wait_for``
         awaits cancellation cleanup, and a cancel landing inside
-        ``connect()`` awaits ``_close_connection`` (itself bounded).  Worst
+        ``connect()`` awaits the channel close (itself bounded).  Worst
         case the probe approaches ~2x the budget — still far below the
         default 10s response timeout it replaces.
         """
@@ -1739,24 +1938,28 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     # are inherited from RegisterDataMixin via _register_data.py.
 
     # ------------------------------------------------------------------
-    # Operation-level serialisation (self._op_lock)
+    # Operation-level serialisation (channel op lock via self._operation())
     # ------------------------------------------------------------------
     # The WiFi dongle processes ONE request at a time over its single TCP
     # connection.  High-level operations that issue multiple sequential
-    # register reads release self._lock (per-transaction) between calls,
+    # register reads release the per-transaction lock between calls,
     # allowing concurrent writes to interleave and confuse the protocol.
     #
-    # self._op_lock (a task-reentrant lock from BaseTransport) serialises
-    # entire multi-step operations so that writes wait until a read
-    # sequence is fully complete — and vice-versa.
+    # The channel's op lock (the task-reentrant lock from BaseTransport,
+    # moved to the shared DongleChannel) serialises entire multi-step
+    # operations so that writes wait until a read sequence is fully
+    # complete — and vice-versa.  It is per CHANNEL, not per transport:
+    # with several devices on one socket, correlation is positional, so a
+    # same-register reply landing on a sibling's step would go undetected
+    # (pylxpweb#329).
     #
     # Re-entrancy is required because write_named_parameters (BaseTransport)
     # calls self.read_parameters + self.write_parameters internally, which
-    # also acquire self._op_lock.
+    # also acquire the op lock.
 
     async def read_midbox_runtime(self) -> MidboxRuntimeData:
         """Serialised read of MID/GridBOSS runtime data (5 INPUT + 1 HOLD read)."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_midbox_runtime()
 
     async def read_runtime(self) -> InverterRuntimeData:
@@ -1770,14 +1973,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         — consistent with ``read_all_input_data``.  The pv4-6 read itself
         remains non-fatal (handled inside ``RegisterDataMixin``).
         """
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_runtime()
 
     async def read_all_input_data(
         self,
     ) -> tuple[InverterRuntimeData, InverterEnergyData, BatteryBankData | None]:
         """Serialised combined read of all input register groups."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_all_input_data()
 
     async def read_parameters(
@@ -1786,12 +1989,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         count: int,
     ) -> dict[int, int]:
         """Serialised read of holding (configuration) registers."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_parameters(start_address, count)
 
     async def read_quick_charge_remaining_seconds(self) -> int | None:
         """Serialised read of quick-charge remaining seconds (input reg 210)."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_quick_charge_remaining_seconds()
 
     async def write_parameters(
@@ -1799,7 +2002,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         parameters: dict[int, int],
     ) -> bool:
         """Serialised write of holding (configuration) registers."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().write_parameters(parameters)
 
     # Remaining inherited multi-request reads (review): without these
@@ -1808,32 +2011,32 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
 
     async def read_energy(self) -> InverterEnergyData:
         """Serialised energy read (multi-group input read)."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_energy()
 
     async def read_battery(self, *args: Any, **kwargs: Any) -> Any:
         """Serialised battery read (atomic 120-register input read)."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_battery(*args, **kwargs)
 
     async def read_serial_number(self) -> str:
         """Serialised device-info read."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_serial_number()
 
     async def read_firmware_version(self) -> str:
         """Serialised device-info read."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_firmware_version()
 
     async def read_device_type(self) -> int:
         """Serialised device-info read."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_device_type()
 
     async def read_parallel_config(self) -> int:
         """Serialised device-info read."""
-        async with self._op_lock:
+        async with self._operation():
             return await super().read_parallel_config()
 
     async def write_named_parameters(
@@ -1877,7 +2080,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 consumers can still dispatch their cloud API fallback.
             ValueError: If a parameter name is not recognized (not retried).
         """
-        async with self._op_lock:
+        async with self._operation():
             attempts = self._write_retries + 1
             last_error: TransportError | None = None
 

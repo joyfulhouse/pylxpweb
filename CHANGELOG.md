@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One serialized TCP socket per physical dongle** (closes
+  [#329](https://github.com/joyfulhouse/pylxpweb/issues/329)): every
+  `DongleTransport` in a process that targets the same dongle
+  (`host:port` + `dongle_serial`, host normalized by strip + lowercase only)
+  now shares an endpoint-scoped `DongleChannel` — default-on for every
+  construction path (factories, `Station.attach_local_transports`, CLI,
+  direct constructor). A live probe showed a dongle *accepts* a second TCP
+  client but cannot sustain two (38 evictions and 5 cross-routed replies in
+  12 min for the later client, 2× poll-gap for the first), so per-device
+  sockets are no longer opened. The channel owns the streams, the connect /
+  transaction / operation locks, the TLS-PSK detection memo, the single
+  `connected` flag, a monotonic `generation` (a transaction spanning a
+  reconnect fails coherently instead of parsing a stale stream) and the
+  lease set: `connect()` takes an idempotent lease, `disconnect()` /
+  `async_shutdown()` release it, and the last release closes the socket
+  (bounded) and retires the channel. `async_shutdown()` stays bounded and
+  only tears the shared stream down when the shutting-down transport owns
+  the in-flight transaction. Multi-step operations are serialized per
+  channel, so two devices on one dongle can no longer interleave steps.
+  New keyword-only `DongleTransport(..., shared_channel=False)` keeps the
+  previous private-socket behaviour. Attaching to an endpoint with a
+  different `use_ssl` mode or a different `dongle_serial` on the same
+  `host:port` raises the new `DongleChannelMismatchError`; attaching from a
+  different running event loop raises `DongleChannelLoopError` (both are
+  `TransportConnectionError` subclasses, exported from `pylxpweb.transports`).
+  Per-operation knobs (timeouts, block size, write retries, family) remain
+  per-transport.
+
 ## [0.10.0b8] - 2026-09-02
 
 ### Added
