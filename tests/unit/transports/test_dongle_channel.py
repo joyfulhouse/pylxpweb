@@ -1225,3 +1225,94 @@ async def test_teardown_is_scoped_to_the_stream_it_ran_on(
         await fake.wait_for_connections(0)
     finally:
         await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_wait_behind_own_error_teardown(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """Own transaction already in error teardown holds the connect lock: no queuing on it."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    release_close = asyncio.Event()
+    try:
+        await a.connect()
+        await b.connect()
+        channel = a.channel
+        assert channel is not None and channel.writer is not None
+        original_wait_closed = channel.writer.wait_closed
+
+        async def blocked_wait_closed() -> None:
+            await release_close.wait()
+            await original_wait_closed()
+
+        with patch.object(channel.writer, "wait_closed", blocked_wait_closed):
+            fake.hold = True
+            read_a = asyncio.create_task(a._read_input_registers(0, 1))
+            await asyncio.wait_for(fake.frame_received.wait(), timeout=1.0)
+            await fake.drop_all()  # EOF -> A's handler enters teardown(), parked in wait_closed
+            await asyncio.sleep(0.05)
+            assert channel.transaction_owner is a
+            assert channel.connect_lock.locked() and channel.connect_owner is None
+
+            await asyncio.wait_for(a.async_shutdown(), timeout=0.3)
+            assert channel.connect_lock.locked()  # the teardown is still the holder
+            release_close.set()
+
+        with pytest.raises(TransportConnectionError, match="shut down"):
+            await read_a
+        fake.release()
+
+        assert b.is_connected is False
+        await b.connect()
+        assert b.is_connected is True
+        assert await b._read_input_registers(0, 1) == [0]
+        assert fake.dials == 2
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_wait_behind_sibling_disconnect_close(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A sibling's last-lease disconnect holds the connect lock: return, never close again."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    key = make_channel_key("127.0.0.1", port, DONGLE)
+    release_close = asyncio.Event()
+    try:
+        await a.connect()
+        await b.connect()
+        channel = a.channel
+        assert channel is not None and channel.writer is not None
+        await a.disconnect()  # B is the last lease; A stays bound, lease-less
+        writer = channel.writer
+        original_wait_closed = writer.wait_closed
+        closes = 0
+
+        async def blocked_wait_closed() -> None:
+            nonlocal closes
+            closes += 1
+            await release_close.wait()
+            await original_wait_closed()
+
+        with patch.object(writer, "wait_closed", blocked_wait_closed):
+            disconnect_b = asyncio.create_task(b.disconnect())
+            await asyncio.sleep(0)  # inside B's lock-held close, parked in wait_closed
+            assert channel.connect_lock.locked() and channel.connect_owner is None
+            assert channel.lease_count == 0
+
+            generation = channel.generation
+            await asyncio.wait_for(a.async_shutdown(), timeout=0.3)
+            assert channel.generation == generation  # no second close from A
+            assert channel.retired is False  # B's disconnect still holds the lock
+            release_close.set()
+            await disconnect_b
+            assert closes == 1
+
+        assert channel.retired is True
+        assert _REGISTRY.get(key) is None
+        await fake.wait_for_connections(0)
+    finally:
+        await _shutdown_all(a, b)

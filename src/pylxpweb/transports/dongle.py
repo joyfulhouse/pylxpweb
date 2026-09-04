@@ -980,12 +980,18 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         theirs — shutdown never blocks behind a sibling's dial.  Owning the
         transaction is not owning the dial: this transport's inner
         ``connect()`` can be queued behind a sibling's dial, and that
-        sibling's fresh socket must survive.  The last-lease close takes the
-        connect lock only when it is provably uncontended — no holder AND no
-        queued waiter, because ``asyncio.Lock.acquire()`` queues a new
-        acquirer behind existing waiters even while ``locked()`` is False —
-        and holds it through the bounded ``wait_closed()`` so any later dial
-        is ordered after the old socket has actually gone.
+        sibling's fresh socket must survive.  Either close under the connect
+        lock happens only when the lock is provably uncontended, which needs
+        two checks: the owner/waiter bookkeeping (it covers ``connect()``,
+        including a woken waiter that will capture the lock even while
+        ``locked()`` reads False) AND ``locked()`` itself (it covers every
+        other holder — ``teardown()`` / ``disconnect()`` closing the stream
+        with an ordinary 5 s bound).  If either says otherwise the lease is
+        released and shutdown returns at once: the stream is already being
+        closed (or the slot is a sibling's), and the terminal flag interrupts
+        this transport at its next ``_raise_if_shutdown()``.  Held through
+        the bounded ``wait_closed()``, the lock orders any later dial after
+        the old socket has actually gone.
         Ordinary reusable disconnects retain the fully serialised
         :meth:`disconnect` contract.
         """
@@ -1010,7 +1016,13 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 # sees the stream go down cannot dial before the old socket
                 # is gone; the only possible waiter is our own queued
                 # connect(), which raises on resume within one loop turn.
-                if not channel.sibling_dialing(self):
+                # Owner/waiter bookkeeping only covers connect(); teardown()
+                # and disconnect() hold the lock without it, with an ordinary
+                # (up to 5 s) close inside — so locked() is checked too.  If
+                # they hold it, the stream is already being closed: release
+                # the lease and return without waiting; the terminal flag
+                # interrupts this transport at its next _raise_if_shutdown().
+                if not channel.sibling_dialing(self) and not channel.connect_lock.locked():
                     async with channel.connect_lock:
                         await channel.close(timeout=close_timeout)
             elif (
@@ -1018,13 +1030,17 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 and channel.lease_count == 0
                 and channel.connect_owner is None
                 and not channel.connect_waiters
+                and not channel.connect_lock.locked()
             ):
-                # Last lease, nothing in flight, no dialer and no queued
-                # dialer: the connect lock is genuinely uncontended, so the
-                # acquire below cannot suspend.  Holding it across the
-                # bounded close orders any later dial after the old socket
-                # has actually gone; the re-check guards a future suspension
-                # point, not a live race.
+                # Last lease, nothing in flight, no dialer, no queued dialer
+                # and no other holder (a sibling's disconnect() or teardown()
+                # closing the stream): the connect lock is genuinely
+                # uncontended, so the acquire below cannot suspend.  Holding
+                # it across the bounded close orders any later dial after the
+                # old socket has actually gone; the re-check guards a future
+                # suspension point, not a live race.  When another holder is
+                # closing, this lease is released and the closer's own exit
+                # retires the channel.
                 async with channel.connect_lock:
                     if channel.lease_count == 0 and channel.transaction_owner is None:
                         await channel.close(timeout=close_timeout)
