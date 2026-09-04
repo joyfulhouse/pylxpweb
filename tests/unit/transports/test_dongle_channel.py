@@ -1380,3 +1380,90 @@ async def test_check_link_is_serialised_with_sibling_operations(
         assert all(frame[1] == MODBUS_READ_HOLDING for frame in fake.frames if frame[0] == SERIAL_B)
     finally:
         await _shutdown_all(a, b)
+
+
+_PROBE_BUDGET_PATCHES = (
+    ("pylxpweb.transports.dongle.LINK_PROBE_TIMEOUT_SECONDS", 0.2),
+    ("pylxpweb.transports.dongle._LINK_PROBE_CONNECT_GRACE_SECONDS", 0.3),
+)
+
+
+@pytest.mark.asyncio
+async def test_check_link_budget_covers_waiting_for_a_sibling_operation(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A probe queued behind a sibling's stalled op returns False in budget, stream untouched."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B, timeout=5.0)
+    try:
+        await a.connect()
+        await b.connect()
+        channel = a.channel
+        assert channel is not None
+        generation = channel.generation
+
+        fake.hold = True
+        op_b = asyncio.create_task(b.read_parameters(0, 80))
+        await asyncio.wait_for(fake.frame_received.wait(), timeout=1.0)  # B holds the op lock
+
+        async def release_after_budget() -> None:
+            await asyncio.sleep(1.2)  # well past the 0.5 s probe budget
+            fake.release()
+
+        releaser = asyncio.create_task(release_after_budget())
+        with (
+            patch(_PROBE_BUDGET_PATCHES[0][0], _PROBE_BUDGET_PATCHES[0][1]),
+            patch(_PROBE_BUDGET_PATCHES[1][0], _PROBE_BUDGET_PATCHES[1][1]),
+        ):
+            started = time.monotonic()
+            link_up = await a.check_link()
+            elapsed = time.monotonic() - started
+
+        assert link_up is False
+        assert elapsed < 0.5 + 0.3, elapsed  # budget + slack, not B's whole op
+        assert channel.generation == generation  # nothing of A's was on the wire: no teardown
+        assert await op_b == {i: i for i in range(80)}
+        await releaser
+        assert fake.dials == 1
+        assert all(frame[0] == SERIAL_B for frame in fake.frames)
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_queued_probe_leaves_users_and_op_lock_consistent(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A probe cancelled while queued for the op lock leaves no user count or lock behind."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B, timeout=5.0)
+    try:
+        await a.connect()
+        await b.connect()
+        channel = a.channel
+        assert channel is not None
+
+        fake.hold = True
+        op_b = asyncio.create_task(b.read_parameters(0, 80))
+        await asyncio.wait_for(fake.frame_received.wait(), timeout=1.0)
+        baseline = channel._users  # B's operation + B's in-flight transaction
+        assert baseline == 2
+
+        with (
+            patch(_PROBE_BUDGET_PATCHES[0][0], _PROBE_BUDGET_PATCHES[0][1]),
+            patch(_PROBE_BUDGET_PATCHES[1][0], _PROBE_BUDGET_PATCHES[1][1]),
+        ):
+            assert await a.check_link() is False  # queued, then cancelled by the budget
+        assert channel._users == baseline  # A's queued user was released on cancellation
+
+        fake.release()
+        assert await op_b == {i: i for i in range(80)}
+        assert channel._users == 0
+        assert channel.op_lock.locked() is False
+
+        # A subsequent sibling operation acquires the op lock immediately.
+        started = time.monotonic()
+        assert await b.read_parameters(0, 40) == {i: i for i in range(40)}
+        assert time.monotonic() - started < 0.5
+    finally:
+        await _shutdown_all(a, b)

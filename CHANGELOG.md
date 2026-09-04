@@ -40,8 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an un-leased transport as connected, and a transport that uses the shared
   socket without calling `connect()` takes its lease on first use.
   `check_link()` now runs under the channel operation lock like every other
-  wire-touching operation, so a link probe can wait for a sibling device's
-  in-flight multi-step read but can never interleave with it.
+  wire-touching operation, so a link probe can never interleave with a
+  sibling device's multi-step read; its single budget covers waiting for that
+  lock too, and a probe that stays queued for the whole budget returns
+  `False` without touching the socket.
 
 ## [0.10.0b8] - 2026-09-02
 

@@ -1892,20 +1892,28 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         teardown after an outer cancellation guarantees the next probe
         dials fresh.
 
-        The outer budget is not a strict wall-clock bound: ``wait_for``
-        awaits cancellation cleanup, and a cancel landing inside
-        ``connect()`` awaits the channel close (itself bounded).  Worst
-        case the probe approaches ~2x the budget — still far below the
-        default 10s response timeout it replaces.
+        The budget is not a strict wall-clock bound: the timeout awaits
+        cancellation cleanup, and a cancel landing inside ``connect()``
+        awaits the channel close (itself bounded).  Worst case the probe
+        approaches ~2x the budget — still far below the default 10s
+        response timeout it replaces.
 
         Shared socket: the probe is one more wire-touching operation, so it
         runs under the channel operation lock like every read and write —
-        it can wait for a sibling's in-flight multi-step operation, but it
-        can never slip a transaction between that operation's steps.  The
-        budget bounds the probe itself, not that wait.  The teardown after
-        an exhausted budget is scoped to the stream the probe started on: a
-        stream dialed since (by the probe's own reconnect, which closes
-        itself on cancellation, or by a sibling) is left alone.
+        it can never slip a transaction between a sibling's multi-step
+        operation.  ONE budget covers both waiting for that lock and the
+        probe itself, so caller latency stays bounded even when a sibling
+        holds the bus.  If the budget runs out while the probe is still
+        queued it returns ``False`` without touching the stream (nothing of
+        ours is on the wire; a sibling owns it).  The caller cannot tell
+        that ``False`` from a genuinely dead link, and does not need to: the
+        next probe retries, and a sibling that monopolised the bus with a
+        successful operation has itself just proven the link up.  If the
+        budget runs out after the probe started, the teardown is scoped to
+        the stream the probe started on; a stream dialed since (by the
+        probe's own reconnect, which closes itself on cancellation, or by a
+        sibling) is left alone — and it happens while the operation lock is
+        still held, so no sibling operation can be on that stream.
         """
         packet = self._build_packet(
             tcp_func=TCP_FUNC_TRANSLATED,
@@ -1913,37 +1921,52 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             start_register=0,
             register_count=1,
         )
-        async with self._operation():
-            generation = self._resolve_channel().generation
-            try:
-                # A probe dial must reuse the last-known channel state instead
-                # of AUTO TLS-probing (see _auto_ssl_context): a TLS-silent
-                # peer would otherwise burn the handshake timeout inside this
-                # budget and report a working plaintext dongle as down.
-                self._link_probe_active = True
-                await asyncio.wait_for(
-                    self._send_receive(
-                        packet,
-                        max_retries=0,
-                        expected_func=MODBUS_READ_INPUT,
-                        expected_register=0,
-                        timeout_override=LINK_PROBE_TIMEOUT_SECONDS,
-                    ),
-                    timeout=LINK_PROBE_TIMEOUT_SECONDS + _LINK_PROBE_CONNECT_GRACE_SECONDS,
-                )
-            except TimeoutError:
-                # Outer budget hit (e.g. connect stalled): the cancellation
-                # may have left a half-established connection on the stream
-                # the probe started on — tear that one down so the next
-                # probe dials fresh.
-                await self._force_reconnect(expected_generation=generation)
+        started = False
+        try:
+            async with asyncio.timeout(
+                LINK_PROBE_TIMEOUT_SECONDS + _LINK_PROBE_CONNECT_GRACE_SECONDS
+            ) as budget:
+                async with self._operation():
+                    generation = self._resolve_channel().generation
+                    started = True
+                    try:
+                        # A probe dial must reuse the last-known channel state
+                        # instead of AUTO TLS-probing (see _auto_ssl_context):
+                        # a TLS-silent peer would otherwise burn the handshake
+                        # timeout inside this budget and report a working
+                        # plaintext dongle as down.
+                        self._link_probe_active = True
+                        await self._send_receive(
+                            packet,
+                            max_retries=0,
+                            expected_func=MODBUS_READ_INPUT,
+                            expected_register=0,
+                            timeout_override=LINK_PROBE_TIMEOUT_SECONDS,
+                        )
+                    except asyncio.CancelledError:
+                        if budget.expired():
+                            # Budget hit mid-probe (e.g. connect stalled):
+                            # the cancellation may have left a half-
+                            # established connection on the stream the probe
+                            # started on — tear that one down, still under
+                            # the operation lock, so the next probe dials
+                            # fresh.  Then let the timeout surface.
+                            await self._force_reconnect(expected_generation=generation)
+                        raise
+                    finally:
+                        self._link_probe_active = False
+        except TimeoutError:
+            if started:
                 _LOGGER.debug("[%s] Link probe exceeded its budget", self._serial)
-                return False
-            except (TransportError, OSError) as err:
-                _LOGGER.debug("[%s] Link probe failed: %s", self._serial, err)
-                return False
-            finally:
-                self._link_probe_active = False
+            else:
+                _LOGGER.debug(
+                    "[%s] Link probe queued behind a sibling operation for its whole budget",
+                    self._serial,
+                )
+            return False
+        except (TransportError, OSError) as err:
+            _LOGGER.debug("[%s] Link probe failed: %s", self._serial, err)
+            return False
         return True
 
     async def _read_input_registers(
