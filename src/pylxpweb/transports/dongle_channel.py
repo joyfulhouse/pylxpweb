@@ -35,9 +35,13 @@ Model
   create / retire under one process-wide ``threading.Lock`` (check-then-create
   never suspends, so it is also atomic on a single loop).  Channels are
   single-loop objects: an attach from a different running loop is refused.
-* **Users** — a counter of tasks queued on or holding a channel lock.  A
-  channel is retired only when it has no lease, no socket, no user and no
-  lock held, so a task queued on a lock never wakes on a retired channel.
+* **Users and dialers** — ``_users`` counts tasks queued on or holding the
+  transaction/operation locks; ``connect_owner`` names the transport whose
+  ``connect()`` holds the connect lock and ``connect_waiters`` lists the
+  transports queued for it.  A channel is retired only when it has no lease,
+  no socket, no user, no dialer and no lock held, so a task queued on a lock
+  never wakes on a retired channel — and ``async_shutdown()`` can tell its
+  own dial from a sibling's without touching the lock.
 
 The dial ladder itself (retry/backoff, TLS-PSK auto-detection, initial-data
 discard) lives in ``DongleTransport._dial()``, called from ``connect()``
@@ -120,6 +124,11 @@ class DongleChannel:
         self.connect_lock = asyncio.Lock()
         self.op_lock = _ChannelOpLock()
         self.transaction_owner: DongleTransport | None = None
+        # Dial bookkeeping: who holds connect_lock inside connect(), and who
+        # is queued for it (a queued waiter captures the lock on release,
+        # so "not locked()" alone never proves the lock is free to take).
+        self.connect_owner: DongleTransport | None = None
+        self.connect_waiters: list[DongleTransport] = []
         # --- TLS-PSK detection memo (per socket, shared by all leases) ---
         self.ssl_active = False
         self.ssl_proven = False
@@ -253,10 +262,19 @@ class DongleChannel:
             not self._leases
             and not self.connected
             and self._users == 0
+            and self.connect_owner is None
+            and not self.connect_waiters
             and not self.op_lock.locked()
             and not self.transaction_lock.locked()
             and not self.connect_lock.locked()
         )
+
+    def sibling_dialing(self, transport: DongleTransport) -> bool:
+        """Whether another transport holds, or is queued for, the connect lock."""
+        owner = self.connect_owner
+        if owner is not None and owner is not transport:
+            return True
+        return any(waiter is not transport for waiter in self.connect_waiters)
 
     def retire_if_idle(self) -> bool:
         """Remove an idle shared channel from the registry.

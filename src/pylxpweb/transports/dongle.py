@@ -707,16 +707,29 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         while True:
             channel = self._resolve_channel()
             try:
-                async with channel.connect_lock:
-                    self._raise_if_shutdown()
-                    if channel.retired:
-                        # The last lease released between resolve and acquire:
-                        # re-resolve to the live channel for this endpoint.
-                        continue
-                    if not channel.connected:
-                        await self._dial(channel)
-                    channel.acquire_lease(self)
-                    return
+                channel.connect_waiters.append(self)
+                acquired = False
+                try:
+                    async with channel.connect_lock:
+                        channel.connect_waiters.remove(self)
+                        acquired = True
+                        channel.connect_owner = self
+                        try:
+                            self._raise_if_shutdown()
+                            if channel.retired:
+                                # The last lease released between resolve and
+                                # acquire: re-resolve to the live channel.
+                                continue
+                            if not channel.connected:
+                                await self._dial(channel)
+                            channel.acquire_lease(self)
+                            return
+                        finally:
+                            channel.connect_owner = None
+                finally:
+                    if not acquired:
+                        # Cancelled (or shut down) while queued for the lock.
+                        channel.connect_waiters.remove(self)
             except BaseException:
                 # A failed (or cancelled / shut-down) dial must not leave a
                 # disconnected, lease-less channel registered: it would
@@ -957,17 +970,21 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         shutdown does not permit another dial or sequence retry.
 
         Shared socket: the stream is torn down (generation bumped, siblings'
-        next transaction reconnects) only when THIS transport owns the
-        in-flight transaction, or when no transaction is in flight, no lease
-        remains and no dial is in progress.  If a sibling owns the in-flight
-        transaction, or is mid-dial, this lease is just released and the
-        sibling's stream is left intact (a dial owned by this transport still
-        closes itself via the post-open terminal check).  The last-lease
-        close holds the channel's connect lock through ``wait_closed()`` so a
-        sibling cannot dial a second socket while the old one is still
-        closing; that cannot stall shutdown because the lock is taken only
-        when it is free (an uncontended ``asyncio.Lock`` is acquired without
-        yielding) and the close itself is bounded.
+        next transaction reconnects) only when THIS transport owns the active
+        dial, or owns the in-flight transaction while no sibling holds or is
+        queued for the connect lock, or when nothing is in flight, no lease
+        remains and no sibling is dialing.  If a sibling owns the in-flight
+        transaction, holds the connect lock, or is queued for it, this lease
+        is just released and the socket (or the dongle's single slot) is
+        theirs — shutdown never blocks behind a sibling's dial.  Owning the
+        transaction is not owning the dial: this transport's inner
+        ``connect()`` can be queued behind a sibling's dial, and that
+        sibling's fresh socket must survive.  The last-lease close takes the
+        connect lock only when it is provably uncontended — no holder AND no
+        queued waiter, because ``asyncio.Lock.acquire()`` queues a new
+        acquirer behind existing waiters even while ``locked()`` is False —
+        and holds it through the bounded ``wait_closed()`` so any later dial
+        is ordered after the old socket has actually gone.
         Ordinary reusable disconnects retain the fully serialised
         :meth:`disconnect` contract.
         """
@@ -977,21 +994,30 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             channel.release_lease(self)
             owner = channel.transaction_owner
             close_timeout = min(self._timeout, _SHUTDOWN_CLOSE_TIMEOUT)
-            if owner is self:
-                # Interrupt this transport's own in-flight transaction:
-                # lock-free on purpose — the transaction lock is held by the
-                # very task being unblocked, and a dial owned by this
-                # transport closes its own result via the post-open check.
+            if channel.connect_owner is self:
+                # Interrupt this transport's own active dial: lock-free on
+                # purpose (the lock is held by the very task being unblocked;
+                # its post-open terminal check closes whatever it opens).
                 await channel.close(timeout=close_timeout)
-            elif owner is None and channel.lease_count == 0 and not channel.connect_lock.locked():
-                # Last lease, nothing in flight, no dial: close the shared
-                # socket under the connect lock.  The lock is free at this
-                # point and acquiring a free asyncio.Lock never yields, so
-                # nothing can lease or dial between the check and the
-                # acquire — the re-check below is a guard against a future
-                # suspension point, not a live race.  Holding the lock across
-                # the bounded wait_closed() orders any sibling's dial after
-                # the old socket has actually gone.
+            elif owner is self:
+                # Interrupt this transport's own in-flight transaction —
+                # unless a sibling holds or is queued for the connect lock,
+                # in which case the stream is (or is about to be) theirs and
+                # our queued connect() raises on resume instead.
+                if not channel.sibling_dialing(self):
+                    await channel.close(timeout=close_timeout)
+            elif (
+                owner is None
+                and channel.lease_count == 0
+                and channel.connect_owner is None
+                and not channel.connect_waiters
+            ):
+                # Last lease, nothing in flight, no dialer and no queued
+                # dialer: the connect lock is genuinely uncontended, so the
+                # acquire below cannot suspend.  Holding it across the
+                # bounded close orders any later dial after the old socket
+                # has actually gone; the re-check guards a future suspension
+                # point, not a live race.
                 async with channel.connect_lock:
                     if channel.lease_count == 0 and channel.transaction_owner is None:
                         await channel.close(timeout=close_timeout)

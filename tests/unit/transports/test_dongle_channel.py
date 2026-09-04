@@ -1059,3 +1059,83 @@ async def test_last_lease_shutdown_holds_connect_lock_through_close(
         assert await b._read_input_registers(0, 1) == [0]
     finally:
         await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_of_transaction_owner_spares_sibling_dial(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """Owning the transaction is not owning the dial: a queued connect must not close B's socket.
+
+    A holds the transaction lock inside ``_send_receive`` while its inner
+    ``connect()`` waits on the connect lock that B holds in a direct dial.
+    A's terminal shutdown must release its lease and leave B's fresh socket
+    alone; A's queued connect then raises on resume.
+    """
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None
+        await a._force_reconnect()  # A leased, socket torn down
+
+        connect_b = asyncio.create_task(b.connect())
+        await asyncio.sleep(0.05)  # B is inside the dial, holding the connect lock
+        assert channel.connect_owner is b
+
+        read_a = asyncio.create_task(a._read_input_registers(0, 1))
+        await asyncio.sleep(0)  # A owns the transaction; its inner connect() is queued
+        assert channel.transaction_owner is a
+        assert a in channel.connect_waiters
+        dials_before = fake.dials
+
+        await asyncio.wait_for(a.async_shutdown(), timeout=0.5)
+
+        await connect_b
+        assert b.is_connected is True
+        assert fake.dials == dials_before
+        assert fake.open_connections == 1
+        with pytest.raises(TransportConnectionError, match="shut down"):
+            await read_a
+        assert await b._read_input_registers(0, 1) == [0]
+        assert fake.dials == dials_before
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_last_lease_shutdown_does_not_queue_behind_a_woken_dialer(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A woken-but-not-yet-running connect waiter must not capture the shutdown.
+
+    ``asyncio.Lock.acquire()`` queues a new acquirer behind existing waiters
+    even when ``locked()`` is False, so the last-lease branch must not take
+    the connect lock while a sibling is queued on it — shutdown would wait
+    out the sibling's whole dial.
+    """
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None
+        await a._force_reconnect()  # A leased, socket torn down
+
+        await channel.connect_lock.acquire()  # stand-in for a holder about to release
+        connect_b = asyncio.create_task(b.connect())
+        await asyncio.sleep(0)  # B queued on the connect lock
+        assert b in channel.connect_waiters
+        channel.connect_lock.release()  # B is woken but has not run yet
+
+        async with asyncio.timeout(0.5):
+            await a.async_shutdown()  # awaited inline: runs before B resumes
+
+        await connect_b
+        assert b.is_connected is True
+        assert fake.open_connections == 1
+        assert fake.dials == 2
+        assert await b._read_input_registers(0, 1) == [0]
+    finally:
+        await _shutdown_all(a, b)
