@@ -24,6 +24,7 @@ import pytest
 
 from pylxpweb.transports import create_dongle_transport
 from pylxpweb.transports.dongle import (
+    MODBUS_READ_HOLDING,
     MODBUS_READ_INPUT,
     MODBUS_WRITE_MULTI,
     MODBUS_WRITE_SINGLE,
@@ -1314,5 +1315,68 @@ async def test_shutdown_does_not_wait_behind_sibling_disconnect_close(
         assert channel.retired is True
         assert _REGISTRY.get(key) is None
         await fake.wait_for_connections(0)
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_with_own_connect_woken_spares_the_new_live_stream(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A's queued connect() is woken (B just finished dialing): shutdown spares B's stream."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    try:
+        await a.connect()
+        await b.connect()
+        channel = a.channel
+        assert channel is not None
+        await a.disconnect()  # A lease-less; B leased on the live socket
+
+        await channel.connect_lock.acquire()  # stand-in for B's dial in progress
+        read_a = asyncio.create_task(a._read_input_registers(0, 1))
+        await asyncio.sleep(0)  # A owns the transaction; its inner connect() is queued
+        assert channel.transaction_owner is a and a in channel.connect_waiters
+        channel.connect_lock.release()  # "dial finished": A is woken but has not run
+
+        async with asyncio.timeout(0.5):
+            await a.async_shutdown()  # same turn, before A's connect() resumes
+
+        with pytest.raises(TransportConnectionError, match="shut down"):
+            await read_a
+        assert b.is_connected is True
+        assert fake.open_connections == 1
+        assert await b._read_input_registers(0, 1) == [0]
+        assert fake.dials == 1  # B's live stream survived; no redial
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_check_link_is_serialised_with_sibling_operations(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A link probe on A cannot slip between the steps of B's multi-step read."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    try:
+        await a.connect()
+        await b.connect()
+        channel = a.channel
+        assert channel is not None
+        generation = channel.generation
+
+        # read_parameters(0, 80) is two FC03 steps; the probe is one FC04.
+        result_b, link_up = await asyncio.gather(b.read_parameters(0, 80), a.check_link())
+
+        assert link_up is True
+        assert result_b == {i: i for i in range(80)}
+        assert channel.generation == generation  # no mid-op teardown
+        assert fake.dials == 1
+        assert [frame[0] for frame in fake.frames].count(SERIAL_B) == 2
+        b_steps = [i for i, frame in enumerate(fake.frames) if frame[0] == SERIAL_B]
+        assert b_steps[1] == b_steps[0] + 1, fake.frames  # B's steps are adjacent on the wire
+        assert (SERIAL_A, MODBUS_READ_INPUT, 0) in fake.frames
+        assert all(frame[1] == MODBUS_READ_HOLDING for frame in fake.frames if frame[0] == SERIAL_B)
     finally:
         await _shutdown_all(a, b)

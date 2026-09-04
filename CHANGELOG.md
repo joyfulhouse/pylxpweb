@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds a lease on a live socket": a sibling's open socket no longer reports
   an un-leased transport as connected, and a transport that uses the shared
   socket without calling `connect()` takes its lease on first use.
+  `check_link()` now runs under the channel operation lock like every other
+  wire-touching operation, so a link probe can wait for a sibling device's
+  in-flight multi-step read but can never interleave with it.
 
 ## [0.10.0b8] - 2026-09-02
 

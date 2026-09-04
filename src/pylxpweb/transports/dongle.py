@@ -466,14 +466,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     def _connected(self, value: bool) -> None:
         # BaseTransport.__init__ assigns False before any channel exists; an
         # unbound transport is not connected, so that assignment is a no-op.
-        # Setting True is the test seam for "connect() completed": it marks
-        # the socket live AND records this transport's lease, exactly as
-        # connect() would.  Setting False models a teardown, which keeps
-        # the lease (only disconnect()/async_shutdown() release one).
+        # This seam only flips the channel's socket-live flag; it never
+        # touches the lease set (leases change in connect(), disconnect()
+        # and async_shutdown() only).
         if value:
-            channel = self._resolve_channel()
-            channel.connected = True
-            channel.acquire_lease(self)
+            self._resolve_channel().connected = True
         elif self._channel is not None:
             self._channel.connected = False
 
@@ -1022,7 +1019,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 # they hold it, the stream is already being closed: release
                 # the lease and return without waiting; the terminal flag
                 # interrupts this transport at its next _raise_if_shutdown().
-                if not channel.sibling_dialing(self) and not channel.connect_lock.locked():
+                # If this transport's OWN connect() is the queued waiter there
+                # is no in-flight I/O on the stream to interrupt (it raises on
+                # resume) — and the live stream belongs to whoever just
+                # finished dialing, so it must not be closed either.
+                if (
+                    not channel.sibling_dialing(self)
+                    and self not in channel.connect_waiters
+                    and not channel.connect_lock.locked()
+                ):
                     async with channel.connect_lock:
                         await channel.close(timeout=close_timeout)
             elif (
@@ -1296,15 +1301,17 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         if channel is not None:
             await channel.teardown(expected_generation=expected_generation)
 
-    async def _force_reconnect(self) -> None:
+    async def _force_reconnect(self, *, expected_generation: int | None = None) -> None:
         """Tear down the (possibly broken) connection for a fresh start.
 
         Acquires the per-transaction lock so an in-flight request on another
         task is never yanked mid-transaction.  Reconnection itself is lazy —
         ``_send_receive`` re-establishes the connection on the next request.
+        With ``expected_generation`` only the stream of that generation is
+        torn down (see :meth:`_teardown_connection`).
         """
         async with self._lock:
-            await self._teardown_connection()
+            await self._teardown_connection(expected_generation=expected_generation)
 
     async def _send_receive(
         self,
@@ -1890,6 +1897,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         ``connect()`` awaits the channel close (itself bounded).  Worst
         case the probe approaches ~2x the budget — still far below the
         default 10s response timeout it replaces.
+
+        Shared socket: the probe is one more wire-touching operation, so it
+        runs under the channel operation lock like every read and write —
+        it can wait for a sibling's in-flight multi-step operation, but it
+        can never slip a transaction between that operation's steps.  The
+        budget bounds the probe itself, not that wait.  The teardown after
+        an exhausted budget is scoped to the stream the probe started on: a
+        stream dialed since (by the probe's own reconnect, which closes
+        itself on cancellation, or by a sibling) is left alone.
         """
         packet = self._build_packet(
             tcp_func=TCP_FUNC_TRANSLATED,
@@ -1897,34 +1913,37 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             start_register=0,
             register_count=1,
         )
-        try:
-            # A probe dial must reuse the last-known channel state instead of
-            # AUTO TLS-probing (see _auto_ssl_context): a TLS-silent peer
-            # would otherwise burn the handshake timeout inside this budget
-            # and report a working plaintext dongle as down.
-            self._link_probe_active = True
-            await asyncio.wait_for(
-                self._send_receive(
-                    packet,
-                    max_retries=0,
-                    expected_func=MODBUS_READ_INPUT,
-                    expected_register=0,
-                    timeout_override=LINK_PROBE_TIMEOUT_SECONDS,
-                ),
-                timeout=LINK_PROBE_TIMEOUT_SECONDS + _LINK_PROBE_CONNECT_GRACE_SECONDS,
-            )
-        except TimeoutError:
-            # Outer budget hit (e.g. connect stalled): the cancellation may
-            # have left a half-established connection — tear it down so the
-            # next probe dials fresh.
-            await self._force_reconnect()
-            _LOGGER.debug("[%s] Link probe exceeded its budget", self._serial)
-            return False
-        except (TransportError, OSError) as err:
-            _LOGGER.debug("[%s] Link probe failed: %s", self._serial, err)
-            return False
-        finally:
-            self._link_probe_active = False
+        async with self._operation():
+            generation = self._resolve_channel().generation
+            try:
+                # A probe dial must reuse the last-known channel state instead
+                # of AUTO TLS-probing (see _auto_ssl_context): a TLS-silent
+                # peer would otherwise burn the handshake timeout inside this
+                # budget and report a working plaintext dongle as down.
+                self._link_probe_active = True
+                await asyncio.wait_for(
+                    self._send_receive(
+                        packet,
+                        max_retries=0,
+                        expected_func=MODBUS_READ_INPUT,
+                        expected_register=0,
+                        timeout_override=LINK_PROBE_TIMEOUT_SECONDS,
+                    ),
+                    timeout=LINK_PROBE_TIMEOUT_SECONDS + _LINK_PROBE_CONNECT_GRACE_SECONDS,
+                )
+            except TimeoutError:
+                # Outer budget hit (e.g. connect stalled): the cancellation
+                # may have left a half-established connection on the stream
+                # the probe started on — tear that one down so the next
+                # probe dials fresh.
+                await self._force_reconnect(expected_generation=generation)
+                _LOGGER.debug("[%s] Link probe exceeded its budget", self._serial)
+                return False
+            except (TransportError, OSError) as err:
+                _LOGGER.debug("[%s] Link probe failed: %s", self._serial, err)
+                return False
+            finally:
+                self._link_probe_active = False
         return True
 
     async def _read_input_registers(
@@ -2258,6 +2277,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                             sorted(parameters),
                             err,
                         )
+                        # Deliberately unconditional: the failed sequence may
+                        # have reconnected mid-way, so no single generation
+                        # names "the stream the failure happened on"; the
+                        # retry contract is a fresh start.  Under the op lock
+                        # no sibling operation is in flight — at worst a
+                        # sibling's idle, just-dialed socket costs one redial.
                         await self._force_reconnect()
                         self._raise_if_shutdown()
                         await asyncio.sleep(WRITE_RETRY_DELAY * attempt)

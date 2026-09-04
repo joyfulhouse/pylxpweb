@@ -38,6 +38,17 @@ from pylxpweb.transports.exceptions import (
 )
 
 
+def _lease(transport: DongleTransport) -> None:
+    """Test-only stand-in for the lease ``connect()`` records.
+
+    The ``_connected = True`` seam only marks the channel's socket live; the
+    lease set is mutated by ``connect()`` / ``disconnect()`` /
+    ``async_shutdown()`` alone, so tests that emulate a completed connect()
+    record the lease here — never in ``src``.
+    """
+    transport._resolve_channel().acquire_lease(transport)
+
+
 class TestComputeCRC16:
     """Tests for CRC-16/Modbus computation."""
 
@@ -662,6 +673,7 @@ class TestDongleConnection:
         transport._reader = reader
         transport._writer = writer
         transport._connected = True
+        _lease(transport)
         transport._drain_buffer = AsyncMock()  # type: ignore[method-assign]
         transport._receive_frame = blocked_receive  # type: ignore[method-assign]
 
@@ -768,6 +780,7 @@ class TestDongleConnection:
         transport._reader = reader
         transport._writer = writer
         transport._connected = True
+        _lease(transport)
         transport._drain_buffer = AsyncMock()  # type: ignore[method-assign]
 
         async def shutdown_then_fail() -> bytes:
@@ -918,6 +931,7 @@ class TestDongleConnection:
         transport._reader = old_reader
         transport._writer = old_writer
         transport._connected = True
+        _lease(transport)
 
         new_reader = AsyncMock()
         new_reader.read = AsyncMock(side_effect=TimeoutError())
@@ -1126,6 +1140,7 @@ class TestDongleFrameAssembly:
         transport._reader = reader
         transport._writer = writer
         transport._connected = True
+        _lease(transport)
         return transport, writer
 
     @staticmethod
@@ -1559,6 +1574,7 @@ class TestDongleResponseValidation:
         transport._writer = MagicMock()
         transport._writer.drain = AsyncMock()
         transport._connected = True
+        _lease(transport)
 
         with (
             patch.object(transport, "_drain_buffer", new=AsyncMock()),
@@ -1611,6 +1627,7 @@ class TestDongleResponseValidation:
         transport._writer = MagicMock()
         transport._writer.drain = AsyncMock()
         transport._connected = True
+        _lease(transport)
 
         with (
             patch.object(transport, "_drain_buffer", new=AsyncMock()),
@@ -1705,6 +1722,7 @@ class TestDongleShortReadGuard:
         """
         transport = self._make_transport()
         transport._connected = True
+        _lease(transport)
 
         short = _build_mock_response(
             modbus_func=MODBUS_READ_HOLDING,
@@ -1733,6 +1751,7 @@ class TestDongleShortReadGuard:
         """A transient short read recovers when the retry returns full data."""
         transport = self._make_transport()
         transport._connected = True
+        _lease(transport)
 
         short = _build_mock_response(
             modbus_func=MODBUS_READ_HOLDING,
@@ -1816,6 +1835,7 @@ class TestDongleRegisterOperations:
         # Mock connect to succeed and set up fresh reader/writer
         async def mock_connect() -> None:
             transport._connected = True
+            _lease(transport)
             transport._reader = AsyncMock()
             writer = AsyncMock()
             writer.write = MagicMock()
@@ -1848,6 +1868,7 @@ class TestDongleRegisterOperations:
             inverter_serial="CE12345678",
         )
         transport._connected = True
+        _lease(transport)
 
         valid_response = _build_mock_response(
             modbus_func=MODBUS_READ_HOLDING,
@@ -1874,6 +1895,7 @@ class TestDongleRegisterOperations:
 
         async def mock_connect() -> None:
             transport._connected = True
+            _lease(transport)
             transport._reader = second_reader
             transport._writer = second_writer
 
@@ -1903,9 +1925,11 @@ class TestDongleRegisterOperations:
             inverter_serial="CE12345678",
         )
         transport._connected = True
+        _lease(transport)
 
         async def mock_connect() -> None:
             transport._connected = True
+            _lease(transport)
             reader = AsyncMock()
             reader.read = AsyncMock(side_effect=OSError("Connection lost"))
             writer = AsyncMock()
@@ -1949,6 +1973,7 @@ class TestDongleRegisterOperations:
             inverter_serial="CE12345678",
         )
         transport._connected = True
+        _lease(transport)
         transport._reader = AsyncMock()
         transport._reader.read = AsyncMock(side_effect=OSError("Connection lost"))
         transport._writer = AsyncMock()
@@ -2163,6 +2188,7 @@ def _make_write_test_transport(**kwargs: object) -> DongleTransport:
     defaults.update(kwargs)
     transport = DongleTransport(**defaults)  # type: ignore[arg-type]
     transport._connected = True
+    _lease(transport)
     return transport
 
 
@@ -2594,6 +2620,7 @@ class TestDongleSendReceiveTimeoutRetry:
 
         async def mock_connect() -> None:
             transport._connected = True
+            _lease(transport)
             transport._reader = second_reader
             transport._writer = second_writer
 
@@ -2625,6 +2652,7 @@ class TestDongleSendReceiveTimeoutRetry:
 
         async def mock_connect() -> None:
             transport._connected = True
+            _lease(transport)
             reader = AsyncMock()
             reader.read = AsyncMock(side_effect=TimeoutError())
             transport._reader = reader
@@ -2690,6 +2718,7 @@ class TestWriteAckEchoValidation:
             write_step_delay=0,
         )
         transport._connected = True
+        _lease(transport)
         reader = AsyncMock()
         writer = AsyncMock()
         writer.write = MagicMock()
@@ -3237,6 +3266,7 @@ class TestDongleSilentPathLoss:
             inverter_serial="CE12345678",
         )
         transport._connected = True
+        _lease(transport)
         eof_reader = AsyncMock()
         eof_reader.read = AsyncMock(return_value=b"")
         writer = AsyncMock()
@@ -3251,6 +3281,7 @@ class TestDongleSilentPathLoss:
             nonlocal reconnects
             reconnects += 1
             transport._connected = True
+            _lease(transport)
             fresh_reader = AsyncMock()
             fresh_reader.read = AsyncMock(return_value=b"")
             fresh_writer = AsyncMock()
