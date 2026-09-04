@@ -941,7 +941,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
             async with channel.transaction_lock:
                 channel.release_lease(self)
                 if channel.lease_count == 0:
-                    async with channel.connect_lock:
+                    async with channel.acquire_connect_lock(self):
                         # A dial that was in flight has finished by now and
                         # leased its caller.  If that caller was THIS
                         # transport (connect() racing this disconnect),
@@ -1299,7 +1299,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         """
         channel = self._channel
         if channel is not None:
-            await channel.teardown(expected_generation=expected_generation)
+            await channel.teardown(holder=self, expected_generation=expected_generation)
 
     async def _force_reconnect(self, *, expected_generation: int | None = None) -> None:
         """Tear down the (possibly broken) connection for a fresh start.
@@ -1909,11 +1909,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         that ``False`` from a genuinely dead link, and does not need to: the
         next probe retries, and a sibling that monopolised the bus with a
         successful operation has itself just proven the link up.  If the
-        budget runs out after the probe started, the teardown is scoped to
-        the stream the probe started on; a stream dialed since (by the
-        probe's own reconnect, which closes itself on cancellation, or by a
-        sibling) is left alone — and it happens while the operation lock is
-        still held, so no sibling operation can be on that stream.
+        budget runs out after the probe started, the stream that is current
+        at that moment is torn down — under the operation lock it can only
+        be the one the probe ran on (the probe's own reconnect dials a new
+        generation, so a snapshot taken at probe start would miss it and
+        leave a fresh socket live with an unanswered request in flight).
         """
         packet = self._build_packet(
             tcp_func=TCP_FUNC_TRANSLATED,
@@ -1927,7 +1927,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 LINK_PROBE_TIMEOUT_SECONDS + _LINK_PROBE_CONNECT_GRACE_SECONDS
             ) as budget:
                 async with self._operation():
-                    generation = self._resolve_channel().generation
+                    channel = self._resolve_channel()
                     started = True
                     try:
                         # A probe dial must reuse the last-known channel state
@@ -1945,13 +1945,15 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         )
                     except asyncio.CancelledError:
                         if budget.expired():
-                            # Budget hit mid-probe (e.g. connect stalled):
-                            # the cancellation may have left a half-
-                            # established connection on the stream the probe
-                            # started on — tear that one down, still under
-                            # the operation lock, so the next probe dials
-                            # fresh.  Then let the timeout surface.
-                            await self._force_reconnect(expected_generation=generation)
+                            # Budget hit mid-probe: whatever stream is
+                            # current now is the probe's — a stalled dial
+                            # already closed itself, a completed reconnect
+                            # left a live socket with our unanswered request
+                            # on it.  Tear it down, still under the
+                            # operation lock, so a late reply can never land
+                            # on the next transaction of any lease.  Then
+                            # let the timeout surface.
+                            await self._force_reconnect(expected_generation=channel.generation)
                         raise
                     finally:
                         self._link_probe_active = False

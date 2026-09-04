@@ -213,17 +213,44 @@ class DongleChannel:
                 writer.close()
                 await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
 
-    async def teardown(self, *, expected_generation: int | None = None) -> None:
+    @contextlib.asynccontextmanager
+    async def acquire_connect_lock(self, holder: DongleTransport) -> AsyncIterator[None]:
+        """Take ``connect_lock`` for non-dial lifecycle work, visibly.
+
+        ``async_shutdown()`` decides whether the lock is free from
+        ``connect_owner`` / ``connect_waiters`` (queued or woken-but-not-run
+        acquirers, which ``locked()`` cannot see) plus ``locked()`` (the
+        current holder).  Every non-``connect()`` acquirer — ``teardown()``
+        and ``disconnect()`` — therefore registers as a waiter while queued;
+        once it holds the lock ``locked()`` covers it.  ``connect_owner`` is
+        reserved for dials.
+        """
+        self.connect_waiters.append(holder)
+        acquired = False
+        try:
+            async with self.connect_lock:
+                self.connect_waiters.remove(holder)
+                acquired = True
+                yield
+        finally:
+            if not acquired:
+                self.connect_waiters.remove(holder)
+
+    async def teardown(
+        self, *, holder: DongleTransport, expected_generation: int | None = None
+    ) -> None:
         """Close under ``connect_lock`` so no lease dials while it drains.
 
-        With ``expected_generation`` the teardown is stream-scoped: it closes
-        only if the stream the caller ran on is still the current one.  If
+        ``holder`` is the transport tearing down, registered as a connect
+        waiter while queued (see :meth:`acquire_connect_lock`).  With
+        ``expected_generation`` the teardown is stream-scoped: it closes only
+        if the stream the caller ran on is still the current one.  If
         ``generation`` has already moved past it, someone else replaced the
         stream (a sibling's dial, a terminal shutdown) and the caller's
         failure says nothing about the new socket — leave it alone.  Without
         it the teardown is unconditional.
         """
-        async with self.connect_lock:
+        async with self.acquire_connect_lock(holder):
             if expected_generation is not None and self.generation != expected_generation:
                 return
             await self.close()

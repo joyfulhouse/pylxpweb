@@ -997,7 +997,7 @@ async def test_generation_change_mid_transaction_fails_coherently(
         stale = _build_response(SERIAL_A, MODBUS_READ_INPUT, 0, [0])
 
         async def receive_after_replacement() -> bytes:
-            await channel.teardown()  # socket replaced underneath the transaction
+            await channel.teardown(holder=a)  # socket replaced underneath the transaction
             return stale
 
         with (
@@ -1467,3 +1467,131 @@ async def test_cancelled_queued_probe_leaves_users_and_op_lock_consistent(
         assert time.monotonic() - started < 0.5
     finally:
         await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_check_link_budget_hit_after_own_dial_tears_down_the_fresh_stream(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A probe whose own reconnect succeeded and then timed out must not leave that stream live.
+
+    Budget (1.3 s) is above the dial's 1 s initial-data window and below the
+    inner response timeout (1.0 s after the dial), so the budget fires while
+    the probe's unanswered FC04 sits on the fresh socket.  This is also the
+    "slow connect then mute" shape: the dial outlasts the grace, the peer
+    never answers.
+    """
+    fake, port = server
+    a = _make(port, SERIAL_A)
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None
+        await a._force_reconnect()  # the probe has to dial
+        before = channel.generation
+
+        fake.hold = True
+        with (
+            patch("pylxpweb.transports.dongle.LINK_PROBE_TIMEOUT_SECONDS", 1.0),
+            patch("pylxpweb.transports.dongle._LINK_PROBE_CONNECT_GRACE_SECONDS", 0.3),
+        ):
+            assert await a.check_link() is False
+
+        assert fake.dials == 2  # the probe dialed (generation before + 1) ...
+        assert channel.connected is False  # ... and that stream was torn down, not left live
+        assert channel.writer is None
+        assert channel.generation > before + 1
+        fake.release()
+
+        # No unanswered request can land on the next transaction: a fresh
+        # single-attempt read on another register gets its own reply.
+        assert await a._send_receive(
+            _read_packet(a, 5, 1),
+            max_retries=0,
+            expected_func=MODBUS_READ_INPUT,
+            expected_register=5,
+        ) == [5]
+        assert fake.dials == 3
+    finally:
+        await _shutdown_all(a)
+
+
+@pytest.mark.asyncio
+async def test_last_lease_shutdown_sees_a_woken_sibling_teardown(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A sibling's teardown woken on the connect lock is visible: shutdown returns in bound."""
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    release_close = asyncio.Event()
+    try:
+        await a.connect()
+        await b.connect()
+        channel = a.channel
+        assert channel is not None and channel.writer is not None
+        await b.disconnect()  # A is the last lease; B stays bound, lease-less
+        writer = channel.writer
+        original_wait_closed = writer.wait_closed
+
+        async def blocked_wait_closed() -> None:
+            await release_close.wait()
+            await original_wait_closed()
+
+        with patch.object(writer, "wait_closed", blocked_wait_closed):
+            await channel.connect_lock.acquire()  # stand-in for a dialer holding the lock
+            reconnect_b = asyncio.create_task(b._force_reconnect())
+            await asyncio.sleep(0)  # B's teardown is queued on the connect lock
+            assert b in channel.connect_waiters
+            channel.connect_lock.release()  # dialer done; B's teardown woken, not yet run
+
+            async with asyncio.timeout(0.3):
+                await a.async_shutdown()  # inline, same turn
+            assert channel.connect_lock.locked() or b in channel.connect_waiters
+            release_close.set()
+            await reconnect_b
+
+        assert channel.connected is False
+        await fake.wait_for_connections(0)
+    finally:
+        await _shutdown_all(a, b)
+
+
+@pytest.mark.asyncio
+async def test_transaction_owner_shutdown_sees_its_own_woken_teardown(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A's own error teardown woken on the connect lock is visible: shutdown returns in bound."""
+    fake, port = server
+    a = _make(port, SERIAL_A)
+    release_close = asyncio.Event()
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None and channel.writer is not None
+        writer = channel.writer
+        original_wait_closed = writer.wait_closed
+
+        async def blocked_wait_closed() -> None:
+            await release_close.wait()
+            await original_wait_closed()
+
+        with patch.object(writer, "wait_closed", blocked_wait_closed):
+            await channel.connect_lock.acquire()  # stand-in for a dialer holding the lock
+            fake.hold = True
+            read_a = asyncio.create_task(a._read_input_registers(0, 1))
+            await asyncio.wait_for(fake.frame_received.wait(), timeout=1.0)
+            await fake.drop_all()  # EOF -> A's handler queues its teardown on the connect lock
+            await asyncio.sleep(0.05)
+            assert channel.transaction_owner is a and a in channel.connect_waiters
+            channel.connect_lock.release()  # dialer done; A's teardown woken, not yet run
+
+            async with asyncio.timeout(0.3):
+                await a.async_shutdown()  # inline, same turn
+            release_close.set()
+
+        with pytest.raises(TransportConnectionError, match="shut down"):
+            await read_a
+        fake.release()
+        assert channel.connected is False
+    finally:
+        await _shutdown_all(a)
