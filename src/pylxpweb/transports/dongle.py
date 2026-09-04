@@ -181,16 +181,11 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     This transport connects directly to the inverter's WiFi dongle
     via TCP port 8000 using the LuxPower/EG4 proprietary protocol.
 
-    IMPORTANT: Single-Client Limitation
-    ------------------------------------
-    The WiFi dongle sustains only ONE TCP client, so every transport in this
-    process that targets the same dongle shares one serialized socket
-    (:mod:`pylxpweb.transports.dongle_channel`): ``connect()`` takes a lease
-    on the endpoint's channel, ``disconnect()`` / ``async_shutdown()``
-    release it, and the socket closes when the last lease goes.  The
-    per-socket state (streams, locks, TLS memo, ``connected``) has exactly
-    one owner — the channel — and this class reads it live.  Disable other
-    *processes* (integrations/scripts) before using this transport.
+    The dongle sustains only ONE TCP client (see the module docstring), so
+    transports in this process that target the same dongle share one
+    serialized socket owned by a :class:`~.dongle_channel.DongleChannel`:
+    ``connect()`` takes a lease, ``disconnect()`` / ``async_shutdown()``
+    release it, and the last release closes the socket.
 
     Example:
         transport = DongleTransport(
@@ -370,13 +365,10 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     # ------------------------------------------------------------------
     # Channel binding (pylxpweb#329)
     # ------------------------------------------------------------------
-    # Everything per-socket lives on a DongleChannel shared by every
-    # transport that targets the same dongle.  The historical private names
-    # (``_reader`` / ``_writer`` / ``_connected`` / ``_lock`` /
-    # ``_connect_lock`` / ``_op_lock`` / ``_ssl_*`` / ``_receive_buffer``)
-    # are kept as forwarding accessors: the state has exactly one owner, the
-    # channel, and every existing call site — including tests that drive
-    # the transport through these seams — reads and writes it live.
+    # Everything per-socket lives on the DongleChannel; the ``_reader`` /
+    # ``_writer`` / ``_connected`` / ``_lock`` / ``_connect_lock`` /
+    # ``_op_lock`` / ``_ssl_*`` / ``_receive_buffer`` accessors below forward
+    # to it so the channel stays the single owner of that state.
 
     @property
     def channel(self) -> DongleChannel | None:
@@ -402,7 +394,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         key = make_channel_key(self._host, self._port, self._dongle_serial)
         if not self._shared_channel:
             if channel is None or channel.loop_is_dead():
-                channel = DongleChannel(key, ssl_mode=self._ssl_mode, shared=False, loop=None)
+                channel = DongleChannel(key, ssl_mode=self._ssl_mode, shared=False)
                 self._channel = channel
             channel.bind_loop()
             return channel
@@ -741,7 +733,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                             # An SSLError off a plaintext socket is not
                             # TLS capability evidence — ordinary failure.
                             raise
-                        if self._ssl_mode is not None or self._ssl_proven:
+                        if self._ssl_mode is not None or channel.ssl_proven:
                             # Forced TLS fails fast (outer handler wraps
                             # it); a proven-TLS instance retries TLS-only
                             # on the outer ladder — neither ever falls
@@ -774,8 +766,8 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 elif (
                     self._link_probe_active
                     and self._ssl_mode is None
-                    and not self._ssl_proven
-                    and self._ssl_unsupported_until is None
+                    and not channel.ssl_proven
+                    and channel.ssl_unsupported_until is None
                 ):
                     # A link probe forced this plaintext dial before TLS
                     # auto-detection ever ran; the connection may be kept
@@ -1945,8 +1937,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
     # register reads release the per-transaction lock between calls,
     # allowing concurrent writes to interleave and confuse the protocol.
     #
-    # The channel's op lock (the task-reentrant lock from BaseTransport,
-    # moved to the shared DongleChannel) serialises entire multi-step
+    # The channel's task-reentrant op lock serialises entire multi-step
     # operations so that writes wait until a read sequence is fully
     # complete — and vice-versa.  It is per CHANNEL, not per transport:
     # with several devices on one socket, correlation is positional, so a

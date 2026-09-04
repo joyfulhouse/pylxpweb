@@ -100,12 +100,11 @@ class DongleChannel:
         *,
         ssl_mode: bool | None,
         shared: bool,
-        loop: asyncio.AbstractEventLoop | None,
     ) -> None:
         self.key = key
         self.ssl_mode = ssl_mode
         self.shared = shared
-        self._loop = loop
+        self._loop: asyncio.AbstractEventLoop | None = None
         # --- per-socket stream state (replace only under connect_lock) ---
         self.reader: asyncio.StreamReader | None = None
         self.writer: asyncio.StreamWriter | None = None
@@ -135,20 +134,13 @@ class DongleChannel:
         """Derived refcount: the number of transports currently leasing."""
         return len(self._leases)
 
-    def holds_lease(self, transport: DongleTransport) -> bool:
-        """Whether ``transport`` currently holds a lease on this channel."""
-        return transport in self._leases
-
     def acquire_lease(self, transport: DongleTransport) -> None:
         """Record a lease for ``transport`` (idempotent)."""
         self._leases.add(transport)
 
-    def release_lease(self, transport: DongleTransport) -> bool:
-        """Drop ``transport``'s lease; return whether one was held (idempotent)."""
-        if transport in self._leases:
-            self._leases.discard(transport)
-            return True
-        return False
+    def release_lease(self, transport: DongleTransport) -> None:
+        """Drop ``transport``'s lease (idempotent)."""
+        self._leases.discard(transport)
 
     # ------------------------------------------------------------------
     # Loop affinity
@@ -297,7 +289,8 @@ def resolve_shared_channel(key: DongleChannelKey, *, ssl_mode: bool | None) -> D
                     f"dongle_serial {other.key[2]!r}; refusing dongle_serial {key[2]!r} "
                     "(one physical dongle has one serial)"
                 )
-        channel = DongleChannel(key, ssl_mode=ssl_mode, shared=True, loop=_running_loop_or_none())
+        channel = DongleChannel(key, ssl_mode=ssl_mode, shared=True)
+        channel.bind_loop()
         _REGISTRY[key] = channel
         _LOGGER.debug("Created shared dongle channel for %s:%s (%s)", key[0], key[1], key[2])
         return channel
