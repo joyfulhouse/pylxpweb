@@ -962,7 +962,12 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         remains and no dial is in progress.  If a sibling owns the in-flight
         transaction, or is mid-dial, this lease is just released and the
         sibling's stream is left intact (a dial owned by this transport still
-        closes itself via the post-open terminal check).
+        closes itself via the post-open terminal check).  The last-lease
+        close holds the channel's connect lock through ``wait_closed()`` so a
+        sibling cannot dial a second socket while the old one is still
+        closing; that cannot stall shutdown because the lock is taken only
+        when it is free (an uncontended ``asyncio.Lock`` is acquired without
+        yielding) and the close itself is bounded.
         Ordinary reusable disconnects retain the fully serialised
         :meth:`disconnect` contract.
         """
@@ -971,10 +976,25 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         if channel is not None:
             channel.release_lease(self)
             owner = channel.transaction_owner
-            if owner is self or (
-                owner is None and channel.lease_count == 0 and not channel.connect_lock.locked()
-            ):
-                await channel.close(timeout=min(self._timeout, _SHUTDOWN_CLOSE_TIMEOUT))
+            close_timeout = min(self._timeout, _SHUTDOWN_CLOSE_TIMEOUT)
+            if owner is self:
+                # Interrupt this transport's own in-flight transaction:
+                # lock-free on purpose — the transaction lock is held by the
+                # very task being unblocked, and a dial owned by this
+                # transport closes its own result via the post-open check.
+                await channel.close(timeout=close_timeout)
+            elif owner is None and channel.lease_count == 0 and not channel.connect_lock.locked():
+                # Last lease, nothing in flight, no dial: close the shared
+                # socket under the connect lock.  The lock is free at this
+                # point and acquiring a free asyncio.Lock never yields, so
+                # nothing can lease or dial between the check and the
+                # acquire — the re-check below is a guard against a future
+                # suspension point, not a live race.  Holding the lock across
+                # the bounded wait_closed() orders any sibling's dial after
+                # the old socket has actually gone.
+                async with channel.connect_lock:
+                    if channel.lease_count == 0 and channel.transaction_owner is None:
+                        await channel.close(timeout=close_timeout)
             channel.retire_if_idle()
         _LOGGER.debug("Dongle transport shut down for %s", self._serial)
 

@@ -1012,3 +1012,50 @@ async def test_generation_change_mid_transaction_fails_coherently(
         assert fake.dials == 2
     finally:
         await _shutdown_all(a)
+
+
+@pytest.mark.asyncio
+async def test_last_lease_shutdown_holds_connect_lock_through_close(
+    server: tuple[FakeDongleServer, int],
+) -> None:
+    """A sibling that dials while the last-lease shutdown is still closing waits for it.
+
+    ``close()`` detaches the writer before ``wait_closed()`` yields; without
+    the connect lock a sibling could resolve the still-registered channel,
+    see it disconnected, and dial a second socket while the old one is
+    still closing — the overlapping-client state the dongle punishes.
+    """
+    fake, port = server
+    a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
+    release_close = asyncio.Event()
+    try:
+        await a.connect()
+        channel = a.channel
+        assert channel is not None and channel.writer is not None
+        original_wait_closed = channel.writer.wait_closed
+
+        async def blocked_wait_closed() -> None:
+            await release_close.wait()
+            await original_wait_closed()
+
+        with patch.object(channel.writer, "wait_closed", blocked_wait_closed):
+            shutdown_a = asyncio.create_task(a.async_shutdown())
+            await asyncio.sleep(0)  # parked inside close(): writer detached, wait_closed blocked
+            assert not shutdown_a.done()
+            assert channel.connected is False
+
+            connect_b = asyncio.create_task(b.connect())
+            await asyncio.sleep(0.05)
+            # The sibling's dial is ordered after the close, not overlapping it.
+            assert fake.dials == 1
+            assert not connect_b.done()
+
+            release_close.set()
+            await asyncio.wait_for(shutdown_a, timeout=0.5)
+            await connect_b
+
+        assert fake.dials == 2
+        assert b.is_connected is True
+        assert await b._read_input_registers(0, 1) == [0]
+    finally:
+        await _shutdown_all(a, b)
