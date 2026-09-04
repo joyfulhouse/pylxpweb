@@ -203,6 +203,20 @@ def _read_packet(transport: DongleTransport, register: int = 0, count: int = 1) 
     )
 
 
+def _park_wait_closed(
+    writer: asyncio.StreamWriter,
+) -> tuple[asyncio.Event, contextlib.AbstractContextManager[Any]]:
+    """Patch ``writer.wait_closed()`` to park until the returned event is set."""
+    release = asyncio.Event()
+    original_wait_closed = writer.wait_closed
+
+    async def blocked_wait_closed() -> None:
+        await release.wait()
+        await original_wait_closed()
+
+    return release, patch.object(writer, "wait_closed", blocked_wait_closed)
+
+
 async def _shutdown_all(*transports: DongleTransport) -> None:
     for transport in transports:
         await transport.async_shutdown()
@@ -1028,18 +1042,13 @@ async def test_last_lease_shutdown_holds_connect_lock_through_close(
     """
     fake, port = server
     a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
-    release_close = asyncio.Event()
     try:
         await a.connect()
         channel = a.channel
         assert channel is not None and channel.writer is not None
-        original_wait_closed = channel.writer.wait_closed
+        release_close, parked = _park_wait_closed(channel.writer)
 
-        async def blocked_wait_closed() -> None:
-            await release_close.wait()
-            await original_wait_closed()
-
-        with patch.object(channel.writer, "wait_closed", blocked_wait_closed):
+        with parked:
             shutdown_a = asyncio.create_task(a.async_shutdown())
             await asyncio.sleep(0)  # parked inside close(): writer detached, wait_closed blocked
             assert not shutdown_a.done()
@@ -1156,23 +1165,18 @@ async def test_shutdown_error_path_does_not_tear_down_sibling_stream(
     """
     fake, port = server
     a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
-    release_close = asyncio.Event()
     try:
         await a.connect()
         channel = a.channel
         assert channel is not None and channel.writer is not None
-        original_wait_closed = channel.writer.wait_closed
-
-        async def blocked_wait_closed() -> None:
-            await release_close.wait()
-            await original_wait_closed()
+        release_close, parked = _park_wait_closed(channel.writer)
 
         fake.hold = True
         read_a = asyncio.create_task(a._read_input_registers(0, 1))
         await asyncio.wait_for(fake.frame_received.wait(), timeout=1.0)
         assert channel.transaction_owner is a
 
-        with patch.object(channel.writer, "wait_closed", blocked_wait_closed):
+        with parked:
             shutdown_a = asyncio.create_task(a.async_shutdown())
             await asyncio.sleep(0)  # parked inside close(): writer detached, wait_closed blocked
             assert not shutdown_a.done()
@@ -1235,19 +1239,14 @@ async def test_shutdown_does_not_wait_behind_own_error_teardown(
     """Own transaction already in error teardown holds the connect lock: no queuing on it."""
     fake, port = server
     a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
-    release_close = asyncio.Event()
     try:
         await a.connect()
         await b.connect()
         channel = a.channel
         assert channel is not None and channel.writer is not None
-        original_wait_closed = channel.writer.wait_closed
+        release_close, parked = _park_wait_closed(channel.writer)
 
-        async def blocked_wait_closed() -> None:
-            await release_close.wait()
-            await original_wait_closed()
-
-        with patch.object(channel.writer, "wait_closed", blocked_wait_closed):
+        with parked:
             fake.hold = True
             read_a = asyncio.create_task(a._read_input_registers(0, 1))
             await asyncio.wait_for(fake.frame_received.wait(), timeout=1.0)
@@ -1523,21 +1522,15 @@ async def test_last_lease_shutdown_sees_a_woken_sibling_teardown(
     """A sibling's teardown woken on the connect lock is visible: shutdown returns in bound."""
     fake, port = server
     a, b = _make(port, SERIAL_A), _make(port, SERIAL_B)
-    release_close = asyncio.Event()
     try:
         await a.connect()
         await b.connect()
         channel = a.channel
         assert channel is not None and channel.writer is not None
         await b.disconnect()  # A is the last lease; B stays bound, lease-less
-        writer = channel.writer
-        original_wait_closed = writer.wait_closed
+        release_close, parked = _park_wait_closed(channel.writer)
 
-        async def blocked_wait_closed() -> None:
-            await release_close.wait()
-            await original_wait_closed()
-
-        with patch.object(writer, "wait_closed", blocked_wait_closed):
+        with parked:
             await channel.connect_lock.acquire()  # stand-in for a dialer holding the lock
             reconnect_b = asyncio.create_task(b._force_reconnect())
             await asyncio.sleep(0)  # B's teardown is queued on the connect lock
@@ -1563,19 +1556,13 @@ async def test_transaction_owner_shutdown_sees_its_own_woken_teardown(
     """A's own error teardown woken on the connect lock is visible: shutdown returns in bound."""
     fake, port = server
     a = _make(port, SERIAL_A)
-    release_close = asyncio.Event()
     try:
         await a.connect()
         channel = a.channel
         assert channel is not None and channel.writer is not None
-        writer = channel.writer
-        original_wait_closed = writer.wait_closed
+        release_close, parked = _park_wait_closed(channel.writer)
 
-        async def blocked_wait_closed() -> None:
-            await release_close.wait()
-            await original_wait_closed()
-
-        with patch.object(writer, "wait_closed", blocked_wait_closed):
+        with parked:
             await channel.connect_lock.acquire()  # stand-in for a dialer holding the lock
             fake.hold = True
             read_a = asyncio.create_task(a._read_input_registers(0, 1))

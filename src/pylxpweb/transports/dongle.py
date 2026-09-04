@@ -967,30 +967,24 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
         shutdown does not permit another dial or sequence retry.
 
         Shared socket: the stream is torn down (generation bumped, siblings'
-        next transaction reconnects) only when THIS transport owns the active
-        dial, or owns the in-flight transaction while no sibling holds or is
-        queued for the connect lock (then under that lock, held through the
-        bounded close), or when nothing is in flight, no lease remains and no
-        sibling is dialing.  If a sibling owns the in-flight
-        transaction, holds the connect lock, or is queued for it, this lease
-        is just released and the socket (or the dongle's single slot) is
-        theirs — shutdown never blocks behind a sibling's dial.  Owning the
-        transaction is not owning the dial: this transport's inner
-        ``connect()`` can be queued behind a sibling's dial, and that
-        sibling's fresh socket must survive.  Either close under the connect
-        lock happens only when the lock is provably uncontended, which needs
-        two checks: the owner/waiter bookkeeping (it covers ``connect()``,
-        including a woken waiter that will capture the lock even while
-        ``locked()`` reads False) AND ``locked()`` itself (it covers every
-        other holder — ``teardown()`` / ``disconnect()`` closing the stream
-        with an ordinary 5 s bound).  If either says otherwise the lease is
-        released and shutdown returns at once: the stream is already being
-        closed (or the slot is a sibling's), and the terminal flag interrupts
-        this transport at its next ``_raise_if_shutdown()``.  Held through
-        the bounded ``wait_closed()``, the lock orders any later dial after
-        the old socket has actually gone.
-        Ordinary reusable disconnects retain the fully serialised
-        :meth:`disconnect` contract.
+        next transaction reconnects) in exactly three cases — THIS transport
+        owns the active dial (lock-free: the dial's own task holds the
+        connect lock); it owns the in-flight transaction; or it held the
+        last lease with nothing in flight.  The latter two close under the
+        connect lock, held through the bounded ``wait_closed()`` so a later
+        dial is ordered after the old socket has actually gone, and only
+        when that lock is provably free: nobody holds it (``locked()``) and
+        nobody is queued for it (``connect_owner`` / ``connect_waiters`` —
+        a sibling's dial, a sibling's or this transport's own queued
+        ``connect()``, or a queued ``teardown()`` / ``disconnect()``; the
+        bookkeeping sees a woken waiter that will capture the lock while
+        ``locked()`` still reads False).  Otherwise the lease is released
+        and shutdown returns at once: the socket (or the dongle's single
+        slot) is a sibling's, or is already being closed, and the terminal
+        flag interrupts this transport at its next ``_raise_if_shutdown()``
+        — shutdown never blocks behind another lock taker.  Ordinary
+        reusable disconnects retain the fully serialised :meth:`disconnect`
+        contract.
         """
         self._shutdown_requested = True
         channel = self._channel
@@ -1004,25 +998,19 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 # its post-open terminal check closes whatever it opens).
                 await channel.close(timeout=close_timeout)
             elif owner is self:
-                # Interrupt this transport's own in-flight transaction —
-                # unless a sibling holds or is queued for the connect lock,
-                # in which case the stream is (or is about to be) theirs and
-                # our queued connect() raises on resume instead.
-                # With no sibling holding or queued, the connect lock is
-                # taken and held through the bounded close so a sibling that
-                # sees the stream go down cannot dial before the old socket
-                # is gone; the only possible waiter is our own queued
-                # connect(), which raises on resume within one loop turn.
-                # Owner/waiter bookkeeping only covers connect(); teardown()
-                # and disconnect() hold the lock without it, with an ordinary
-                # (up to 5 s) close inside — so locked() is checked too.  If
-                # they hold it, the stream is already being closed: release
-                # the lease and return without waiting; the terminal flag
-                # interrupts this transport at its next _raise_if_shutdown().
-                # If this transport's OWN connect() is the queued waiter there
-                # is no in-flight I/O on the stream to interrupt (it raises on
-                # resume) — and the live stream belongs to whoever just
-                # finished dialing, so it must not be closed either.
+                # Interrupt this transport's own in-flight transaction, but
+                # only with the connect lock provably free (see docstring).
+                # A sibling dialing or queued: the stream is (or is about to
+                # be) theirs; our queued connect() raises on resume.  Our
+                # OWN queued connect(): nothing of ours is on the stream to
+                # interrupt (it raises on resume) and the live stream belongs
+                # to whoever just finished dialing — it must survive.  A
+                # queued (in connect_waiters) or holding (locked()) teardown()
+                # / disconnect(): the stream is already being closed under an
+                # ordinary, up to 5 s, bound — never wait behind it.  Holding
+                # the lock through the bounded close keeps a sibling that
+                # sees the stream go down from dialing before the old socket
+                # is gone.
                 if (
                     not channel.sibling_dialing(self)
                     and self not in channel.connect_waiters
@@ -1037,15 +1025,14 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                 and not channel.connect_waiters
                 and not channel.connect_lock.locked()
             ):
-                # Last lease, nothing in flight, no dialer, no queued dialer
-                # and no other holder (a sibling's disconnect() or teardown()
-                # closing the stream): the connect lock is genuinely
-                # uncontended, so the acquire below cannot suspend.  Holding
-                # it across the bounded close orders any later dial after the
-                # old socket has actually gone; the re-check guards a future
-                # suspension point, not a live race.  When another holder is
-                # closing, this lease is released and the closer's own exit
-                # retires the channel.
+                # Last lease, nothing in flight and the connect lock provably
+                # free (no dial, no queued acquirer of any kind, no holder),
+                # so the acquire below cannot suspend.  Holding it across the
+                # bounded close orders any later dial after the old socket
+                # has actually gone; the re-check guards a future suspension
+                # point, not a live race.  When another acquirer is closing,
+                # this lease is released and the closer's own exit retires
+                # the channel.
                 async with channel.connect_lock:
                     if channel.lease_count == 0 and channel.transaction_owner is None:
                         await channel.close(timeout=close_timeout)

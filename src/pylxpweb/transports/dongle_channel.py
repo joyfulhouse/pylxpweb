@@ -35,13 +35,16 @@ Model
   create / retire under one process-wide ``threading.Lock`` (check-then-create
   never suspends, so it is also atomic on a single loop).  Channels are
   single-loop objects: an attach from a different running loop is refused.
-* **Users and dialers** — ``_users`` counts tasks queued on or holding the
-  transaction/operation locks; ``connect_owner`` names the transport whose
-  ``connect()`` holds the connect lock and ``connect_waiters`` lists the
-  transports queued for it.  A channel is retired only when it has no lease,
-  no socket, no user, no dialer and no lock held, so a task queued on a lock
+* **Users and connect-lock takers** — ``_users`` counts tasks queued on or
+  holding the transaction/operation locks; ``connect_owner`` names the
+  transport whose ``connect()`` holds the connect lock and
+  ``connect_waiters`` lists every transport queued for it — dials,
+  teardowns and disconnects alike (:meth:`DongleChannel.acquire_connect_lock`).
+  A channel is retired only when it has no lease, no socket, no user, no
+  connect-lock owner or waiter and no lock held, so a task queued on a lock
   never wakes on a retired channel — and ``async_shutdown()`` can tell its
-  own dial from a sibling's without touching the lock.
+  own dial from a sibling's, and a free connect lock from one a woken waiter
+  is about to capture, without touching the lock.
 
 The dial ladder itself (retry/backoff, TLS-PSK auto-detection, initial-data
 discard) lives in ``DongleTransport._dial()``, called from ``connect()``
@@ -98,8 +101,9 @@ class DongleChannel:
     """Per-socket state shared by every lease on one dongle endpoint.
 
     Attributes are deliberately plain: ``DongleTransport`` is the only
-    writer, and it always holds the appropriate lock (``connect_lock`` for
-    stream replacement, ``transaction_lock`` for stream use).
+    writer, and it holds the appropriate lock (``connect_lock`` for stream
+    replacement, ``transaction_lock`` for stream use) — except when
+    ``async_shutdown()`` interrupts its own dial, whose task holds the lock.
     """
 
     def __init__(
@@ -124,9 +128,10 @@ class DongleChannel:
         self.connect_lock = asyncio.Lock()
         self.op_lock = _ChannelOpLock()
         self.transaction_owner: DongleTransport | None = None
-        # Dial bookkeeping: who holds connect_lock inside connect(), and who
-        # is queued for it (a queued waiter captures the lock on release,
-        # so "not locked()" alone never proves the lock is free to take).
+        # Connect-lock bookkeeping: connect_owner is the transport whose dial
+        # holds the lock; connect_waiters lists every transport queued for it
+        # (dials, teardowns, disconnects).  A queued waiter captures the lock
+        # on release, so "not locked()" alone never proves the lock is free.
         self.connect_owner: DongleTransport | None = None
         self.connect_waiters: list[DongleTransport] = []
         # --- TLS-PSK detection memo (per socket, shared by all leases) ---
@@ -196,10 +201,11 @@ class DongleChannel:
         """Mark the socket broken, bump ``generation`` and close it (bounded).
 
         Callers replacing the stream hold ``connect_lock`` (``teardown``
-        does); the terminal ``async_shutdown`` path calls this lock-free on
-        purpose so a muted dongle cannot hold shutdown behind a transaction.
-        Awaits ``wait_closed()`` (bounded) so the dongle's single slot is
-        actually free before the next dial.
+        does); ``async_shutdown`` interrupting its own active dial calls this
+        lock-free on purpose — the dial's task holds the lock — so a muted
+        dongle cannot hold shutdown behind it.  Awaits ``wait_closed()``
+        (bounded) so the dongle's single slot is actually free before the
+        next dial.
         """
         self.connected = False
         self.ssl_active = False
@@ -307,13 +313,13 @@ class DongleChannel:
         )
 
     def sibling_dialing(self, transport: DongleTransport) -> bool:
-        """Whether another transport holds, or is queued for, the connect lock."""
+        """Whether another transport's dial holds the connect lock, or another is queued for it."""
         owner = self.connect_owner
         if owner is not None and owner is not transport:
             return True
         return any(waiter is not transport for waiter in self.connect_waiters)
 
-    def retire_if_idle(self) -> bool:
+    def retire_if_idle(self) -> None:
         """Remove an idle shared channel from the registry.
 
         A retired channel is never reused: transports bound to it re-resolve
@@ -322,12 +328,11 @@ class DongleChannel:
         so an operation always finishes on the channel it started on.
         """
         if self.retired or not self.shared or not self.is_idle():
-            return False
+            return
         with _REGISTRY_LOCK:
             if _REGISTRY.get(self.key) is self:
                 del _REGISTRY[self.key]
         self.retired = True
-        return True
 
 
 # ----------------------------------------------------------------------
