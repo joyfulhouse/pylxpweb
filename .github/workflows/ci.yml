@@ -85,6 +85,40 @@ jobs:
           path: .pytest_cache/
           retention-days: 30
 
+  test-ha-pymodbus:
+    # Home Assistant core pins pymodbus (homeassistant/package_constraints.txt)
+    # below what uv.lock resolves, and that pin is what the eg4_web_monitor
+    # integration's users actually run. Exercise the Modbus transports on it.
+    name: Modbus transports on Home Assistant's pymodbus pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HA_PYMODBUS_VERSION: "3.13.1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Pin pymodbus to Home Assistant's version
+        # ``uv run`` re-syncs to the lock by default; ``--no-sync`` below keeps
+        # the pin in place for the test run.
+        run: |
+          uv pip install "pymodbus==${HA_PYMODBUS_VERSION}"
+          uv run --no-sync python -c "import pymodbus, sys; print('pymodbus', pymodbus.__version__); sys.exit(pymodbus.__version__ != '${HA_PYMODBUS_VERSION}')"
+
+      - name: Run transport tests
+        run: uv run --no-sync pytest tests/unit/transports/ -v
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -146,7 +180,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [lint, test, integration]
+    needs: [lint, test, test-ha-pymodbus, integration]
     if: always()
     steps:
       - name: Check all jobs
@@ -157,6 +191,10 @@ jobs:
           fi
           if [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "Test job failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-ha-pymodbus.result }}" != "success" ]]; then
+            echo "Home Assistant pymodbus pin job failed"
             exit 1
           fi
           if [[ "${{ needs.integration.result }}" != "success" ]] && [[ "${{ needs.integration.result }}" != "skipped" ]]; then

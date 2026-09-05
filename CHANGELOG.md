@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Backend-neutral Modbus client seam** (`pylxpweb.transports._modbus_client`).
+  `ModbusTransport` and `ModbusSerialTransport` now do wire I/O through a
+  `RegisterClient` adapter shaped like Home Assistant's `ModbusUnit` protocol
+  instead of calling pymodbus directly. Two backends ship:
+  - `backend="pymodbus"` — the historical default, unchanged behaviour,
+    still carrying the gateway transaction-ID workaround.
+  - `backend="modbus_connection"` — Home Assistant's shared-connection
+    library (`modbus-connection[tmodbus]`, tmodbus + serialx). Opt-in via
+    the new `modbus-connection` extra: `uv add 'pylxpweb[modbus-connection]'`.
+  - `backend="auto"` (the default) keeps pymodbus except for serial ports
+    only serialx can open (`esphome://…`), which select `modbus_connection`.
+- **Host-shared Modbus links**: both transports accept `unit=` — a
+  `ModbusUnit`-shaped object such as the one Home Assistant 2026.9's
+  `homeassistant.components.modbus.async_get_unit()` returns. The transport
+  then performs no dialing, never closes the shared link, and heals a wedged
+  link through the unit's own `disconnect()` (that library's documented
+  recovery path) instead of a close-and-redial.
+- `TransportConfig.backend` (serialised as `"backend"`, default `"auto"`),
+  passed through by `create_transport_from_config()`.
+- Home Assistant / ESPHome serial-proxy support via `esphome://` ports on the
+  `modbus_connection` backend
+  ([#180](https://github.com/joyfulhouse/pylxpweb/issues/180)); the extra
+  pulls in `serialx[esphome]` (aioesphomeapi), which serialx needs to register
+  that scheme. pymodbus remains pyserial-based upstream, so this no longer
+  waits on it.
+- CI job running the Modbus transport tests against the pymodbus version Home
+  Assistant core pins (3.13.1), which is what integration users actually run;
+  `uv.lock` resolves a newer release.
+
+### Changed
+
+- Typed transport errors raised from a backend failure keep the *backend's*
+  exception as `__cause__` (for example pymodbus' `ConnectionException`), not
+  the seam wrapper, preserving the existing contract for callers that inspect
+  the chain.
+- `ModbusTransport.async_shutdown()` and both transports' `disconnect()` now
+  await the underlying close, so a released endpoint is really closed before a
+  replacement dials. `ModbusSerialTransport.connect()` releases a cancelled or
+  failed dial instead of orphaning it.
+- On a host-shared link, the error-recycle gate counts only link errors
+  (timeouts, connection/protocol failures); a device's exception response never
+  recycles an endpoint other units and host consumers are using.
+
 ## [0.10.0b9] - 2026-09-04
 
 ### Changed
@@ -51,6 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sibling device's multi-step read; its single budget covers waiting for that
   lock too, and a probe that stays queued for the whole budget returns
   `False` without touching the socket.
+||||||| parent of 9c80aa2 (feat(transports): backend-neutral Modbus client seam + modbus-connection backend (#180))
 
 ## [0.10.0b8] - 2026-09-02
 
