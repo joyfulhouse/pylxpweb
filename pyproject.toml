@@ -31,7 +31,17 @@ Repository = "https://github.com/joyfulhouse/pylxpweb"
 parse = [
     "xlrd>=2.0.1",
 ]
+# Opt-in second Modbus backend: Home Assistant's shared-connection library
+# (tmodbus + serialx). Enables ``backend="modbus_connection"`` on the Modbus
+# transports and serialx URL ports such as ``esphome://`` (#180).
+modbus-connection = [
+    "modbus-connection[tmodbus]>=4.10.0",
+    # serialx's esphome:// URL scheme needs aioesphomeapi (serialx "esphome" extra).
+    "serialx[esphome]>=1.10.0",
+]
 dev = [
+    "modbus-connection[tmodbus]>=4.10.0",
+    "serialx[esphome]>=1.10.0",
     "pytest>=9.0.1",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",

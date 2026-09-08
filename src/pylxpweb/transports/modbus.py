@@ -22,9 +22,19 @@ import asyncio
 import hashlib
 import logging
 import time
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from ._modbus_base import INPUT_REGISTER_GROUPS, BaseModbusTransport
+from ._modbus_client import (
+    ModbusBackend,
+    ModbusConnectionUnit,
+    ModbusUnitLike,
+    PymodbusUnit,
+    RegisterClient,
+    normalize_backend,
+    patch_pymodbus_tid_validation,
+    resolve_backend,
+)
 from ._register_data import DEFAULT_INPUT_BLOCK_SIZE
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .exceptions import TransportConnectionError
@@ -135,6 +145,8 @@ class ModbusTransport(BaseModbusTransport):
         max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
         register_observer: RegisterObserver | None = None,
         session_max_age: float | None = _DEFAULT_SESSION_MAX_AGE,
+        backend: str = "auto",
+        unit: ModbusUnitLike | None = None,
     ) -> None:
         """Initialize Modbus transport.
 
@@ -165,6 +177,17 @@ class ModbusTransport(BaseModbusTransport):
                 proactive reconnect (default 3600), with deterministic per-
                 transport jitter of plus or minus ten percent. None disables
                 proactive recycling.
+            backend: Wire backend: ``"pymodbus"`` (the historical default,
+                carrying the gateway transaction-ID workaround),
+                ``"modbus_connection"`` (Home Assistant's shared-connection
+                library, tmodbus-based; requires the ``modbus-connection``
+                extra), or ``"auto"`` (pymodbus for TCP).
+            unit: A ``ModbusUnit``-shaped object supplied by a host — for
+                example Home Assistant's ``async_get_unit()`` — that already
+                addresses this inverter's unit ID over a shared link. The
+                transport then performs no dialing, never closes the link,
+                and heals a wedged link through the unit's ``disconnect()``.
+                Mutually exclusive with ``backend="pymodbus"``.
         """
         super().__init__(
             serial,
@@ -187,16 +210,33 @@ class ModbusTransport(BaseModbusTransport):
         )
         self._host = host
         self._port = port
-        # Narrow type for TCP client
-        self._client: AsyncModbusTcpClient | None = None
+        self._backend_setting = normalize_backend(backend)
+        self._backend: ModbusBackend = resolve_backend(self._backend_setting)
+        self._external_unit = unit
+        if unit is not None:
+            if self._backend_setting == "pymodbus":
+                raise ValueError("An injected unit cannot be used with the pymodbus backend")
+            self._backend = "modbus_connection"
+        # Raw backend handle: pymodbus client, owned ModbusConnection, or the
+        # injected unit. I/O goes through ``self._unit`` (see _modbus_base).
+        self._client: AsyncModbusTcpClient | Any | None = None
         self._session_started_at: float | None = None
         self._reconnect_retry_after: float | None = None
         self._session_reconnect_count = 0
+        # Adapters whose (possibly asynchronous) close is still settling;
+        # disconnect()/async_shutdown() await them so a released endpoint is
+        # really closed before a replacement dials.
+        self._draining_units: list[RegisterClient] = []
 
     @property
     def capabilities(self) -> TransportCapabilities:
         """Get Modbus transport capabilities."""
         return MODBUS_CAPABILITIES
+
+    @property
+    def backend(self) -> ModbusBackend:
+        """The wire backend this transport dials with."""
+        return self._backend
 
     @property
     def host(self) -> str:
@@ -229,68 +269,24 @@ class ModbusTransport(BaseModbusTransport):
         self._drop_session()
 
         try:
-            # Import pymodbus here to make it optional
-            from pymodbus.client import AsyncModbusTcpClient
-
-            client = AsyncModbusTcpClient(
-                host=self._host,
-                port=self._port,
-                timeout=self._timeout,
-                retries=self._pymodbus_retries,
-            )
-            self._client = client
-
-            connected = await client.connect()
-            if self._shutdown_requested:
-                # pymodbus close() becomes a no-op after the first call sets
-                # is_closing, even if the in-flight dial later installs a
-                # transport. Reset its version-dependent owner so this close
-                # reclaims that socket.
-                closing_owner = _closing_state_owner(client)
-                if closing_owner is not None:
-                    closing_owner.is_closing = False
-                else:
-                    _LOGGER.debug(
-                        "Unable to resolve pymodbus closing state for %s; "
-                        "attempting best-effort close",
-                        type(client).__name__,
-                    )
-                client.close()
-            self._raise_if_shutdown()
-            if not connected:
-                self._drop_session()
-                self._reconnect_retry_after = _monotonic() + _FAILED_RECONNECT_COOLDOWN
-                raise TransportConnectionError(
-                    f"Failed to connect to Modbus gateway at {self._host}:{self._port}"
-                )
-
-            self._connected = True
-            self._consecutive_errors = 0
-            self._session_started_at = _monotonic()
-            self._reconnect_retry_after = None
-
-            # Waveshare "Modbus TCP to RTU" gateways use MBAP framing on
-            # the TCP side but don't echo the request's transaction ID —
-            # they substitute their own counter. Patch pymodbus to skip
-            # TID validation and suppress stale response log spam.
-            self._patch_tid_validation()
-
-            _LOGGER.info(
-                "Modbus transport connected to %s:%s (unit %s) for %s",
-                self._host,
-                self._port,
-                self._unit_id,
-                self._serial,
-            )
-
+            if self._external_unit is not None:
+                self._attach_external_unit(self._external_unit)
+            elif self._backend == "modbus_connection":
+                await self._dial_modbus_connection()
+            else:
+                await self._dial_pymodbus()
         except asyncio.CancelledError:
             self._drop_session()
             self._reconnect_retry_after = _monotonic()
             raise
         except ImportError as err:
-            raise TransportConnectionError(
-                "pymodbus package not installed. Install with: uv add pymodbus"
-            ) from err
+            hint = (
+                "modbus-connection package not installed. "
+                "Install with: uv add 'pylxpweb[modbus-connection]'"
+                if self._backend == "modbus_connection"
+                else "pymodbus package not installed. Install with: uv add pymodbus"
+            )
+            raise TransportConnectionError(hint) from err
         except (TimeoutError, OSError) as err:
             self._drop_session()
             self._reconnect_retry_after = _monotonic() + _FAILED_RECONNECT_COOLDOWN
@@ -306,74 +302,151 @@ class ModbusTransport(BaseModbusTransport):
                 "(3) Modbus TCP is enabled on the inverter/datalogger."
             ) from err
 
-    def _patch_tid_validation(self) -> None:
-        """Disable MBAP transaction ID validation in pymodbus.
-
-        Waveshare RS485-to-Ethernet gateways use MBAP framing on the TCP
-        side but don't echo the request's transaction ID in responses --
-        they use their own incrementing counter. This causes pymodbus to
-        reject every response at two validation points:
-
-        1. ``framer.handleFrame``: ``if exp_tid and tid != exp_tid``
-        2. ``execute``: ``if response.transaction_id != request.transaction_id``
-
-        We patch ``handleFrame`` to pass ``exp_tid=0`` (disabling check 1)
-        and set the decoded PDU's TID to the expected value (fixing check 2).
-        Stale responses arriving after a future is resolved are also
-        silently dropped to prevent log spam.
-        """
-        if self._client is None:
-            return
-
-        ctx = getattr(self._client, "ctx", None)
-        if ctx is None or not hasattr(ctx, "framer"):
-            return
-
-        framer = ctx.framer
-        original_handle_frame = framer.handleFrame
-
-        def _patched_handle_frame(
-            data: bytes,
-            exp_devid: int,
-            exp_tid: int,
-        ) -> tuple[int, object | None]:
-            used_len, pdu = original_handle_frame(data, exp_devid, 0)
-            if pdu is not None:
-                # Drop stale responses whose future is already resolved.
-                future = getattr(ctx, "response_future", None)
-                if future is not None and future.done():
-                    return used_len, None
-                if exp_tid:
-                    pdu.transaction_id = exp_tid
-            return used_len, pdu
-
-        framer.handleFrame = _patched_handle_frame
-        _LOGGER.debug(
-            "Patched TID validation for Modbus gateway %s:%s (%s)",
+        self._connected = True
+        self._consecutive_errors = 0
+        self._session_started_at = _monotonic()
+        self._reconnect_retry_after = None
+        _LOGGER.info(
+            "Modbus transport connected to %s:%s (unit %s, backend %s) for %s",
             self._host,
             self._port,
+            self._unit_id,
+            "shared" if self._external_unit is not None else self._backend,
             self._serial,
         )
 
+    def _attach_external_unit(self, unit: ModbusUnitLike) -> None:
+        """Adopt a host-supplied shared unit; no I/O by that library's contract."""
+        self._client = unit
+        self._unit = ModbusConnectionUnit(unit)
+
+    async def _dial_modbus_connection(self) -> None:
+        """Open an owned ``modbus_connection`` (tmodbus) link."""
+        from modbus_connection import ModbusTcpParams
+        from modbus_connection import exceptions as mc_exc
+        from modbus_connection.tmodbus import ModbusConnection
+
+        connection = ModbusConnection(
+            ModbusTcpParams(host=self._host, port=self._port),
+            timeout=self._timeout,
+        )
+        self._client = connection
+        self._unit = ModbusConnectionUnit(connection.for_unit(self._unit_id), connection=connection)
+        try:
+            await connection.connect()
+        except (mc_exc.ModbusError, TimeoutError, OSError) as err:
+            self._drop_session()
+            self._reconnect_retry_after = _monotonic() + _FAILED_RECONNECT_COOLDOWN
+            _LOGGER.error(
+                "Failed to connect to Modbus gateway at %s:%s: %s",
+                self._host,
+                self._port,
+                err,
+            )
+            raise TransportConnectionError(
+                f"Failed to connect to Modbus gateway at {self._host}:{self._port}: {err}"
+            ) from err
+        if self._shutdown_requested:
+            self._drop_session()
+        self._raise_if_shutdown()
+
+    async def _dial_pymodbus(self) -> None:
+        """Open an owned pymodbus TCP client (with the gateway TID workaround)."""
+        # Import pymodbus here to make it optional
+        from pymodbus.client import AsyncModbusTcpClient
+
+        client = AsyncModbusTcpClient(
+            host=self._host,
+            port=self._port,
+            timeout=self._timeout,
+            retries=self._pymodbus_retries,
+        )
+        self._client = client
+        self._unit = PymodbusUnit(client, self._unit_id)
+
+        connected = await client.connect()
+        if self._shutdown_requested:
+            # pymodbus close() becomes a no-op after the first call sets
+            # is_closing, even if the in-flight dial later installs a
+            # transport. Reset its version-dependent owner so this close
+            # reclaims that socket.
+            closing_owner = _closing_state_owner(client)
+            if closing_owner is not None:
+                closing_owner.is_closing = False
+            else:
+                _LOGGER.debug(
+                    "Unable to resolve pymodbus closing state for %s; attempting best-effort close",
+                    type(client).__name__,
+                )
+            client.close()
+        self._raise_if_shutdown()
+        if not connected:
+            self._drop_session()
+            self._reconnect_retry_after = _monotonic() + _FAILED_RECONNECT_COOLDOWN
+            raise TransportConnectionError(
+                f"Failed to connect to Modbus gateway at {self._host}:{self._port}"
+            )
+
+        # Some "Modbus TCP to RTU" gateways were observed to use MBAP framing
+        # on the TCP side without echoing the request's transaction ID.
+        # Patch pymodbus to skip TID validation and suppress stale response
+        # log spam (see patch_pymodbus_tid_validation).
+        self._patch_tid_validation()
+
+    def _patch_tid_validation(self) -> None:
+        """Apply the gateway transaction-ID workaround to the pymodbus client."""
+        if self._client is None:
+            return
+        patch_pymodbus_tid_validation(
+            self._client,
+            label=f"{self._host}:{self._port} ({self._serial})",
+        )
+
     def _drop_session(self) -> None:
-        """Close and forget the client, marking the session as dead."""
-        if self._client is not None:
-            self._client.close()
-            self._client = None
+        """Release the client and forget it, marking the session as dead.
+
+        Owned links close (pymodbus synchronously, modbus_connection in a
+        background task that :meth:`disconnect` awaits); a host-shared unit
+        is only detached, never closed.
+        """
+        unit = self._unit
+        if unit is not None:
+            unit.close()
+            self._draining_units.append(unit)
+        elif self._client is not None and self._external_unit is None:
+            # A raw client that never got its adapter (defensive; the dial
+            # paths install both together).
+            close = getattr(self._client, "close", None)
+            if callable(close):
+                close()
+        self._client = None
+        self._unit = None
         self._connected = False
         self._session_started_at = None
+
+    async def _drain_closes(self) -> None:
+        """Await every pending adapter close (idempotent, cancellation-safe)."""
+        while self._draining_units:
+            unit = self._draining_units.pop(0)
+            await unit.aclose()
 
     async def disconnect(self) -> None:
         """Close the Modbus TCP connection under the operation lock."""
         async with self._op_lock:
             self._drop_session()
+            await self._drain_closes()
             self._reconnect_retry_after = None
             _LOGGER.debug("Modbus transport disconnected for %s", self._serial)
 
     async def async_shutdown(self) -> None:
-        """Terminally close the session without waiting for the operation lock."""
+        """Terminally close the session without waiting for the operation lock.
+
+        The close itself is awaited, so a caller releasing this endpoint may
+        dial a replacement immediately afterwards.
+        """
         self._shutdown_requested = True
         self._drop_session()
+        await self._drain_closes()
         _LOGGER.debug("Modbus transport shut down for %s", self._serial)
 
     def _raise_if_shutdown(self) -> None:
@@ -387,8 +460,28 @@ class ModbusTransport(BaseModbusTransport):
         """Reconnect Modbus client to reset transaction ID state.
 
         Called at operation boundaries for absent, failed, or over-age sessions.
+
+        On a host-shared link only the error-recycle applies, and it goes
+        through the unit's own ``disconnect()`` so the host's connection
+        re-dials on the next request; the link's age and lifecycle are the
+        host's, not this transport's.
         """
         async with self._lock:
+            if self.backend_shares_link:
+                if not self._shared_link_needs_recycle():
+                    return
+                self._session_reconnect_count += 1
+                _LOGGER.warning(
+                    "Recycling shared Modbus link for %s: reason=error-recycle errors=%d count=%d",
+                    self._serial,
+                    self._consecutive_errors,
+                    self._session_reconnect_count,
+                )
+                await self._recycle_link()
+                self._consecutive_errors = 0
+                self._consecutive_link_errors = 0
+                return
+
             now = _monotonic()
             if self._reconnect_retry_after is not None and now < self._reconnect_retry_after:
                 remaining = self._reconnect_retry_after - now
