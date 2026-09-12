@@ -8,6 +8,7 @@ A Python client library for Luxpower/EG4 solar inverters and energy storage syst
 [![CI][ci-shield]][ci]
 [![GitHub Sponsors][sponsors-shield]][sponsors]
 [![Ko-fi][kofi-shield]][kofi]
+[![Built with Omnigent][omnigent-shield]][omnigent]
 
 ## What It Does
 
@@ -236,6 +237,14 @@ library from the start.
 **Disclaimer**: Unofficial library, not affiliated with Luxpower or EG4 Electronics.
 Communicates with the official API using the same endpoints as the official web interface.
 
+---
+
+<p align="center">
+  <a href="https://github.com/omnigent-ai/omnigent"><img src="https://raw.githubusercontent.com/joyfulhouse/.github/main/assets/badges/built-with-omnigent.svg" alt="Built with Omnigent"></a>
+  <br>
+  <sub>Built with <a href="https://github.com/omnigent-ai/omnigent">Omnigent</a> — the open-source AI agent framework and meta-harness.</sub>
+</p>
+
 <!-- Badge links -->
 [pypi-shield]: https://img.shields.io/pypi/v/pylxpweb.svg?style=for-the-badge
 [pypi]: https://pypi.org/project/pylxpweb/
@@ -247,4 +256,6 @@ Communicates with the official API using the same endpoints as the official web 
 [sponsors]: https://github.com/sponsors/btli
 [kofi-shield]: https://img.shields.io/badge/Ko--fi-donate-FF5E5B.svg?style=for-the-badge&logo=ko-fi&logoColor=white
 [kofi]: https://ko-fi.com/bryanli
+[omnigent-shield]: https://raw.githubusercontent.com/joyfulhouse/.github/main/assets/badges/built-with-omnigent.svg
+[omnigent]: https://github.com/omnigent-ai/omnigent
 [crosslink]: https://github.com/joyfulhouse/eg4_web_monitor
