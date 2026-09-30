@@ -53,18 +53,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same close. `connect()` (including the replacement dial after a failed or
   cancelled one) waits for every prior owned close before dialing, and serial
   `connect()`/`disconnect()` now take the operation lock, as TCP's do.
-- On `modbus_connection`, a replacement never dials before the previous
-  owned link is released. tmodbus 0.6.2 returns from `close()` before serialx
-  has closed the port's descriptor (or ESPHome connection), so the transport
-  also awaits the serialx transport's `wait_closed()`. One 5 s budget per
-  drain covers the whole teardown: waiting out an in-flight connect, the close,
-  and the link's release. Nothing is cancelled when it expires.
-  `disconnect()`/`async_shutdown()` then log a warning and return, releasing
-  the operation lock, but the transport keeps tracking the link. The next
-  `connect()` waits for it again (same bound) and raises
-  `TransportConnectionError` rather than dialing while it is still held. A
-  replacement on another transport instance may still collide with a link that
-  outlives the bound.
+- On `modbus_connection`, an owned connection never dials a new link while
+  one it created earlier is still held. tmodbus 0.6.2 returns from `close()`
+  before serialx has closed the port's descriptor (or ESPHome connection). So
+  the owned connection records every link's serialx `wait_closed()` when the
+  link is created. Before every dial it waits for all earlier links to be
+  released: after pylxpweb's own disconnect, and after modbus-connection's
+  automatic reconnect following a desync. The wait is bounded at 5 s and
+  never cancels; a link still held at that bound fails the dial as a
+  connection error.
+  `disconnect()`/`async_shutdown()` spend one 5 s budget on the close
+  (including an in-flight connect) and those releases. If the budget runs out
+  they log a warning and return, releasing the operation lock. The transport
+  keeps tracking the link, and the next `connect()` raises
+  `TransportConnectionError` while it is still held. A replacement on another
+  transport instance may still collide with a link that outlives the bound.
   asyncio TCP sockets expose no such wait. With an empty write buffer they are
   closed by the time a close waiter resumes; unsent data would delay that
   unobservably. A close that raises is dropped from tracking instead of

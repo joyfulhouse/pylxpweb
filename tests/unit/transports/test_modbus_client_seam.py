@@ -20,6 +20,7 @@ from modbus_connection import ModbusTcpParams
 from modbus_connection import exceptions as mc_exc
 from modbus_connection.tmodbus import ModbusConnection
 from pymodbus.exceptions import ConnectionException, ModbusIOException
+from tmodbus.exceptions import HeaderMismatchError
 
 from pylxpweb.transports import _modbus_client
 from pylxpweb.transports._modbus_client import (
@@ -695,6 +696,74 @@ class _BlockedClose:
         self.closed = True
 
 
+class _FakeLink:
+    """A serialx-shaped link whose release is event-controlled."""
+
+    def __init__(self) -> None:
+        self.closing = False
+        self.release = asyncio.Event()
+
+    def close(self) -> None:
+        self.closing = True
+
+    async def wait_closed(self) -> None:
+        await self.release.wait()
+
+
+class _FakeTmodbusClient:
+    """A tmodbus ``AsyncModbusClient``-shaped client over a :class:`_FakeLink`."""
+
+    def __init__(self, link: _FakeLink) -> None:
+        self.link = link
+        self.transport = MagicMock()
+        self.transport.base_transport._transport = link
+        self.error: Exception | None = None
+
+    def for_unit_id(self, unit_id: int) -> _FakeTmodbusClient:
+        return self
+
+    async def disconnect(self) -> None:
+        # tmodbus 0.6.2: closes the serialx transport and returns at once.
+        self.link.close()
+
+    async def read_holding_registers(self, address: int, count: int) -> list[int]:
+        if self.error is not None:
+            error, self.error = self.error, None
+            raise error
+        return [0] * count
+
+
+class _LinkFactory:
+    """Stands in for tmodbus client creation under the real owned connection."""
+
+    def __init__(self) -> None:
+        self.clients: list[_FakeTmodbusClient] = []
+        self.dial_gate: asyncio.Event | None = None
+        self.auto_release = False
+
+    async def connect_client(self) -> _FakeTmodbusClient:
+        if self.dial_gate is not None:
+            await self.dial_gate.wait()
+        link = _FakeLink()
+        if self.auto_release:
+            link.release.set()
+        client = _FakeTmodbusClient(link)
+        self.clients.append(client)
+        return client
+
+
+@pytest.fixture
+def links(monkeypatch: pytest.MonkeyPatch) -> _LinkFactory:
+    """Replace tmodbus client creation beneath pylxpweb's release-gated connection."""
+    factory = _LinkFactory()
+
+    async def connect_client(self: ModbusConnection) -> _FakeTmodbusClient:
+        return await factory.connect_client()
+
+    monkeypatch.setattr(ModbusConnection, "_connect_client", connect_client)
+    return factory
+
+
 class TestLifecycleRegressions:
     @pytest.mark.parametrize("action", ["connect", "disconnect"])
     async def test_serial_lifecycle_waits_for_operation_lock(self, action: str) -> None:
@@ -896,104 +965,54 @@ class TestLifecycleRegressions:
         clients[0].close.assert_called_once()
 
     @pytest.mark.parametrize("kind", ["tcp", "serial"])
-    async def test_replacement_dial_waits_for_link_release(
-        self, kind: str, monkeypatch: pytest.MonkeyPatch
+    async def test_backend_desync_reconnect_waits_for_link_release(
+        self, kind: str, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A backend close() that returns before the OS link is released is not enough.
-
-        Real-shaped chain (tmodbus 0.6.2 over serialx): ``close()`` closes the
-        transport synchronously and returns, while the descriptor is released
-        later and resolves ``wait_closed()``. No replacement may dial before that.
-        """
+        """modbus-connection's own reconnect after a desync cannot beat the old link's release."""
+        monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 1.0)
         transport = _lifecycle_transport(kind)
-        release = asyncio.Event()
-
-        class _Link:
-            def __init__(self) -> None:
-                self.closing = False
-
-            def close(self) -> None:
-                self.closing = True
-
-            async def wait_closed(self) -> None:
-                await release.wait()
-
-        link = _Link()
-
-        class _Connection:
-            def __init__(self) -> None:
-                self._connect_task = None
-                self._client = MagicMock()
-                self._client.transport.base_transport._transport = link
-
-            async def close(self) -> None:
-                link.close()
-
-        transport._unit = ModbusConnectionUnit(_FakeUnit(), connection=_Connection())
-        dial_started = asyncio.Event()
-
-        async def dial() -> None:
-            dial_started.set()
-            transport._unit = ModbusConnectionUnit(_FakeUnit())
-
-        monkeypatch.setattr(
-            transport,
-            "_dial_modbus_connection" if kind == "tcp" else "_open_modbus_connection",
-            dial,
-        )
-        replacement = asyncio.create_task(transport.connect())
-        try:
-            with pytest.raises(TimeoutError):
-                await asyncio.wait_for(dial_started.wait(), 0.05)
-            assert link.closing
-        finally:
-            release.set()
-        await asyncio.wait_for(replacement, 2.0)
-        assert dial_started.is_set()
+        await transport.connect()
+        first = links.clients[0]
+        # The real _map_errors wrapper drops the link on a header mismatch.
+        first.error = HeaderMismatchError("mismatch", response_bytes=b"")
+        with pytest.raises(TransportReadError):
+            await transport.read_parameters(0, 1)
+        assert first.link.closing
+        # The next operation's automatic reconnect waits for the release.
+        read = asyncio.create_task(transport.read_parameters(0, 1))
+        await asyncio.sleep(0.05)
+        assert len(links.clients) == 1
+        assert not read.done()
+        first.link.release.set()
+        assert await asyncio.wait_for(read, 1.0) == {0: 0}
+        assert len(links.clients) == 2
+        # An explicit disconnect/connect waits for the release too.
+        replace = asyncio.create_task(self._reconnect(transport))
+        await asyncio.sleep(0.05)
+        assert len(links.clients) == 2
+        links.clients[1].link.release.set()
+        await asyncio.wait_for(replace, 1.0)
+        assert len(links.clients) == 3
+        links.clients[2].link.release.set()
         await transport.disconnect()
+
+    @staticmethod
+    async def _reconnect(transport: ModbusTransport | ModbusSerialTransport) -> None:
+        await transport.disconnect()
+        await transport.connect()
 
     @pytest.mark.parametrize(
         ("kind", "method"),
         [("tcp", "disconnect"), ("tcp", "async_shutdown"), ("serial", "disconnect")],
     )
     async def test_unreleased_link_blocks_replacement_dial(
-        self, kind: str, method: str, monkeypatch: pytest.MonkeyPatch
+        self, kind: str, method: str, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A release that outlives the bound: close returns, but no replacement dials."""
         monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.05)
         transport = _lifecycle_transport(kind)
-        release = asyncio.Event()
-
-        class _Link:
-            def close(self) -> None:
-                pass
-
-            async def wait_closed(self) -> None:
-                await release.wait()
-
-        class _Connection:
-            def __init__(self) -> None:
-                self._connect_task = None
-                self._client = MagicMock()
-                self._client.transport.base_transport._transport = _Link()
-
-            async def close(self) -> None:
-                pass
-
-        held = ModbusConnectionUnit(_FakeUnit(), connection=_Connection())
-        transport._unit = held
-        dials = 0
-
-        async def dial() -> None:
-            nonlocal dials
-            dials += 1
-            transport._unit = ModbusConnectionUnit(_FakeUnit())
-
-        monkeypatch.setattr(
-            transport,
-            "_dial_modbus_connection" if kind == "tcp" else "_open_modbus_connection",
-            dial,
-        )
+        await transport.connect()
+        held = transport._unit
         # (a) The close is bounded: it returns while the link is still held.
         await asyncio.wait_for(getattr(transport, method)(), 1.0)
         assert transport._draining_units == [held]
@@ -1002,13 +1021,13 @@ class TestLifecycleRegressions:
         # (b) A replacement connect waits (bounded) again, then refuses to dial.
         with pytest.raises(TransportConnectionError, match="still being released"):
             await asyncio.wait_for(transport.connect(), 1.0)
-        assert dials == 0
-        assert transport._draining_units == [held]
+        assert len(links.clients) == 1
         # (c) Once the link is released, the next connect dials.
-        release.set()
+        links.clients[0].link.release.set()
         await asyncio.wait_for(transport.connect(), 1.0)
-        assert dials == 1
+        assert len(links.clients) == 2
         assert transport._draining_units == []
+        links.clients[1].link.release.set()
         await transport.disconnect()
 
     @pytest.mark.parametrize(
@@ -1016,42 +1035,22 @@ class TestLifecycleRegressions:
         [("tcp", "disconnect"), ("tcp", "async_shutdown"), ("serial", "disconnect")],
     )
     async def test_stuck_in_flight_connect_does_not_hold_teardown(
-        self, kind: str, method: str, monkeypatch: pytest.MonkeyPatch
+        self, kind: str, method: str, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A dial whose failed-open cleanup never finishes cannot wedge disconnect()."""
+        """A cancelled dial that never finishes cannot wedge disconnect()."""
         monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.05)
         transport = _lifecycle_transport(kind)
-        cleanup_done = asyncio.Event()
-
-        class _Connection:
-            def __init__(self) -> None:
-                # The in-flight connect: stuck in serialx's unbounded
-                # wait_closed() after a failed open.
-                self._connect_task = asyncio.ensure_future(cleanup_done.wait())
-                self._client = None
-
-            async def close(self) -> None:
-                await self._connect_task
-
-        connection = _Connection()
-        held = ModbusConnectionUnit(_FakeUnit(), connection=connection)
-        transport._unit = held
-        dials = 0
-
-        async def dial() -> None:
-            nonlocal dials
-            dials += 1
-            transport._unit = ModbusConnectionUnit(_FakeUnit())
-
-        monkeypatch.setattr(
-            transport,
-            "_dial_modbus_connection" if kind == "tcp" else "_open_modbus_connection",
-            dial,
-        )
+        links.dial_gate = asyncio.Event()
+        links.auto_release = True
+        dial = asyncio.create_task(transport.connect())
+        await asyncio.sleep(0.01)
+        dial.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await dial
+        held = transport._draining_units[0]
         try:
-            # (a) Teardown returns within the bound; the cleanup keeps running.
+            # (a) Teardown returns within the bound; the dial keeps running.
             await asyncio.wait_for(getattr(transport, method)(), 1.0)
-            assert not connection._connect_task.done()
             assert not held.released
             assert transport._draining_units == [held]
             # (b) The operation lock is free again.
@@ -1062,16 +1061,15 @@ class TestLifecycleRegressions:
             # (c) connect() refuses while the close is still pending.
             with pytest.raises(TransportConnectionError, match="still being released"):
                 await asyncio.wait_for(transport.connect(), 1.0)
-            assert dials == 0
-            # (d) Once the cleanup completes, connect() dials.
-            cleanup_done.set()
+            assert links.clients == []
+            # (d) Once the stuck dial finishes (and its link is released), connect() dials.
+            links.dial_gate.set()
             await asyncio.wait_for(transport.connect(), 1.0)
-            assert dials == 1
+            assert len(links.clients) == 2
             assert transport._draining_units == []
             await transport.disconnect()
         finally:
-            cleanup_done.set()
-            await connection._connect_task
+            links.dial_gate.set()
 
     async def test_owned_serial_close_releases_the_port(self) -> None:
         """Real tmodbus + serialx over a pty: disconnect() returns with the fd closed."""

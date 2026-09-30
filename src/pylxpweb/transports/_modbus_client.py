@@ -20,6 +20,7 @@ backend-agnostic.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -39,6 +40,7 @@ __all__ = [
     "RegisterLinkError",
     "RegisterTimeoutError",
     "normalize_backend",
+    "owned_modbus_connection",
     "patch_pymodbus_tid_validation",
     "resolve_backend",
     "select_backend",
@@ -405,10 +407,6 @@ class ModbusConnectionUnit:
         self._unit = unit
         self._connection = connection
         self._close_task: asyncio.Task[None] | None = None
-        # The closed link's release (serialx ``wait_closed()``), awaited by
-        # every aclose() but never cancelled, so a bounded wait that expires
-        # can be resumed later.
-        self._release: asyncio.Future[Any] | None = None
 
     @property
     def owns_link(self) -> bool:
@@ -416,7 +414,8 @@ class ModbusConnectionUnit:
 
     @property
     def released(self) -> bool:
-        return all(step is None or step.done() for step in (self._close_task, self._release))
+        closing = self._close_task is not None and not self._close_task.done()
+        return not closing and not _pending_releases(self._connection)
 
     async def read_holding_registers(self, address: int, count: int) -> list[int]:
         return list(await self._call(self._unit.read_holding_registers, address, count))
@@ -453,13 +452,13 @@ class ModbusConnectionUnit:
         self.close()
         # One LINK_RELEASE_TIMEOUT_SECONDS budget covers the whole teardown:
         # the close task (which first waits out an in-flight connect, then
-        # closes) and the link's release after it. asyncio.wait() neither
-        # cancels what it waits on nor raises on timeout, so on expiry both
-        # keep running and ``released`` stays False until they finish.
+        # closes) and the release of every link the connection created.
+        # Nothing waited on is cancelled, so on expiry both keep running and
+        # ``released`` stays False until they finish.
         deadline = time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS
-        await _wait_until(self._close_task, deadline)
-        # Read only now: the close task is what sets ``_release``.
-        await _wait_until(self._release, deadline)
+        await _wait_until([self._close_task] if self._close_task else [], deadline)
+        # Read only now: a connect in flight at close() records its link late.
+        await _wait_until(_pending_releases(self._connection), deadline)
         if not self.released:
             _LOGGER.warning(
                 "Modbus link not released %.1fs after close; no replacement will dial until it is",
@@ -468,9 +467,7 @@ class ModbusConnectionUnit:
 
     async def _close_connection(self, connection: Any) -> None:
         try:
-            link = await _owned_link_transport(connection)
             await connection.close()
-            self._release = _link_release(link)
         except Exception as err:  # teardown must not raise
             _LOGGER.debug("Modbus connection close raised %s: %s", type(err).__name__, err)
 
@@ -498,48 +495,96 @@ class ModbusConnectionUnit:
             raise RegisterLinkError(str(err)) from err
 
 
-async def _wait_until(step: asyncio.Future[Any] | None, deadline: float) -> None:
-    """Wait for ``step`` until ``deadline`` without cancelling it or raising."""
-    if step is not None and not step.done():
-        await asyncio.wait((step,), timeout=max(0.0, deadline - time.monotonic()))
+async def _wait_until(steps: list[asyncio.Future[Any]], deadline: float) -> None:
+    """Wait for ``steps`` until ``deadline`` without cancelling them or raising."""
+    pending = [step for step in steps if not step.done()]
+    if pending:
+        await asyncio.wait(pending, timeout=max(0.0, deadline - time.monotonic()))
 
 
-async def _owned_link_transport(connection: Any) -> Any:
-    """Return the OS-level transport under an owned ``ModbusConnection``, if any.
+def _pending_releases(connection: Any) -> list[asyncio.Future[Any]]:
+    """Releases still pending for links an owned connection created (none if shared)."""
+    releases = getattr(connection, "pending_releases", None)
+    return list(releases) if isinstance(releases, list) else []
 
-    ``ModbusConnection.close()`` returns before the serial port is released:
-    tmodbus 0.6.2's ``AsyncRtuTransport.close()`` calls the serialx
-    transport's synchronous ``close()`` without awaiting, and serialx
-    (1.8.2 through 1.11.0) closes the descriptor in a background task that
-    resolves ``wait_closed()``. Nothing public exposes that transport, so this
-    walks the private chain of modbus-connection 4.10.0-4.12.3 and tmodbus
-    0.6.2 (``_client.transport.base_transport._transport``) defensively and
-    returns ``None`` when the layout differs. A connect still in flight is
-    waited out first, as ``close()`` itself does, so its link is captured
-    rather than released unobserved. That wait runs inside the adapter's close
-    task, which callers only ever wait on within the bound in ``aclose()``.
+
+def owned_modbus_connection(params: Any, *, timeout: float) -> Any:
+    """Build an owned tmodbus ``ModbusConnection`` whose every dial waits for release.
+
+    See :func:`_release_gated_connection_class`.
     """
-    flight = getattr(connection, "_connect_task", None)
-    if isinstance(flight, asyncio.Future) and not flight.done():
-        await asyncio.wait((flight,))
-    client = getattr(connection, "_client", None)
+    return _release_gated_connection_class()(params, timeout=timeout)
+
+
+@functools.cache
+def _release_gated_connection_class() -> type[Any]:
+    """The owned-connection class: every new link waits for the old one's release.
+
+    Root cause this works around (upstream: tmodbus ``close()`` should await
+    the serialx transport's ``wait_closed()``): tmodbus 0.6.2's transport
+    ``close()`` calls serialx's synchronous ``close()`` and returns, while
+    serialx (1.8.2 through 1.11.0) releases the descriptor or ESPHome
+    connection later in a background task. Any path that closes a link and
+    then dials — pylxpweb's own disconnect/connect, or modbus-connection's
+    automatic reconnect after it drops a desynchronised link — could otherwise
+    open the port again while the old one is still held.
+
+    The choke point is ``ModbusConnection._connect_client()`` (the private
+    hook every dial goes through in modbus-connection 4.10.0 through 4.12.3):
+    it records each new client's serialx link at creation and, before creating
+    the next one, waits up to ``LINK_RELEASE_TIMEOUT_SECONDS`` (never
+    cancelling) for every earlier link's release. A link still held at that
+    bound fails the dial with ``ModbusConnectionError``. asyncio TCP sockets
+    expose no ``wait_closed()``; with an empty write buffer they are closed by
+    the time a close waiter resumes (unsent data would delay that
+    unobservably), so they count as released at once. Without the hook
+    (another modbus-connection layout) the plain class is used ungated.
+    """
+    from modbus_connection.exceptions import ModbusConnectionError
+    from modbus_connection.tmodbus import ModbusConnection
+    from tmodbus.client import AsyncModbusClient
+
+    if not callable(getattr(ModbusConnection, "_connect_client", None)):
+        _LOGGER.debug("modbus-connection has no _connect_client hook; link release is ungated")
+        return ModbusConnection
+
+    class ReleaseGatedModbusConnection(ModbusConnection):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._link_releases: list[asyncio.Future[Any]] = []
+
+        @property
+        def pending_releases(self) -> list[asyncio.Future[Any]]:
+            """Releases of links this connection created that have not happened yet."""
+            return [release for release in self._link_releases if not release.done()]
+
+        async def _connect_client(self) -> AsyncModbusClient:
+            await _wait_until(
+                self.pending_releases, time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS
+            )
+            self._link_releases = self.pending_releases
+            if self._link_releases:
+                raise ModbusConnectionError(
+                    f"previous link to {self._target} is still being released"
+                )
+            client = await super()._connect_client()
+            release = _link_release(client)
+            if release is not None:
+                self._link_releases.append(release)
+            return client
+
+    return ReleaseGatedModbusConnection
+
+
+def _link_release(client: Any) -> asyncio.Future[Any] | None:
+    """Start observing a new tmodbus client's link release, if observable.
+
+    Reads the one private step tmodbus 0.6.2 offers no public accessor for:
+    ``client.transport.base_transport._transport``, the serialx transport.
+    """
     smart = getattr(client, "transport", None)
     base = getattr(smart, "base_transport", smart)
-    return getattr(base, "_transport", None)
-
-
-def _link_release(link: Any) -> asyncio.Future[Any] | None:
-    """Start observing a closed transport's OS-resource release, if observable.
-
-    serialx transports (descriptor and ``esphome://``) expose ``wait_closed()``.
-    asyncio's socket transports do not. With an empty write buffer their
-    ``close()`` queues the socket close ahead of the callbacks that wake
-    anyone awaiting this close, so the socket is closed when those waiters
-    resume; with unsent data the close waits for the buffer to drain, which
-    asyncio does not expose. Modbus requests are small and answered before
-    the next is sent, so that buffer is normally empty at close.
-    """
-    wait_closed = getattr(link, "wait_closed", None)
+    wait_closed = getattr(getattr(base, "_transport", None), "wait_closed", None)
     if not callable(wait_closed):
         return None
     release: asyncio.Future[Any] = asyncio.ensure_future(wait_closed())

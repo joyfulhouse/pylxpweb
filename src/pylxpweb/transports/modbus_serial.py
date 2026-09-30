@@ -29,7 +29,13 @@ import logging
 from typing import TYPE_CHECKING, Literal
 
 from ._modbus_base import BaseModbusTransport
-from ._modbus_client import ModbusConnectionUnit, ModbusUnitLike, PymodbusUnit, select_backend
+from ._modbus_client import (
+    ModbusConnectionUnit,
+    ModbusUnitLike,
+    PymodbusUnit,
+    owned_modbus_connection,
+    select_backend,
+)
 from ._register_data import DEFAULT_INPUT_BLOCK_SIZE
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .exceptions import TransportConnectionError
@@ -289,7 +295,6 @@ class ModbusSerialTransport(BaseModbusTransport):
         """Open the port with modbus_connection (tmodbus + serialx)."""
         from modbus_connection import ModbusSerialParams
         from modbus_connection import exceptions as mc_exc
-        from modbus_connection.tmodbus import ModbusConnection
 
         params = ModbusSerialParams(
             device=self._port,
@@ -298,7 +303,7 @@ class ModbusSerialTransport(BaseModbusTransport):
             parity=_literal_parity(self._parity),
             stopbits=_literal_stopbits(self._stopbits),
         )
-        connection = ModbusConnection(params, timeout=self._timeout)
+        connection = owned_modbus_connection(params, timeout=self._timeout)
         self._client = connection
         self._unit = ModbusConnectionUnit(connection.for_unit(self._unit_id), connection=connection)
         try:
@@ -308,8 +313,9 @@ class ModbusSerialTransport(BaseModbusTransport):
             # calls connection_made synchronously before create_serial_connection
             # returns, and drains its own failed opens (close + wait_closed)
             # before raising, so tmodbus 0.6.2's unawaited _abort_failed_open()
-            # path is unreachable here. A serialx that defers connection_made
-            # would need the release captured at that layer.
+            # path is unreachable here, and the owned connection's release gate
+            # (owned_modbus_connection) never sees that link. A serialx that
+            # defers connection_made would need its release captured there.
             # The library wraps the OS error; PermissionError detail survives
             # in the message only, so surface it as a plain connect failure.
             self._drop_session()

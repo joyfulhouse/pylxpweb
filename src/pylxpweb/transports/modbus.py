@@ -29,6 +29,7 @@ from ._modbus_client import (
     ModbusConnectionUnit,
     ModbusUnitLike,
     PymodbusUnit,
+    owned_modbus_connection,
     patch_pymodbus_tid_validation,
     select_backend,
 )
@@ -297,9 +298,8 @@ class ModbusTransport(BaseModbusTransport):
         """Open an owned ``modbus_connection`` (tmodbus) link."""
         from modbus_connection import ModbusTcpParams
         from modbus_connection import exceptions as mc_exc
-        from modbus_connection.tmodbus import ModbusConnection
 
-        connection = ModbusConnection(
+        connection = owned_modbus_connection(
             ModbusTcpParams(host=self._host, port=self._port),
             timeout=self._timeout,
         )
