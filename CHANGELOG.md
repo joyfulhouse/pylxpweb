@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     library (`modbus-connection[tmodbus]`, tmodbus + serialx). Opt-in via
     the new `modbus-connection` extra: `uv add 'pylxpweb[modbus-connection]'`.
   - `backend="auto"` (the default) keeps pymodbus except for serial ports
-    only serialx can open (`esphome://…`), which select `modbus_connection`.
+    only serialx can open (`esphome://…`) or an injected `unit=`, which select
+    `modbus_connection`.
 - **Host-shared Modbus links**: both transports accept `unit=` — a
   `ModbusUnit`-shaped object such as the one Home Assistant 2026.9's
   `homeassistant.components.modbus.async_get_unit()` returns. The transport
@@ -34,23 +35,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pulls in `serialx[esphome]` (aioesphomeapi), which serialx needs to register
   that scheme. pymodbus remains pyserial-based upstream, so this no longer
   waits on it.
-- CI job running the Modbus transport tests against the pymodbus version Home
-  Assistant core pins (3.13.1), which is what integration users actually run;
-  `uv.lock` resolves a newer release.
+- CI job running the Modbus transport tests against Home Assistant 2026.9's
+  pins (pymodbus 3.13.1, modbus-connection 4.10.0, tmodbus 0.6.2), plus extra
+  resolution checks under HA 2026.8.0, 2026.9.0 and 2026.9.4 constraints.
 
 ### Changed
 
 - Typed transport errors raised from a backend failure keep the *backend's*
   exception as `__cause__` (for example pymodbus' `ConnectionException`), not
   the seam wrapper, preserving the existing contract for callers that inspect
-  the chain.
-- `ModbusTransport.async_shutdown()` and both transports' `disconnect()` now
-  await the underlying close, so a released endpoint is really closed before a
-  replacement dials. `ModbusSerialTransport.connect()` releases a cancelled or
-  failed dial instead of orphaning it.
-- On a host-shared link, the error-recycle gate counts only link errors
-  (timeouts, connection/protocol failures); a device's exception response never
-  recycles an endpoint other units and host consumers are using.
+  the chain. Errors synthesized from pymodbus response objects retain their
+  historical message and no explicit cause.
+- `ModbusTransport.async_shutdown()` and both transports' `disconnect()` await
+  owned closes. A close stays tracked until it completes, so a cancelled waiter
+  does not lose it and every later `disconnect()`/`async_shutdown()` awaits the
+  same close. `connect()` (including the replacement dial after a failed or
+  cancelled one) waits for every prior owned close before dialing, and serial
+  `connect()`/`disconnect()` now take the operation lock, as TCP's do.
+- On a host-shared link (TCP and serial), the error-recycle gate counts only
+  link errors (timeouts, connection/protocol failures); a device's exception
+  response never recycles an endpoint other units and host consumers are
+  using. Owned links keep the historical total-error gate.
+- A peer that accepts requests and never replies raises `TransportReadError`
+  on reads and `TransportWriteError` on writes with either backend: the
+  `modbus_connection` response timeout is mapped to the classes the default
+  pymodbus path has always raised there (`TransportTimeoutError` is not a
+  subclass of `TransportReadError`). pymodbus's mapping is unchanged.
+- The `modbus-connection` extra requires modbus-connection[tmodbus] >=4.10.0
+  and tmodbus >=0.6.2 (Home Assistant 2026.9's pins) and serialx[esphome]
+  >=1.8.2: Home Assistant installs integration requirements under its
+  `package_constraints.txt`, which pins serialx 1.8.2 on 2026.8.x and 1.9.0 on
+  2026.9.0–2026.9.3, so a higher floor would fail to install there. Every
+  serialx from 1.8.2 ships the `esphome://` platform. `uv.lock` tests the
+  latest stable graph (modbus-connection 4.12.3, tmodbus 0.6.2, serialx 1.11.0,
+  aioesphomeapi 46.6.0); the backend's tests run from the default dev
+  dependency group, so `uv run pytest` works without extras.
+- The optional TCP backend requires correctly echoed transaction IDs; gateway
+  hardware/firmware compatibility needs a packet capture. Owned TCP or
+  pyserial-supported serial transports can roll back by persisting `pymodbus`
+  (or `auto`) and recreating the transport. Injected units require removing the
+  injection and coordinating host ownership; `esphome://` needs another port or
+  bridge for pymodbus, so neither can roll back by toggle alone.
 
 ## [0.10.0b9] - 2026-09-04
 
@@ -96,7 +121,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sibling device's multi-step read; its single budget covers waiting for that
   lock too, and a probe that stays queued for the whole budget returns
   `False` without touching the socket.
-||||||| parent of 9c80aa2 (feat(transports): backend-neutral Modbus client seam + modbus-connection backend (#180))
 
 ## [0.10.0b8] - 2026-09-02
 

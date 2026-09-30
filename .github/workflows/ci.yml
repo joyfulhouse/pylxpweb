@@ -89,11 +89,13 @@ jobs:
     # Home Assistant core pins pymodbus (homeassistant/package_constraints.txt)
     # below what uv.lock resolves, and that pin is what the eg4_web_monitor
     # integration's users actually run. Exercise the Modbus transports on it.
-    name: Modbus transports on Home Assistant's pymodbus pin
+    name: Modbus transports on Home Assistant 2026.9 pins
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       HA_PYMODBUS_VERSION: "3.13.1"
+      HA_MODBUS_CONNECTION_VERSION: "4.10.0"
+      HA_TMODBUS_VERSION: "0.6.2"
     steps:
       - uses: actions/checkout@v7
 
@@ -109,12 +111,41 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
-      - name: Pin pymodbus to Home Assistant's version
+      - name: Resolve optional extra under Home Assistant constraints
+        # Home Assistant installs integration requirements with
+        # ``--constraint homeassistant/package_constraints.txt`` (serialx is
+        # pinned there), so the extra must resolve against each release's file.
+        run: |
+          for tag in 2026.8.0 2026.9.0 2026.9.4; do
+            constraints="${RUNNER_TEMP}/ha-${tag}-constraints.txt"
+            curl --fail --silent --show-error --location \
+              "https://raw.githubusercontent.com/home-assistant/core/${tag}/homeassistant/package_constraints.txt" \
+              --output "$constraints"
+            uv pip compile pyproject.toml --extra modbus-connection \
+              --python-version 3.13 \
+              --constraint "$constraints" \
+              --output-file "${RUNNER_TEMP}/ha-${tag}-resolved.txt"
+          done
+
+      - name: Pin Modbus libraries to Home Assistant 2026.9 versions
         # ``uv run`` re-syncs to the lock by default; ``--no-sync`` below keeps
         # the pin in place for the test run.
         run: |
-          uv pip install "pymodbus==${HA_PYMODBUS_VERSION}"
-          uv run --no-sync python -c "import pymodbus, sys; print('pymodbus', pymodbus.__version__); sys.exit(pymodbus.__version__ != '${HA_PYMODBUS_VERSION}')"
+          uv pip install "pymodbus==${HA_PYMODBUS_VERSION}" \
+            "modbus-connection[tmodbus]==${HA_MODBUS_CONNECTION_VERSION}" \
+            "tmodbus==${HA_TMODBUS_VERSION}"
+          uv run --no-sync python - <<'PY'
+          import os
+          from importlib.metadata import version
+          for package, key in (
+              ("pymodbus", "HA_PYMODBUS_VERSION"),
+              ("modbus-connection", "HA_MODBUS_CONNECTION_VERSION"),
+              ("tmodbus", "HA_TMODBUS_VERSION"),
+          ):
+              installed = version(package)
+              print(package, installed)
+              assert installed == os.environ[key]
+          PY
 
       - name: Run transport tests
         run: uv run --no-sync pytest tests/unit/transports/ -v

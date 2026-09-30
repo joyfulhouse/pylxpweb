@@ -63,11 +63,21 @@ The base URL is fully configurable to support regional variations and future end
 - **Modbus** — a direct Modbus connection to the inverter's RS-485 port, over TCP (an
   RS-485-to-Ethernet gateway) or serial (a USB adapter, or a serial URL such as
   `socket://`, `rfc2217://`, or `esphome://` for a network / ESPHome serial proxy).
-  - Two wire backends: `backend="pymodbus"` (default) and `backend="modbus_connection"`,
+  - The default setting is `backend="auto"`, resolving to `pymodbus` except for
+    `esphome://` serial ports or an injected `unit=`, which select `modbus_connection`.
+    The two wire backends are `backend="pymodbus"` and `backend="modbus_connection"`,
     Home Assistant's shared-connection library (tmodbus + serialx; install the
     `pylxpweb[modbus-connection]` extra). `esphome://` ports need the latter and are
     selected automatically. Both transports also accept a host-provided `unit=` (Home
     Assistant's `async_get_unit()`) to run over a link the host owns.
+  - The optional backend strictly matches TCP transaction IDs. Gateways that return
+    zero or incorrect IDs can time out even when pymodbus's gateway workaround succeeds;
+    validate the exact gateway and firmware with a packet capture before switching.
+  - To roll back an owned TCP or pyserial-supported serial transport, set its persisted
+    `backend` to `pymodbus` (or `auto`) and recreate it with the same connection settings.
+    An injected unit cannot roll back by toggle: remove the injection and coordinate
+    ownership with the host first. An `esphome://` port needs a different bridge or port
+    to use pymodbus; `auto` continues selecting the optional backend for that URL.
 - **Hybrid** — combines one local connection with the cloud API (local polling with cloud
   fallback and cloud-only supplemental data).
 
