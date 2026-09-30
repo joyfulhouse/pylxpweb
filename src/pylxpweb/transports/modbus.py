@@ -22,17 +22,15 @@ import asyncio
 import hashlib
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from ._modbus_base import INPUT_REGISTER_GROUPS, BaseModbusTransport
 from ._modbus_client import (
-    ModbusBackend,
     ModbusConnectionUnit,
     ModbusUnitLike,
     PymodbusUnit,
-    normalize_backend,
     patch_pymodbus_tid_validation,
-    resolve_backend,
+    select_backend,
 )
 from ._register_data import DEFAULT_INPUT_BLOCK_SIZE
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
@@ -40,8 +38,6 @@ from .exceptions import TransportConnectionError
 from .observation import RegisterObserver
 
 if TYPE_CHECKING:
-    from pymodbus.client import AsyncModbusTcpClient
-
     from pylxpweb.devices.inverters._features import InverterFamily
 
 _LOGGER = logging.getLogger(__name__)
@@ -209,16 +205,8 @@ class ModbusTransport(BaseModbusTransport):
         )
         self._host = host
         self._port = port
-        self._backend_setting = normalize_backend(backend)
-        self._backend: ModbusBackend = resolve_backend(self._backend_setting)
+        self._backend = select_backend(backend, unit=unit)
         self._external_unit = unit
-        if unit is not None:
-            if self._backend_setting == "pymodbus":
-                raise ValueError("An injected unit cannot be used with the pymodbus backend")
-            self._backend = "modbus_connection"
-        # Raw backend handle: pymodbus client, owned ModbusConnection, or the
-        # injected unit. I/O goes through ``self._unit`` (see _modbus_base).
-        self._client: AsyncModbusTcpClient | Any | None = None
         self._session_started_at: float | None = None
         self._reconnect_retry_after: float | None = None
         self._session_reconnect_count = 0
@@ -227,11 +215,6 @@ class ModbusTransport(BaseModbusTransport):
     def capabilities(self) -> TransportCapabilities:
         """Get Modbus transport capabilities."""
         return MODBUS_CAPABILITIES
-
-    @property
-    def backend(self) -> ModbusBackend:
-        """The wire backend this transport dials with."""
-        return self._backend
 
     @property
     def host(self) -> str:
@@ -243,17 +226,11 @@ class ModbusTransport(BaseModbusTransport):
         """Get the Modbus gateway port."""
         return self._port
 
-    async def connect(self) -> None:
-        """Establish a Modbus TCP connection under the operation lock.
+    async def _connect_locked(self) -> None:
+        """Establish a Modbus TCP connection while the caller owns the operation lock.
 
         This is a no-op when already connected. Call :meth:`disconnect` first
         to force a fresh session.
-        """
-        async with self._op_lock:
-            await self._connect_locked()
-
-    async def _connect_locked(self) -> None:
-        """Establish a connection while the caller owns the operation lock.
 
         Raises:
             TransportConnectionError: If connection fails
@@ -266,7 +243,9 @@ class ModbusTransport(BaseModbusTransport):
 
         try:
             if self._external_unit is not None:
-                self._attach_external_unit(self._external_unit)
+                # A host-supplied shared unit: adopting it performs no I/O.
+                self._client = self._external_unit
+                self._unit = ModbusConnectionUnit(self._external_unit)
             elif self._backend == "modbus_connection":
                 await self._dial_modbus_connection()
             else:
@@ -310,11 +289,6 @@ class ModbusTransport(BaseModbusTransport):
             "shared" if self._external_unit is not None else self._backend,
             self._serial,
         )
-
-    def _attach_external_unit(self, unit: ModbusUnitLike) -> None:
-        """Adopt a host-supplied shared unit; no I/O by that library's contract."""
-        self._client = unit
-        self._unit = ModbusConnectionUnit(unit)
 
     async def _dial_modbus_connection(self) -> None:
         """Open an owned ``modbus_connection`` (tmodbus) link."""
@@ -385,39 +359,10 @@ class ModbusTransport(BaseModbusTransport):
 
         # Some "Modbus TCP to RTU" gateways were observed to use MBAP framing
         # on the TCP side without echoing the request's transaction ID.
-        # Patch pymodbus to skip TID validation and suppress stale response
-        # log spam (see patch_pymodbus_tid_validation).
-        self._patch_tid_validation()
-
-    def _patch_tid_validation(self) -> None:
-        """Apply the gateway transaction-ID workaround to the pymodbus client."""
-        if self._client is None:
-            return
-        patch_pymodbus_tid_validation(
-            self._client,
-            label=f"{self._host}:{self._port} ({self._serial})",
-        )
+        patch_pymodbus_tid_validation(client, label=f"{self._host}:{self._port} ({self._serial})")
 
     def _drop_session(self) -> None:
-        """Release the client and forget it, marking the session as dead.
-
-        Owned links close (pymodbus synchronously, modbus_connection in a
-        background task that :meth:`disconnect` awaits); a host-shared unit
-        is only detached, never closed.
-        """
-        unit = self._unit
-        if unit is not None:
-            unit.close()
-            self._draining_units.append(unit)
-        elif self._client is not None and self._external_unit is None:
-            # A raw client that never got its adapter (defensive; the dial
-            # paths install both together).
-            close = getattr(self._client, "close", None)
-            if callable(close):
-                close()
-        self._client = None
-        self._unit = None
-        self._connected = False
+        super()._drop_session()
         self._session_started_at = None
 
     async def disconnect(self) -> None:

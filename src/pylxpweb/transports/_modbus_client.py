@@ -40,6 +40,7 @@ __all__ = [
     "normalize_backend",
     "patch_pymodbus_tid_validation",
     "resolve_backend",
+    "select_backend",
 ]
 
 type ModbusBackend = Literal["pymodbus", "modbus_connection"]
@@ -121,9 +122,6 @@ class RegisterClient(Protocol):
     """
 
     @property
-    def connected(self) -> bool: ...
-
-    @property
     def owns_link(self) -> bool:
         """Whether closing this client tears down the underlying link.
 
@@ -183,6 +181,18 @@ def resolve_backend(backend: str, *, serial_port: str | None = None) -> ModbusBa
     if value == "modbus_connection":
         return "modbus_connection"
     return "pymodbus"
+
+
+def select_backend(
+    backend: str, *, unit: ModbusUnitLike | None, serial_port: str | None = None
+) -> ModbusBackend:
+    """Resolve a transport's backend; a host-injected ``unit`` forces ``modbus_connection``."""
+    setting = normalize_backend(backend)
+    if unit is None:
+        return resolve_backend(setting, serial_port=serial_port)
+    if setting == "pymodbus":
+        raise ValueError("An injected unit cannot be used with the pymodbus backend")
+    return "modbus_connection"
 
 
 # ----------------------------------------------------------------------
@@ -251,20 +261,6 @@ class PymodbusUnit:
         self._client = client
         self._unit_id = unit_id
         self._closed = False
-
-    @property
-    def client(self) -> Any:
-        """The wrapped pymodbus client."""
-        return self._client
-
-    @property
-    def unit_id(self) -> int:
-        """The Modbus unit ID every request is addressed to."""
-        return self._unit_id
-
-    @property
-    def connected(self) -> bool:
-        return bool(getattr(self._client, "connected", False))
 
     async def read_holding_registers(self, address: int, count: int) -> list[int]:
         result = await self._call(
@@ -395,22 +391,8 @@ class ModbusConnectionUnit:
         self._close_task: asyncio.Task[None] | None = None
 
     @property
-    def unit(self) -> ModbusUnitLike:
-        """The wrapped ``ModbusUnit``."""
-        return self._unit
-
-    @property
-    def connection(self) -> Any | None:
-        """The owned ``ModbusConnection``, or ``None`` when shared."""
-        return self._connection
-
-    @property
     def owns_link(self) -> bool:
         return self._connection is not None
-
-    @property
-    def connected(self) -> bool:
-        return bool(self._unit.connected)
 
     async def read_holding_registers(self, address: int, count: int) -> list[int]:
         return list(await self._call(self._unit.read_holding_registers, address, count))
@@ -465,15 +447,13 @@ class ModbusConnectionUnit:
         except exc.ModbusExceptionError as err:
             code = getattr(err, "exception_code", None)
             raise RegisterExceptionResponse(str(err), code=int(code) if code else None) from err
-        except exc.ModbusTimeoutError as err:
-            # A silent peer on the default pymodbus path surfaces as an
-            # exhausted-retries ModbusIOException, i.e. a read/write error,
-            # not TransportTimeoutError. Map it the same way so the public
-            # error class does not depend on the backend.
-            raise RegisterLinkError(str(err)) from err
         except exc.ModbusError as err:
             # ModbusConnectionError, ModbusProtocolError, ModbusDesyncError,
-            # ClientClosedError: the link or the frame is unusable.
+            # ClientClosedError: the link or the frame is unusable. This also
+            # covers ModbusTimeoutError: a silent peer on the default pymodbus
+            # path surfaces as an exhausted-retries ModbusIOException, i.e. a
+            # read/write error, not TransportTimeoutError, so the public error
+            # class does not depend on the backend.
             raise RegisterLinkError(str(err)) from err
         except TimeoutError as err:
             raise RegisterTimeoutError(str(err) or "timeout") from err

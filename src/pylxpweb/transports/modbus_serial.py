@@ -26,25 +26,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from ._modbus_base import BaseModbusTransport
-from ._modbus_client import (
-    ModbusBackend,
-    ModbusConnectionUnit,
-    ModbusUnitLike,
-    PymodbusUnit,
-    normalize_backend,
-    resolve_backend,
-)
+from ._modbus_client import ModbusConnectionUnit, ModbusUnitLike, PymodbusUnit, select_backend
 from ._register_data import DEFAULT_INPUT_BLOCK_SIZE
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .exceptions import TransportConnectionError
 from .observation import RegisterObserver
 
 if TYPE_CHECKING:
-    from pymodbus.client import AsyncModbusSerialClient
-
     from pylxpweb.devices.inverters._features import InverterFamily
 
 _LOGGER = logging.getLogger(__name__)
@@ -181,25 +172,13 @@ class ModbusSerialTransport(BaseModbusTransport):
         self._bytesize = bytesize
         self._parity = parity
         self._stopbits = stopbits
-        self._backend_setting = normalize_backend(backend)
-        self._backend: ModbusBackend = resolve_backend(self._backend_setting, serial_port=port)
+        self._backend = select_backend(backend, unit=unit, serial_port=port)
         self._external_unit = unit
-        if unit is not None:
-            if self._backend_setting == "pymodbus":
-                raise ValueError("An injected unit cannot be used with the pymodbus backend")
-            self._backend = "modbus_connection"
-        # Raw backend handle; I/O goes through ``self._unit`` (see _modbus_base).
-        self._client: AsyncModbusSerialClient | Any | None = None
 
     @property
     def capabilities(self) -> TransportCapabilities:
         """Get Modbus transport capabilities."""
         return MODBUS_CAPABILITIES
-
-    @property
-    def backend(self) -> ModbusBackend:
-        """The wire backend this transport opens the port with."""
-        return self._backend
 
     @property
     def port(self) -> str:
@@ -211,13 +190,8 @@ class ModbusSerialTransport(BaseModbusTransport):
         """Get the serial baud rate."""
         return self._baudrate
 
-    async def connect(self) -> None:
-        """Establish Modbus RTU serial connection under the operation lock."""
-        async with self._op_lock:
-            await self._connect_locked()
-
     async def _connect_locked(self) -> None:
-        """Establish Modbus RTU serial connection.
+        """Establish Modbus RTU serial connection while the caller owns the operation lock.
 
         Raises:
             TransportConnectionError: If connection fails
@@ -339,16 +313,6 @@ class ModbusSerialTransport(BaseModbusTransport):
                 "another application."
             ) from err
 
-    def _drop_session(self) -> None:
-        """Release the adapter and forget it; closes settle in :meth:`disconnect`."""
-        unit = self._unit
-        if unit is not None:
-            unit.close()
-            self._draining_units.append(unit)
-        self._client = None
-        self._unit = None
-        self._connected = False
-
     async def disconnect(self) -> None:
         """Close Modbus serial connection (a host-shared unit is only detached).
 
@@ -359,24 +323,6 @@ class ModbusSerialTransport(BaseModbusTransport):
             self._drop_session()
             await self._drain_closes()
         _LOGGER.debug("Modbus serial transport disconnected for %s", self._serial)
-
-    async def _reconnect(self) -> None:
-        """Reconnect Modbus serial client to reset state."""
-        async with self._lock:
-            if self.backend_shares_link:
-                if not self._shared_link_needs_recycle():
-                    return
-            elif self._consecutive_errors < self._max_consecutive_errors:
-                return
-
-            _LOGGER.warning(
-                "Reconnecting Modbus serial client for %s after %d consecutive errors",
-                self._serial,
-                self._consecutive_errors,
-            )
-            await self._recycle_link()
-            self._consecutive_errors = 0
-            self._consecutive_link_errors = 0
 
 
 def _literal_bytesize(value: int) -> Literal[7, 8]:

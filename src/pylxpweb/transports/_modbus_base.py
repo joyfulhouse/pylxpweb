@@ -11,9 +11,10 @@ Wire I/O goes through the backend-neutral ``RegisterClient`` seam in
 so nothing here depends on a particular Modbus library.
 
 Subclasses must implement:
-- connect() / disconnect() — protocol-specific connection management
-- _reconnect() — protocol-specific reconnection with logging
+- _connect_locked() / disconnect() — protocol-specific connection management
 - capabilities property — transport capability flags
+
+and may override _reconnect() for protocol-specific recycling and logging.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 from ._modbus_client import (
+    ModbusBackend,
+    ModbusUnitLike,
     RegisterClient,
     RegisterClientError,
     RegisterExceptionResponse,
@@ -61,17 +64,6 @@ _LOGGER = logging.getLogger(__name__)
 __all__ = ["BaseModbusTransport", "INPUT_REGISTER_GROUPS"]
 
 
-def _backend_cause(err: RegisterClientError) -> BaseException | None:
-    """Return the backend exception behind a seam error, for ``__cause__`` chains.
-
-    Callers historically saw the raw backend exception (for example pymodbus'
-    ``ConnectionException``) as the cause of a typed transport error; the
-    seam wrapper is transparent to that contract. Errors synthesized from a
-    pymodbus response object had no cause, and keep none (``None``).
-    """
-    return err.__cause__
-
-
 class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     """Base class for Modbus-based transports (TCP and Serial).
 
@@ -82,8 +74,12 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
 
     Subclasses must set ``self._client`` to the raw backend handle and
     ``self._unit`` to the :class:`RegisterClient` adapter over it, and
-    implement ``connect()``, ``disconnect()``, and ``_reconnect()``.
+    implement ``_connect_locked()`` and ``disconnect()``.
     """
+
+    # Set by subclasses from their ``backend`` / ``unit`` arguments.
+    _backend: ModbusBackend
+    _external_unit: ModbusUnitLike | None
 
     def __init__(
         self,
@@ -193,6 +189,11 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._split_phase = value
 
     @property
+    def backend(self) -> ModbusBackend:
+        """The wire backend this transport dials with."""
+        return self._backend
+
+    @property
     def pv_string_count(self) -> int:
         """Number of PV (MPPT) strings the inverter model exposes (0..n)."""
         return self._pv_string_count
@@ -211,6 +212,30 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         if self._unit is None or self._shutdown_requested:
             raise TransportConnectionError(f"Transport not connected for {self._serial}")
         return self._unit
+
+    async def connect(self) -> None:
+        """Establish the connection under the operation lock."""
+        async with self._op_lock:
+            await self._connect_locked()
+
+    async def _connect_locked(self) -> None:
+        """Dial while the caller owns the operation lock (subclass hook)."""
+        raise NotImplementedError
+
+    def _drop_session(self) -> None:
+        """Release the adapter and forget it; closes settle in :meth:`_drain_closes`.
+
+        Owned links close through the adapter (pymodbus synchronously,
+        modbus_connection in a background task); a host-shared unit is only
+        detached, never closed.
+        """
+        unit = self._unit
+        if unit is not None:
+            unit.close()
+            self._draining_units.append(unit)
+        self._client = None
+        self._unit = None
+        self._connected = False
 
     async def _drain_closes(self) -> None:
         """Keep adapters tracked until close completes, even if a waiter cancels."""
@@ -322,16 +347,19 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     # The device answered with an exception response.  Reads
                     # keep counting it (a refused read yields no data, and
                     # the historical accounting was the same), unlike writes.
+                    # Seam errors chain the raw backend exception (or None
+                    # for one synthesized from a response object), and the
+                    # typed transport error keeps exposing that as its cause.
                     self._consecutive_errors += 1
                     last_err = TransportReadError(str(err))
-                    last_err.__cause__ = _backend_cause(err)
+                    last_err.__cause__ = err.__cause__
                 except RegisterTimeoutError as err:
                     self._consecutive_errors += 1
                     self._consecutive_link_errors += 1
                     last_err = TransportTimeoutError(
                         f"Timeout reading {reg_type} registers at {address}"
                     )
-                    last_err.__cause__ = _backend_cause(err)
+                    last_err.__cause__ = err.__cause__
                 except RegisterInvalidResponse as err:
                     # A response object without registers: same message and
                     # (absent) cause as before the seam.
@@ -347,7 +375,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     last_err = TransportReadError(
                         f"Failed to read {reg_type} registers at {address}: {err}"
                     )
-                    last_err.__cause__ = _backend_cause(err)
+                    last_err.__cause__ = err.__cause__
                 except TimeoutError as err:
                     self._consecutive_errors += 1
                     self._consecutive_link_errors += 1
@@ -451,14 +479,14 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     address,
                     err,
                 )
-                raise TransportWriteError(str(err)) from _backend_cause(err)
+                raise TransportWriteError(str(err)) from err.__cause__
             except RegisterTimeoutError as err:
                 self._consecutive_errors += 1
                 self._consecutive_link_errors += 1
                 _LOGGER.error("[%s] Timeout writing registers at %d", self._serial, address)
                 raise TransportTimeoutError(
                     f"[{self._serial}] Timeout writing registers at {address}"
-                ) from _backend_cause(err)
+                ) from err.__cause__
             except RegisterLinkError as err:
                 # A write on a dropped session must surface through the typed
                 # TransportWriteError contract the upstream write retry /
@@ -472,7 +500,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 )
                 raise TransportWriteError(
                     f"[{self._serial}] Failed to write registers at {address}: {err}"
-                ) from _backend_cause(err)
+                ) from err.__cause__
             except TimeoutError as err:
                 self._consecutive_errors += 1
                 self._consecutive_link_errors += 1
