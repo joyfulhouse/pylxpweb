@@ -96,6 +96,7 @@ jobs:
       HA_PYMODBUS_VERSION: "3.13.1"
       HA_MODBUS_CONNECTION_VERSION: "4.10.0"
       HA_TMODBUS_VERSION: "0.6.2"
+      HA_SERIALX_VERSION: "1.10.0"
     steps:
       - uses: actions/checkout@v7
 
@@ -127,13 +128,14 @@ jobs:
               --output-file "${RUNNER_TEMP}/ha-${tag}-resolved.txt"
           done
 
-      - name: Pin Modbus libraries to Home Assistant 2026.9 versions
+      - name: Pin Modbus libraries to Home Assistant 2026.9.4 versions
         # ``uv run`` re-syncs to the lock by default; ``--no-sync`` below keeps
         # the pin in place for the test run.
         run: |
           uv pip install "pymodbus==${HA_PYMODBUS_VERSION}" \
             "modbus-connection[tmodbus]==${HA_MODBUS_CONNECTION_VERSION}" \
-            "tmodbus==${HA_TMODBUS_VERSION}"
+            "tmodbus==${HA_TMODBUS_VERSION}" \
+            "serialx[esphome]==${HA_SERIALX_VERSION}"
           uv run --no-sync python - <<'PY'
           import os
           from importlib.metadata import version
@@ -141,6 +143,7 @@ jobs:
               ("pymodbus", "HA_PYMODBUS_VERSION"),
               ("modbus-connection", "HA_MODBUS_CONNECTION_VERSION"),
               ("tmodbus", "HA_TMODBUS_VERSION"),
+              ("serialx", "HA_SERIALX_VERSION"),
           ):
               installed = version(package)
               print(package, installed)

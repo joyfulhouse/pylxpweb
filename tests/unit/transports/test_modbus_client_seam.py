@@ -210,6 +210,26 @@ def _pymodbus_response(*, error: bool = False, registers: list[int] | None = Non
 
 
 class TestPymodbusUnit:
+    @pytest.mark.parametrize("response_kind", ["missing", "none"])
+    async def test_check_link_accepts_response_without_registers(self, response_kind: str) -> None:
+        """Any returned response proves liveness, as before the seam (origin/main)."""
+        response = _pymodbus_response()
+        if response_kind == "missing":
+            del response.registers
+        client = MagicMock()
+        client.read_input_registers = AsyncMock(return_value=response)
+        transport = ModbusTransport(host="127.0.0.1", retries=0, session_max_age=None)
+        transport._unit = PymodbusUnit(client, 1)
+        transport._connected = True
+        transport._consecutive_errors = 2
+        transport._consecutive_link_errors = 2
+        assert await transport.check_link() is True
+        assert transport._consecutive_errors == 0
+        assert transport._consecutive_link_errors == 0
+        # Ordinary reads still reject the same response.
+        with pytest.raises(TransportReadError, match="no registers in response"):
+            await transport._read_registers(0, 1, input_registers=True)
+
     @pytest.mark.parametrize("operation", ["input", "holding", "single", "multiple"])
     @pytest.mark.parametrize("response_kind", ["exception", "missing", "none"])
     async def test_baseline_response_contract(self, operation: str, response_kind: str) -> None:
@@ -792,6 +812,80 @@ class TestLifecycleRegressions:
             await second
             await transport.disconnect()
         assert transport._draining_units == []
+
+    @pytest.mark.parametrize("injected", [False, True])
+    async def test_shutdown_during_replacement_drain_blocks_the_replacement(
+        self, injected: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """async_shutdown() awaiting the same close stops a queued replacement connect."""
+        transport = (
+            _shared_transport("tcp", unit=_FakeUnit(), retries=0)
+            if injected
+            else _lifecycle_transport("tcp")
+        )
+        connection = _BlockedClose()
+        transport._unit = ModbusConnectionUnit(_FakeUnit(), connection=connection)
+        dials = 0
+
+        async def dial() -> None:
+            nonlocal dials
+            dials += 1
+            transport._unit = ModbusConnectionUnit(_FakeUnit())
+
+        monkeypatch.setattr(transport, "_dial_modbus_connection", dial)
+        replacement = asyncio.create_task(transport.connect())
+        await asyncio.wait_for(connection.started.wait(), 1.0)
+        shutdown = asyncio.create_task(transport.async_shutdown())
+        await asyncio.sleep(0)
+        connection.release.set()
+        await shutdown
+        with pytest.raises(TransportConnectionError, match="shut down"):
+            await replacement
+        assert dials == 0
+        assert transport._unit is None
+        assert not transport.is_connected
+        assert transport._draining_units == []
+
+    @pytest.mark.parametrize("kind", ["tcp", "serial"])
+    async def test_reconnect_resets_link_error_count(self, kind: str) -> None:
+        """Link errors before a reconnect never count toward the next session's recycle."""
+        fake = _FakeUnit(mc_exc.ModbusConnectionError("down"))
+        transport = _shared_transport(kind, unit=fake, retries=0)
+        await transport.connect()
+        for _ in range(transport._max_consecutive_errors - 1):
+            with pytest.raises(TransportReadError):
+                await transport.read_parameters(0, 1)
+        await transport.disconnect()
+        await transport.connect()
+        assert transport._consecutive_link_errors == 0
+        with pytest.raises(TransportReadError):
+            await transport.read_parameters(0, 1)
+        fake.error = None
+        assert await transport.read_parameters(0, 1) == {0: 0}
+        assert fake.disconnect_calls == 0
+
+    async def test_serial_pymodbus_refused_open_drops_the_adapter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A pymodbus serial client that fails to open is released, not left installed."""
+        import pymodbus.client
+
+        clients: list[MagicMock] = []
+
+        def make_client(**_: Any) -> MagicMock:
+            client = MagicMock()
+            client.connect = AsyncMock(return_value=False)
+            clients.append(client)
+            return client
+
+        monkeypatch.setattr(pymodbus.client, "AsyncModbusSerialClient", make_client)
+        transport = ModbusSerialTransport(port="/dev/ttyUSB0", serial="CE1", backend="pymodbus")
+        with pytest.raises(TransportConnectionError, match="Failed to connect"):
+            await transport.connect()
+        assert transport._unit is None
+        assert transport._client is None
+        assert not transport.is_connected
+        clients[0].close.assert_called_once()
 
     async def test_tcp_async_shutdown_awaits_owned_close(self, server: FakeModbusServer) -> None:
         """A released endpoint is really closed when async_shutdown() returns."""

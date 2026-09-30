@@ -210,8 +210,7 @@ class ModbusSerialTransport(BaseModbusTransport):
             else:
                 await self._open_pymodbus()
 
-            self._connected = True
-            self._consecutive_errors = 0
+            self._mark_connected()
             _LOGGER.info(
                 "Modbus serial transport connected to %s @ %d baud (unit %s, backend %s) for %s",
                 self._port,
@@ -282,6 +281,7 @@ class ModbusSerialTransport(BaseModbusTransport):
 
         connected = await client.connect()
         if not connected:
+            self._drop_session()
             raise TransportConnectionError(f"Failed to connect to serial port {self._port}")
 
     async def _open_modbus_connection(self) -> None:

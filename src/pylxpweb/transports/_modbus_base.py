@@ -222,6 +222,12 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         """Dial while the caller owns the operation lock (subclass hook)."""
         raise NotImplementedError
 
+    def _mark_connected(self) -> None:
+        """Record a successful connect; error accounting starts afresh."""
+        self._connected = True
+        self._consecutive_errors = 0
+        self._consecutive_link_errors = 0
+
     def _drop_session(self) -> None:
         """Release the adapter and forget it; closes settle in :meth:`_drain_closes`.
 
@@ -269,8 +275,10 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
             async with self._op_guard(), self._lock:
                 unit = self._require_active_unit()
                 # An exception response means the device decoded and refused
-                # the request: the link is alive.
-                with contextlib.suppress(RegisterExceptionResponse):
+                # the request, and a response without registers still came
+                # back: either way the link is alive. Ordinary reads keep
+                # validating the payload.
+                with contextlib.suppress(RegisterExceptionResponse, RegisterInvalidResponse):
                     await asyncio.wait_for(
                         unit.read_input_registers(0, 1),
                         timeout=LINK_PROBE_TIMEOUT_SECONDS,

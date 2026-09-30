@@ -35,9 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pulls in `serialx[esphome]` (aioesphomeapi), which serialx needs to register
   that scheme. pymodbus remains pyserial-based upstream, so this no longer
   waits on it.
-- CI job running the Modbus transport tests against Home Assistant 2026.9's
-  pins (pymodbus 3.13.1, modbus-connection 4.10.0, tmodbus 0.6.2), plus extra
-  resolution checks under HA 2026.8.0, 2026.9.0 and 2026.9.4 constraints.
+- CI job running the Modbus transport tests against Home Assistant 2026.9.4's
+  pins (pymodbus 3.13.1, modbus-connection 4.10.0, tmodbus 0.6.2, serialx
+  1.10.0), plus extra resolution checks under HA 2026.8.0, 2026.9.0 and
+  2026.9.4 constraints.
 
 ### Changed
 
@@ -64,8 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `modbus-connection` extra requires modbus-connection[tmodbus] >=4.10.0
   and tmodbus >=0.6.2 (Home Assistant 2026.9's pins) and serialx[esphome]
   >=1.8.2: Home Assistant installs integration requirements under its
-  `package_constraints.txt`, which pins serialx 1.8.2 on 2026.8.x and 1.9.0 on
-  2026.9.0–2026.9.3, so a higher floor would fail to install there. Every
+  `package_constraints.txt`, which pins serialx 1.8.2 on 2026.8.x, 1.9.0 on
+  2026.9.0 and 1.10.0 on 2026.9.1–2026.9.4, so a higher floor would fail to
+  install there. Every
   serialx from 1.8.2 ships the `esphome://` platform. `uv.lock` tests the
   latest stable graph (modbus-connection 4.12.3, tmodbus 0.6.2, serialx 1.11.0,
   aioesphomeapi 46.6.0); the backend's tests run from the default dev

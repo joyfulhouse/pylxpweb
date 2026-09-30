@@ -240,6 +240,9 @@ class ModbusTransport(BaseModbusTransport):
             return
         self._drop_session()
         await self._drain_closes()
+        # async_shutdown() may have run while the close drained; it awaited
+        # the same close and returned, so nothing may be adopted or dialed now.
+        self._raise_if_shutdown()
 
         try:
             if self._external_unit is not None:
@@ -277,8 +280,7 @@ class ModbusTransport(BaseModbusTransport):
                 "(3) Modbus TCP is enabled on the inverter/datalogger."
             ) from err
 
-        self._connected = True
-        self._consecutive_errors = 0
+        self._mark_connected()
         self._session_started_at = _monotonic()
         self._reconnect_retry_after = None
         _LOGGER.info(
