@@ -247,10 +247,20 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         """Keep adapters tracked until close completes, even if a waiter cancels."""
         while self._draining_units:
             unit = self._draining_units[0]
-            await unit.aclose()
-            # Concurrent shutdown waiters may have completed the same close.
-            if unit in self._draining_units:
-                self._draining_units.remove(unit)
+            try:
+                await unit.aclose()
+            except Exception:
+                # A failed close is finished, not pending: forget it so later
+                # disconnect()/connect() calls do not re-raise it forever. A
+                # cancelled waiter (CancelledError) keeps it tracked instead.
+                self._forget_drained(unit)
+                raise
+            self._forget_drained(unit)
+
+    def _forget_drained(self, unit: RegisterClient) -> None:
+        # Concurrent shutdown waiters may have completed the same close.
+        if unit in self._draining_units:
+            self._draining_units.remove(unit)
 
     @property
     def backend_shares_link(self) -> bool:

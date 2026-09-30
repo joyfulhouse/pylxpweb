@@ -255,8 +255,17 @@ class TestPymodbusUnit:
         transport._unit = PymodbusUnit(client, 1)
         transport._connected = True
         read = operation in ("input", "holding")
+        values = [1] if operation == "single" else [1, 2]
         if response_kind != "exception" and not read:
-            assert await transport._write_holding_registers(7, [1]) is True
+            assert await transport._write_holding_registers(7, values) is True
+            if operation == "single":
+                client.write_register.assert_awaited_once_with(address=7, value=1, device_id=1)
+                client.write_registers.assert_not_awaited()
+            else:
+                client.write_registers.assert_awaited_once_with(
+                    address=7, values=[1, 2], device_id=1
+                )
+                client.write_register.assert_not_awaited()
             return
         if response_kind == "exception":
             message = f"Modbus {'read' if read else 'write'} error at address 7: refused"
@@ -266,9 +275,7 @@ class TestPymodbusUnit:
             if read:
                 await transport._read_registers(7, 1, input_registers=operation == "input")
             else:
-                await transport._write_holding_registers(
-                    7, [1] if operation == "single" else [1, 2]
-                )
+                await transport._write_holding_registers(7, values)
         assert str(info.value) == message
         assert info.value.__cause__ is None
 
@@ -886,6 +893,101 @@ class TestLifecycleRegressions:
         assert transport._client is None
         assert not transport.is_connected
         clients[0].close.assert_called_once()
+
+    @pytest.mark.parametrize("kind", ["tcp", "serial"])
+    async def test_replacement_dial_waits_for_link_release(
+        self, kind: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A backend close() that returns before the OS link is released is not enough.
+
+        Real-shaped chain (tmodbus 0.6.2 over serialx): ``close()`` closes the
+        transport synchronously and returns, while the descriptor is released
+        later and resolves ``wait_closed()``. No replacement may dial before that.
+        """
+        transport = _lifecycle_transport(kind)
+        release = asyncio.Event()
+
+        class _Link:
+            def __init__(self) -> None:
+                self.closing = False
+
+            def close(self) -> None:
+                self.closing = True
+
+            async def wait_closed(self) -> None:
+                await release.wait()
+
+        link = _Link()
+
+        class _Connection:
+            def __init__(self) -> None:
+                self._connect_task = None
+                self._client = MagicMock()
+                self._client.transport.base_transport._transport = link
+
+            async def close(self) -> None:
+                link.close()
+
+        transport._unit = ModbusConnectionUnit(_FakeUnit(), connection=_Connection())
+        dial_started = asyncio.Event()
+
+        async def dial() -> None:
+            dial_started.set()
+            transport._unit = ModbusConnectionUnit(_FakeUnit())
+
+        monkeypatch.setattr(
+            transport,
+            "_dial_modbus_connection" if kind == "tcp" else "_open_modbus_connection",
+            dial,
+        )
+        replacement = asyncio.create_task(transport.connect())
+        try:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(dial_started.wait(), 0.05)
+            assert link.closing
+        finally:
+            release.set()
+        await asyncio.wait_for(replacement, 2.0)
+        assert dial_started.is_set()
+        await transport.disconnect()
+
+    async def test_owned_serial_close_releases_the_port(self) -> None:
+        """Real tmodbus + serialx over a pty: disconnect() returns with the fd closed."""
+        import os
+
+        primary, secondary = os.openpty()
+        try:
+            transport = ModbusSerialTransport(
+                port=os.ttyname(secondary),
+                serial="CE1",
+                backend="modbus_connection",
+                timeout=1.0,
+                retries=0,
+            )
+            await transport.connect()
+            link = transport._client._client.transport.base_transport._transport
+            fd = link._fileno
+            assert fd is not None
+            await transport.disconnect()
+            with pytest.raises(OSError):
+                os.fstat(fd)
+        finally:
+            os.close(primary)
+            os.close(secondary)
+
+    @pytest.mark.parametrize("kind", ["tcp", "serial"])
+    async def test_failed_close_is_not_retried_forever(self, kind: str) -> None:
+        """A close that raised is finished: later lifecycle calls do not re-raise it."""
+        transport = _lifecycle_transport(kind)
+        broken = MagicMock()
+        broken.close = MagicMock()
+        broken.aclose = AsyncMock(side_effect=RuntimeError("close failed"))
+        transport._draining_units.append(broken)
+        with pytest.raises(RuntimeError, match="close failed"):
+            await transport.disconnect()
+        assert transport._draining_units == []
+        await transport.disconnect()
+        broken.aclose.assert_awaited_once()
 
     async def test_tcp_async_shutdown_awaits_owned_close(self, server: FakeModbusServer) -> None:
         """A released endpoint is really closed when async_shutdown() returns."""

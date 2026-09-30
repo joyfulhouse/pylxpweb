@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same close. `connect()` (including the replacement dial after a failed or
   cancelled one) waits for every prior owned close before dialing, and serial
   `connect()`/`disconnect()` now take the operation lock, as TCP's do.
+- On `modbus_connection`, an owned close now waits until the OS link is
+  released. tmodbus 0.6.2 returns from `close()` before serialx has closed the
+  port's descriptor, so the transport also awaits the serialx transport's
+  `wait_closed()`, bounded at 5 s; after that it logs a warning and continues.
+  asyncio TCP sockets need no wait: they are closed by the time a close waiter
+  resumes. A close that raises is dropped from tracking instead of re-raising
+  on every later `disconnect()`/`connect()`.
 - On a host-shared link (TCP and serial), the error-recycle gate counts only
   link errors (timeouts, connection/protocol failures); a device's exception
   response never recycles an endpoint other units and host consumers are
@@ -67,8 +74,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   >=1.8.2: Home Assistant installs integration requirements under its
   `package_constraints.txt`, which pins serialx 1.8.2 on 2026.8.x, 1.9.0 on
   2026.9.0 and 1.10.0 on 2026.9.1–2026.9.4, so a higher floor would fail to
-  install there. Every
-  serialx from 1.8.2 ships the `esphome://` platform. `uv.lock` tests the
+  install there. Every serialx from 1.8.2 ships the `esphome://` platform.
+  The CI constraint check covers HA's `package_constraints.txt` only.
+  aioesphomeapi is pinned by HA's `esphome` integration manifest instead
+  (45.6.1 on 2026.8.0, 46.2.0 on 2026.9.x). Each HA-pinned serialx accepts
+  that release: 1.8.2 needs aioesphomeapi >=44.17.0, and 1.9.0/1.10.0 need
+  >=46.0.0. `uv.lock` tests the
   latest stable graph (modbus-connection 4.12.3, tmodbus 0.6.2, serialx 1.11.0,
   aioesphomeapi 46.6.0); the backend's tests run from the default dev
   dependency group, so `uv run pytest` works without extras.

@@ -11,7 +11,7 @@ hands out, so the same transport code can run on:
   + serialx), either owned by the transport or shared/injected by a host
   such as Home Assistant.
 
-Both adapters translate backend-specific failures into the three
+Both adapters translate backend-specific failures into the four
 :class:`RegisterClientError` subclasses the transport branches on, so the
 retry, link-health, and reconnect logic in ``_modbus_base.py`` stays
 backend-agnostic.
@@ -51,6 +51,9 @@ BACKENDS: tuple[str, ...] = ("auto", "pymodbus", "modbus_connection")
 
 # Serial URL schemes only serialx can open; pyserial (pymodbus) cannot.
 _SERIALX_ONLY_SCHEMES: tuple[str, ...] = ("esphome://",)
+
+LINK_RELEASE_TIMEOUT_SECONDS = 5.0
+"""Upper bound on waiting for an owned link's OS resource after its close."""
 
 
 # ----------------------------------------------------------------------
@@ -251,8 +254,9 @@ class PymodbusUnit:
     """:class:`RegisterClient` over a pymodbus async client bound to one unit ID.
 
     Owns the client: :meth:`close` closes the socket/port. Calls use the
-    keyword form ``read_*(address=..., count=..., device_id=...)`` that
-    pymodbus 3.6 through 3.15 share.
+    keyword form ``read_*(address=..., count=..., device_id=...)``, which
+    pymodbus introduced in 3.10.0; earlier releases (3.9.x and before) name
+    that keyword ``slave=``.
     """
 
     owns_link: bool = True
@@ -433,7 +437,9 @@ class ModbusConnectionUnit:
 
     async def _close_connection(self, connection: Any) -> None:
         try:
+            link = await _owned_link_transport(connection)
             await connection.close()
+            await _wait_link_released(link)
         except Exception as err:  # teardown must not raise
             _LOGGER.debug("Modbus connection close raised %s: %s", type(err).__name__, err)
 
@@ -459,3 +465,46 @@ class ModbusConnectionUnit:
             raise RegisterTimeoutError(str(err) or "timeout") from err
         except OSError as err:
             raise RegisterLinkError(str(err)) from err
+
+
+async def _owned_link_transport(connection: Any) -> Any:
+    """Return the OS-level transport under an owned ``ModbusConnection``, if any.
+
+    ``ModbusConnection.close()`` returns before the serial port is released:
+    tmodbus 0.6.2's ``AsyncRtuTransport.close()`` calls the serialx
+    transport's synchronous ``close()`` without awaiting, and serialx
+    (1.8.2 through 1.11.0) closes the descriptor in a background task that
+    resolves ``wait_closed()``. Nothing public exposes that transport, so this
+    walks the private chain of modbus-connection 4.10.0-4.12.3 and tmodbus
+    0.6.2 (``_client.transport.base_transport._transport``) defensively and
+    returns ``None`` when the layout differs. A connect still in flight is
+    waited out first, as ``close()`` itself does, so its link is captured
+    rather than released unobserved.
+    """
+    flight = getattr(connection, "_connect_task", None)
+    if isinstance(flight, asyncio.Future) and not flight.done():
+        await asyncio.wait((flight,))
+    client = getattr(connection, "_client", None)
+    smart = getattr(client, "transport", None)
+    base = getattr(smart, "base_transport", smart)
+    return getattr(base, "_transport", None)
+
+
+async def _wait_link_released(link: Any) -> None:
+    """Wait (bounded) until a closed transport has released its OS resource.
+
+    serialx transports (descriptor and ``esphome://``) expose ``wait_closed()``.
+    asyncio's socket transports do not; their ``close()`` queues the socket
+    close ahead of the callbacks that wake anyone awaiting this close, so the
+    socket is already closed when those waiters resume.
+    """
+    wait_closed = getattr(link, "wait_closed", None)
+    if not callable(wait_closed):
+        return
+    try:
+        await asyncio.wait_for(wait_closed(), LINK_RELEASE_TIMEOUT_SECONDS)
+    except TimeoutError:
+        _LOGGER.warning(
+            "Modbus link not released %.1fs after close; continuing",
+            LINK_RELEASE_TIMEOUT_SECONDS,
+        )
