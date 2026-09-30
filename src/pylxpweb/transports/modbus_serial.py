@@ -34,7 +34,6 @@ from ._modbus_client import (
     ModbusConnectionUnit,
     ModbusUnitLike,
     PymodbusUnit,
-    RegisterClient,
     normalize_backend,
     resolve_backend,
 )
@@ -191,8 +190,6 @@ class ModbusSerialTransport(BaseModbusTransport):
             self._backend = "modbus_connection"
         # Raw backend handle; I/O goes through ``self._unit`` (see _modbus_base).
         self._client: AsyncModbusSerialClient | Any | None = None
-        # Adapters whose close is still settling (see ModbusTransport).
-        self._draining_units: list[RegisterClient] = []
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -215,14 +212,21 @@ class ModbusSerialTransport(BaseModbusTransport):
         return self._baudrate
 
     async def connect(self) -> None:
+        """Establish Modbus RTU serial connection under the operation lock."""
+        async with self._op_lock:
+            await self._connect_locked()
+
+    async def _connect_locked(self) -> None:
         """Establish Modbus RTU serial connection.
 
         Raises:
             TransportConnectionError: If connection fails
         """
         # A previous dial (cancelled or failed) may still own a link: release
-        # it first so a re-dial never orphans a connection.
+        # it and wait for the close, so a re-dial never overlaps an exclusive
+        # port or single-client bridge that is still held.
         self._drop_session()
+        await self._drain_closes()
         try:
             if self._external_unit is not None:
                 self._client = self._external_unit
@@ -346,16 +350,23 @@ class ModbusSerialTransport(BaseModbusTransport):
         self._connected = False
 
     async def disconnect(self) -> None:
-        """Close Modbus serial connection (a host-shared unit is only detached)."""
-        self._drop_session()
-        while self._draining_units:
-            await self._draining_units.pop(0).aclose()
+        """Close Modbus serial connection (a host-shared unit is only detached).
+
+        Waits for the owned close; a cancelled waiter leaves it tracked, so the
+        next disconnect() or connect() awaits the same close.
+        """
+        async with self._op_lock:
+            self._drop_session()
+            await self._drain_closes()
         _LOGGER.debug("Modbus serial transport disconnected for %s", self._serial)
 
     async def _reconnect(self) -> None:
         """Reconnect Modbus serial client to reset state."""
         async with self._lock:
-            if self._consecutive_errors < self._max_consecutive_errors:
+            if self.backend_shares_link:
+                if not self._shared_link_needs_recycle():
+                    return
+            elif self._consecutive_errors < self._max_consecutive_errors:
                 return
 
             _LOGGER.warning(
@@ -365,6 +376,7 @@ class ModbusSerialTransport(BaseModbusTransport):
             )
             await self._recycle_link()
             self._consecutive_errors = 0
+            self._consecutive_link_errors = 0
 
 
 def _literal_bytesize(value: int) -> Literal[7, 8]:

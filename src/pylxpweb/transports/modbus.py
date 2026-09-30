@@ -30,7 +30,6 @@ from ._modbus_client import (
     ModbusConnectionUnit,
     ModbusUnitLike,
     PymodbusUnit,
-    RegisterClient,
     normalize_backend,
     patch_pymodbus_tid_validation,
     resolve_backend,
@@ -223,10 +222,6 @@ class ModbusTransport(BaseModbusTransport):
         self._session_started_at: float | None = None
         self._reconnect_retry_after: float | None = None
         self._session_reconnect_count = 0
-        # Adapters whose (possibly asynchronous) close is still settling;
-        # disconnect()/async_shutdown() await them so a released endpoint is
-        # really closed before a replacement dials.
-        self._draining_units: list[RegisterClient] = []
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -267,6 +262,7 @@ class ModbusTransport(BaseModbusTransport):
         if self._connected:
             return
         self._drop_session()
+        await self._drain_closes()
 
         try:
             if self._external_unit is not None:
@@ -423,12 +419,6 @@ class ModbusTransport(BaseModbusTransport):
         self._unit = None
         self._connected = False
         self._session_started_at = None
-
-    async def _drain_closes(self) -> None:
-        """Await every pending adapter close (idempotent, cancellation-safe)."""
-        while self._draining_units:
-            unit = self._draining_units.pop(0)
-            await unit.aclose()
 
     async def disconnect(self) -> None:
         """Close the Modbus TCP connection under the operation lock."""

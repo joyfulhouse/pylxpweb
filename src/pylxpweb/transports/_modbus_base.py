@@ -28,6 +28,7 @@ from ._modbus_client import (
     RegisterClient,
     RegisterClientError,
     RegisterExceptionResponse,
+    RegisterInvalidResponse,
     RegisterLinkError,
     RegisterTimeoutError,
 )
@@ -60,14 +61,15 @@ _LOGGER = logging.getLogger(__name__)
 __all__ = ["BaseModbusTransport", "INPUT_REGISTER_GROUPS"]
 
 
-def _backend_cause(err: RegisterClientError) -> BaseException:
+def _backend_cause(err: RegisterClientError) -> BaseException | None:
     """Return the backend exception behind a seam error, for ``__cause__`` chains.
 
     Callers historically saw the raw backend exception (for example pymodbus'
     ``ConnectionException``) as the cause of a typed transport error; the
-    seam wrapper is transparent to that contract.
+    seam wrapper is transparent to that contract. Errors synthesized from a
+    pymodbus response object had no cause, and keep none (``None``).
     """
-    return err.__cause__ if err.__cause__ is not None else err
+    return err.__cause__
 
 
 class BaseModbusTransport(RegisterDataMixin, BaseTransport):
@@ -152,6 +154,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._last_read_retried: bool = False
         self._op_guard_depth: int = 0
         self._shutdown_requested = False
+        self._draining_units: list[RegisterClient] = []
 
     # ------------------------------------------------------------------
     # Properties
@@ -208,6 +211,15 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         if self._unit is None or self._shutdown_requested:
             raise TransportConnectionError(f"Transport not connected for {self._serial}")
         return self._unit
+
+    async def _drain_closes(self) -> None:
+        """Keep adapters tracked until close completes, even if a waiter cancels."""
+        while self._draining_units:
+            unit = self._draining_units[0]
+            await unit.aclose()
+            # Concurrent shutdown waiters may have completed the same close.
+            if unit in self._draining_units:
+                self._draining_units.remove(unit)
 
     @property
     def backend_shares_link(self) -> bool:
@@ -320,6 +332,12 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                         f"Timeout reading {reg_type} registers at {address}"
                     )
                     last_err.__cause__ = _backend_cause(err)
+                except RegisterInvalidResponse as err:
+                    # A response object without registers: same message and
+                    # (absent) cause as before the seam.
+                    self._consecutive_errors += 1
+                    self._consecutive_link_errors += 1
+                    last_err = TransportReadError(str(err))
                 except RegisterLinkError as err:
                     # Covers the backend's "not connected" fast-fail too, so a
                     # dropped session advances the consecutive-error gate and

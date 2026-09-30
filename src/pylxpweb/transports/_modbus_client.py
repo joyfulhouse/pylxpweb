@@ -34,6 +34,7 @@ __all__ = [
     "RegisterClient",
     "RegisterClientError",
     "RegisterExceptionResponse",
+    "RegisterInvalidResponse",
     "RegisterLinkError",
     "RegisterTimeoutError",
     "normalize_backend",
@@ -78,6 +79,10 @@ class RegisterTimeoutError(RegisterClientError, TimeoutError):
 
 class RegisterLinkError(RegisterClientError):
     """The link is down or the response was unusable (connection/protocol)."""
+
+
+class RegisterInvalidResponse(RegisterLinkError):
+    """An unusable response object, rather than a backend-thrown exception."""
 
 
 # ----------------------------------------------------------------------
@@ -339,7 +344,7 @@ class PymodbusUnit:
             )
         registers = getattr(result, "registers", None)
         if registers is None:
-            raise RegisterLinkError(
+            raise RegisterInvalidResponse(
                 f"Invalid Modbus response at address {address}: no registers in response"
             )
         # pymodbus decodes registers from the response's own byte_count and
@@ -461,7 +466,11 @@ class ModbusConnectionUnit:
             code = getattr(err, "exception_code", None)
             raise RegisterExceptionResponse(str(err), code=int(code) if code else None) from err
         except exc.ModbusTimeoutError as err:
-            raise RegisterTimeoutError(str(err)) from err
+            # A silent peer on the default pymodbus path surfaces as an
+            # exhausted-retries ModbusIOException, i.e. a read/write error,
+            # not TransportTimeoutError. Map it the same way so the public
+            # error class does not depend on the backend.
+            raise RegisterLinkError(str(err)) from err
         except exc.ModbusError as err:
             # ModbusConnectionError, ModbusProtocolError, ModbusDesyncError,
             # ClientClosedError: the link or the frame is unusable.
