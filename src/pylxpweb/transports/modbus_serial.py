@@ -201,6 +201,7 @@ class ModbusSerialTransport(BaseModbusTransport):
         # port or single-client bridge that is still held.
         self._drop_session()
         await self._drain_closes()
+        self._require_links_released()
         try:
             if self._external_unit is not None:
                 self._client = self._external_unit
@@ -303,6 +304,12 @@ class ModbusSerialTransport(BaseModbusTransport):
         try:
             await connection.connect()
         except mc_exc.ModbusError as err:
+            # A failed open leaves no link to wait for: serialx (1.8.2-1.11.0)
+            # calls connection_made synchronously before create_serial_connection
+            # returns, and drains its own failed opens (close + wait_closed)
+            # before raising, so tmodbus 0.6.2's unawaited _abort_failed_open()
+            # path is unreachable here. A serialx that defers connection_made
+            # would need the release captured at that layer.
             # The library wraps the OS error; PermissionError detail survives
             # in the message only, so surface it as a plain connect failure.
             self._drop_session()

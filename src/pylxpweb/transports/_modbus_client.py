@@ -150,7 +150,16 @@ class RegisterClient(Protocol):
         ...
 
     async def aclose(self) -> None:
-        """Release the client and wait for the underlying close to finish."""
+        """Release the client and wait (bounded) for the underlying close to finish."""
+        ...
+
+    @property
+    def released(self) -> bool:
+        """Whether the link's OS resource is known to be released after close.
+
+        ``False`` while a closed owned link is still held (its release outlived
+        :meth:`aclose`'s bound); the transport must not dial a replacement then.
+        """
         ...
 
 
@@ -260,6 +269,8 @@ class PymodbusUnit:
     """
 
     owns_link: bool = True
+    # pymodbus' close() releases the socket/port synchronously.
+    released: bool = True
 
     def __init__(self, client: Any, unit_id: int) -> None:
         self._client = client
@@ -393,10 +404,18 @@ class ModbusConnectionUnit:
         self._unit = unit
         self._connection = connection
         self._close_task: asyncio.Task[None] | None = None
+        # The closed link's release (serialx ``wait_closed()``), awaited by
+        # every aclose() but never cancelled, so a bounded wait that expires
+        # can be resumed later.
+        self._release: asyncio.Future[Any] | None = None
 
     @property
     def owns_link(self) -> bool:
         return self._connection is not None
+
+    @property
+    def released(self) -> bool:
+        return all(step is None or step.done() for step in (self._close_task, self._release))
 
     async def read_holding_registers(self, address: int, count: int) -> list[int]:
         return list(await self._call(self._unit.read_holding_registers, address, count))
@@ -434,12 +453,22 @@ class ModbusConnectionUnit:
         if self._close_task is not None:
             # Shielded: cancelling the waiter must not cancel the close itself.
             await asyncio.shield(self._close_task)
+        release = self._release
+        if release is not None and not release.done():
+            # asyncio.wait() neither cancels the release nor raises on timeout.
+            await asyncio.wait((release,), timeout=LINK_RELEASE_TIMEOUT_SECONDS)
+            if not release.done():
+                _LOGGER.warning(
+                    "Modbus link not released %.1fs after close; "
+                    "no replacement will dial until it is",
+                    LINK_RELEASE_TIMEOUT_SECONDS,
+                )
 
     async def _close_connection(self, connection: Any) -> None:
         try:
             link = await _owned_link_transport(connection)
             await connection.close()
-            await _wait_link_released(link)
+            self._release = _link_release(link)
         except Exception as err:  # teardown must not raise
             _LOGGER.debug("Modbus connection close raised %s: %s", type(err).__name__, err)
 
@@ -490,21 +519,21 @@ async def _owned_link_transport(connection: Any) -> Any:
     return getattr(base, "_transport", None)
 
 
-async def _wait_link_released(link: Any) -> None:
-    """Wait (bounded) until a closed transport has released its OS resource.
+def _link_release(link: Any) -> asyncio.Future[Any] | None:
+    """Start observing a closed transport's OS-resource release, if observable.
 
     serialx transports (descriptor and ``esphome://``) expose ``wait_closed()``.
-    asyncio's socket transports do not; their ``close()`` queues the socket
-    close ahead of the callbacks that wake anyone awaiting this close, so the
-    socket is already closed when those waiters resume.
+    asyncio's socket transports do not. With an empty write buffer their
+    ``close()`` queues the socket close ahead of the callbacks that wake
+    anyone awaiting this close, so the socket is closed when those waiters
+    resume; with unsent data the close waits for the buffer to drain, which
+    asyncio does not expose. Modbus requests are small and answered before
+    the next is sent, so that buffer is normally empty at close.
     """
     wait_closed = getattr(link, "wait_closed", None)
     if not callable(wait_closed):
-        return
-    try:
-        await asyncio.wait_for(wait_closed(), LINK_RELEASE_TIMEOUT_SECONDS)
-    except TimeoutError:
-        _LOGGER.warning(
-            "Modbus link not released %.1fs after close; continuing",
-            LINK_RELEASE_TIMEOUT_SECONDS,
-        )
+        return None
+    release: asyncio.Future[Any] = asyncio.ensure_future(wait_closed())
+    # Observe a failed release so asyncio does not warn; it still counts as done.
+    release.add_done_callback(lambda task: task.cancelled() or task.exception())
+    return release

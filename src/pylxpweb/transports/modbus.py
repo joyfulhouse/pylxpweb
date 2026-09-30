@@ -243,6 +243,7 @@ class ModbusTransport(BaseModbusTransport):
         # async_shutdown() may have run while the close drained; it awaited
         # the same close and returned, so nothing may be adopted or dialed now.
         self._raise_if_shutdown()
+        self._require_links_released()
 
         try:
             if self._external_unit is not None:

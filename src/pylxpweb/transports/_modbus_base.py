@@ -244,9 +244,14 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
         self._connected = False
 
     async def _drain_closes(self) -> None:
-        """Keep adapters tracked until close completes, even if a waiter cancels."""
-        while self._draining_units:
-            unit = self._draining_units[0]
+        """Keep adapters tracked until their link is released, even if a waiter cancels.
+
+        Each wait is bounded (see ``aclose()``). An adapter whose link is still
+        held afterwards stays tracked, so :meth:`_require_links_released`
+        refuses a replacement dial until a later drain sees the release.
+        """
+        held: list[RegisterClient] = []
+        while (unit := next((u for u in self._draining_units if u not in held), None)) is not None:
             try:
                 await unit.aclose()
             except Exception:
@@ -255,7 +260,18 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 # cancelled waiter (CancelledError) keeps it tracked instead.
                 self._forget_drained(unit)
                 raise
-            self._forget_drained(unit)
+            if unit.released:
+                self._forget_drained(unit)
+            else:
+                held.append(unit)
+
+    def _require_links_released(self) -> None:
+        """Refuse to dial while a previously owned link is still held."""
+        if self._draining_units:
+            raise TransportConnectionError(
+                f"Previous Modbus link for {self._serial} is still being released; "
+                "not dialing a replacement"
+            )
 
     def _forget_drained(self, unit: RegisterClient) -> None:
         # Concurrent shutdown waiters may have completed the same close.

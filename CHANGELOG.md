@@ -53,13 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same close. `connect()` (including the replacement dial after a failed or
   cancelled one) waits for every prior owned close before dialing, and serial
   `connect()`/`disconnect()` now take the operation lock, as TCP's do.
-- On `modbus_connection`, an owned close now waits until the OS link is
-  released. tmodbus 0.6.2 returns from `close()` before serialx has closed the
-  port's descriptor, so the transport also awaits the serialx transport's
-  `wait_closed()`, bounded at 5 s; after that it logs a warning and continues.
-  asyncio TCP sockets need no wait: they are closed by the time a close waiter
-  resumes. A close that raises is dropped from tracking instead of re-raising
-  on every later `disconnect()`/`connect()`.
+- On `modbus_connection`, a replacement never dials before the previous
+  owned link is released. tmodbus 0.6.2 returns from `close()` before serialx
+  has closed the port's descriptor (or ESPHome connection), so the transport
+  also awaits the serialx transport's `wait_closed()`. Each wait is bounded at
+  5 s. If the link is still held after that, `disconnect()`/`async_shutdown()`
+  log a warning and return, but the transport keeps tracking the link. The
+  next `connect()` waits for it again (same bound) and raises
+  `TransportConnectionError` rather than dialing while it is still held.
+  asyncio TCP sockets expose no such wait. With an empty write buffer they are
+  closed by the time a close waiter resumes; unsent data would delay that
+  unobservably. A close that raises is dropped from tracking instead of
+  re-raising on every later `disconnect()`/`connect()`.
 - On a host-shared link (TCP and serial), the error-recycle gate counts only
   link errors (timeouts, connection/protocol failures); a device's exception
   response never recycles an endpoint other units and host consumers are

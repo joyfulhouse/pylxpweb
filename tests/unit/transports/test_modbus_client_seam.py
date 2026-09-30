@@ -21,6 +21,7 @@ from modbus_connection import exceptions as mc_exc
 from modbus_connection.tmodbus import ModbusConnection
 from pymodbus.exceptions import ConnectionException, ModbusIOException
 
+from pylxpweb.transports import _modbus_client
 from pylxpweb.transports._modbus_client import (
     ModbusConnectionUnit,
     PymodbusUnit,
@@ -949,6 +950,65 @@ class TestLifecycleRegressions:
             release.set()
         await asyncio.wait_for(replacement, 2.0)
         assert dial_started.is_set()
+        await transport.disconnect()
+
+    @pytest.mark.parametrize(
+        ("kind", "method"),
+        [("tcp", "disconnect"), ("tcp", "async_shutdown"), ("serial", "disconnect")],
+    )
+    async def test_unreleased_link_blocks_replacement_dial(
+        self, kind: str, method: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A release that outlives the bound: close returns, but no replacement dials."""
+        monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.05)
+        transport = _lifecycle_transport(kind)
+        release = asyncio.Event()
+
+        class _Link:
+            def close(self) -> None:
+                pass
+
+            async def wait_closed(self) -> None:
+                await release.wait()
+
+        class _Connection:
+            def __init__(self) -> None:
+                self._connect_task = None
+                self._client = MagicMock()
+                self._client.transport.base_transport._transport = _Link()
+
+            async def close(self) -> None:
+                pass
+
+        held = ModbusConnectionUnit(_FakeUnit(), connection=_Connection())
+        transport._unit = held
+        dials = 0
+
+        async def dial() -> None:
+            nonlocal dials
+            dials += 1
+            transport._unit = ModbusConnectionUnit(_FakeUnit())
+
+        monkeypatch.setattr(
+            transport,
+            "_dial_modbus_connection" if kind == "tcp" else "_open_modbus_connection",
+            dial,
+        )
+        # (a) The close is bounded: it returns while the link is still held.
+        await asyncio.wait_for(getattr(transport, method)(), 1.0)
+        assert transport._draining_units == [held]
+        if method == "async_shutdown":
+            return
+        # (b) A replacement connect waits (bounded) again, then refuses to dial.
+        with pytest.raises(TransportConnectionError, match="still being released"):
+            await asyncio.wait_for(transport.connect(), 1.0)
+        assert dials == 0
+        assert transport._draining_units == [held]
+        # (c) Once the link is released, the next connect dials.
+        release.set()
+        await asyncio.wait_for(transport.connect(), 1.0)
+        assert dials == 1
+        assert transport._draining_units == []
         await transport.disconnect()
 
     async def test_owned_serial_close_releases_the_port(self) -> None:
