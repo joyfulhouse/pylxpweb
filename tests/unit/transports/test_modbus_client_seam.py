@@ -1011,6 +1011,68 @@ class TestLifecycleRegressions:
         assert transport._draining_units == []
         await transport.disconnect()
 
+    @pytest.mark.parametrize(
+        ("kind", "method"),
+        [("tcp", "disconnect"), ("tcp", "async_shutdown"), ("serial", "disconnect")],
+    )
+    async def test_stuck_in_flight_connect_does_not_hold_teardown(
+        self, kind: str, method: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dial whose failed-open cleanup never finishes cannot wedge disconnect()."""
+        monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.05)
+        transport = _lifecycle_transport(kind)
+        cleanup_done = asyncio.Event()
+
+        class _Connection:
+            def __init__(self) -> None:
+                # The in-flight connect: stuck in serialx's unbounded
+                # wait_closed() after a failed open.
+                self._connect_task = asyncio.ensure_future(cleanup_done.wait())
+                self._client = None
+
+            async def close(self) -> None:
+                await self._connect_task
+
+        connection = _Connection()
+        held = ModbusConnectionUnit(_FakeUnit(), connection=connection)
+        transport._unit = held
+        dials = 0
+
+        async def dial() -> None:
+            nonlocal dials
+            dials += 1
+            transport._unit = ModbusConnectionUnit(_FakeUnit())
+
+        monkeypatch.setattr(
+            transport,
+            "_dial_modbus_connection" if kind == "tcp" else "_open_modbus_connection",
+            dial,
+        )
+        try:
+            # (a) Teardown returns within the bound; the cleanup keeps running.
+            await asyncio.wait_for(getattr(transport, method)(), 1.0)
+            assert not connection._connect_task.done()
+            assert not held.released
+            assert transport._draining_units == [held]
+            # (b) The operation lock is free again.
+            await asyncio.wait_for(transport._op_lock.__aenter__(), 0.5)
+            await transport._op_lock.__aexit__(None, None, None)
+            if method == "async_shutdown":
+                return
+            # (c) connect() refuses while the close is still pending.
+            with pytest.raises(TransportConnectionError, match="still being released"):
+                await asyncio.wait_for(transport.connect(), 1.0)
+            assert dials == 0
+            # (d) Once the cleanup completes, connect() dials.
+            cleanup_done.set()
+            await asyncio.wait_for(transport.connect(), 1.0)
+            assert dials == 1
+            assert transport._draining_units == []
+            await transport.disconnect()
+        finally:
+            cleanup_done.set()
+            await connection._connect_task
+
     async def test_owned_serial_close_releases_the_port(self) -> None:
         """Real tmodbus + serialx over a pty: disconnect() returns with the fd closed."""
         import os

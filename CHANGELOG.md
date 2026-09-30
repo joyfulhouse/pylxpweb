@@ -56,11 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On `modbus_connection`, a replacement never dials before the previous
   owned link is released. tmodbus 0.6.2 returns from `close()` before serialx
   has closed the port's descriptor (or ESPHome connection), so the transport
-  also awaits the serialx transport's `wait_closed()`. Each wait is bounded at
-  5 s. If the link is still held after that, `disconnect()`/`async_shutdown()`
-  log a warning and return, but the transport keeps tracking the link. The
-  next `connect()` waits for it again (same bound) and raises
-  `TransportConnectionError` rather than dialing while it is still held.
+  also awaits the serialx transport's `wait_closed()`. One 5 s budget per
+  drain covers the whole teardown: waiting out an in-flight connect, the close,
+  and the link's release. Nothing is cancelled when it expires.
+  `disconnect()`/`async_shutdown()` then log a warning and return, releasing
+  the operation lock, but the transport keeps tracking the link. The next
+  `connect()` waits for it again (same bound) and raises
+  `TransportConnectionError` rather than dialing while it is still held. A
+  replacement on another transport instance may still collide with a link that
+  outlives the bound.
   asyncio TCP sockets expose no such wait. With an empty write buffer they are
   closed by the time a close waiter resumes; unsent data would delay that
   unobservably. A close that raises is dropped from tracking instead of

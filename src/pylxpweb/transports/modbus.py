@@ -379,8 +379,12 @@ class ModbusTransport(BaseModbusTransport):
     async def async_shutdown(self) -> None:
         """Terminally close the session without waiting for the operation lock.
 
-        The close itself is awaited, so a caller releasing this endpoint may
-        dial a replacement immediately afterwards.
+        Releasing an owned link is bounded and best-effort: the close and the
+        link's release are awaited for up to ``LINK_RELEASE_TIMEOUT_SECONDS``.
+        If the link is still held when that bound expires, this returns anyway
+        (with a warning); a replacement dialed on another transport instance
+        may then collide with it, and this instance refuses to redial until
+        the link is released.
         """
         self._shutdown_requested = True
         self._drop_session()

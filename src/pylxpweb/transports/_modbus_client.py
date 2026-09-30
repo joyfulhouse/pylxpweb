@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Literal, Protocol, runtime_checkable
 
 _LOGGER = logging.getLogger(__name__)
@@ -450,19 +451,20 @@ class ModbusConnectionUnit:
 
     async def aclose(self) -> None:
         self.close()
-        if self._close_task is not None:
-            # Shielded: cancelling the waiter must not cancel the close itself.
-            await asyncio.shield(self._close_task)
-        release = self._release
-        if release is not None and not release.done():
-            # asyncio.wait() neither cancels the release nor raises on timeout.
-            await asyncio.wait((release,), timeout=LINK_RELEASE_TIMEOUT_SECONDS)
-            if not release.done():
-                _LOGGER.warning(
-                    "Modbus link not released %.1fs after close; "
-                    "no replacement will dial until it is",
-                    LINK_RELEASE_TIMEOUT_SECONDS,
-                )
+        # One LINK_RELEASE_TIMEOUT_SECONDS budget covers the whole teardown:
+        # the close task (which first waits out an in-flight connect, then
+        # closes) and the link's release after it. asyncio.wait() neither
+        # cancels what it waits on nor raises on timeout, so on expiry both
+        # keep running and ``released`` stays False until they finish.
+        deadline = time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS
+        await _wait_until(self._close_task, deadline)
+        # Read only now: the close task is what sets ``_release``.
+        await _wait_until(self._release, deadline)
+        if not self.released:
+            _LOGGER.warning(
+                "Modbus link not released %.1fs after close; no replacement will dial until it is",
+                LINK_RELEASE_TIMEOUT_SECONDS,
+            )
 
     async def _close_connection(self, connection: Any) -> None:
         try:
@@ -496,6 +498,12 @@ class ModbusConnectionUnit:
             raise RegisterLinkError(str(err)) from err
 
 
+async def _wait_until(step: asyncio.Future[Any] | None, deadline: float) -> None:
+    """Wait for ``step`` until ``deadline`` without cancelling it or raising."""
+    if step is not None and not step.done():
+        await asyncio.wait((step,), timeout=max(0.0, deadline - time.monotonic()))
+
+
 async def _owned_link_transport(connection: Any) -> Any:
     """Return the OS-level transport under an owned ``ModbusConnection``, if any.
 
@@ -508,7 +516,8 @@ async def _owned_link_transport(connection: Any) -> Any:
     0.6.2 (``_client.transport.base_transport._transport``) defensively and
     returns ``None`` when the layout differs. A connect still in flight is
     waited out first, as ``close()`` itself does, so its link is captured
-    rather than released unobserved.
+    rather than released unobserved. That wait runs inside the adapter's close
+    task, which callers only ever wait on within the bound in ``aclose()``.
     """
     flight = getattr(connection, "_connect_task", None)
     if isinstance(flight, asyncio.Future) and not flight.done():
