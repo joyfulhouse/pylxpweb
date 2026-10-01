@@ -1095,7 +1095,8 @@ class TestLifecycleRegressions:
         await transport.connect()
         start = time.monotonic()
         await transport.disconnect()
-        assert time.monotonic() - start >= bound
+        # Generous margin: asyncio timers may fire up to a clock tick early.
+        assert time.monotonic() - start >= bound / 2
         # Every later disconnect/connect only checks; none waits the bound again.
         for _ in range(3):
             start = time.monotonic()
@@ -1111,6 +1112,36 @@ class TestLifecycleRegressions:
         assert len(links.clients) == 2
         links.clients[1].link.release.set()
         await transport.disconnect()
+
+    @pytest.mark.parametrize("kind", ["tcp", "serial"])
+    async def test_automatic_redial_waits_on_a_held_link_once(
+        self, kind: str, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The backend's own redials spend the release bound once per held link."""
+        monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.05)
+        waited: list[int] = []
+        real_wait_until = _modbus_client._wait_until
+
+        async def spy(steps: list[asyncio.Future[Any]], deadline: float) -> None:
+            waited.append(len([step for step in steps if not step.done()]))
+            await real_wait_until(steps, deadline)
+
+        params = ModbusTcpParams(host="h") if kind == "tcp" else ModbusSerialParams(device="/dev/x")
+        connection = owned_modbus_connection(params, timeout=1.0)
+        await connection.connect()
+        await connection.disconnect()  # e.g. _map_errors dropping a desynced link
+        monkeypatch.setattr(_modbus_client, "_wait_until", spy)
+        for _ in range(2):
+            with pytest.raises(mc_exc.ModbusConnectionError, match="still being released"):
+                await connection.connect()
+        # First redial waited on the held link; the second only checked it.
+        assert waited == [1, 0]
+        assert len(links.clients) == 1
+        links.clients[0].link.release.set()
+        await connection.connect()
+        assert len(links.clients) == 2
+        links.clients[1].link.release.set()
+        await connection.close()
 
     async def test_refused_dial_without_private_target_is_a_connection_error(
         self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
@@ -1128,24 +1159,40 @@ class TestLifecycleRegressions:
     async def test_unobservable_serial_release_is_logged_once(
         self, links: _LinkFactory, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A serial client whose release cannot be observed is diagnosable, not silent."""
+        """A serial client whose release cannot be observed warns once; TCP stays silent."""
         links.observable = False
-        connection = owned_modbus_connection(ModbusSerialParams(device="/dev/ttyUSB0"), timeout=1.0)
         with caplog.at_level(logging.DEBUG, logger=_modbus_client.__name__):
-            for _ in range(2):
-                await connection.connect()
-                await connection.disconnect()
-        assert caplog.text.count("Cannot observe serial link release") == 1
+            for params in (ModbusSerialParams(device="/dev/ttyUSB0"), ModbusTcpParams(host="h")):
+                connection = owned_modbus_connection(params, timeout=1.0)
+                for _ in range(2):
+                    await connection.connect()
+                    await connection.disconnect()
+        warnings = [
+            record
+            for record in caplog.records
+            if "Cannot observe serial link release" in record.getMessage()
+        ]
+        assert [record.levelno for record in warnings] == [logging.WARNING]
 
     async def test_hook_absent_falls_back_to_plain_connection(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Without ``_connect_client`` the plain class is used; release follows the close."""
         gated = _modbus_client._release_gated_connection_class
+        warn = _modbus_client._warn_release_gate_absent
         gated.cache_clear()
+        warn.cache_clear()
         try:
             with monkeypatch.context() as patch:
                 patch.setattr(ModbusConnection, "_connect_client", None)
+                with caplog.at_level(logging.DEBUG, logger=_modbus_client.__name__):
+                    owned_modbus_connection(ModbusTcpParams(host="h"), timeout=1.0)
+                    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+                    for _ in range(2):
+                        owned_modbus_connection(ModbusSerialParams(device="/dev/x"), timeout=1.0)
+                warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+                assert len(warnings) == 1
+                assert "no _connect_client hook" in warnings[0].getMessage()
                 connection = owned_modbus_connection(ModbusTcpParams(host="127.0.0.1"), timeout=1.0)
                 assert type(connection) is ModbusConnection
                 closed = asyncio.Event()
@@ -1163,6 +1210,7 @@ class TestLifecycleRegressions:
                 assert unit.released
         finally:
             gated.cache_clear()
+            warn.cache_clear()
 
     async def test_owned_serial_close_releases_the_port(self) -> None:
         """Real tmodbus + serialx over a pty: disconnect() returns with the fd closed."""

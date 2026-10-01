@@ -68,9 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they log a warning and return, releasing the operation lock. The transport
   keeps tracking the link, and the next `connect()` raises
   `TransportConnectionError` while it is still held. That budget is spent
-  once per held link. Later disconnects and connects only check whether it
-  has been released, so a link that stays held fails each redial at once
-  instead of stalling every operation by the bound again. A replacement on another
+  once per held link, both in teardown and in modbus-connection's automatic
+  redials. Later attempts only check whether the link has been released, so
+  a link that stays held fails each redial at once instead of stalling every
+  operation by the bound again. If the private hook or the tmodbus layout
+  the gate reads is missing, owned serial connections log a one-time
+  warning that redials are not gated. A replacement on another
   transport instance may still collide with a link that outlives the bound.
   asyncio TCP sockets expose no such wait. With an empty write buffer they are
   closed by the time a close waiter resumes; unsent data would delay that

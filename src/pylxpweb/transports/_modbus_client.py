@@ -520,7 +520,21 @@ def owned_modbus_connection(params: Any, *, timeout: float) -> Any:
 
     See :func:`_release_gated_connection_class`.
     """
-    return _release_gated_connection_class()(params, timeout=timeout)
+    from modbus_connection import ModbusSerialParams
+
+    cls = _release_gated_connection_class()
+    if not hasattr(cls, "pending_releases") and isinstance(params, ModbusSerialParams):
+        _warn_release_gate_absent()
+    return cls(params, timeout=timeout)
+
+
+@functools.cache
+def _warn_release_gate_absent() -> None:
+    """Warn (once per process) that owned serial redials are not release-gated."""
+    _LOGGER.warning(
+        "modbus-connection has no _connect_client hook (layout changed?); owned "
+        "serial redials are not gated on the previous link's release"
+    )
 
 
 @functools.cache
@@ -560,6 +574,10 @@ def _release_gated_connection_class() -> type[Any]:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             self._link_releases: list[asyncio.Future[Any]] = []
+            # Releases whose bounded wait already expired once: later dials
+            # only check them, so a link that stays held refuses each
+            # automatic redial at once instead of stalling it by the bound.
+            self._waited_releases: set[asyncio.Future[Any]] = set()
             self._unobservable_logged = False
 
         @property
@@ -569,9 +587,11 @@ def _release_gated_connection_class() -> type[Any]:
 
         async def _connect_client(self) -> AsyncModbusClient:
             await _wait_until(
-                self.pending_releases, time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS
+                [r for r in self.pending_releases if r not in self._waited_releases],
+                time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS,
             )
             self._link_releases = self.pending_releases
+            self._waited_releases = set(self._link_releases)
             if self._link_releases:
                 target = getattr(self, "_target", "link")
                 raise ModbusConnectionError(f"previous link to {target} is still being released")
@@ -583,7 +603,7 @@ def _release_gated_connection_class() -> type[Any]:
                 # A serial link always has a serialx wait_closed(); not finding
                 # it means the private tmodbus layout changed and the gate is off.
                 self._unobservable_logged = True
-                _LOGGER.debug(
+                _LOGGER.warning(
                     "Cannot observe serial link release for %s (tmodbus layout "
                     "changed?); redials are not gated on it",
                     getattr(self, "_target", "link"),
