@@ -540,6 +540,7 @@ def _release_gated_connection_class() -> type[Any]:
     unobservably), so they count as released at once. Without the hook
     (another modbus-connection layout) the plain class is used ungated.
     """
+    from modbus_connection import ModbusSerialParams
     from modbus_connection.exceptions import ModbusConnectionError
     from modbus_connection.tmodbus import ModbusConnection
     from tmodbus.client import AsyncModbusClient
@@ -552,6 +553,7 @@ def _release_gated_connection_class() -> type[Any]:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             self._link_releases: list[asyncio.Future[Any]] = []
+            self._unobservable_logged = False
 
         @property
         def pending_releases(self) -> list[asyncio.Future[Any]]:
@@ -564,13 +566,21 @@ def _release_gated_connection_class() -> type[Any]:
             )
             self._link_releases = self.pending_releases
             if self._link_releases:
-                raise ModbusConnectionError(
-                    f"previous link to {self._target} is still being released"
-                )
+                target = getattr(self, "_target", "link")
+                raise ModbusConnectionError(f"previous link to {target} is still being released")
             client = await super()._connect_client()
             release = _link_release(client)
             if release is not None:
                 self._link_releases.append(release)
+            elif isinstance(self._params, ModbusSerialParams) and not self._unobservable_logged:
+                # A serial link always has a serialx wait_closed(); not finding
+                # it means the private tmodbus layout changed and the gate is off.
+                self._unobservable_logged = True
+                _LOGGER.debug(
+                    "Cannot observe serial link release for %s (tmodbus layout "
+                    "changed?); redials are not gated on it",
+                    getattr(self, "_target", "link"),
+                )
             return client
 
     return ReleaseGatedModbusConnection

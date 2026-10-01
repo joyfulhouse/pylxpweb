@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from modbus_connection import ModbusTcpParams
+from modbus_connection import ModbusSerialParams, ModbusTcpParams
 from modbus_connection import exceptions as mc_exc
 from modbus_connection.tmodbus import ModbusConnection
 from pymodbus.exceptions import ConnectionException, ModbusIOException
@@ -30,6 +31,7 @@ from pylxpweb.transports._modbus_client import (
     RegisterLinkError,
     RegisterTimeoutError,
     normalize_backend,
+    owned_modbus_connection,
     resolve_backend,
 )
 from pylxpweb.transports.config import TransportConfig, TransportType
@@ -713,10 +715,10 @@ class _FakeLink:
 class _FakeTmodbusClient:
     """A tmodbus ``AsyncModbusClient``-shaped client over a :class:`_FakeLink`."""
 
-    def __init__(self, link: _FakeLink) -> None:
+    def __init__(self, link: _FakeLink, *, observable: bool = True) -> None:
         self.link = link
         self.transport = MagicMock()
-        self.transport.base_transport._transport = link
+        self.transport.base_transport._transport = link if observable else None
         self.error: Exception | None = None
 
     def for_unit_id(self, unit_id: int) -> _FakeTmodbusClient:
@@ -740,6 +742,7 @@ class _LinkFactory:
         self.clients: list[_FakeTmodbusClient] = []
         self.dial_gate: asyncio.Event | None = None
         self.auto_release = False
+        self.observable = True
 
     async def connect_client(self) -> _FakeTmodbusClient:
         if self.dial_gate is not None:
@@ -747,7 +750,7 @@ class _LinkFactory:
         link = _FakeLink()
         if self.auto_release:
             link.release.set()
-        client = _FakeTmodbusClient(link)
+        client = _FakeTmodbusClient(link, observable=self.observable)
         self.clients.append(client)
         return client
 
@@ -1070,6 +1073,58 @@ class TestLifecycleRegressions:
             await transport.disconnect()
         finally:
             links.dial_gate.set()
+
+    async def test_refused_dial_without_private_target_is_a_connection_error(
+        self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gate's refusal never depends on modbus-connection's private ``_target``."""
+        monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.01)
+        connection = owned_modbus_connection(ModbusTcpParams(host="127.0.0.1"), timeout=1.0)
+        await connection.connect()
+        await connection.disconnect()
+        del connection._target
+        with pytest.raises(mc_exc.ModbusConnectionError, match="previous link to link"):
+            await connection.connect()
+        links.clients[0].link.release.set()
+
+    async def test_unobservable_serial_release_is_logged_once(
+        self, links: _LinkFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A serial client whose release cannot be observed is diagnosable, not silent."""
+        links.observable = False
+        connection = owned_modbus_connection(ModbusSerialParams(device="/dev/ttyUSB0"), timeout=1.0)
+        with caplog.at_level(logging.DEBUG, logger=_modbus_client.__name__):
+            for _ in range(2):
+                await connection.connect()
+                await connection.disconnect()
+        assert caplog.text.count("Cannot observe serial link release") == 1
+
+    async def test_hook_absent_falls_back_to_plain_connection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without ``_connect_client`` the plain class is used; release follows the close."""
+        gated = _modbus_client._release_gated_connection_class
+        gated.cache_clear()
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(ModbusConnection, "_connect_client", None)
+                connection = owned_modbus_connection(ModbusTcpParams(host="127.0.0.1"), timeout=1.0)
+                assert type(connection) is ModbusConnection
+                closed = asyncio.Event()
+
+                async def close() -> None:
+                    await closed.wait()
+
+                patch.setattr(connection, "close", close)
+                unit = ModbusConnectionUnit(_FakeUnit(), connection=connection)
+                unit.close()
+                await asyncio.sleep(0)
+                assert not unit.released
+                closed.set()
+                await unit.aclose()
+                assert unit.released
+        finally:
+            gated.cache_clear()
 
     async def test_owned_serial_close_releases_the_port(self) -> None:
         """Real tmodbus + serialx over a pty: disconnect() returns with the fd closed."""

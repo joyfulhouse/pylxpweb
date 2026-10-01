@@ -89,14 +89,19 @@ jobs:
     # Home Assistant core pins pymodbus (homeassistant/package_constraints.txt)
     # below what uv.lock resolves, and that pin is what the eg4_web_monitor
     # integration's users actually run. Exercise the Modbus transports on it.
-    name: Modbus transports on Home Assistant 2026.9 pins
+    name: Modbus transports on Home Assistant pins (serialx ${{ matrix.serialx }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.10.0: HA 2026.9.1-2026.9.4. 1.8.2: HA 2026.8.x, the extra's floor.
+        serialx: ["1.10.0", "1.8.2"]
     env:
       HA_PYMODBUS_VERSION: "3.13.1"
       HA_MODBUS_CONNECTION_VERSION: "4.10.0"
       HA_TMODBUS_VERSION: "0.6.2"
-      HA_SERIALX_VERSION: "1.10.0"
+      HA_SERIALX_VERSION: ${{ matrix.serialx }}
     steps:
       - uses: actions/checkout@v7
 
@@ -128,7 +133,7 @@ jobs:
               --output-file "${RUNNER_TEMP}/ha-${tag}-resolved.txt"
           done
 
-      - name: Pin Modbus libraries to Home Assistant 2026.9.4 versions
+      - name: Pin Modbus libraries to Home Assistant versions
         # ``uv run`` re-syncs to the lock by default; ``--no-sync`` below keeps
         # the pin in place for the test run.
         run: |

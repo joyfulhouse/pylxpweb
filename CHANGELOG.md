@@ -35,10 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pulls in `serialx[esphome]` (aioesphomeapi), which serialx needs to register
   that scheme. pymodbus remains pyserial-based upstream, so this no longer
   waits on it.
-- CI job running the Modbus transport tests against Home Assistant 2026.9.4's
-  pins (pymodbus 3.13.1, modbus-connection 4.10.0, tmodbus 0.6.2, serialx
-  1.10.0), plus extra resolution checks under HA 2026.8.0, 2026.9.0 and
-  2026.9.4 constraints.
+- CI job running the Modbus transport tests against Home Assistant's pins
+  (pymodbus 3.13.1, modbus-connection 4.10.0, tmodbus 0.6.2) with serialx
+  1.10.0 (HA 2026.9.1–2026.9.4) and 1.8.2 (HA 2026.8.x, the extra's floor),
+  plus extra resolution checks under HA 2026.8.0, 2026.9.0 and 2026.9.4
+  constraints.
 
 ### Changed
 
