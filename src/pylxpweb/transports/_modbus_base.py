@@ -524,7 +524,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     "[%s] Modbus error writing registers at %d: %s",
                     self._serial,
                     address,
-                    err,
+                    err.detail if err.detail is not None else err,
                 )
                 failure: TransportError = TransportWriteError(str(err))
                 cause = err.__cause__

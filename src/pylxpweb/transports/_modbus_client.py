@@ -72,12 +72,14 @@ class RegisterExceptionResponse(RegisterClientError):
     """The device answered with a Modbus exception response.
 
     The link is alive — the device decoded the request and refused it — so
-    callers must not count this against link health.
+    callers must not count this against link health. ``detail`` is the raw
+    backend text, when the message wraps it.
     """
 
-    def __init__(self, message: str, *, code: int | None = None) -> None:
+    def __init__(self, message: str, *, code: int | None = None, detail: str | None = None) -> None:
         super().__init__(message)
         self.code = code
+        self.detail = detail
 
 
 class RegisterTimeoutError(RegisterClientError, TimeoutError):
@@ -372,6 +374,7 @@ class PymodbusUnit:
             raise RegisterExceptionResponse(
                 f"Modbus write error at address {address}: {result}",
                 code=getattr(result, "exception_code", None),
+                detail=str(result),
             )
 
 

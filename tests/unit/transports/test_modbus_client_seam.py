@@ -305,7 +305,7 @@ class TestPymodbusUnit:
         ],
     )
     async def test_error_chain_matches_baseline(
-        self, failure: str, operation: str, outer: bool
+        self, failure: str, operation: str, outer: bool, caplog: pytest.LogCaptureFixture
     ) -> None:
         """__cause__/__context__/__suppress_context__ match origin/main (477ac477).
 
@@ -335,7 +335,7 @@ class TestPymodbusUnit:
         ):
             mock = AsyncMock(side_effect=raised) if raised else AsyncMock(return_value=response)
             setattr(client, name, mock)
-        transport = ModbusTransport(host="127.0.0.1", retries=0)
+        transport = ModbusTransport(host="127.0.0.1", serial="CE1", retries=0)
         transport._unit = PymodbusUnit(client, 1)
         transport._connected = True
         caller = ValueError("caller")
@@ -363,6 +363,9 @@ class TestPymodbusUnit:
             assert error.__context__ is (caller if outer else None)
             assert error.__suppress_context__ is False
             assert ("ValueError: caller" in rendered) is outer
+            if not read:
+                # origin/main logged the raw response text, not the exception message.
+                assert caplog.messages == ["[CE1] Modbus error writing registers at 7: refused"]
         else:
             assert error.__cause__ is raised
             context = raised if not read else (caller if outer else None)
