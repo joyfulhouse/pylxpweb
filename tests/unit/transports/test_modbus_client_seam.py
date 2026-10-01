@@ -283,6 +283,31 @@ class TestPymodbusUnit:
                 await transport._write_holding_registers(7, values)
         assert str(info.value) == message
         assert info.value.__cause__ is None
+        # origin/main raised these inside a plain try body: no hidden context.
+        assert info.value.__context__ is None
+
+    @pytest.mark.parametrize(
+        ("raised", "expected"),
+        [
+            (ConnectionException("Not connected"), TransportWriteError),
+            (ModbusIOException("Modbus Error: [Input/Output] timeout"), TransportTimeoutError),
+        ],
+    )
+    async def test_backend_write_failure_chain_matches_baseline(
+        self, raised: Exception, expected: type[Exception]
+    ) -> None:
+        # origin/main (477ac477) raised `... from err` inside `except ModbusException
+        # as err`, so both __cause__ and __context__ are the raw backend exception;
+        # the seam wrapper must not appear anywhere in the chain.
+        client = MagicMock()
+        client.write_registers = AsyncMock(side_effect=raised)
+        transport = ModbusTransport(host="127.0.0.1", retries=0)
+        transport._unit = PymodbusUnit(client, 1)
+        transport._connected = True
+        with pytest.raises(expected) as info:
+            await transport._write_holding_registers(7, [1, 2])
+        assert info.value.__cause__ is raised
+        assert info.value.__context__ is raised
 
     async def test_reads_use_keyword_device_id_form(self) -> None:
         client = MagicMock()
@@ -1180,6 +1205,43 @@ class TestLifecycleRegressions:
             await asyncio.wait_for(shutdown, 1.0)
         assert transport._reconnect_retry_after is None
         assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    @pytest.mark.parametrize(
+        ("kind", "method"), [("tcp", "async_shutdown"), ("serial", "disconnect")]
+    )
+    async def test_held_link_leaves_no_pending_task_after_teardown(
+        self, kind: str, method: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A link that never releases leaves no task of ours pending (serialx shape)."""
+        monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.01)
+
+        class _SerialxLink(_FakeLink):
+            # serialx 1.8.2-1.11.0: wait_closed() only awaits this future.
+            def __init__(self) -> None:
+                super().__init__()
+                self._closed_waiter: asyncio.Future[None] = (
+                    asyncio.get_running_loop().create_future()
+                )
+
+            async def wait_closed(self) -> None:
+                await self._closed_waiter
+
+        link = _SerialxLink()
+
+        async def connect_client(self: ModbusConnection) -> _FakeTmodbusClient:
+            return _FakeTmodbusClient(link)
+
+        monkeypatch.setattr(ModbusConnection, "_connect_client", connect_client)
+        before = asyncio.all_tasks()
+        transport = _lifecycle_transport(kind)
+        await transport.connect()
+        await getattr(transport, method)()
+        await asyncio.sleep(0)
+        assert [task for task in asyncio.all_tasks() - before if not task.done()] == []
+        # The gate still refuses: the held link is tracked, not forgotten.
+        assert not transport._draining_units[0].released
+        link._closed_waiter.set_result(None)
+        assert transport._draining_units[0].released
 
     async def test_refused_dial_without_private_target_is_a_connection_error(
         self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch

@@ -618,13 +618,22 @@ def _link_release(client: Any) -> asyncio.Future[Any] | None:
 
     Reads the one private step tmodbus 0.6.2 offers no public accessor for:
     ``client.transport.base_transport._transport``, the serialx transport.
+    Its ``wait_closed()`` only awaits the transport's own ``_closed_waiter``
+    future (serialx 1.8.2 through 1.11.0), so that future is observed directly:
+    a Task wrapping ``wait_closed()`` would stay pending for a link that never
+    releases, pinning the transport and warning at loop shutdown. Other
+    layouts fall back to that Task.
     """
     smart = getattr(client, "transport", None)
     base = getattr(smart, "base_transport", smart)
-    wait_closed = getattr(getattr(base, "_transport", None), "wait_closed", None)
+    link = getattr(base, "_transport", None)
+    wait_closed = getattr(link, "wait_closed", None)
     if not callable(wait_closed):
         return None
-    release: asyncio.Future[Any] = asyncio.ensure_future(wait_closed())
+    waiter = getattr(link, "_closed_waiter", None)
+    release: asyncio.Future[Any] = (
+        waiter if isinstance(waiter, asyncio.Future) else asyncio.ensure_future(wait_closed())
+    )
     # Observe a failed release so asyncio does not warn; it still counts as done.
     release.add_done_callback(lambda task: task.cancelled() or task.exception())
     return release

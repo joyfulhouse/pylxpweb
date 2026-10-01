@@ -513,14 +513,16 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     address,
                     err,
                 )
-                raise TransportWriteError(str(err)) from err.__cause__
+                failure: TransportError = TransportWriteError(str(err))
+                cause = err.__cause__
             except RegisterTimeoutError as err:
                 self._consecutive_errors += 1
                 self._consecutive_link_errors += 1
                 _LOGGER.error("[%s] Timeout writing registers at %d", self._serial, address)
-                raise TransportTimeoutError(
+                failure = TransportTimeoutError(
                     f"[{self._serial}] Timeout writing registers at {address}"
-                ) from err.__cause__
+                )
+                cause = err.__cause__
             except RegisterLinkError as err:
                 # A write on a dropped session must surface through the typed
                 # TransportWriteError contract the upstream write retry /
@@ -532,9 +534,10 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 _LOGGER.error(
                     "[%s] Failed to write registers at %d: %s", self._serial, address, err
                 )
-                raise TransportWriteError(
+                failure = TransportWriteError(
                     f"[{self._serial}] Failed to write registers at {address}: {err}"
-                ) from err.__cause__
+                )
+                cause = err.__cause__
             except TimeoutError as err:
                 self._consecutive_errors += 1
                 self._consecutive_link_errors += 1
@@ -551,6 +554,14 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                 raise TransportWriteError(
                     f"[{self._serial}] Failed to write registers at {address}: {err}"
                 ) from err
+
+            # Raised outside the handler so the seam wrapper is not chained
+            # as __context__: the chain is the raw backend exception (or none
+            # for a refused write), exactly as before the seam.
+            failure.__context__ = cause
+            if cause is not None:
+                failure.__cause__ = cause
+            raise failure
 
     # ------------------------------------------------------------------
     # Operation guard: reconnect gate + op lock
