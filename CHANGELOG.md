@@ -71,9 +71,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once per held link, both in teardown and in modbus-connection's automatic
   redials. Later attempts only check whether the link has been released, so
   a link that stays held fails each redial at once instead of stalling every
-  operation by the bound again. If the private hook or the tmodbus layout
-  the gate reads is missing, owned serial connections log a one-time
-  warning that redials are not gated. A replacement on another
+  operation by the bound again. Owned serial connections warn when redials
+  are not gated: once per process if the private hook is missing, and once
+  per connection if the tmodbus layout hides a link's release. A
+  replacement on another
   transport instance may still collide with a link that outlives the bound.
   asyncio TCP sockets expose no such wait. With an empty write buffer they are
   closed by the time a close waiter resumes; unsent data would delay that

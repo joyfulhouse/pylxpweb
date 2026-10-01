@@ -1143,6 +1143,44 @@ class TestLifecycleRegressions:
         links.clients[1].link.release.set()
         await connection.close()
 
+    async def test_gate_forwards_extra_connect_client_arguments(
+        self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A future ``_connect_client(...)`` signature still dials through the gate."""
+        seen: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+        async def connect_client(
+            self: ModbusConnection, *args: Any, **kwargs: Any
+        ) -> _FakeTmodbusClient:
+            seen.append((args, kwargs))
+            return await links.connect_client()
+
+        monkeypatch.setattr(ModbusConnection, "_connect_client", connect_client)
+        connection = owned_modbus_connection(ModbusTcpParams(host="h"), timeout=1.0)
+        await connection._connect_client("extra", flag=True)
+        assert seen == [(("extra",), {"flag": True})]
+        assert len(connection.pending_releases) == 1
+        links.clients[0].link.release.set()
+
+    async def test_shutdown_during_owned_dial_reports_shutdown(
+        self, links: _LinkFactory, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """async_shutdown() mid-dial raises the shutdown error, without cooldown or ERROR."""
+        links.dial_gate = asyncio.Event()
+        links.auto_release = True
+        transport = _lifecycle_transport("tcp")
+        with caplog.at_level(logging.DEBUG):
+            dial = asyncio.create_task(transport.connect())
+            await asyncio.sleep(0.01)
+            shutdown = asyncio.create_task(transport.async_shutdown())
+            await asyncio.sleep(0.01)
+            links.dial_gate.set()
+            with pytest.raises(TransportConnectionError, match="has been shut down"):
+                await asyncio.wait_for(dial, 1.0)
+            await asyncio.wait_for(shutdown, 1.0)
+        assert transport._reconnect_retry_after is None
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
     async def test_refused_dial_without_private_target_is_a_connection_error(
         self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
     ) -> None:

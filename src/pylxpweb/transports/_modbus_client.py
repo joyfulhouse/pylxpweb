@@ -585,7 +585,7 @@ def _release_gated_connection_class() -> type[Any]:
             """Releases of links this connection created that have not happened yet."""
             return [release for release in self._link_releases if not release.done()]
 
-        async def _connect_client(self) -> AsyncModbusClient:
+        async def _connect_client(self, *args: Any, **kwargs: Any) -> AsyncModbusClient:
             await _wait_until(
                 [r for r in self.pending_releases if r not in self._waited_releases],
                 time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS,
@@ -595,7 +595,7 @@ def _release_gated_connection_class() -> type[Any]:
             if self._link_releases:
                 target = getattr(self, "_target", "link")
                 raise ModbusConnectionError(f"previous link to {target} is still being released")
-            client = await super()._connect_client()
+            client = await super()._connect_client(*args, **kwargs)
             release = _link_release(client)
             if release is not None:
                 self._link_releases.append(release)

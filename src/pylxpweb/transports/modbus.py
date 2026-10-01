@@ -309,6 +309,9 @@ class ModbusTransport(BaseModbusTransport):
             await connection.connect()
         except (mc_exc.ModbusError, TimeoutError, OSError) as err:
             self._drop_session()
+            # async_shutdown() closing the connection mid-dial is not a dial
+            # failure: report the shutdown, without cooldown or error log.
+            self._raise_if_shutdown()
             self._reconnect_retry_after = _monotonic() + _FAILED_RECONNECT_COOLDOWN
             _LOGGER.error(
                 "Failed to connect to Modbus gateway at %s:%s: %s",
