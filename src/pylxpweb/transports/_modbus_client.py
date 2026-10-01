@@ -407,6 +407,8 @@ class ModbusConnectionUnit:
         self._unit = unit
         self._connection = connection
         self._close_task: asyncio.Task[None] | None = None
+        # Set once a bounded teardown wait has expired with the link held.
+        self._release_wait_expired = False
 
     @property
     def owns_link(self) -> bool:
@@ -454,12 +456,17 @@ class ModbusConnectionUnit:
         # the close task (which first waits out an in-flight connect, then
         # closes) and the release of every link the connection created.
         # Nothing waited on is cancelled, so on expiry both keep running and
-        # ``released`` stays False until they finish.
-        deadline = time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS
+        # ``released`` stays False until they finish. The budget is spent only
+        # once: after it has expired, later calls just check (a zero-length
+        # wait), so a link that stays held fails every redial fast instead of
+        # stalling each operation by the bound again.
+        budget = 0.0 if self._release_wait_expired else LINK_RELEASE_TIMEOUT_SECONDS
+        deadline = time.monotonic() + budget
         await _wait_until([self._close_task] if self._close_task else [], deadline)
         # Read only now: a connect in flight at close() records its link late.
         await _wait_until(_pending_releases(self._connection), deadline)
-        if not self.released:
+        if not self.released and not self._release_wait_expired:
+            self._release_wait_expired = True
             _LOGGER.warning(
                 "Modbus link not released %.1fs after close; no replacement will dial until it is",
                 LINK_RELEASE_TIMEOUT_SECONDS,

@@ -12,7 +12,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -698,6 +699,12 @@ class _BlockedClose:
         self.closed = True
 
 
+async def _until(condition: Callable[[], bool]) -> None:
+    """Yield to the loop until ``condition`` holds (callers bound it with wait_for)."""
+    while not condition():
+        await asyncio.sleep(0)
+
+
 class _FakeLink:
     """A serialx-shaped link whose release is event-controlled."""
 
@@ -1065,14 +1072,45 @@ class TestLifecycleRegressions:
             with pytest.raises(TransportConnectionError, match="still being released"):
                 await asyncio.wait_for(transport.connect(), 1.0)
             assert links.clients == []
-            # (d) Once the stuck dial finishes (and its link is released), connect() dials.
+            # (d) Once the stuck dial finishes and its link is released, connect()
+            # dials. The bound already expired once, so connect() only checks:
+            # let the background close finish first.
             links.dial_gate.set()
+            await asyncio.wait_for(_until(lambda: held.released), 1.0)
             await asyncio.wait_for(transport.connect(), 1.0)
             assert len(links.clients) == 2
             assert transport._draining_units == []
             await transport.disconnect()
         finally:
             links.dial_gate.set()
+
+    @pytest.mark.parametrize("kind", ["tcp", "serial"])
+    async def test_held_link_is_waited_on_once(
+        self, kind: str, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After one expired wait, a link that stays held fails redials fast."""
+        bound = 0.2
+        monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", bound)
+        transport = _lifecycle_transport(kind)
+        await transport.connect()
+        start = time.monotonic()
+        await transport.disconnect()
+        assert time.monotonic() - start >= bound
+        # Every later disconnect/connect only checks; none waits the bound again.
+        for _ in range(3):
+            start = time.monotonic()
+            await transport.disconnect()
+            with pytest.raises(TransportConnectionError, match="still being released"):
+                await transport.connect()
+            assert time.monotonic() - start < bound / 2
+        assert len(links.clients) == 1
+        # Once released, the next connect dials.
+        links.clients[0].link.release.set()
+        await asyncio.wait_for(_until(lambda: transport._draining_units[0].released), 1.0)
+        await transport.connect()
+        assert len(links.clients) == 2
+        links.clients[1].link.release.set()
+        await transport.disconnect()
 
     async def test_refused_dial_without_private_target_is_a_connection_error(
         self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
@@ -1140,10 +1178,14 @@ class TestLifecycleRegressions:
                 retries=0,
             )
             await transport.connect()
-            link = transport._client._client.transport.base_transport._transport
+            connection = transport._client
+            link = connection._client.transport.base_transport._transport
             fd = link._fileno
             assert fd is not None
+            # The release gate found the real tmodbus/serialx link at creation.
+            assert len(connection.pending_releases) == 1
             await transport.disconnect()
+            assert connection.pending_releases == []
             with pytest.raises(OSError):
                 os.fstat(fd)
         finally:
@@ -1204,10 +1246,13 @@ class TestLifecycleRegressions:
             assert isinstance(transport._client, ModbusConnection)
             connections.append(transport._client)
             assert connections[0] is not connections[1]
+            # The release gate found the real socket:// serialx link at creation.
+            assert len(connections[1].pending_releases) == 1
 
             await transport.disconnect()
             for connection in connections:
                 assert connection.connected is False
+                assert connection.pending_releases == []
             assert transport._draining_units == []
         finally:
             for connection in connections:
