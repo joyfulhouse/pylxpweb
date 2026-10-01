@@ -433,6 +433,95 @@ class TestPymodbusUnit:
         client.close.assert_called_once()
 
 
+class _FakePymodbusClient:
+    """A connectable pymodbus client whose frame layout accepts the TID patch."""
+
+    def __init__(self, **_: Any) -> None:
+        self.ctx = MagicMock()
+        self.read_input_registers = AsyncMock(side_effect=TimeoutError())
+
+    async def connect(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        return None
+
+
+class TestDefaultPathLogParity:
+    """Default (pymodbus) path log records equal origin/main's: logger, level and text."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_pymodbus(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import pymodbus.client
+
+        monkeypatch.setattr(pymodbus.client, "AsyncModbusTcpClient", _FakePymodbusClient)
+        monkeypatch.setattr(pymodbus.client, "AsyncModbusSerialClient", _FakePymodbusClient)
+        monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    @staticmethod
+    def _records(caplog: pytest.LogCaptureFixture) -> list[tuple[str, int, str]]:
+        return [r for r in caplog.record_tuples if r[0].startswith("pylxpweb.transports")]
+
+    async def test_tcp_connect(self, caplog: pytest.LogCaptureFixture) -> None:
+        transport = ModbusTransport(host="h", serial="CE1")
+        with caplog.at_level(logging.DEBUG, logger="pylxpweb"):
+            await transport.connect()
+        assert self._records(caplog) == [
+            (
+                "pylxpweb.transports.modbus",
+                logging.DEBUG,
+                "Patched TID validation for Modbus gateway h:502 (CE1)",
+            ),
+            (
+                "pylxpweb.transports.modbus",
+                logging.INFO,
+                "Modbus transport connected to h:502 (unit 1) for CE1",
+            ),
+        ]
+
+    async def test_serial_connect(self, caplog: pytest.LogCaptureFixture) -> None:
+        transport = ModbusSerialTransport(port="/dev/ttyUSB0", serial="CE1")
+        with caplog.at_level(logging.DEBUG, logger="pylxpweb"):
+            await transport.connect()
+        assert self._records(caplog) == [
+            (
+                "pylxpweb.transports.modbus_serial",
+                logging.INFO,
+                "Modbus serial transport connected to /dev/ttyUSB0 @ 19200 baud (unit 1) for CE1",
+            ),
+        ]
+
+    async def test_serial_error_recycle(self, caplog: pytest.LogCaptureFixture) -> None:
+        transport = ModbusSerialTransport(port="/dev/ttyUSB0", serial="CE1")
+        await transport.connect()
+        transport._consecutive_errors = 3
+        with caplog.at_level(logging.WARNING, logger="pylxpweb"):
+            await transport._reconnect()
+        assert self._records(caplog) == [
+            (
+                "pylxpweb.transports.modbus_serial",
+                logging.WARNING,
+                "Reconnecting Modbus serial client for CE1 after 3 consecutive errors",
+            ),
+        ]
+
+    @pytest.mark.parametrize("kind", ["tcp", "serial"])
+    async def test_link_probe_empty_timeout(
+        self, kind: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        transport: ModbusTransport | ModbusSerialTransport = (
+            ModbusTransport(host="h", serial="CE1")
+            if kind == "tcp"
+            else ModbusSerialTransport(port="/dev/ttyUSB0", serial="CE1")
+        )
+        await transport.connect()
+        with caplog.at_level(logging.DEBUG, logger="pylxpweb"):
+            assert await transport.check_link() is False
+        assert self._records(caplog) == [
+            ("pylxpweb.transports._modbus_base", logging.DEBUG, "[CE1] Link probe failed: "),
+        ]
+
+
 # ----------------------------------------------------------------------
 # modbus_connection adapter
 # ----------------------------------------------------------------------

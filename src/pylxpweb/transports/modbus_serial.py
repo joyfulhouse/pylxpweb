@@ -100,6 +100,8 @@ class ModbusSerialTransport(BaseModbusTransport):
     """
 
     transport_type: str = "modbus_serial"
+    _recycle_label = "Modbus serial client"
+    _recycle_logger = _LOGGER
 
     def __init__(
         self,
@@ -218,12 +220,14 @@ class ModbusSerialTransport(BaseModbusTransport):
                 await self._open_pymodbus()
 
             self._mark_connected()
+            backend = "shared" if self._external_unit is not None else self._backend
             _LOGGER.info(
-                "Modbus serial transport connected to %s @ %d baud (unit %s, backend %s) for %s",
+                "Modbus serial transport connected to %s @ %d baud (unit %s%s) for %s",
                 self._port,
                 self._baudrate,
                 self._unit_id,
-                "shared" if self._external_unit is not None else self._backend,
+                # The default backend logs exactly as before the seam.
+                "" if backend == "pymodbus" else f", backend {backend}",
                 self._serial,
             )
 

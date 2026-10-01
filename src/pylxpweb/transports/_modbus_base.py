@@ -23,7 +23,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from ._modbus_client import (
     ModbusBackend,
@@ -88,6 +88,10 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     ``self._unit`` to the :class:`RegisterClient` adapter over it, and
     implement ``_connect_locked()`` and ``disconnect()``.
     """
+
+    # Error-recycle WARNING wording and logger, so a subclass keeps its own.
+    _recycle_label: ClassVar[str] = "Modbus client"
+    _recycle_logger: ClassVar[logging.Logger] = _LOGGER
 
     # Set by subclasses from their ``backend`` / ``unit`` arguments.
     _backend: ModbusBackend
@@ -729,8 +733,9 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
             elif self._consecutive_errors < self._max_consecutive_errors:
                 return
 
-            _LOGGER.warning(
-                "Reconnecting Modbus client for %s after %d consecutive errors",
+            self._recycle_logger.warning(
+                "Reconnecting %s for %s after %d consecutive errors",
+                self._recycle_label,
                 self._serial,
                 self._consecutive_errors,
             )

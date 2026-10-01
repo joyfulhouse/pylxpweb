@@ -285,12 +285,14 @@ class ModbusTransport(BaseModbusTransport):
         self._mark_connected()
         self._session_started_at = _monotonic()
         self._reconnect_retry_after = None
+        backend = "shared" if self._external_unit is not None else self._backend
         _LOGGER.info(
-            "Modbus transport connected to %s:%s (unit %s, backend %s) for %s",
+            "Modbus transport connected to %s:%s (unit %s%s) for %s",
             self._host,
             self._port,
             self._unit_id,
-            "shared" if self._external_unit is not None else self._backend,
+            # The default backend logs exactly as before the seam.
+            "" if backend == "pymodbus" else f", backend {backend}",
             self._serial,
         )
 
@@ -365,7 +367,13 @@ class ModbusTransport(BaseModbusTransport):
 
         # Some "Modbus TCP to RTU" gateways were observed to use MBAP framing
         # on the TCP side without echoing the request's transaction ID.
-        patch_pymodbus_tid_validation(client, label=f"{self._host}:{self._port} ({self._serial})")
+        if patch_pymodbus_tid_validation(client):
+            _LOGGER.debug(
+                "Patched TID validation for Modbus gateway %s:%s (%s)",
+                self._host,
+                self._port,
+                self._serial,
+            )
 
     def _drop_session(self) -> None:
         super()._drop_session()

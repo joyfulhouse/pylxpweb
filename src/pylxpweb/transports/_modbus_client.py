@@ -217,7 +217,7 @@ def select_backend(
 # ----------------------------------------------------------------------
 
 
-def patch_pymodbus_tid_validation(client: Any, *, label: str) -> bool:
+def patch_pymodbus_tid_validation(client: Any) -> bool:
     """Disable MBAP transaction-ID validation on a pymodbus client.
 
     Some RS485-to-Ethernet gateways were observed (2026-02, pylxpweb 0.6.9)
@@ -260,7 +260,6 @@ def patch_pymodbus_tid_validation(client: Any, *, label: str) -> bool:
         return used_len, pdu
 
     framer.handleFrame = _patched_handle_frame
-    _LOGGER.debug("Patched TID validation for Modbus gateway %s", label)
     return True
 
 
@@ -347,7 +346,7 @@ class PymodbusUnit:
                 raise RegisterTimeoutError(str(err)) from err
             raise RegisterLinkError(str(err)) from err
         except TimeoutError as err:
-            raise RegisterTimeoutError(str(err) or "timeout") from err
+            raise RegisterTimeoutError(str(err)) from err
         except OSError as err:
             raise RegisterLinkError(str(err)) from err
 
