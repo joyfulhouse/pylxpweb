@@ -64,6 +64,18 @@ _LOGGER = logging.getLogger(__name__)
 __all__ = ["BaseModbusTransport", "INPUT_REGISTER_GROUPS"]
 
 
+def _chain(error: TransportError, cause: BaseException | None) -> TransportError:
+    """Chain ``cause`` as ``raise error from cause`` would; without one, chain nothing.
+
+    Assigning ``__cause__ = None`` would still set ``__suppress_context__`` and
+    hide a caller's in-flight exception, which pre-seam errors built from a
+    response object never did.
+    """
+    if cause is not None:
+        error.__cause__ = cause
+    return error
+
+
 class BaseModbusTransport(RegisterDataMixin, BaseTransport):
     """Base class for Modbus-based transports (TCP and Serial).
 
@@ -385,15 +397,14 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     # for one synthesized from a response object), and the
                     # typed transport error keeps exposing that as its cause.
                     self._consecutive_errors += 1
-                    last_err = TransportReadError(str(err))
-                    last_err.__cause__ = err.__cause__
+                    last_err = _chain(TransportReadError(str(err)), err.__cause__)
                 except RegisterTimeoutError as err:
                     self._consecutive_errors += 1
                     self._consecutive_link_errors += 1
-                    last_err = TransportTimeoutError(
-                        f"Timeout reading {reg_type} registers at {address}"
+                    last_err = _chain(
+                        TransportTimeoutError(f"Timeout reading {reg_type} registers at {address}"),
+                        err.__cause__,
                     )
-                    last_err.__cause__ = err.__cause__
                 except RegisterInvalidResponse as err:
                     # A response object without registers: same message and
                     # (absent) cause as before the seam.
@@ -406,10 +417,12 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     # _reconnect() heals it once the network is back (eg4-57g).
                     self._consecutive_errors += 1
                     self._consecutive_link_errors += 1
-                    last_err = TransportReadError(
-                        f"Failed to read {reg_type} registers at {address}: {err}"
+                    last_err = _chain(
+                        TransportReadError(
+                            f"Failed to read {reg_type} registers at {address}: {err}"
+                        ),
+                        err.__cause__,
                     )
-                    last_err.__cause__ = err.__cause__
                 except TimeoutError as err:
                     self._consecutive_errors += 1
                     self._consecutive_link_errors += 1
@@ -555,13 +568,20 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                     f"[{self._serial}] Failed to write registers at {address}: {err}"
                 ) from err
 
-            # Raised outside the handler so the seam wrapper is not chained
-            # as __context__: the chain is the raw backend exception (or none
-            # for a refused write), exactly as before the seam.
-            failure.__context__ = cause
-            if cause is not None:
-                failure.__cause__ = cause
-            raise failure
+            # Raised outside the seam handler so the wrapper is never chained.
+            # A refused write has no cause: raise it plainly, as before the seam.
+            _chain(failure, cause)
+            if cause is None:
+                raise failure
+            # Before the seam this was `raise ... from err` inside the backend
+            # exception's own handler, so __context__ was that raw exception
+            # even when the caller was already handling another. A bare
+            # re-raise keeps a context set here and leaves the cause untouched.
+            try:
+                raise failure
+            except TransportError:
+                failure.__context__ = cause
+                raise
 
     # ------------------------------------------------------------------
     # Operation guard: reconnect gate + op lock

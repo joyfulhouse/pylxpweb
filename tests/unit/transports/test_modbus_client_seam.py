@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import logging
 import time
+import traceback
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -38,6 +39,7 @@ from pylxpweb.transports._modbus_client import (
 from pylxpweb.transports.config import TransportConfig, TransportType
 from pylxpweb.transports.exceptions import (
     TransportConnectionError,
+    TransportError,
     TransportReadError,
     TransportTimeoutError,
     TransportWriteError,
@@ -283,31 +285,91 @@ class TestPymodbusUnit:
                 await transport._write_holding_registers(7, values)
         assert str(info.value) == message
         assert info.value.__cause__ is None
-        # origin/main raised these inside a plain try body: no hidden context.
-        assert info.value.__context__ is None
 
+    @pytest.mark.parametrize("outer", [False, True], ids=["plain", "in_handler"])
     @pytest.mark.parametrize(
-        ("raised", "expected"),
+        ("failure", "operation"),
         [
-            (ConnectionException("Not connected"), TransportWriteError),
-            (ModbusIOException("Modbus Error: [Input/Output] timeout"), TransportTimeoutError),
+            (failure, operation)
+            for failure in (
+                "refused",
+                "no_registers",
+                "connection",
+                "io_timeout",
+                "timeout",
+                "oserror",
+            )
+            for operation in ("input", "holding", "single", "multiple")
+            # A write acknowledgement carries no registers, so it cannot fail that way.
+            if not (failure == "no_registers" and operation in ("single", "multiple"))
         ],
     )
-    async def test_backend_write_failure_chain_matches_baseline(
-        self, raised: Exception, expected: type[Exception]
+    async def test_error_chain_matches_baseline(
+        self, failure: str, operation: str, outer: bool
     ) -> None:
-        # origin/main (477ac477) raised `... from err` inside `except ModbusException
-        # as err`, so both __cause__ and __context__ are the raw backend exception;
-        # the seam wrapper must not appear anywhere in the chain.
+        """__cause__/__context__/__suppress_context__ match origin/main (477ac477).
+
+        Expectations were recorded by running these same calls against origin/main,
+        both plainly and from inside a caller's ``except`` block. A refused or
+        register-less response has no cause, leaves suppression off and shows the
+        caller's exception; a backend exception is the cause and suppresses it, and
+        on writes it is also the context (main raised in its handler).
+        """
+        read = operation in ("input", "holding")
+        response = MagicMock()
+        response.__str__.return_value = "refused"
+        response.isError.return_value = failure == "refused"
+        response.registers = None
+        raised: Exception | None = {
+            "connection": ConnectionException("down"),
+            "io_timeout": ModbusIOException("timeout here"),
+            "timeout": TimeoutError("t"),
+            "oserror": OSError("eio"),
+        }.get(failure)
         client = MagicMock()
-        client.write_registers = AsyncMock(side_effect=raised)
+        for name in (
+            "read_input_registers",
+            "read_holding_registers",
+            "write_register",
+            "write_registers",
+        ):
+            mock = AsyncMock(side_effect=raised) if raised else AsyncMock(return_value=response)
+            setattr(client, name, mock)
         transport = ModbusTransport(host="127.0.0.1", retries=0)
         transport._unit = PymodbusUnit(client, 1)
         transport._connected = True
-        with pytest.raises(expected) as info:
-            await transport._write_holding_registers(7, [1, 2])
-        assert info.value.__cause__ is raised
-        assert info.value.__context__ is raised
+        caller = ValueError("caller")
+
+        async def call() -> None:
+            if read:
+                await transport._read_registers(7, 1, input_registers=operation == "input")
+            else:
+                await transport._write_holding_registers(
+                    7, [1] if operation == "single" else [1, 2]
+                )
+
+        with pytest.raises(TransportError) as info:
+            if outer:
+                try:
+                    raise caller
+                except ValueError:
+                    await call()
+            else:
+                await call()
+        error = info.value
+        rendered = "".join(traceback.format_exception(error))
+        if raised is None:
+            assert error.__cause__ is None
+            assert error.__context__ is (caller if outer else None)
+            assert error.__suppress_context__ is False
+            assert ("ValueError: caller" in rendered) is outer
+        else:
+            assert error.__cause__ is raised
+            context = raised if not read else (caller if outer else None)
+            assert error.__context__ is context
+            assert error.__suppress_context__ is True
+            # The caller's exception is still shown, as the raw exception's context.
+            assert ("ValueError: caller" in rendered) is outer
 
     async def test_reads_use_keyword_device_id_form(self) -> None:
         client = MagicMock()
