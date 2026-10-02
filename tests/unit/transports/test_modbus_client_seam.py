@@ -602,6 +602,62 @@ class TestDefaultPathRaces:
             await task
         assert info.value.__cause__ is refusal
 
+    @pytest.mark.parametrize("operation", ["read", "write"])
+    async def test_serial_disconnect_does_not_wait_for_operation(
+        self, operation: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """disconnect() mid-operation closes the port at once; the operation sees it dropped.
+
+        Serial has no async_shutdown(), so disconnect() is its shutdown path and,
+        as on origin/main, must not wait out an in-flight request.
+        """
+        import pymodbus.client
+
+        sent = asyncio.Event()
+        replied = asyncio.Event()
+
+        async def respond(**_: Any) -> MagicMock:
+            sent.set()
+            await replied.wait()
+            return _pymodbus_response(registers=[1])
+
+        client = MagicMock()
+        client.connect = AsyncMock(return_value=True)
+        client.read_holding_registers = respond
+        client.write_register = respond
+        monkeypatch.setattr(pymodbus.client, "AsyncModbusSerialClient", lambda **_: client)
+        monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+        transport = ModbusSerialTransport(port="/dev/ttyUSB0", serial="CE1", retries=1)
+        await transport.connect()
+
+        call = (
+            transport.read_parameters(0, 1)
+            if operation == "read"
+            else transport.write_parameters({66: 50})
+        )
+        task = asyncio.ensure_future(call)
+        await sent.wait()
+        with caplog.at_level(logging.DEBUG, logger="pylxpweb"):
+            disconnect = asyncio.ensure_future(transport.disconnect())
+            # The reply is withheld until disconnect() finishes, so it must not
+            # depend on the in-flight request. The bound only matters on failure.
+            done, _ = await asyncio.wait(
+                {disconnect, task}, timeout=5, return_when=asyncio.FIRST_COMPLETED
+            )
+            if disconnect not in done:
+                replied.set()
+                await asyncio.gather(disconnect, task, return_exceptions=True)
+            assert disconnect in done
+            await disconnect
+            client.close.assert_called_once()
+            assert not transport.is_connected
+            replied.set()
+            with pytest.raises(TransportConnectionError) as info:
+                await task
+        assert str(info.value) == "Transport not connected for CE1"
+        assert transport._consecutive_errors == 0
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
     async def test_cancelled_serial_settle_leaves_link_connected(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1065,15 +1121,16 @@ def links(monkeypatch: pytest.MonkeyPatch) -> _LinkFactory:
 
 
 class TestLifecycleRegressions:
-    @pytest.mark.parametrize("action", ["connect", "disconnect"])
-    async def test_serial_lifecycle_waits_for_operation_lock(self, action: str) -> None:
+    async def test_serial_connect_waits_for_operation_lock(self) -> None:
+        # disconnect() does not: it is serial's only shutdown path (see
+        # TestDefaultPathRaces.test_serial_disconnect_does_not_wait_for_operation).
         transport = _shared_transport("serial", unit=_FakeUnit())
         await transport.connect()
         original = transport._unit
         task = None
         try:
             async with transport._op_lock:
-                task = asyncio.create_task(getattr(transport, action)())
+                task = asyncio.create_task(transport.connect())
                 with pytest.raises(TimeoutError):
                     await asyncio.wait_for(asyncio.shield(task), 0.05)
                 assert transport._unit is original
@@ -1432,6 +1489,37 @@ class TestLifecycleRegressions:
         assert len(links.clients) == 2
         links.clients[1].link.release.set()
         await connection.close()
+
+    async def test_teardown_does_not_rewait_a_link_a_redial_waited_out(
+        self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One held link gets one release bound: a failed automatic redial spends it.
+
+        Shutdown after modbus-connection's redial already waited the bound for
+        that link only checks it, rather than stalling by the bound again.
+        """
+        monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.05)
+        transport = _lifecycle_transport("tcp")
+        await transport.connect()
+        connection = transport._client
+        await connection.disconnect()  # e.g. _map_errors dropping a desynced link
+        with pytest.raises(mc_exc.ModbusConnectionError, match="still being released"):
+            await connection.connect()
+        waited: list[int] = []
+        real_wait_until = _modbus_client._wait_until
+
+        async def spy(steps: list[asyncio.Future[Any]], deadline: float) -> None:
+            waited.append(len([step for step in steps if not step.done()]))
+            await real_wait_until(steps, deadline)
+
+        monkeypatch.setattr(_modbus_client, "_wait_until", spy)
+        held = transport._unit
+        await transport.async_shutdown()
+        # The close task, then the link releases: none left to wait on.
+        assert waited == [1, 0]
+        assert held is not None and not held.released
+        links.clients[0].link.release.set()
+        await asyncio.wait_for(_until(lambda: held.released), 1.0)
 
     async def test_gate_forwards_extra_connect_client_arguments(
         self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch

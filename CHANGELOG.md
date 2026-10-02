@@ -53,7 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not lose it and every later `disconnect()`/`async_shutdown()` awaits the
   same close. `connect()` (including the replacement dial after a failed or
   cancelled one) waits for every prior owned close before dialing, and serial
-  `connect()`/`disconnect()` now take the operation lock, as TCP's do.
+  `connect()` now takes the operation lock, as TCP's does. Serial `disconnect()`
+  is that transport's only shutdown, so like TCP's `async_shutdown()` it does
+  not wait for the operation lock: it closes the port at once, and an
+  in-flight operation raises `TransportConnectionError`, as before.
 - On `modbus_connection`, an owned connection never dials a new link while
   one it created earlier is still held. tmodbus 0.6.2 returns from `close()`
   before serialx has closed the port's descriptor (or ESPHome connection). So
@@ -65,14 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection error.
   `disconnect()`/`async_shutdown()` spend one 5 s budget on the close
   (including an in-flight connect) and those releases. If the budget runs out
-  they log a warning and return, releasing the operation lock. The transport
-  keeps tracking the link, and the next `connect()` raises
+  they log a warning and return (releasing the operation lock where they hold
+  it). The transport keeps tracking the link, and the next `connect()` raises
   `TransportConnectionError` while it is still held. That budget is spent
-  once per held link, both in teardown and in modbus-connection's automatic
-  redials. Later attempts only check whether the link has been released, so
-  a link that stays held fails each redial at once instead of stalling every
-  operation by the bound again. Owned serial connections warn when redials
-  are not gated: once per process if the private hook is missing, and once
+  once per held link across teardown and modbus-connection's automatic
+  redials together. Later attempts only check whether the link has been
+  released, so a link that stays held fails each redial at once instead of
+  stalling every operation by the bound again. Owned serial connections warn
+  when redials are not gated: once per process if the private hook is missing, and once
   per connection if the tmodbus layout hides a link's release. A
   replacement on another
   transport instance may still collide with a link that outlives the bound.

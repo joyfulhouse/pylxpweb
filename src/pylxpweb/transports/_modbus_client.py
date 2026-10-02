@@ -466,7 +466,8 @@ class ModbusConnectionUnit:
         deadline = time.monotonic() + budget
         await _wait_until([self._close_task] if self._close_task else [], deadline)
         # Read only now: a connect in flight at close() records its link late.
-        await _wait_until(_pending_releases(self._connection), deadline)
+        # A release an automatic redial already waited out is only checked.
+        await _wait_until(_pending_releases(self._connection, "unwaited_releases"), deadline)
         if not self.released and not self._release_wait_expired:
             self._release_wait_expired = True
             _LOGGER.warning(
@@ -511,9 +512,9 @@ async def _wait_until(steps: list[asyncio.Future[Any]], deadline: float) -> None
         await asyncio.wait(pending, timeout=max(0.0, deadline - time.monotonic()))
 
 
-def _pending_releases(connection: Any) -> list[asyncio.Future[Any]]:
+def _pending_releases(connection: Any, name: str = "pending_releases") -> list[asyncio.Future[Any]]:
     """Releases still pending for links an owned connection created (none if shared)."""
-    releases = getattr(connection, "pending_releases", None)
+    releases = getattr(connection, name, None)
     return list(releases) if isinstance(releases, list) else []
 
 
@@ -587,10 +588,14 @@ def _release_gated_connection_class() -> type[Any]:
             """Releases of links this connection created that have not happened yet."""
             return [release for release in self._link_releases if not release.done()]
 
+        @property
+        def unwaited_releases(self) -> list[asyncio.Future[Any]]:
+            """Pending releases no dial has waited out yet (teardown skips the rest)."""
+            return [r for r in self.pending_releases if r not in self._waited_releases]
+
         async def _connect_client(self, *args: Any, **kwargs: Any) -> AsyncModbusClient:
             await _wait_until(
-                [r for r in self.pending_releases if r not in self._waited_releases],
-                time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS,
+                self.unwaited_releases, time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS
             )
             self._link_releases = self.pending_releases
             self._waited_releases = set(self._link_releases)

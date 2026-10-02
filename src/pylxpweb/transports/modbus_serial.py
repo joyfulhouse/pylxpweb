@@ -334,12 +334,15 @@ class ModbusSerialTransport(BaseModbusTransport):
     async def disconnect(self) -> None:
         """Close Modbus serial connection (a host-shared unit is only detached).
 
+        This is serial's only shutdown path, so like TCP's async_shutdown() it
+        does not wait for the operation lock: an in-flight operation sees the
+        dropped session and raises TransportConnectionError, as before the seam.
         Waits for the owned close; a cancelled waiter leaves it tracked, so the
-        next disconnect() or connect() awaits the same close.
+        next disconnect() or connect() awaits the same close, and connect()
+        drains it under the lock before dialing.
         """
-        async with self._op_lock:
-            self._drop_session()
-            await self._drain_closes()
+        self._drop_session()
+        await self._drain_closes()
         _LOGGER.debug("Modbus serial transport disconnected for %s", self._serial)
 
 
