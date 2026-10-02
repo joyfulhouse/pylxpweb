@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from ._modbus_client import (
@@ -229,6 +229,23 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
             raise TransportConnectionError(f"Transport not connected for {self._serial}")
         return self._unit
 
+    async def _request[T](self, call: Awaitable[T]) -> T:
+        """Await a register request, checking the session before reading the reply.
+
+        A refusal or register-less reply object (no backend exception as its
+        cause) that lands after disconnect() or async_shutdown() reports the
+        dropped session, as before the seam, rather than a read/write error.
+        """
+        try:
+            return await call
+        except (RegisterExceptionResponse, RegisterInvalidResponse) as err:
+            if err.__cause__ is not None or (
+                self._unit is not None and not self._shutdown_requested
+            ):
+                raise
+        # Raised outside the handler, so nothing is chained, as before the seam.
+        raise TransportConnectionError(f"Transport not connected for {self._serial}")
+
     async def connect(self) -> None:
         """Establish the connection under the operation lock."""
         async with self._op_lock:
@@ -370,7 +387,7 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
                         if input_registers
                         else unit.read_holding_registers
                     )
-                    registers = await read_fn(address, count)
+                    registers = await self._request(read_fn(address, count))
                     self._require_active_unit()
 
                     # A backend decodes registers from the response's own
@@ -511,9 +528,9 @@ class BaseModbusTransport(RegisterDataMixin, BaseTransport):
             try:
                 unit = self._require_active_unit()
                 if len(values) == 1:
-                    await unit.write_register(address, values[0])
+                    await self._request(unit.write_register(address, values[0]))
                 else:
-                    await unit.write_registers(address, values)
+                    await self._request(unit.write_registers(address, values))
                 self._require_active_unit()
 
                 self._consecutive_errors = 0

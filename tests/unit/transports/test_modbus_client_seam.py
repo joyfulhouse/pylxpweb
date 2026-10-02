@@ -522,6 +522,117 @@ class TestDefaultPathLogParity:
         ]
 
 
+class TestDefaultPathRaces:
+    """Shutdown and cancellation races on the default (pymodbus) path match origin/main."""
+
+    @pytest.mark.parametrize("stop", ["async_shutdown", "disconnect"])
+    @pytest.mark.parametrize(
+        ("operation", "reply"),
+        [
+            ("input", "refused"),
+            ("input", "no_registers"),
+            ("holding", "refused"),
+            ("holding", "no_registers"),
+            ("single", "refused"),
+            ("multiple", "refused"),
+        ],
+    )
+    async def test_reply_after_shutdown_reports_dropped_session(
+        self, operation: str, reply: str, stop: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A refusal or register-less reply landing after the session drops is a dropped session.
+
+        origin/main checked the session before interpreting the reply: no read/write
+        error, no ERROR log, no retry and no error count.
+        """
+        transport = ModbusTransport(host="127.0.0.1", serial="CE1", retries=1)
+        replied = asyncio.Event()
+
+        async def respond(**_: Any) -> MagicMock:
+            await replied.wait()
+            return _pymodbus_response(error=reply == "refused")
+
+        client = MagicMock()
+        for name in (
+            "read_input_registers",
+            "read_holding_registers",
+            "write_register",
+            "write_registers",
+        ):
+            setattr(client, name, respond)
+        transport._unit = PymodbusUnit(client, 1)
+        transport._client = client
+        transport._connected = True
+
+        if operation in ("input", "holding"):
+            call = transport._read_registers(7, 1, input_registers=operation == "input")
+        else:
+            call = transport._write_holding_registers(7, [1] if operation == "single" else [1, 2])
+        task = asyncio.ensure_future(call)
+        await asyncio.sleep(0)
+        with caplog.at_level(logging.DEBUG, logger="pylxpweb"):
+            await getattr(transport, stop)()
+            replied.set()
+            with pytest.raises(TransportConnectionError) as info:
+                await task
+        assert str(info.value) == "Transport not connected for CE1"
+        assert info.value.__cause__ is None
+        assert info.value.__context__ is None
+        assert info.value.__suppress_context__ is False
+        assert transport._consecutive_errors == 0
+        assert [r for r in caplog.record_tuples if r[0] == "pylxpweb.transports._modbus_base"] == []
+
+    async def test_backend_refusal_after_disconnect_keeps_its_error(self) -> None:
+        """A modbus_connection refusal carries the backend exception, so it still surfaces."""
+        replied = asyncio.Event()
+
+        class _GatedUnit(_FakeUnit):
+            async def read_holding_registers(self, address: int, count: int) -> list[int]:
+                await replied.wait()
+                return await super().read_holding_registers(address, count)
+
+        refusal = mc_exc.ModbusExceptionError.from_code(2, "illegal address")
+        transport = _shared_transport("tcp", unit=_GatedUnit(refusal), retries=0)
+        await transport.connect()
+        task = asyncio.ensure_future(transport._read_registers(0, 1, input_registers=False))
+        await asyncio.sleep(0)
+        await transport.disconnect()
+        replied.set()
+        with pytest.raises(TransportReadError, match="illegal address") as info:
+            await task
+        assert info.value.__cause__ is refusal
+
+    async def test_cancelled_serial_settle_leaves_link_connected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cancelling connect() during the port-settle delay keeps the open link, as on main."""
+        import pymodbus.client
+
+        client = MagicMock()
+        client.connect = AsyncMock(return_value=True)
+        client.read_input_registers = AsyncMock(return_value=_pymodbus_response(registers=[5]))
+        monkeypatch.setattr(pymodbus.client, "AsyncModbusSerialClient", lambda **_: client)
+        transport = ModbusSerialTransport(port="/dev/ttyUSB0", serial="CE1")
+        settling = asyncio.Event()
+        real_sleep = asyncio.sleep
+
+        async def settle(delay: float) -> None:
+            settling.set()
+            await real_sleep(3600)
+
+        monkeypatch.setattr(asyncio, "sleep", settle)
+        task = asyncio.ensure_future(transport.connect())
+        await settling.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        monkeypatch.setattr(asyncio, "sleep", real_sleep)
+
+        assert transport.is_connected
+        assert await transport._read_registers(7, 1, input_registers=True) == [5]
+        client.close.assert_not_called()
+
+
 # ----------------------------------------------------------------------
 # modbus_connection adapter
 # ----------------------------------------------------------------------

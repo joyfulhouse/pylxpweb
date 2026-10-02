@@ -231,9 +231,6 @@ class ModbusSerialTransport(BaseModbusTransport):
                 self._serial,
             )
 
-            # Brief delay to allow serial port to stabilize
-            await asyncio.sleep(0.2)
-
         except asyncio.CancelledError:
             # The backend's dial may still complete after we were cancelled;
             # releasing the adapter closes whatever it ends up owning.
@@ -273,6 +270,10 @@ class ModbusSerialTransport(BaseModbusTransport):
                 "(3) correct permissions, (4) port is not in use by "
                 "another application."
             ) from err
+
+        # Brief delay to allow serial port to stabilize. The link is up by now,
+        # so a cancelled settle leaves it connected, as before the seam.
+        await asyncio.sleep(0.2)
 
     async def _open_pymodbus(self) -> None:
         """Open the port with pymodbus (pyserial underneath)."""
