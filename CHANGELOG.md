@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0b10] - 2026-10-03
+
 ### Added
 
 - **Backend-neutral Modbus client seam** (`pylxpweb.transports._modbus_client`).
