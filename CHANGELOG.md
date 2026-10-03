@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI
+
+- The "Modbus transports on Home Assistant pins" job now also runs with
+  `serialx[esphome]==1.9.0`, the version Home Assistant 2026.9.0 pins, next to
+  the existing 1.10.0 and 1.8.2 rows (#353).
+
 ## [0.10.0b10] - 2026-10-03
 
 ### Added
