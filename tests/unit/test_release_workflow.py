@@ -23,6 +23,8 @@ from typing import IO, Any
 import pytest
 import yaml
 
+from tests.conftest import is_ci_environment
+
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW_PATH = _ROOT / ".github" / "workflows" / "release.yml"
 _WORKFLOWS_PATH = _WORKFLOW_PATH.parent
@@ -49,18 +51,6 @@ _PYTHON_HEREDOC = re.compile(
 _DOCKER_INFO_TIMEOUT_SECONDS = 30.0
 
 
-def _docker_is_enforced() -> bool:
-    """Return whether an unusable Docker must fail rather than skip.
-
-    GitHub Actions (and most CI systems) export ``CI=true``; there the Docker
-    build tests are part of the release gate, so a runner without a working
-    Docker must surface as a failure instead of silently skipping the gate.
-    """
-    if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
-        return True
-    return os.environ.get("CI", "").strip().lower() not in {"", "0", "false", "no", "off"}
-
-
 def _require_docker() -> None:
     """Skip locally, or fail in CI, unless the Docker CLI reaches a live daemon."""
     if shutil.which("docker") is None:
@@ -83,7 +73,7 @@ def _require_docker() -> None:
             reason = f"Docker daemon is unreachable (`docker info` exited {result.returncode})"
             if detail:
                 reason = f"{reason}: {detail[-1]}"
-    if _docker_is_enforced():
+    if is_ci_environment():
         pytest.fail(f"{reason}; Docker is required in CI for the release build gate")
     pytest.skip(reason)
 
@@ -2401,6 +2391,32 @@ def test_package_index_workflow_audit_detects_known_publish_commands(
     )
 
     assert _package_index_publisher_workflows(tmp_path) == {"competing.yml"}
+
+
+@pytest.mark.parametrize(
+    "ci_env", [{}, {"CI": "true"}, {"CI": "false"}, {"GITHUB_ACTIONS": "true"}]
+)
+@pytest.mark.parametrize("daemon_down", [False, True])
+def test_require_docker_skips_locally_and_fails_in_ci(
+    monkeypatch: pytest.MonkeyPatch, ci_env: dict[str, str], daemon_down: bool
+) -> None:
+    """An unusable Docker skips locally but fails wherever conftest detects CI."""
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for name, value in ci_env.items():
+        monkeypatch.setenv(name, value)
+    if daemon_down:
+        monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *_, **__: subprocess.CompletedProcess(["docker", "info"], 1, "", "no daemon"),
+        )
+    else:
+        monkeypatch.setattr(shutil, "which", lambda _: None)
+    with pytest.raises((pytest.fail.Exception, pytest.skip.Exception)) as outcome:
+        _require_docker()
+    assert outcome.type is (pytest.fail.Exception if ci_env else pytest.skip.Exception)
 
 
 def test_build_produces_exactly_two_bit_reproducible_distributions(tmp_path: Path) -> None:
