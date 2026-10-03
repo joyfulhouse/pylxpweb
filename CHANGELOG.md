@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **pymodbus floor raised to `>=3.10.0`** (#342). The Modbus client seam calls
+  `read_*(..., device_id=...)`, a keyword pymodbus introduced in 3.10.0 (3.9.x and
+  earlier name it `slave=`), so the previous `>=3.6.0` floor admitted versions that
+  fail at call time.
+
 ## [0.10.0b10] - 2026-10-03
 
 ### Added
