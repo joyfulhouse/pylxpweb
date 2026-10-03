@@ -21,7 +21,7 @@ async def read_bus_voltages(host: str, port: int = 502, unit_id: int = 1) -> Non
 
         # Read registers 38-39 (bus voltages) - need to read from input registers (function 04)
         # Most Luxpower inverters use unit ID 1 and input registers
-        # Note: pymodbus 3.6+ uses 'device_id' parameter
+        # Note: pymodbus 3.10+ uses 'device_id' (3.9.x and earlier used 'slave')
         result = await client.read_input_registers(address=38, count=2, device_id=unit_id)
 
         if result.isError():
