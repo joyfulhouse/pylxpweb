@@ -305,6 +305,58 @@ class TestTransportConfigSerialization:
         assert restored.unit_id == original.unit_id
 
 
+class TestTransportConfigBackendFromDict:
+    """``backend`` handling in ``TransportConfig.from_dict`` (issue #343)."""
+
+    @staticmethod
+    def _base() -> dict[str, object]:
+        return {
+            "host": "192.0.2.10",
+            "port": 502,
+            "serial": "SERIAL0001",
+            "transport_type": "modbus_tcp",
+        }
+
+    def test_null_backend_loads_as_auto(self) -> None:
+        """An explicit ``"backend": null`` loads as ``auto``."""
+        data = {**self._base(), "backend": None}
+
+        assert TransportConfig.from_dict(data).backend == "auto"
+
+    def test_missing_backend_loads_as_auto(self) -> None:
+        """A missing ``backend`` key loads as ``auto``."""
+        assert TransportConfig.from_dict(self._base()).backend == "auto"
+
+    @pytest.mark.parametrize("backend", ["auto", "pymodbus", "modbus_connection"])
+    def test_backend_roundtrip(self, backend: str) -> None:
+        """``to_dict``/``from_dict`` round-trips every backend spelling."""
+        original = TransportConfig(
+            host="192.0.2.10",
+            port=502,
+            serial="SERIAL0001",
+            transport_type=TransportType.MODBUS_TCP,
+            backend=backend,
+        )
+
+        restored = TransportConfig.from_dict(original.to_dict())
+
+        assert restored.backend == backend
+        assert restored.to_dict() == original.to_dict()
+
+    def test_null_backend_roundtrip_serializes_auto(self) -> None:
+        """A config loaded from ``null`` serializes back as ``auto``."""
+        data = {**self._base(), "backend": None}
+
+        assert TransportConfig.from_dict(data).to_dict()["backend"] == "auto"
+
+    def test_invalid_backend_string_still_raises(self) -> None:
+        """An unknown backend string is still rejected."""
+        data = {**self._base(), "backend": "not_a_backend"}
+
+        with pytest.raises(ValueError, match="Unsupported Modbus backend"):
+            TransportConfig.from_dict(data)
+
+
 class TestAttachResult:
     """Tests for AttachResult dataclass."""
 
