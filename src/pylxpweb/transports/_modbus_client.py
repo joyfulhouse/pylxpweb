@@ -1,0 +1,667 @@
+"""Backend-neutral register-client seam for the Modbus transports.
+
+``BaseModbusTransport`` talks to the wire through a :class:`RegisterClient`
+rather than a pymodbus client. The seam mirrors the ``ModbusUnit`` protocol
+that Home Assistant's shared-connection library (``modbus-connection``)
+hands out, so the same transport code can run on:
+
+- :class:`PymodbusUnit` — the historical backend, wrapping a pymodbus async
+  client and carrying the Waveshare transaction-ID workaround; or
+- :class:`ModbusConnectionUnit` — a ``modbus_connection.ModbusUnit`` (tmodbus
+  + serialx), either owned by the transport or shared/injected by a host
+  such as Home Assistant.
+
+Both adapters translate backend-specific failures into the four
+:class:`RegisterClientError` subclasses the transport branches on, so the
+retry, link-health, and reconnect logic in ``_modbus_base.py`` stays
+backend-agnostic.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import functools
+import logging
+import time
+from typing import Any, Literal, Protocol, runtime_checkable
+
+_LOGGER = logging.getLogger(__name__)
+
+__all__ = [
+    "BACKENDS",
+    "ModbusBackend",
+    "ModbusConnectionUnit",
+    "ModbusUnitLike",
+    "PymodbusUnit",
+    "RegisterClient",
+    "RegisterClientError",
+    "RegisterExceptionResponse",
+    "RegisterInvalidResponse",
+    "RegisterLinkError",
+    "RegisterTimeoutError",
+    "normalize_backend",
+    "owned_modbus_connection",
+    "patch_pymodbus_tid_validation",
+    "resolve_backend",
+    "select_backend",
+]
+
+type ModbusBackend = Literal["pymodbus", "modbus_connection"]
+"""Concrete wire backend for a Modbus transport."""
+
+BACKENDS: tuple[str, ...] = ("auto", "pymodbus", "modbus_connection")
+"""Accepted ``backend`` spellings: the two backends plus ``auto``."""
+
+# Serial URL schemes only serialx can open; pyserial (pymodbus) cannot.
+_SERIALX_ONLY_SCHEMES: tuple[str, ...] = ("esphome://",)
+
+LINK_RELEASE_TIMEOUT_SECONDS = 5.0
+"""Upper bound on waiting for an owned link's OS resource after its close."""
+
+
+# ----------------------------------------------------------------------
+# Errors the transports branch on
+# ----------------------------------------------------------------------
+
+
+class RegisterClientError(Exception):
+    """Base class for failures raised by a :class:`RegisterClient`."""
+
+
+class RegisterExceptionResponse(RegisterClientError):
+    """The device answered with a Modbus exception response.
+
+    The link is alive — the device decoded the request and refused it — so
+    callers must not count this against link health. ``detail`` is the raw
+    backend text, when the message wraps it.
+    """
+
+    def __init__(self, message: str, *, code: int | None = None, detail: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.detail = detail
+
+
+class RegisterTimeoutError(RegisterClientError, TimeoutError):
+    """No response arrived within the backend's timeout."""
+
+
+class RegisterLinkError(RegisterClientError):
+    """The link is down or the response was unusable (connection/protocol)."""
+
+
+class RegisterInvalidResponse(RegisterLinkError):
+    """An unusable response object, rather than a backend-thrown exception."""
+
+
+# ----------------------------------------------------------------------
+# Protocols
+# ----------------------------------------------------------------------
+
+
+@runtime_checkable
+class ModbusUnitLike(Protocol):
+    """Structural subset of ``modbus_connection.ModbusUnit`` the transports use.
+
+    Any object with this shape — including a unit obtained from Home
+    Assistant's ``async_get_unit`` — can be injected into a Modbus transport.
+    """
+
+    @property
+    def connected(self) -> bool: ...
+
+    async def read_holding_registers(self, address: int, count: int) -> list[int]: ...
+
+    async def read_input_registers(self, address: int, count: int) -> list[int]: ...
+
+    async def write_register(self, address: int, value: int) -> None: ...
+
+    async def write_registers(self, address: int, values: list[int]) -> None: ...
+
+    async def disconnect(self) -> None: ...
+
+
+class RegisterClient(Protocol):
+    """What ``BaseModbusTransport`` requires of its wire client.
+
+    Same call shape as :class:`ModbusUnitLike`; the difference is the error
+    contract: implementations raise only :class:`RegisterClientError`
+    subclasses (plus ``asyncio.CancelledError``), never backend exceptions.
+    """
+
+    @property
+    def owns_link(self) -> bool:
+        """Whether closing this client tears down the underlying link.
+
+        ``False`` for units shared by a host (Home Assistant); the transport
+        must then never close the link, only recycle it via :meth:`recycle`.
+        """
+        ...
+
+    async def read_holding_registers(self, address: int, count: int) -> list[int]: ...
+
+    async def read_input_registers(self, address: int, count: int) -> list[int]: ...
+
+    async def write_register(self, address: int, value: int) -> None: ...
+
+    async def write_registers(self, address: int, values: list[int]) -> None: ...
+
+    async def recycle(self) -> None:
+        """Drop a wedged link so the next request re-dials (error recycle)."""
+        ...
+
+    def close(self) -> None:
+        """Release the client synchronously; safe to call more than once."""
+        ...
+
+    async def aclose(self) -> None:
+        """Release the client and wait (bounded) for the underlying close to finish."""
+        ...
+
+    @property
+    def released(self) -> bool:
+        """Whether the link's OS resource is known to be released after close.
+
+        ``False`` while a closed owned link is still held (its release outlived
+        :meth:`aclose`'s bound); the transport must not dial a replacement then.
+        """
+        ...
+
+
+# ----------------------------------------------------------------------
+# Backend selection
+# ----------------------------------------------------------------------
+
+
+def normalize_backend(backend: str) -> str:
+    """Validate a ``backend`` spelling, returning it lower-cased."""
+    value = str(backend).strip().lower().replace("-", "_")
+    if value not in BACKENDS:
+        raise ValueError(
+            f"Unsupported Modbus backend {backend!r}; expected one of {', '.join(BACKENDS)}"
+        )
+    return value
+
+
+def resolve_backend(backend: str, *, serial_port: str | None = None) -> ModbusBackend:
+    """Resolve ``auto`` to a concrete backend.
+
+    ``auto`` keeps pymodbus — the historical default, carrying the Waveshare
+    transaction-ID workaround — unless the serial port is a URL only serialx
+    can open (``esphome://``), where pymodbus cannot work at all.
+    """
+    value = normalize_backend(backend)
+    if value == "auto":
+        if serial_port is not None and serial_port.lower().startswith(_SERIALX_ONLY_SCHEMES):
+            return "modbus_connection"
+        return "pymodbus"
+    if value == "modbus_connection":
+        return "modbus_connection"
+    return "pymodbus"
+
+
+def select_backend(
+    backend: str, *, unit: ModbusUnitLike | None, serial_port: str | None = None
+) -> ModbusBackend:
+    """Resolve a transport's backend; a host-injected ``unit`` forces ``modbus_connection``."""
+    setting = normalize_backend(backend)
+    if unit is None:
+        return resolve_backend(setting, serial_port=serial_port)
+    if setting == "pymodbus":
+        raise ValueError("An injected unit cannot be used with the pymodbus backend")
+    return "modbus_connection"
+
+
+# ----------------------------------------------------------------------
+# pymodbus adapter
+# ----------------------------------------------------------------------
+
+
+def patch_pymodbus_tid_validation(client: Any) -> bool:
+    """Disable MBAP transaction-ID validation on a pymodbus client.
+
+    Some RS485-to-Ethernet gateways were observed (2026-02, pylxpweb 0.6.9)
+    to use MBAP framing on the TCP side without echoing the request's
+    transaction ID, which makes pymodbus reject every response at two
+    validation points:
+
+    1. ``framer.handleFrame``: ``if exp_tid and tid != exp_tid``
+    2. ``execute``: ``if response.transaction_id != request.transaction_id``
+
+    ``handleFrame`` is patched to pass ``exp_tid=0`` (disabling check 1) and
+    to stamp the decoded PDU with the expected TID (satisfying check 2).
+    Stale responses arriving after a future is resolved are dropped to
+    prevent log spam. Safe because the transport serialises one in-flight
+    request per link.
+
+    Returns ``True`` when the patch was applied; ``False`` when the client
+    layout is unknown (fakes, future pymodbus) and it was left untouched.
+    """
+    ctx = getattr(client, "ctx", None)
+    if ctx is None or not hasattr(ctx, "framer"):
+        return False
+
+    framer = ctx.framer
+    original_handle_frame = framer.handleFrame
+
+    def _patched_handle_frame(
+        data: bytes,
+        exp_devid: int,
+        exp_tid: int,
+    ) -> tuple[int, object | None]:
+        used_len, pdu = original_handle_frame(data, exp_devid, 0)
+        if pdu is not None:
+            # Drop stale responses whose future is already resolved.
+            future = getattr(ctx, "response_future", None)
+            if future is not None and future.done():
+                return used_len, None
+            if exp_tid:
+                pdu.transaction_id = exp_tid
+        return used_len, pdu
+
+    framer.handleFrame = _patched_handle_frame
+    return True
+
+
+class PymodbusUnit:
+    """:class:`RegisterClient` over a pymodbus async client bound to one unit ID.
+
+    Owns the client: :meth:`close` closes the socket/port. Calls use the
+    keyword form ``read_*(address=..., count=..., device_id=...)``, which
+    pymodbus introduced in 3.10.0; earlier releases (3.9.x and before) name
+    that keyword ``slave=``.
+    """
+
+    owns_link: bool = True
+    # pymodbus' close() releases the socket/port synchronously.
+    released: bool = True
+
+    def __init__(self, client: Any, unit_id: int) -> None:
+        self._client = client
+        self._unit_id = unit_id
+        self._closed = False
+
+    async def read_holding_registers(self, address: int, count: int) -> list[int]:
+        result = await self._call(
+            self._client.read_holding_registers,
+            address=address,
+            count=count,
+            device_id=self._unit_id,
+        )
+        return self._registers(result, address)
+
+    async def read_input_registers(self, address: int, count: int) -> list[int]:
+        result = await self._call(
+            self._client.read_input_registers,
+            address=address,
+            count=count,
+            device_id=self._unit_id,
+        )
+        return self._registers(result, address)
+
+    async def write_register(self, address: int, value: int) -> None:
+        result = await self._call(
+            self._client.write_register,
+            address=address,
+            value=value,
+            device_id=self._unit_id,
+        )
+        self._check_write(result, address)
+
+    async def write_registers(self, address: int, values: list[int]) -> None:
+        result = await self._call(
+            self._client.write_registers,
+            address=address,
+            values=values,
+            device_id=self._unit_id,
+        )
+        self._check_write(result, address)
+
+    async def recycle(self) -> None:
+        """pymodbus links are owned: the transport recycles by close + dial."""
+        return None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._client.close()
+
+    async def aclose(self) -> None:
+        self.close()
+
+    # -- helpers -------------------------------------------------------------
+
+    @staticmethod
+    async def _call(func: Any, **kwargs: Any) -> Any:
+        from pymodbus.exceptions import ModbusException
+
+        try:
+            return await func(**kwargs)
+        except ModbusException as err:
+            # Catch the pymodbus BASE class: ConnectionException ("Not
+            # connected") is a SIBLING of ModbusIOException, not a subclass
+            # (eg4-57g, eg4-1cxn).
+            if "timeout" in str(err).lower():
+                raise RegisterTimeoutError(str(err)) from err
+            raise RegisterLinkError(str(err)) from err
+        except TimeoutError as err:
+            raise RegisterTimeoutError(str(err)) from err
+        except OSError as err:
+            raise RegisterLinkError(str(err)) from err
+
+    @staticmethod
+    def _registers(result: Any, address: int) -> list[int]:
+        if result.isError():
+            raise RegisterExceptionResponse(
+                f"Modbus read error at address {address}: {result}",
+                code=getattr(result, "exception_code", None),
+            )
+        registers = getattr(result, "registers", None)
+        if registers is None:
+            raise RegisterInvalidResponse(
+                f"Invalid Modbus response at address {address}: no registers in response"
+            )
+        # pymodbus decodes registers from the response's own byte_count and
+        # never checks it against the requested count, so this can be short;
+        # the transport decides what a short read means per register space.
+        return list(registers)
+
+    @staticmethod
+    def _check_write(result: Any, address: int) -> None:
+        if result.isError():
+            raise RegisterExceptionResponse(
+                f"Modbus write error at address {address}: {result}",
+                code=getattr(result, "exception_code", None),
+                detail=str(result),
+            )
+
+
+# ----------------------------------------------------------------------
+# modbus-connection adapter
+# ----------------------------------------------------------------------
+
+
+def _modbus_connection_exceptions() -> Any:
+    """Import ``modbus_connection.exceptions`` lazily (optional extra)."""
+    try:
+        from modbus_connection import exceptions
+    except ImportError as err:  # pragma: no cover - exercised without the extra
+        raise RegisterLinkError(
+            "modbus-connection package not installed. "
+            "Install with: uv add 'pylxpweb[modbus-connection]'"
+        ) from err
+    return exceptions
+
+
+class ModbusConnectionUnit:
+    """:class:`RegisterClient` over a ``modbus_connection.ModbusUnit``.
+
+    ``connection`` is the owning ``ModbusConnection`` when the transport
+    created it, in which case :meth:`close` closes it permanently. When the
+    unit was injected by a host (``connection=None``), the transport shares
+    the link and must never close it; :meth:`recycle` drops a wedged link via
+    the unit's own ``disconnect()`` so the host's connection re-dials on the
+    next request, which is the documented recovery path for shared units.
+    """
+
+    def __init__(self, unit: ModbusUnitLike, *, connection: Any | None = None) -> None:
+        self._unit = unit
+        self._connection = connection
+        self._close_task: asyncio.Task[None] | None = None
+        # Fixed by the first teardown wait, so a cancelled, repeated or
+        # concurrent aclose() never restarts the bound.
+        self._close_deadline: float | None = None
+        # Set once a bounded teardown wait has expired with the link held.
+        self._release_wait_expired = False
+
+    @property
+    def owns_link(self) -> bool:
+        return self._connection is not None
+
+    @property
+    def released(self) -> bool:
+        closing = self._close_task is not None and not self._close_task.done()
+        return not closing and not _pending_releases(self._connection)
+
+    async def read_holding_registers(self, address: int, count: int) -> list[int]:
+        return list(await self._call(self._unit.read_holding_registers, address, count))
+
+    async def read_input_registers(self, address: int, count: int) -> list[int]:
+        return list(await self._call(self._unit.read_input_registers, address, count))
+
+    async def write_register(self, address: int, value: int) -> None:
+        await self._call(self._unit.write_register, address, value)
+
+    async def write_registers(self, address: int, values: list[int]) -> None:
+        await self._call(self._unit.write_registers, address, values)
+
+    async def recycle(self) -> None:
+        """Drop the link (shared or owned); the next request re-dials."""
+        try:
+            await self._unit.disconnect()
+        except Exception as err:  # recycle is best-effort by contract
+            _LOGGER.debug("Modbus unit recycle raised %s: %s", type(err).__name__, err)
+
+    def close(self) -> None:
+        """Release the client without blocking.
+
+        Owned connections close asynchronously; the task is kept so
+        :meth:`aclose` can await it and so it is not garbage-collected
+        mid-flight. Shared units are never closed.
+        """
+        connection = self._connection
+        if connection is None or self._close_task is not None:
+            return
+        self._close_task = asyncio.create_task(self._close_connection(connection))
+
+    async def aclose(self) -> None:
+        self.close()
+        # One LINK_RELEASE_TIMEOUT_SECONDS budget covers the whole teardown:
+        # the close task (which first waits out an in-flight connect, then
+        # closes) and the release of every link the connection created.
+        # Nothing waited on is cancelled, so on expiry both keep running and
+        # ``released`` stays False until they finish. The budget is spent only
+        # once: after it has expired, later calls just check (a zero-length
+        # wait), so a link that stays held fails every redial fast instead of
+        # stalling each operation by the bound again. The deadline is fixed by
+        # the first wait, so cancelling and re-awaiting, or a concurrent
+        # waiter, cannot restart it.
+        if self._close_deadline is None:
+            self._close_deadline = time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS
+        await _wait_until([self._close_task] if self._close_task else [], self._close_deadline)
+        # Read only now: a connect in flight at close() records its link late.
+        # Each link's release keeps the deadline its first waiter (this
+        # teardown or an automatic redial) fixed, so one held link is waited
+        # on for one bound in total.
+        releases = _pending_releases(self._connection)
+        await _wait_until(releases, _release_deadline(self._connection, self._close_deadline))
+        if not self.released and not self._release_wait_expired:
+            self._release_wait_expired = True
+            _LOGGER.warning(
+                "Modbus link not released %.1fs after close; no replacement will dial until it is",
+                LINK_RELEASE_TIMEOUT_SECONDS,
+            )
+
+    async def _close_connection(self, connection: Any) -> None:
+        try:
+            await connection.close()
+        except Exception as err:  # teardown must not raise
+            _LOGGER.debug("Modbus connection close raised %s: %s", type(err).__name__, err)
+
+    # -- helpers -------------------------------------------------------------
+
+    @staticmethod
+    async def _call(func: Any, *args: Any) -> Any:
+        exc = _modbus_connection_exceptions()
+        try:
+            return await func(*args)
+        except exc.ModbusExceptionError as err:
+            code = getattr(err, "exception_code", None)
+            raise RegisterExceptionResponse(str(err), code=int(code) if code else None) from err
+        except exc.ModbusError as err:
+            # ModbusConnectionError, ModbusProtocolError, ModbusDesyncError,
+            # ClientClosedError: the link or the frame is unusable. This also
+            # covers ModbusTimeoutError: a silent peer on the default pymodbus
+            # path surfaces as an exhausted-retries ModbusIOException, i.e. a
+            # read/write error, not TransportTimeoutError, so the public error
+            # class does not depend on the backend.
+            raise RegisterLinkError(str(err)) from err
+        except TimeoutError as err:
+            raise RegisterTimeoutError(str(err) or "timeout") from err
+        except OSError as err:
+            raise RegisterLinkError(str(err)) from err
+
+
+async def _wait_until(steps: list[asyncio.Future[Any]], deadline: float) -> None:
+    """Wait for ``steps`` until ``deadline`` without cancelling them or raising."""
+    pending = [step for step in steps if not step.done()]
+    if pending:
+        await asyncio.wait(pending, timeout=max(0.0, deadline - time.monotonic()))
+
+
+def _pending_releases(connection: Any) -> list[asyncio.Future[Any]]:
+    """Releases still pending for links an owned connection created (none if shared)."""
+    releases = getattr(connection, "pending_releases", None)
+    return list(releases) if isinstance(releases, list) else []
+
+
+def _release_deadline(connection: Any, deadline: float) -> float:
+    """The deadline to wait for ``connection``'s pending releases, at most ``deadline``.
+
+    Each release's bound starts with its first waiter and is never extended,
+    so whichever waits on it later (teardown or a redial) shares that bound.
+    """
+    fix = getattr(connection, "release_deadline", None)
+    fixed = fix(deadline) if callable(fix) else None
+    return min(deadline, fixed) if isinstance(fixed, float) else deadline
+
+
+def owned_modbus_connection(params: Any, *, timeout: float) -> Any:
+    """Build an owned tmodbus ``ModbusConnection`` whose every dial waits for release.
+
+    See :func:`_release_gated_connection_class`.
+    """
+    from modbus_connection import ModbusSerialParams
+
+    cls = _release_gated_connection_class()
+    if not hasattr(cls, "pending_releases") and isinstance(params, ModbusSerialParams):
+        _warn_release_gate_absent()
+    return cls(params, timeout=timeout)
+
+
+@functools.cache
+def _warn_release_gate_absent() -> None:
+    """Warn (once per process) that owned serial redials are not release-gated."""
+    _LOGGER.warning(
+        "modbus-connection has no _connect_client hook (layout changed?); owned "
+        "serial redials are not gated on the previous link's release"
+    )
+
+
+@functools.cache
+def _release_gated_connection_class() -> type[Any]:
+    """The owned-connection class: every new link waits for the old one's release.
+
+    Root cause this works around (upstream: tmodbus ``close()`` should await
+    the serialx transport's ``wait_closed()``): tmodbus 0.6.2's transport
+    ``close()`` calls serialx's synchronous ``close()`` and returns, while
+    serialx (1.8.2 through 1.11.0) releases the descriptor or ESPHome
+    connection later in a background task. Any path that closes a link and
+    then dials — pylxpweb's own disconnect/connect, or modbus-connection's
+    automatic reconnect after it drops a desynchronised link — could otherwise
+    open the port again while the old one is still held.
+
+    The choke point is ``ModbusConnection._connect_client()`` (the private
+    hook every dial goes through in modbus-connection 4.10.0 through 4.12.3):
+    it records each new client's serialx link at creation and, before creating
+    the next one, waits up to ``LINK_RELEASE_TIMEOUT_SECONDS`` (never
+    cancelling) for every earlier link's release. A link still held at that
+    bound fails the dial with ``ModbusConnectionError``. asyncio TCP sockets
+    expose no ``wait_closed()``; with an empty write buffer they are closed by
+    the time a close waiter resumes (unsent data would delay that
+    unobservably), so they count as released at once. Without the hook
+    (another modbus-connection layout) the plain class is used ungated.
+    """
+    from modbus_connection import ModbusSerialParams
+    from modbus_connection.exceptions import ModbusConnectionError
+    from modbus_connection.tmodbus import ModbusConnection
+    from tmodbus.client import AsyncModbusClient
+
+    if not callable(getattr(ModbusConnection, "_connect_client", None)):
+        _LOGGER.debug("modbus-connection has no _connect_client hook; link release is ungated")
+        return ModbusConnection
+
+    class ReleaseGatedModbusConnection(ModbusConnection):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._link_releases: list[asyncio.Future[Any]] = []
+            # Each release's wait deadline, fixed by its first waiter (a dial
+            # or teardown): later waits share it, so a link that stays held
+            # refuses each automatic redial at once instead of stalling it by
+            # the bound again.
+            self._release_deadlines: dict[asyncio.Future[Any], float] = {}
+            self._unobservable_logged = False
+
+        @property
+        def pending_releases(self) -> list[asyncio.Future[Any]]:
+            """Releases of links this connection created that have not happened yet."""
+            return [release for release in self._link_releases if not release.done()]
+
+        def release_deadline(self, default: float) -> float:
+            """Fix every pending release's deadline (``default`` if unset); return the latest."""
+            self._release_deadlines = {
+                release: self._release_deadlines.get(release, default)
+                for release in self.pending_releases
+            }
+            return max(self._release_deadlines.values(), default=default)
+
+        async def _connect_client(self, *args: Any, **kwargs: Any) -> AsyncModbusClient:
+            deadline = self.release_deadline(time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS)
+            await _wait_until(self.pending_releases, deadline)
+            self._link_releases = self.pending_releases
+            if self._link_releases:
+                target = getattr(self, "_target", "link")
+                raise ModbusConnectionError(f"previous link to {target} is still being released")
+            client = await super()._connect_client(*args, **kwargs)
+            release = _link_release(client)
+            if release is not None:
+                self._link_releases.append(release)
+            elif isinstance(self._params, ModbusSerialParams) and not self._unobservable_logged:
+                # A serial link always has a serialx wait_closed(); not finding
+                # it means the private tmodbus layout changed and the gate is off.
+                self._unobservable_logged = True
+                _LOGGER.warning(
+                    "Cannot observe serial link release for %s (tmodbus layout "
+                    "changed?); redials are not gated on it",
+                    getattr(self, "_target", "link"),
+                )
+            return client
+
+    return ReleaseGatedModbusConnection
+
+
+def _link_release(client: Any) -> asyncio.Future[Any] | None:
+    """Start observing a new tmodbus client's link release, if observable.
+
+    Reads the one private step tmodbus 0.6.2 offers no public accessor for:
+    ``client.transport.base_transport._transport``, the serialx transport.
+    Its ``wait_closed()`` only awaits the transport's own ``_closed_waiter``
+    future (serialx 1.8.2 through 1.11.0), so that future is observed directly:
+    a Task wrapping ``wait_closed()`` would stay pending for a link that never
+    releases, pinning the transport and warning at loop shutdown. Other
+    layouts fall back to that Task.
+    """
+    smart = getattr(client, "transport", None)
+    base = getattr(smart, "base_transport", smart)
+    link = getattr(base, "_transport", None)
+    wait_closed = getattr(link, "wait_closed", None)
+    if not callable(wait_closed):
+        return None
+    waiter = getattr(link, "_closed_waiter", None)
+    release: asyncio.Future[Any] = (
+        waiter if isinstance(waiter, asyncio.Future) else asyncio.ensure_future(wait_closed())
+    )
+    # Observe a failed release so asyncio does not warn; it still counts as done.
+    release.add_done_callback(lambda task: task.cancelled() or task.exception())
+    return release

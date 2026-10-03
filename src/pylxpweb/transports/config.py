@@ -155,6 +155,16 @@ class TransportConfig:
     rejects large reads automatically falls back (eg4_web_monitor#254).
     """
 
+    backend: str = field(default="auto")
+    """Modbus wire backend for MODBUS_TCP / MODBUS_SERIAL transports.
+
+    ``"pymodbus"`` (historical default), ``"modbus_connection"`` (Home
+    Assistant's shared-connection library, tmodbus + serialx; needs the
+    ``modbus-connection`` extra), or ``"auto"`` (pymodbus unless the serial
+    port is a serialx-only URL such as ``esphome://``). Ignored by other
+    transport types.
+    """
+
     def __post_init__(self) -> None:
         """Validate configuration after initialization."""
         self.validate()
@@ -168,11 +178,13 @@ class TransportConfig:
         Raises:
             ValueError: If configuration is invalid
         """
+        from ._modbus_client import normalize_backend
         from ._register_data import validate_input_block_size
 
         # Applies to every register-reading transport type (not HTTP, but
         # harmless there: the field only matters for local transports).
         validate_input_block_size(self.max_input_block_size)
+        self.backend = normalize_backend(self.backend)
 
         # HTTP transport has relaxed validation (used for hybrid mode reference only)
         if self.transport_type == TransportType.HTTP:
@@ -228,6 +240,7 @@ class TransportConfig:
             "retry_delay": self.retry_delay,
             "inter_register_delay": self.inter_register_delay,
             "max_input_block_size": self.max_input_block_size,
+            "backend": self.backend,
         }
 
     @classmethod
@@ -270,6 +283,7 @@ class TransportConfig:
         instance.retry_delay = data.get("retry_delay", 0.5)
         instance.inter_register_delay = data.get("inter_register_delay", 0.05)
         instance.max_input_block_size = data.get("max_input_block_size", 40)
+        instance.backend = data.get("backend", "auto")
 
         # Validate the restored config
         instance.validate()

@@ -648,6 +648,7 @@ def create_transport_from_config(
             inter_register_delay=config.inter_register_delay,
             max_input_block_size=config.max_input_block_size,
             register_observer=register_observer,
+            backend=config.backend,
         )
     elif config.transport_type == TransportType.MODBUS_SERIAL:
         # serial_port is guaranteed to be set after validate() for MODBUS_SERIAL
@@ -666,6 +667,7 @@ def create_transport_from_config(
             inter_register_delay=config.inter_register_delay,
             max_input_block_size=config.max_input_block_size,
             register_observer=register_observer,
+            backend=config.backend,
         )
     elif config.transport_type == TransportType.WIFI_DONGLE:
         # dongle_serial is guaranteed to be set after validate() for WIFI_DONGLE

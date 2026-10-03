@@ -26,17 +26,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from ._modbus_base import BaseModbusTransport
+from ._modbus_client import (
+    ModbusConnectionUnit,
+    ModbusUnitLike,
+    PymodbusUnit,
+    owned_modbus_connection,
+    select_backend,
+)
 from ._register_data import DEFAULT_INPUT_BLOCK_SIZE
 from .capabilities import MODBUS_CAPABILITIES, TransportCapabilities
 from .exceptions import TransportConnectionError
 from .observation import RegisterObserver
 
 if TYPE_CHECKING:
-    from pymodbus.client import AsyncModbusSerialClient
-
     from pylxpweb.devices.inverters._features import InverterFamily
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,16 +55,26 @@ class ModbusSerialTransport(BaseModbusTransport):
 
     Network Serial Bridges (Proxies)
     --------------------------------
-    The ``port`` argument is passed straight through to pymodbus'
-    ``AsyncModbusSerialClient``, which opens it via pyserial's
-    ``serial.serial_for_url``. Any pyserial URL therefore works without code
-    changes, so a remote RS485 adapter can be reached over the network:
+    The ``port`` argument is passed straight through to the backend's serial
+    layer, so URL-style ports reach a remote RS485 adapter over the network:
 
-        # Raw TCP serial bridge
+        # Raw TCP serial bridge (pyserial or serialx)
         transport = ModbusSerialTransport(port="socket://10.0.0.5:502", ...)
 
-        # RFC 2217 proxy (ESPHome, ser2net, etc.)
+        # RFC 2217 proxy (ser2net etc.; pyserial or serialx)
         transport = ModbusSerialTransport(port="rfc2217://10.0.0.5:2217", ...)
+
+        # Home Assistant / ESPHome serial proxy (serialx only, #180):
+        # ``backend="auto"`` selects the modbus_connection backend for it.
+        transport = ModbusSerialTransport(port="esphome://esp-node.local:6053", ...)
+
+    Backends
+    --------
+    ``backend="pymodbus"`` (pyserial underneath) is the historical default.
+    ``backend="modbus_connection"`` uses Home Assistant's shared-connection
+    library (tmodbus + serialx) and needs the ``modbus-connection`` extra.
+    ``backend="auto"`` keeps pymodbus unless the port is a URL only serialx
+    can open.
 
     IMPORTANT: Single-Client Limitation
     ------------------------------------
@@ -85,6 +100,8 @@ class ModbusSerialTransport(BaseModbusTransport):
     """
 
     transport_type: str = "modbus_serial"
+    _recycle_label = "Modbus serial client"
+    _recycle_logger = _LOGGER
 
     def __init__(
         self,
@@ -103,6 +120,8 @@ class ModbusSerialTransport(BaseModbusTransport):
         pymodbus_retries: int = 3,
         max_input_block_size: int = DEFAULT_INPUT_BLOCK_SIZE,
         register_observer: RegisterObserver | None = None,
+        backend: str = "auto",
+        unit: ModbusUnitLike | None = None,
     ) -> None:
         """Initialize Modbus serial transport.
 
@@ -137,6 +156,12 @@ class ModbusSerialTransport(BaseModbusTransport):
                 reads; hardware that rejects large reads automatically falls
                 back to the plain grouped reads (eg4_web_monitor#254).
             register_observer: Optional callback for terminal raw-register segments.
+            backend: ``"pymodbus"``, ``"modbus_connection"``, or ``"auto"``
+                (pymodbus unless the port is a serialx-only URL such as
+                ``esphome://``). See the class docstring.
+            unit: A ``ModbusUnit``-shaped object supplied by a host (Home
+                Assistant's ``async_get_unit()``) over a shared serial link.
+                The transport then never opens or closes the port itself.
         """
         super().__init__(
             serial,
@@ -155,8 +180,8 @@ class ModbusSerialTransport(BaseModbusTransport):
         self._bytesize = bytesize
         self._parity = parity
         self._stopbits = stopbits
-        # Narrow type for serial client
-        self._client: AsyncModbusSerialClient | None = None
+        self._backend = select_backend(backend, unit=unit, serial_port=port)
+        self._external_unit = unit
 
     @property
     def capabilities(self) -> TransportCapabilities:
@@ -173,47 +198,55 @@ class ModbusSerialTransport(BaseModbusTransport):
         """Get the serial baud rate."""
         return self._baudrate
 
-    async def connect(self) -> None:
-        """Establish Modbus RTU serial connection.
+    async def _connect_locked(self) -> None:
+        """Establish Modbus RTU serial connection while the caller owns the operation lock.
 
         Raises:
             TransportConnectionError: If connection fails
         """
+        # A previous dial (cancelled or failed) may still own a link: release
+        # it and wait for the close, so a re-dial never overlaps an exclusive
+        # port or single-client bridge that is still held.
+        self._drop_session()
+        await self._drain_closes()
+        self._require_links_released()
         try:
-            from pymodbus.client import AsyncModbusSerialClient
+            if self._external_unit is not None:
+                self._client = self._external_unit
+                self._unit = ModbusConnectionUnit(self._external_unit)
+            elif self._backend == "modbus_connection":
+                await self._open_modbus_connection()
+            else:
+                await self._open_pymodbus()
 
-            self._client = AsyncModbusSerialClient(
-                port=self._port,
-                baudrate=self._baudrate,
-                bytesize=self._bytesize,
-                parity=self._parity,
-                stopbits=self._stopbits,
-                timeout=self._timeout,
-                retries=self._pymodbus_retries,
-            )
-
-            connected = await self._client.connect()
-            if not connected:
-                raise TransportConnectionError(f"Failed to connect to serial port {self._port}")
-
-            self._connected = True
-            self._consecutive_errors = 0
+            self._mark_connected()
+            backend = "shared" if self._external_unit is not None else self._backend
             _LOGGER.info(
-                "Modbus serial transport connected to %s @ %d baud (unit %s) for %s",
+                "Modbus serial transport connected to %s @ %d baud (unit %s%s) for %s",
                 self._port,
                 self._baudrate,
                 self._unit_id,
+                # The default backend logs exactly as before the seam.
+                "" if backend == "pymodbus" else f", backend {backend}",
                 self._serial,
             )
 
-            # Brief delay to allow serial port to stabilize
-            await asyncio.sleep(0.2)
-
+        except asyncio.CancelledError:
+            # The backend's dial may still complete after we were cancelled;
+            # releasing the adapter closes whatever it ends up owning.
+            self._drop_session()
+            raise
         except ImportError as err:
-            raise TransportConnectionError(
-                "pymodbus or pyserial package not installed. Install with: uv add pymodbus pyserial"
-            ) from err
+            hint = (
+                "modbus-connection package not installed. "
+                "Install with: uv add 'pylxpweb[modbus-connection]'"
+                if self._backend == "modbus_connection"
+                else "pymodbus or pyserial package not installed. "
+                "Install with: uv add pymodbus pyserial"
+            )
+            raise TransportConnectionError(hint) from err
         except PermissionError as err:
+            self._drop_session()
             _LOGGER.error(
                 "Permission denied opening serial port %s: %s",
                 self._port,
@@ -225,6 +258,7 @@ class ModbusSerialTransport(BaseModbusTransport):
                 "sudo usermod -a -G dialout $USER"
             ) from err
         except (TimeoutError, OSError) as err:
+            self._drop_session()
             _LOGGER.error(
                 "Failed to connect to serial port %s: %s",
                 self._port,
@@ -237,26 +271,102 @@ class ModbusSerialTransport(BaseModbusTransport):
                 "another application."
             ) from err
 
-    async def disconnect(self) -> None:
-        """Close Modbus serial connection."""
-        if self._client:
-            self._client.close()
-            self._client = None
+        # Brief delay to allow serial port to stabilize. The link is up by now,
+        # so a cancelled settle leaves it connected, as before the seam.
+        await asyncio.sleep(0.2)
 
-        self._connected = False
+    async def _open_pymodbus(self) -> None:
+        """Open the port with pymodbus (pyserial underneath)."""
+        from pymodbus.client import AsyncModbusSerialClient
+
+        client = AsyncModbusSerialClient(
+            port=self._port,
+            baudrate=self._baudrate,
+            bytesize=self._bytesize,
+            parity=self._parity,
+            stopbits=self._stopbits,
+            timeout=self._timeout,
+            retries=self._pymodbus_retries,
+        )
+        self._client = client
+        self._unit = PymodbusUnit(client, self._unit_id)
+
+        connected = await client.connect()
+        if not connected:
+            self._drop_session()
+            raise TransportConnectionError(f"Failed to connect to serial port {self._port}")
+
+    async def _open_modbus_connection(self) -> None:
+        """Open the port with modbus_connection (tmodbus + serialx)."""
+        from modbus_connection import ModbusSerialParams
+        from modbus_connection import exceptions as mc_exc
+
+        params = ModbusSerialParams(
+            device=self._port,
+            baudrate=self._baudrate,
+            bytesize=_literal_bytesize(self._bytesize),
+            parity=_literal_parity(self._parity),
+            stopbits=_literal_stopbits(self._stopbits),
+        )
+        connection = owned_modbus_connection(params, timeout=self._timeout)
+        self._client = connection
+        self._unit = ModbusConnectionUnit(connection.for_unit(self._unit_id), connection=connection)
+        try:
+            await connection.connect()
+        except mc_exc.ModbusError as err:
+            # A failed open leaves no link to wait for: serialx (1.8.2-1.11.0)
+            # calls connection_made synchronously before create_serial_connection
+            # returns, and drains its own failed opens (close + wait_closed)
+            # before raising, so tmodbus 0.6.2's unawaited _abort_failed_open()
+            # path is unreachable here, and the owned connection's release gate
+            # (owned_modbus_connection) never sees that link. A serialx that
+            # defers connection_made would need its release captured there.
+            # The library wraps the OS error; PermissionError detail survives
+            # in the message only, so surface it as a plain connect failure.
+            self._drop_session()
+            raise TransportConnectionError(
+                f"Failed to connect to {self._port}: {err}. "
+                "Verify: (1) serial port exists, (2) device is connected, "
+                "(3) correct permissions, (4) port is not in use by "
+                "another application."
+            ) from err
+
+    async def disconnect(self) -> None:
+        """Close Modbus serial connection (a host-shared unit is only detached).
+
+        This is serial's only shutdown path, so like TCP's async_shutdown() it
+        does not wait for the operation lock: an in-flight operation sees the
+        dropped session and raises TransportConnectionError, as before the seam.
+        Waits for the owned close; a cancelled waiter leaves it tracked, so the
+        next disconnect() or connect() awaits the same close, and connect()
+        drains it under the lock before dialing.
+        """
+        self._drop_session()
+        await self._drain_closes()
         _LOGGER.debug("Modbus serial transport disconnected for %s", self._serial)
 
-    async def _reconnect(self) -> None:
-        """Reconnect Modbus serial client to reset state."""
-        async with self._lock:
-            if self._consecutive_errors < self._max_consecutive_errors:
-                return
 
-            _LOGGER.warning(
-                "Reconnecting Modbus serial client for %s after %d consecutive errors",
-                self._serial,
-                self._consecutive_errors,
-            )
-            await self.disconnect()
-            await self.connect()
-            self._consecutive_errors = 0
+def _literal_bytesize(value: int) -> Literal[7, 8]:
+    if value == 8:
+        return 8
+    if value == 7:
+        return 7
+    raise ValueError(f"Invalid bytesize for modbus_connection backend: {value}")
+
+
+def _literal_parity(value: str) -> Literal["N", "E", "O"]:
+    if value == "N":
+        return "N"
+    if value == "E":
+        return "E"
+    if value == "O":
+        return "O"
+    raise ValueError(f"Invalid parity for modbus_connection backend: {value}")
+
+
+def _literal_stopbits(value: int) -> Literal[1, 2]:
+    if value == 1:
+        return 1
+    if value == 2:
+        return 2
+    raise ValueError(f"Invalid stopbits for modbus_connection backend: {value}")

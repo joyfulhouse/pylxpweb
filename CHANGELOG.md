@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Backend-neutral Modbus client seam** (`pylxpweb.transports._modbus_client`).
+  `ModbusTransport` and `ModbusSerialTransport` now do wire I/O through a
+  `RegisterClient` adapter shaped like Home Assistant's `ModbusUnit` protocol
+  instead of calling pymodbus directly. Two backends ship:
+  - `backend="pymodbus"` — the historical default, unchanged behaviour,
+    still carrying the gateway transaction-ID workaround.
+  - `backend="modbus_connection"` — Home Assistant's shared-connection
+    library (`modbus-connection[tmodbus]`, tmodbus + serialx). Opt-in via
+    the new `modbus-connection` extra: `uv add 'pylxpweb[modbus-connection]'`.
+  - `backend="auto"` (the default) keeps pymodbus except for serial ports
+    only serialx can open (`esphome://…`) or an injected `unit=`, which select
+    `modbus_connection`.
+- **Host-shared Modbus links**: both transports accept `unit=` — a
+  `ModbusUnit`-shaped object such as the one Home Assistant 2026.9's
+  `homeassistant.components.modbus.async_get_unit()` returns. The transport
+  then performs no dialing, never closes the shared link, and heals a wedged
+  link through the unit's own `disconnect()` (that library's documented
+  recovery path) instead of a close-and-redial.
+- `TransportConfig.backend` (serialised as `"backend"`, default `"auto"`),
+  passed through by `create_transport_from_config()`.
+- Home Assistant / ESPHome serial-proxy support via `esphome://` ports on the
+  `modbus_connection` backend
+  ([#180](https://github.com/joyfulhouse/pylxpweb/issues/180)); the extra
+  pulls in `serialx[esphome]` (aioesphomeapi), which serialx needs to register
+  that scheme. pymodbus remains pyserial-based upstream, so this no longer
+  waits on it.
+- CI job running the Modbus transport tests against Home Assistant's pins
+  (pymodbus 3.13.1, modbus-connection 4.10.0, tmodbus 0.6.2) with serialx
+  1.10.0 (HA 2026.9.1–2026.9.4) and 1.8.2 (HA 2026.8.x, the extra's floor),
+  plus extra resolution checks under HA 2026.8.0, 2026.9.0 and 2026.9.4
+  constraints.
+
+### Changed
+
+- Typed transport errors raised from a backend failure keep the *backend's*
+  exception as `__cause__` (for example pymodbus' `ConnectionException`), not
+  the seam wrapper, preserving the existing contract for callers that inspect
+  the chain. Errors synthesized from pymodbus response objects retain their
+  historical message and no explicit cause.
+- `ModbusTransport.async_shutdown()` and both transports' `disconnect()` await
+  owned closes. A close stays tracked until it completes, so a cancelled waiter
+  does not lose it and every later `disconnect()`/`async_shutdown()` awaits the
+  same close. `connect()` (including the replacement dial after a failed or
+  cancelled one) waits for every prior owned close before dialing, and serial
+  `connect()` now takes the operation lock, as TCP's does. Serial `disconnect()`
+  is that transport's only shutdown, so like TCP's `async_shutdown()` it does
+  not wait for the operation lock: it closes the port at once, and an
+  in-flight operation raises `TransportConnectionError`, as before.
+- On `modbus_connection`, an owned connection never dials a new link while
+  one it created earlier is still held. tmodbus 0.6.2 returns from `close()`
+  before serialx has closed the port's descriptor (or ESPHome connection). So
+  the owned connection records every link's serialx `wait_closed()` when the
+  link is created. Before every dial it waits for all earlier links to be
+  released: after pylxpweb's own disconnect, and after modbus-connection's
+  automatic reconnect following a desync. The wait is bounded at 5 s and
+  never cancels; a link still held at that bound fails the dial as a
+  connection error.
+  `disconnect()`/`async_shutdown()` spend one 5 s budget on the close
+  (including an in-flight connect) and those releases. If the budget runs out
+  they log a warning and return (releasing the operation lock where they hold
+  it). The transport keeps tracking the link, and the next `connect()` raises
+  `TransportConnectionError` while it is still held. That budget is spent
+  once per held link across teardown and modbus-connection's automatic
+  redials together. Later attempts only check whether the link has been
+  released, so a link that stays held fails each redial at once instead of
+  stalling every operation by the bound again. Owned serial connections warn
+  when redials are not gated: once per process if the private hook is missing, and once
+  per connection if the tmodbus layout hides a link's release. A
+  replacement on another
+  transport instance may still collide with a link that outlives the bound.
+  asyncio TCP sockets expose no such wait. With an empty write buffer they are
+  closed by the time a close waiter resumes; unsent data would delay that
+  unobservably. A close that raises is dropped from tracking instead of
+  re-raising on every later `disconnect()`/`connect()`.
+- On a host-shared link (TCP and serial), the error-recycle gate counts only
+  link errors (timeouts, connection/protocol failures); a device's exception
+  response never recycles an endpoint other units and host consumers are
+  using. Owned links keep the historical total-error gate.
+- A peer that accepts requests and never replies raises `TransportReadError`
+  on reads and `TransportWriteError` on writes with either backend: the
+  `modbus_connection` response timeout is mapped to the classes the default
+  pymodbus path has always raised there (`TransportTimeoutError` is not a
+  subclass of `TransportReadError`). pymodbus's mapping is unchanged.
+- The `modbus-connection` extra requires modbus-connection[tmodbus] >=4.10.0
+  and tmodbus >=0.6.2 (Home Assistant 2026.9's pins) and serialx[esphome]
+  >=1.8.2: Home Assistant installs integration requirements under its
+  `package_constraints.txt`, which pins serialx 1.8.2 on 2026.8.x, 1.9.0 on
+  2026.9.0 and 1.10.0 on 2026.9.1–2026.9.4, so a higher floor would fail to
+  install there. Every serialx from 1.8.2 ships the `esphome://` platform.
+  The CI constraint check covers HA's `package_constraints.txt` only.
+  aioesphomeapi is pinned by HA's `esphome` integration manifest instead
+  (45.6.1 on 2026.8.0, 46.2.0 on 2026.9.x). Each HA-pinned serialx accepts
+  that release: 1.8.2 needs aioesphomeapi >=44.17.0, and 1.9.0/1.10.0 need
+  >=46.0.0. `uv.lock` tests the
+  latest stable graph (modbus-connection 4.12.3, tmodbus 0.6.2, serialx 1.11.0,
+  aioesphomeapi 46.6.0); the backend's tests run from the default dev
+  dependency group, so `uv run pytest` works without extras.
+- The optional TCP backend requires correctly echoed transaction IDs; gateway
+  hardware/firmware compatibility needs a packet capture. Owned TCP or
+  pyserial-supported serial transports can roll back by persisting `pymodbus`
+  (or `auto`) and recreating the transport. Injected units require removing the
+  injection and coordinating host ownership; `esphome://` needs another port or
+  bridge for pymodbus, so neither can roll back by toggle alone.
+
 ## [0.10.0b9] - 2026-09-04
 
 ### Changed
