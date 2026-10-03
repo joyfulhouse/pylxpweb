@@ -3111,6 +3111,9 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
 [0.10.0b10]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b9...v0.10.0b10
+[0.10.0b9]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b8...v0.10.0b9
+[0.10.0b8]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b7...v0.10.0b8
+[0.10.0b7]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b5...v0.10.0b7
 [0.10.0b5]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b4...v0.10.0b5
 [0.10.0b4]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b3...v0.10.0b4
 [0.10.0b3]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b2...v0.10.0b3
