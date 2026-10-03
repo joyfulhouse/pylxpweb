@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Self
+from typing import Any, Self
 
 from pymodbus.client import AsyncModbusTcpClient
 
@@ -27,6 +27,15 @@ from pylxpweb.battery_protocols.base import BatteryProtocol
 from pylxpweb.battery_protocols.detection import detect_protocol
 from pylxpweb.battery_protocols.eg4_master import EG4MasterProtocol
 from pylxpweb.battery_protocols.eg4_slave import EG4SlaveProtocol
+from pylxpweb.transports._modbus_client import (
+    ModbusConnectionUnit,
+    PymodbusUnit,
+    RegisterClient,
+    RegisterExceptionResponse,
+    RegisterLinkError,
+    owned_modbus_connection,
+    resolve_backend,
+)
 from pylxpweb.transports.data import BatteryData, InverterRuntimeData
 
 _LOGGER = logging.getLogger(__name__)
@@ -118,6 +127,7 @@ class BatteryModbusTransport:
         protocol: Protocol name or "auto" for auto-detection.
         inverter_serial: Serial number of the inverter these batteries belong to.
         timeout: Modbus connection and read timeout in seconds.
+        backend: Wire backend: auto (pymodbus), pymodbus, or modbus_connection.
     """
 
     def __init__(
@@ -129,6 +139,8 @@ class BatteryModbusTransport:
         protocol: str = "auto",
         inverter_serial: str = "",
         timeout: float = 3.0,
+        *,
+        backend: str = "auto",
     ) -> None:
         self.host = host
         self.port = port
@@ -137,7 +149,11 @@ class BatteryModbusTransport:
         self.protocol_name = protocol
         self.inverter_serial = inverter_serial
         self.timeout = timeout
-        self._client: AsyncModbusTcpClient | None = None
+        self._backend = resolve_backend(backend)
+        self._client: Any | None = None
+        self._units: dict[int, RegisterClient] = {}
+        # Only this adapter closes the shared link; per-unit adapters do I/O.
+        self._link_owner: RegisterClient | None = None
         self._connected = False
         # Serializes every operation that uses the shared client across its
         # reconnect gate and reads. It is intentionally distinct from the
@@ -189,7 +205,21 @@ class BatteryModbusTransport:
 
     async def _connect_locked(self) -> None:
         """Establish a connection while the caller holds the operation lock."""
-        self._client = AsyncModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
+        if self._backend == "modbus_connection":
+            from modbus_connection import ModbusTcpParams
+
+            if self._link_owner is not None:
+                await self._disconnect_locked()
+                if not self._link_owner.released:
+                    raise RegisterLinkError("Previous battery Modbus link is still being released")
+            self._client = owned_modbus_connection(
+                ModbusTcpParams(host=self.host, port=self.port), timeout=self.timeout
+            )
+        else:
+            self._client = AsyncModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
+        self._units.clear()
+        self._link_owner = None
+        self._unit_for(1)
         await self._client.connect()
         self._connected = self._client.connected
         if self._connected:
@@ -213,9 +243,27 @@ class BatteryModbusTransport:
 
     async def _disconnect_locked(self) -> None:
         """Close the connection while the caller holds the operation lock."""
-        if self._client:
-            self._client.close()
         self._connected = False
+        if self._link_owner is not None:
+            await self._link_owner.aclose()
+        elif self._client:
+            self._client.close()
+
+    def _unit_for(self, unit_id: int) -> RegisterClient:
+        """Cache unit adapters while retaining exactly one owner of the link."""
+        assert self._client is not None
+        if unit_id not in self._units:
+            if self._backend == "modbus_connection":
+                unit: RegisterClient = ModbusConnectionUnit(
+                    self._client.for_unit(unit_id),
+                    connection=self._client if self._link_owner is None else None,
+                )
+            else:
+                unit = PymodbusUnit(self._client, unit_id)
+            self._units[unit_id] = unit
+            if self._link_owner is None:
+                self._link_owner = unit
+        return self._units[unit_id]
 
     async def _reconnect(self) -> None:
         """Reconnect after the consecutive-error gate trips.
@@ -362,21 +410,7 @@ class BatteryModbusTransport:
                 self._degrade_unit(unit_id, start, required, 0)
             return None
         try:
-            result = await self._client.read_holding_registers(
-                start, count=count, device_id=unit_id
-            )
-            if result.isError():
-                _LOGGER.debug(
-                    "Modbus error response: unit=%d start=%d count=%d",
-                    unit_id,
-                    start,
-                    count,
-                )
-                if not probe:
-                    self._consecutive_errors += 1
-                    self._degrade_unit(unit_id, start, required, 0)
-                return None
-            registers = list(result.registers)
+            registers = await self._unit_for(unit_id).read_holding_registers(start, count)
             # pymodbus decodes registers from the response's own byte_count
             # and never checks it against the requested count, so a truncated
             # response returns a short list without error and would be
@@ -405,6 +439,12 @@ class BatteryModbusTransport:
                 self._consecutive_errors = 0
                 self._recover_reconnect_episode()
             return registers
+        except RegisterExceptionResponse:
+            _LOGGER.debug("Modbus error response: unit=%d start=%d count=%d", unit_id, start, count)
+            if not probe:
+                self._consecutive_errors += 1
+                self._degrade_unit(unit_id, start, required, 0)
+            return None
         except Exception:
             _LOGGER.debug("Read failed: unit=%d start=%d count=%d", unit_id, start, count)
             if not probe:

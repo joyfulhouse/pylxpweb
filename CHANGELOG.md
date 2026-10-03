@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Battery Modbus owned-link backend port** (#348): `BatteryModbusTransport`
+  supports `backend="modbus_connection"` through per-unit register adapters on
+  one connection, while `auto` retains pymodbus. Injection is tracked in #363.
+
 - **pymodbus floor raised to `>=3.10.0`** (#342). The Modbus client seam calls
   `read_*(..., device_id=...)`, a keyword pymodbus introduced in 3.10.0 (3.9.x and
   earlier name it `slave=`), so the previous `>=3.6.0` floor admitted versions that
