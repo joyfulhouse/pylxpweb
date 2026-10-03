@@ -409,6 +409,9 @@ class ModbusConnectionUnit:
         self._unit = unit
         self._connection = connection
         self._close_task: asyncio.Task[None] | None = None
+        # Fixed by the first teardown wait, so a cancelled, repeated or
+        # concurrent aclose() never restarts the bound.
+        self._close_deadline: float | None = None
         # Set once a bounded teardown wait has expired with the link held.
         self._release_wait_expired = False
 
@@ -461,13 +464,18 @@ class ModbusConnectionUnit:
         # ``released`` stays False until they finish. The budget is spent only
         # once: after it has expired, later calls just check (a zero-length
         # wait), so a link that stays held fails every redial fast instead of
-        # stalling each operation by the bound again.
-        budget = 0.0 if self._release_wait_expired else LINK_RELEASE_TIMEOUT_SECONDS
-        deadline = time.monotonic() + budget
-        await _wait_until([self._close_task] if self._close_task else [], deadline)
+        # stalling each operation by the bound again. The deadline is fixed by
+        # the first wait, so cancelling and re-awaiting, or a concurrent
+        # waiter, cannot restart it.
+        if self._close_deadline is None:
+            self._close_deadline = time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS
+        await _wait_until([self._close_task] if self._close_task else [], self._close_deadline)
         # Read only now: a connect in flight at close() records its link late.
-        # A release an automatic redial already waited out is only checked.
-        await _wait_until(_pending_releases(self._connection, "unwaited_releases"), deadline)
+        # Each link's release keeps the deadline its first waiter (this
+        # teardown or an automatic redial) fixed, so one held link is waited
+        # on for one bound in total.
+        releases = _pending_releases(self._connection)
+        await _wait_until(releases, _release_deadline(self._connection, self._close_deadline))
         if not self.released and not self._release_wait_expired:
             self._release_wait_expired = True
             _LOGGER.warning(
@@ -512,10 +520,21 @@ async def _wait_until(steps: list[asyncio.Future[Any]], deadline: float) -> None
         await asyncio.wait(pending, timeout=max(0.0, deadline - time.monotonic()))
 
 
-def _pending_releases(connection: Any, name: str = "pending_releases") -> list[asyncio.Future[Any]]:
+def _pending_releases(connection: Any) -> list[asyncio.Future[Any]]:
     """Releases still pending for links an owned connection created (none if shared)."""
-    releases = getattr(connection, name, None)
+    releases = getattr(connection, "pending_releases", None)
     return list(releases) if isinstance(releases, list) else []
+
+
+def _release_deadline(connection: Any, deadline: float) -> float:
+    """The deadline to wait for ``connection``'s pending releases, at most ``deadline``.
+
+    Each release's bound starts with its first waiter and is never extended,
+    so whichever waits on it later (teardown or a redial) shares that bound.
+    """
+    fix = getattr(connection, "release_deadline", None)
+    fixed = fix(deadline) if callable(fix) else None
+    return min(deadline, fixed) if isinstance(fixed, float) else deadline
 
 
 def owned_modbus_connection(params: Any, *, timeout: float) -> Any:
@@ -577,10 +596,11 @@ def _release_gated_connection_class() -> type[Any]:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             self._link_releases: list[asyncio.Future[Any]] = []
-            # Releases whose bounded wait already expired once: later dials
-            # only check them, so a link that stays held refuses each
-            # automatic redial at once instead of stalling it by the bound.
-            self._waited_releases: set[asyncio.Future[Any]] = set()
+            # Each release's wait deadline, fixed by its first waiter (a dial
+            # or teardown): later waits share it, so a link that stays held
+            # refuses each automatic redial at once instead of stalling it by
+            # the bound again.
+            self._release_deadlines: dict[asyncio.Future[Any], float] = {}
             self._unobservable_logged = False
 
         @property
@@ -588,17 +608,18 @@ def _release_gated_connection_class() -> type[Any]:
             """Releases of links this connection created that have not happened yet."""
             return [release for release in self._link_releases if not release.done()]
 
-        @property
-        def unwaited_releases(self) -> list[asyncio.Future[Any]]:
-            """Pending releases no dial has waited out yet (teardown skips the rest)."""
-            return [r for r in self.pending_releases if r not in self._waited_releases]
+        def release_deadline(self, default: float) -> float:
+            """Fix every pending release's deadline (``default`` if unset); return the latest."""
+            self._release_deadlines = {
+                release: self._release_deadlines.get(release, default)
+                for release in self.pending_releases
+            }
+            return max(self._release_deadlines.values(), default=default)
 
         async def _connect_client(self, *args: Any, **kwargs: Any) -> AsyncModbusClient:
-            await _wait_until(
-                self.unwaited_releases, time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS
-            )
+            deadline = self.release_deadline(time.monotonic() + LINK_RELEASE_TIMEOUT_SECONDS)
+            await _wait_until(self.pending_releases, deadline)
             self._link_releases = self.pending_releases
-            self._waited_releases = set(self._link_releases)
             if self._link_releases:
                 target = getattr(self, "_target", "link")
                 raise ModbusConnectionError(f"previous link to {target} is still being released")

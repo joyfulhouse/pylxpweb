@@ -1051,6 +1051,26 @@ async def _until(condition: Callable[[], bool]) -> None:
         await asyncio.sleep(0)
 
 
+class _ReleaseWaits:
+    """Records the budget each wait on a still-pending release or close gets.
+
+    Waits on nothing pending are skipped. ``budgets`` holds
+    ``deadline - now`` (never negative) per recorded wait, so a spent budget
+    shows as ``0.0``.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.budgets: list[float] = []
+        real = _modbus_client._wait_until
+
+        async def spy(steps: list[asyncio.Future[Any]], deadline: float) -> None:
+            if any(not step.done() for step in steps):
+                self.budgets.append(round(max(0.0, deadline - time.monotonic()), 3))
+            await real(steps, deadline)
+
+        monkeypatch.setattr(_modbus_client, "_wait_until", spy)
+
+
 class _FakeLink:
     """A serialx-shaped link whose release is event-controlled."""
 
@@ -1466,29 +1486,149 @@ class TestLifecycleRegressions:
     ) -> None:
         """The backend's own redials spend the release bound once per held link."""
         monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.05)
-        waited: list[int] = []
-        real_wait_until = _modbus_client._wait_until
-
-        async def spy(steps: list[asyncio.Future[Any]], deadline: float) -> None:
-            waited.append(len([step for step in steps if not step.done()]))
-            await real_wait_until(steps, deadline)
-
         params = ModbusTcpParams(host="h") if kind == "tcp" else ModbusSerialParams(device="/dev/x")
         connection = owned_modbus_connection(params, timeout=1.0)
         await connection.connect()
         await connection.disconnect()  # e.g. _map_errors dropping a desynced link
-        monkeypatch.setattr(_modbus_client, "_wait_until", spy)
+        waits = _ReleaseWaits(monkeypatch)
         for _ in range(2):
             with pytest.raises(mc_exc.ModbusConnectionError, match="still being released"):
                 await connection.connect()
-        # First redial waited on the held link; the second only checked it.
-        assert waited == [1, 0]
+        # First redial waited the bound on the held link; the second only checked it.
+        assert waits.budgets[0] > 0
+        assert waits.budgets[1:] == [0.0]
         assert len(links.clients) == 1
         links.clients[0].link.release.set()
         await connection.connect()
         assert len(links.clients) == 2
         links.clients[1].link.release.set()
         await connection.close()
+
+    @pytest.mark.parametrize("second", ["re_await", "concurrent"])
+    @pytest.mark.parametrize("kind", ["tcp", "serial"])
+    async def test_interrupted_teardown_does_not_restart_the_bound(
+        self, kind: str, second: str, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cancelled, re-awaited or concurrent teardown shares the first one's bound.
+
+        Virtual clock: the first teardown starts at t=100 (deadline 105); a
+        second teardown starting at t=104.9 must keep deadline 105, not get a
+        fresh 109.9, and the held link's release is never cancelled.
+        """
+        deadlines: list[float] = []
+        waiting = asyncio.Event()
+
+        async def wait_until(steps: list[asyncio.Future[Any]], deadline: float) -> None:
+            # Record and park (as asyncio.wait would) without spending real time.
+            if any(not step.done() for step in steps):
+                deadlines.append(deadline)
+                waiting.set()
+                await asyncio.wait([s for s in steps if not s.done()])
+
+        monkeypatch.setattr(_modbus_client, "_wait_until", wait_until)
+        transport = _lifecycle_transport(kind)
+        await transport.connect()
+        # Freeze the clock only now: connect()'s settle sleep runs on the real one.
+        now = [100.0]
+        monkeypatch.setattr(_modbus_client.time, "monotonic", lambda: now[0])
+        first = asyncio.create_task(transport.disconnect())
+        await waiting.wait()
+        waiting.clear()
+        now[0] = 104.9
+        if second == "re_await":
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+        # TCP's disconnect() holds the operation lock, so a concurrent TCP
+        # teardown is async_shutdown(), which does not wait for it.
+        later = asyncio.create_task(
+            transport.async_shutdown()
+            if kind == "tcp" and second == "concurrent"
+            else transport.disconnect()
+        )
+        await waiting.wait()
+        held = transport._draining_units[0]
+        # Every wait, before and after t=104.9, keeps the first bound.
+        assert len(deadlines) >= 2
+        assert set(deadlines) == {105.0}
+        links.clients[0].link.release.set()
+        await asyncio.wait_for(later, 1.0)
+        if second == "concurrent":
+            await asyncio.wait_for(first, 1.0)
+        assert held.released
+        assert transport._draining_units == []
+
+    async def test_interrupted_redial_does_not_restart_the_bound(
+        self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A redial whose release wait is cancelled leaves the next one the same bound.
+
+        modbus-connection shields its connect flight from callers, so this
+        cancels the flight task itself, then shuts down: the held link keeps
+        the deadline its first waiter fixed (virtual clock, t=100 -> 105).
+        """
+        deadlines: list[float] = []  # of waits on the held link's release
+        waiting = asyncio.Event()
+
+        async def wait_until(steps: list[asyncio.Future[Any]], deadline: float) -> None:
+            if any(step in connection.pending_releases for step in steps):
+                deadlines.append(deadline)
+                waiting.set()
+            pending = [step for step in steps if not step.done()]
+            if pending:
+                await asyncio.wait(pending)
+
+        connection = owned_modbus_connection(ModbusTcpParams(host="h"), timeout=1.0)
+        await connection.connect()
+        await connection.disconnect()  # e.g. _map_errors dropping a desynced link
+        now = [100.0]
+        monkeypatch.setattr(_modbus_client.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(_modbus_client, "_wait_until", wait_until)
+        redial = asyncio.create_task(connection.connect())
+        await waiting.wait()
+        waiting.clear()
+        now[0] = 104.9
+        flight = connection._connect_task
+        assert flight is not None
+        flight.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await redial
+        unit = ModbusConnectionUnit(_FakeUnit(), connection=connection)
+        teardown = asyncio.create_task(unit.aclose())
+        await asyncio.wait_for(waiting.wait(), 1.0)
+        assert deadlines == [105.0, 105.0]
+        links.clients[0].link.release.set()
+        await asyncio.wait_for(teardown, 1.0)
+
+    async def test_cancelled_teardown_keeps_waiting_on_the_release(
+        self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cancelling teardown cancels the caller promptly, never the link's release."""
+        parked = asyncio.Event()
+        watched: list[asyncio.Future[Any]] = []
+        real_wait_until = _modbus_client._wait_until
+
+        async def wait_until(steps: list[asyncio.Future[Any]], deadline: float) -> None:
+            if any(step in watched for step in steps):
+                parked.set()
+            await real_wait_until(steps, deadline)
+
+        monkeypatch.setattr(_modbus_client, "_wait_until", wait_until)
+        transport = _lifecycle_transport("serial")
+        await transport.connect()
+        release = transport._client.pending_releases[0]
+        watched.append(release)
+        teardown = asyncio.create_task(transport.disconnect())
+        await asyncio.wait_for(parked.wait(), 1.0)
+        await asyncio.sleep(0)  # into asyncio.wait on the release
+        teardown.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(teardown, 1.0)
+        assert not release.cancelled()
+        links.clients[0].link.release.set()
+        await asyncio.wait_for(transport.disconnect(), 1.0)
+        assert release.done() and not release.cancelled()
+        assert transport._draining_units == []
 
     async def test_teardown_does_not_rewait_a_link_a_redial_waited_out(
         self, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
@@ -1505,18 +1645,13 @@ class TestLifecycleRegressions:
         await connection.disconnect()  # e.g. _map_errors dropping a desynced link
         with pytest.raises(mc_exc.ModbusConnectionError, match="still being released"):
             await connection.connect()
-        waited: list[int] = []
-        real_wait_until = _modbus_client._wait_until
-
-        async def spy(steps: list[asyncio.Future[Any]], deadline: float) -> None:
-            waited.append(len([step for step in steps if not step.done()]))
-            await real_wait_until(steps, deadline)
-
-        monkeypatch.setattr(_modbus_client, "_wait_until", spy)
+        waits = _ReleaseWaits(monkeypatch)
         held = transport._unit
         await transport.async_shutdown()
-        # The close task, then the link releases: none left to wait on.
-        assert waited == [1, 0]
+        # The close task gets the teardown bound; the held link, whose bound
+        # the redial already spent, is only checked.
+        assert waits.budgets[0] > 0
+        assert waits.budgets[1:] == [0.0]
         assert held is not None and not held.released
         links.clients[0].link.release.set()
         await asyncio.wait_for(_until(lambda: held.released), 1.0)
