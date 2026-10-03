@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0b10] - 2026-10-03
+
 ### Added
 
 - **Backend-neutral Modbus client seam** (`pylxpweb.transports._modbus_client`).
@@ -3101,6 +3103,7 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.10.0b10]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b9...v0.10.0b10
 [0.10.0b5]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b4...v0.10.0b5
 [0.10.0b4]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b3...v0.10.0b4
 [0.10.0b3]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b2...v0.10.0b3
