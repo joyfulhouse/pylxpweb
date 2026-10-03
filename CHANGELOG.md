@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier name it `slave=`), so the previous `>=3.6.0` floor admitted versions that
   fail at call time.
 
+### Fixed
+
+- `TransportConfig.from_dict()` now loads an explicit `"backend": null` as
+  `backend="auto"`, the same as a missing key, instead of raising (#343).
+
 ## [0.10.0b10] - 2026-10-03
 
 ### Added
