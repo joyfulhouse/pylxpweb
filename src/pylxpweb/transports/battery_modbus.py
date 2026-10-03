@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Self
+from typing import TYPE_CHECKING, Self, cast
 
 from pymodbus.client import AsyncModbusTcpClient
 
@@ -37,6 +37,9 @@ from pylxpweb.transports._modbus_client import (
     resolve_backend,
 )
 from pylxpweb.transports.data import BatteryData, InverterRuntimeData
+
+if TYPE_CHECKING:
+    from modbus_connection import ModbusConnection
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -150,7 +153,7 @@ class BatteryModbusTransport:
         self.inverter_serial = inverter_serial
         self.timeout = timeout
         self._backend = resolve_backend(backend)
-        self._client: Any | None = None
+        self._client: AsyncModbusTcpClient | ModbusConnection | None = None
         self._units: dict[int, RegisterClient] = {}
         # Only this adapter closes the shared link; per-unit adapters do I/O.
         self._link_owner: RegisterClient | None = None
@@ -212,14 +215,16 @@ class BatteryModbusTransport:
                 await self._disconnect_locked()
                 if not self._link_owner.released:
                     raise RegisterLinkError("Previous battery Modbus link is still being released")
-            self._client = owned_modbus_connection(
+            connection: ModbusConnection = owned_modbus_connection(
                 ModbusTcpParams(host=self.host, port=self.port), timeout=self.timeout
             )
+            self._client = connection
+            self._link_owner = ModbusConnectionUnit(connection.for_unit(1), connection=connection)
         else:
             self._client = AsyncModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
+            self._link_owner = PymodbusUnit(self._client, 1)
         self._units.clear()
-        self._link_owner = None
-        self._unit_for(1)
+        self._units[1] = self._link_owner
         await self._client.connect()
         self._connected = self._client.connected
         if self._connected:
@@ -250,19 +255,16 @@ class BatteryModbusTransport:
             self._client.close()
 
     def _unit_for(self, unit_id: int) -> RegisterClient:
-        """Cache unit adapters while retaining exactly one owner of the link."""
+        """Cache per-unit I/O adapters on the shared link."""
         assert self._client is not None
         if unit_id not in self._units:
             if self._backend == "modbus_connection":
                 unit: RegisterClient = ModbusConnectionUnit(
-                    self._client.for_unit(unit_id),
-                    connection=self._client if self._link_owner is None else None,
+                    cast("ModbusConnection", self._client).for_unit(unit_id)
                 )
             else:
                 unit = PymodbusUnit(self._client, unit_id)
             self._units[unit_id] = unit
-            if self._link_owner is None:
-                self._link_owner = unit
         return self._units[unit_id]
 
     async def _reconnect(self) -> None:

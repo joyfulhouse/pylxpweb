@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -158,46 +159,46 @@ def battery_links(monkeypatch: pytest.MonkeyPatch) -> _LinkFactory:
     return factory
 
 
-async def test_owned_release_blocks_replacement_until_released(battery_links: _LinkFactory) -> None:
-    """A bounded disconnect keeps the held owner; repeated connects cannot redial."""
+@pytest.fixture
+async def connected_battery(battery_links: _LinkFactory) -> AsyncIterator[BatteryModbusTransport]:
     transport = BatteryModbusTransport("127.0.0.1", backend="modbus_connection")
     try:
         await transport.connect()
-        assert len(battery_links.clients) == 1
-        await transport.disconnect()
-        assert not transport.is_connected
-        for _ in range(2):
-            with pytest.raises(RegisterLinkError, match="still being released"):
-                await transport.connect()
-        assert len(battery_links.clients) == 1
-        battery_links.clients[0].link.release.set()
-        await asyncio.sleep(0)
-        await transport.connect()
-        assert len(battery_links.clients) == 2
-        assert transport.is_connected
+        yield transport
     finally:
         for client in battery_links.clients:
             client.link.release.set()
         await transport.disconnect()
+
+
+async def test_owned_release_blocks_replacement_until_released(
+    battery_links: _LinkFactory, connected_battery: BatteryModbusTransport
+) -> None:
+    """A bounded disconnect keeps the held owner; repeated connects cannot redial."""
+    assert len(battery_links.clients) == 1
+    await connected_battery.disconnect()
+    assert not connected_battery.is_connected
+    for _ in range(2):
+        with pytest.raises(RegisterLinkError, match="still being released"):
+            await connected_battery.connect()
+    assert len(battery_links.clients) == 1
+    battery_links.clients[0].link.release.set()
+    await asyncio.sleep(0)
+    await connected_battery.connect()
+    assert len(battery_links.clients) == 2
+    assert connected_battery.is_connected
 
 
 async def test_owned_connection_automatic_redial_honors_release(
-    battery_links: _LinkFactory,
+    battery_links: _LinkFactory, connected_battery: BatteryModbusTransport
 ) -> None:
     """Backend desync recovery also passes through owned_modbus_connection's gate."""
-    transport = BatteryModbusTransport("127.0.0.1", backend="modbus_connection")
-    try:
-        await transport.connect()
-        first = battery_links.clients[0]
-        first.error = HeaderMismatchError("desync", response_bytes=b"")
-        assert await transport._read_registers(0, 1, 1) is None
-        assert await transport._read_registers(0, 1, 2) is None
-        assert len(battery_links.clients) == 1
-        first.link.release.set()
-        await asyncio.sleep(0)
-        assert await transport._read_registers(0, 1, 2) == [0]
-        assert len(battery_links.clients) == 2
-    finally:
-        for client in battery_links.clients:
-            client.link.release.set()
-        await transport.disconnect()
+    first = battery_links.clients[0]
+    first.error = HeaderMismatchError("desync", response_bytes=b"")
+    assert await connected_battery._read_registers(0, 1, 1) is None
+    assert await connected_battery._read_registers(0, 1, 2) is None
+    assert len(battery_links.clients) == 1
+    first.link.release.set()
+    await asyncio.sleep(0)
+    assert await connected_battery._read_registers(0, 1, 2) == [0]
+    assert len(battery_links.clients) == 2
