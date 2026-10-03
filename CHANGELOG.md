@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Release-workflow Docker build tests now skip (instead of failing) when the
+  Docker CLI is missing or its daemon is unreachable on a developer machine;
+  under CI (`CI` / `GITHUB_ACTIONS` set) an unusable Docker still fails them so
+  the release build gate cannot be skipped silently (#356).
+
 ## [0.10.0b10] - 2026-10-03
 
 ### Added
