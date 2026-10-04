@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A single dongle response timeout is logged at debug level while
+  `TransportTimeoutError` continues to report the failed request to its caller.
+
 ## [0.10.0b11] - 2026-10-04
 
 ### Changed

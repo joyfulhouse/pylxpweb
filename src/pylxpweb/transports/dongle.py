@@ -1501,7 +1501,7 @@ class DongleTransport(RegisterDataMixin, BaseTransport):
                         await asyncio.sleep(0.5)
                         continue
 
-                    _LOGGER.error("[%s] Timeout waiting for dongle response", self._serial)
+                    _LOGGER.debug("[%s] Timeout waiting for dongle response", self._serial)
                     raise TransportTimeoutError(
                         f"[{self._serial}] Timeout waiting for dongle response. "
                         "Recent dongle firmware may block port 8000 for security. "
