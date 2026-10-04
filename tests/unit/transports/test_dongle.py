@@ -2600,6 +2600,24 @@ class TestDongleSendReceiveTimeoutRetry:
         return transport
 
     @pytest.mark.asyncio
+    async def test_single_timeout_is_not_logged_as_warning_or_error(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        transport = self._connected_transport()
+        assert transport._reader is not None
+        transport._reader.read = AsyncMock(side_effect=TimeoutError())
+        caplog.set_level(logging.DEBUG, logger="pylxpweb.transports.dongle")
+
+        with pytest.raises(TransportTimeoutError):
+            await transport._send_receive(b"\x00" * 10)
+
+        assert not [
+            record
+            for record in caplog.records
+            if record.name == "pylxpweb.transports.dongle" and record.levelno >= logging.WARNING
+        ]
+
+    @pytest.mark.asyncio
     async def test_write_timeout_reconnects_and_retries(self) -> None:
         """A write request that times out tears down, reconnects, and retries."""
         transport = self._connected_transport()
