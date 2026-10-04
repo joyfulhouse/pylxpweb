@@ -233,6 +233,18 @@ class BatteryModbusTransport:
                 await self._disconnect_locked()
                 if isinstance(exc, asyncio.CancelledError):
                     raise
+                if isinstance(exc, ImportError):
+                    raise TransportConnectionError(
+                        "modbus-connection package not installed. "
+                        "Install with: uv add 'pylxpweb[modbus-connection]'"
+                    ) from exc
+                _LOGGER.error(
+                    "Failed to connect to battery RS485 bridge at %s:%d: %s",
+                    self.host,
+                    self.port,
+                    exc,
+                )
+                return
         else:
             self._client = AsyncModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
             self._link_owner = PymodbusUnit(self._client, 1)

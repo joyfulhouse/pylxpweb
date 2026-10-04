@@ -20,6 +20,7 @@ from pylxpweb.transports._modbus_client import (
 )
 from pylxpweb.transports.battery_modbus import BatteryModbusTransport
 from pylxpweb.transports.exceptions import TransportConnectionError
+from pylxpweb.transports.modbus import ModbusTransport
 
 from .test_link_down_fake_server import FakeModbusServer
 from .test_modbus_client_seam import _LinkFactory
@@ -278,7 +279,10 @@ async def test_failed_owned_connect_matches_pymodbus_contract(
             assert transport._link_owner is None
             assert transport._units == {}
             assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
-                (logging.ERROR, "Failed to connect to battery RS485 bridge at 127.0.0.1:502")
+                (
+                    logging.ERROR,
+                    f"Failed to connect to battery RS485 bridge at 127.0.0.1:502: {failure}",
+                )
             ]
             assert await transport._read_registers(0, 1, 1) is None
             connection.for_unit.return_value.read_holding_registers.assert_not_awaited()
@@ -315,8 +319,12 @@ async def test_refused_owned_dial_cannot_autodial_on_read(
             assert transport._link_owner is None
             assert transport._client is None
             assert transport._units == {}
+            assert len(caplog.messages) == 1
+            assert isinstance(caplog.records[0].args, tuple)
+            error = caplog.records[0].args[-1]
+            assert isinstance(error, mc_exc.ModbusConnectionError)
             assert caplog.messages == [
-                f"Failed to connect to battery RS485 bridge at 127.0.0.1:{port}"
+                f"Failed to connect to battery RS485 bridge at 127.0.0.1:{port}: {error}"
             ]
             await server.start(port)
             assert await transport._read_registers(0, 1, 2) is None
@@ -326,6 +334,24 @@ async def test_refused_owned_dial_cannot_autodial_on_read(
         finally:
             await transport.disconnect()
             await server.stop()
+
+
+async def test_missing_owned_backend_extra_matches_inverter_install_hint() -> None:
+    """Missing optional dependencies surface the inverter's configuration error hint."""
+    transport = BatteryModbusTransport("127.0.0.1", backend="modbus_connection")
+    inverter = ModbusTransport(host="127.0.0.1", serial="1234567890", backend="modbus_connection")
+    with patch.dict("sys.modules", {"modbus_connection": None}):
+        with pytest.raises(TransportConnectionError) as inverter_error:
+            await inverter.connect()
+        with pytest.raises(TransportConnectionError) as battery_error:
+            await transport.connect()
+    assert str(battery_error.value) == str(inverter_error.value)
+    assert "uv add 'pylxpweb[modbus-connection]'" in str(battery_error.value)
+    assert isinstance(battery_error.value.__cause__, ImportError)
+    assert not transport.is_connected
+    assert transport._client is None
+    assert transport._link_owner is None
+    assert transport._units == {}
 
 
 async def test_owned_connection_automatic_redial_honors_release(
