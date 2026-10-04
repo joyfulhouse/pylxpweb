@@ -32,11 +32,11 @@ from pylxpweb.transports._modbus_client import (
     PymodbusUnit,
     RegisterClient,
     RegisterExceptionResponse,
-    RegisterLinkError,
     owned_modbus_connection,
     resolve_backend,
 )
 from pylxpweb.transports.data import BatteryData, InverterRuntimeData
+from pylxpweb.transports.exceptions import TransportConnectionError
 
 if TYPE_CHECKING:
     from modbus_connection import ModbusConnection
@@ -157,6 +157,8 @@ class BatteryModbusTransport:
         self._units: dict[int, RegisterClient] = {}
         # Only this adapter closes the shared link; per-unit adapters do I/O.
         self._link_owner: RegisterClient | None = None
+        # Detached owned setup stays tracked until its shielded dial/close releases the link.
+        self._draining_owner: RegisterClient | None = None
         self._connected = False
         # Serializes every operation that uses the shared client across its
         # reconnect gate and reads. It is intentionally distinct from the
@@ -209,24 +211,35 @@ class BatteryModbusTransport:
     async def _connect_locked(self) -> None:
         """Establish a connection while the caller holds the operation lock."""
         if self._backend == "modbus_connection":
-            from modbus_connection import ModbusTcpParams
+            await self._disconnect_locked()
+            if self._draining_owner is not None:
+                raise TransportConnectionError(
+                    "Previous battery Modbus link is still being released"
+                )
+            try:
+                from modbus_connection import ModbusTcpParams
 
-            if self._link_owner is not None:
+                connection: ModbusConnection = owned_modbus_connection(
+                    ModbusTcpParams(host=self.host, port=self.port), timeout=self.timeout
+                )
+                self._client = connection
+                self._link_owner = ModbusConnectionUnit(
+                    connection.for_unit(1), connection=connection
+                )
+                self._units[1] = self._link_owner
+                await connection.connect()
+                self._connected = connection.connected
+            except (asyncio.CancelledError, Exception) as exc:
                 await self._disconnect_locked()
-                if not self._link_owner.released:
-                    raise RegisterLinkError("Previous battery Modbus link is still being released")
-            connection: ModbusConnection = owned_modbus_connection(
-                ModbusTcpParams(host=self.host, port=self.port), timeout=self.timeout
-            )
-            self._client = connection
-            self._link_owner = ModbusConnectionUnit(connection.for_unit(1), connection=connection)
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
         else:
             self._client = AsyncModbusTcpClient(self.host, port=self.port, timeout=self.timeout)
             self._link_owner = PymodbusUnit(self._client, 1)
-        self._units.clear()
-        self._units[1] = self._link_owner
-        await self._client.connect()
-        self._connected = self._client.connected
+            self._units.clear()
+            self._units[1] = self._link_owner
+            await self._client.connect()
+            self._connected = self._client.connected
         if self._connected:
             _LOGGER.info("Connected to battery RS485 bridge at %s:%d", self.host, self.port)
         else:
@@ -249,6 +262,18 @@ class BatteryModbusTransport:
     async def _disconnect_locked(self) -> None:
         """Close the connection while the caller holds the operation lock."""
         self._connected = False
+        if self._backend == "modbus_connection":
+            if self._link_owner is not None:
+                self._draining_owner = self._link_owner
+                self._draining_owner.close()
+            self._client = None
+            self._link_owner = None
+            self._units.clear()
+            if self._draining_owner is not None:
+                await self._draining_owner.aclose()
+                if self._draining_owner.released:
+                    self._draining_owner = None
+            return
         if self._link_owner is not None:
             await self._link_owner.aclose()
         elif self._client:

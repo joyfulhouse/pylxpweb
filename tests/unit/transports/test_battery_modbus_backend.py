@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,13 +13,13 @@ from modbus_connection import exceptions as mc_exc
 from modbus_connection.tmodbus import ModbusConnection
 from tmodbus.exceptions import HeaderMismatchError
 
-from pylxpweb.transports import _modbus_client
+from pylxpweb.transports import _modbus_client, battery_modbus
 from pylxpweb.transports._modbus_client import (
     ModbusConnectionUnit,
     PymodbusUnit,
-    RegisterLinkError,
 )
 from pylxpweb.transports.battery_modbus import BatteryModbusTransport
+from pylxpweb.transports.exceptions import TransportConnectionError
 
 from .test_link_down_fake_server import FakeModbusServer
 from .test_modbus_client_seam import _LinkFactory
@@ -41,11 +42,10 @@ async def test_pymodbus_construction_and_single_owner(backend: str | None) -> No
         patch(
             "pylxpweb.transports.battery_modbus.AsyncModbusTcpClient", return_value=client
         ) as dial,
-        patch.object(_modbus_client, "patch_pymodbus_tid_validation") as tid_patch,
     ):
         await transport.connect()
         dial.assert_called_once_with("127.0.0.1", port=1502, timeout=2.0)
-        tid_patch.assert_not_called()
+        assert not hasattr(battery_modbus, "patch_pymodbus_tid_validation")
         assert transport.is_connected
         for uid in (1, 2, 2):
             assert await transport._read_registers(4, 2, uid) == [7, 8]
@@ -179,7 +179,7 @@ async def test_owned_release_blocks_replacement_until_released(
     await connected_battery.disconnect()
     assert not connected_battery.is_connected
     for _ in range(2):
-        with pytest.raises(RegisterLinkError, match="still being released"):
+        with pytest.raises(TransportConnectionError, match="still being released"):
             await connected_battery.connect()
     assert len(battery_links.clients) == 1
     battery_links.clients[0].link.release.set()
@@ -187,6 +187,145 @@ async def test_owned_release_blocks_replacement_until_released(
     await connected_battery.connect()
     assert len(battery_links.clients) == 2
     assert connected_battery.is_connected
+
+
+async def test_cancelled_owned_connect_closes_late_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Context entry cancellation closes a shielded dial even after the wait expires."""
+    server = FakeModbusServer()
+    await server.start()
+    connection = _modbus_client.owned_modbus_connection(
+        ModbusTcpParams(host="127.0.0.1", port=server.port), timeout=1.0
+    )
+    transport = BatteryModbusTransport("127.0.0.1", backend="modbus_connection")
+    dial_started = asyncio.Event()
+    finish_dial = asyncio.Event()
+    dial_finished = asyncio.Event()
+    close_finished = asyncio.Event()
+    real_dial = connection._connect_client
+    real_close = connection.close
+
+    async def delayed_dial() -> object:
+        dial_started.set()
+        await finish_dial.wait()
+        client = await real_dial()
+        dial_finished.set()
+        return client
+
+    async def close() -> None:
+        await real_close()
+        close_finished.set()
+
+    monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", 0.0)
+    with (
+        patch.object(battery_modbus, "owned_modbus_connection", return_value=connection) as dial,
+        patch.object(connection, "_connect_client", side_effect=delayed_dial),
+        patch.object(connection, "_close_client", wraps=connection._close_client) as close_client,
+        patch.object(connection, "close", side_effect=close) as close_connection,
+    ):
+        entering = asyncio.create_task(transport.__aenter__())
+        try:
+            await asyncio.wait_for(dial_started.wait(), 1.0)
+            entering.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(entering, 1.0)
+            assert not transport.is_connected
+            assert transport._client is None
+            assert transport._link_owner is None
+            assert transport._units == {}
+            with pytest.raises(TransportConnectionError, match="still being released"):
+                await transport.connect()
+            dial.assert_called_once()
+            finish_dial.set()
+            await asyncio.wait_for(close_finished.wait(), 1.0)
+            close_connection.assert_awaited_once()
+            close_client.assert_awaited_once()
+            assert not connection.connected
+            assert not transport.is_connected
+            await transport.disconnect()
+            close_connection.assert_awaited_once()
+        finally:
+            finish_dial.set()
+            await asyncio.wait_for(dial_finished.wait(), 1.0)
+            await transport.disconnect()
+            await asyncio.wait_for(close_finished.wait(), 1.0)
+            await server.stop()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [mc_exc.ModbusConnectionError("refused"), OSError("refused"), RuntimeError("dial failed")],
+    ids=["backend-error", "os-error", "unexpected-error"],
+)
+async def test_failed_owned_connect_matches_pymodbus_contract(
+    failure: Exception, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Failed owned setup logs and returns; later reads cannot auto-dial the failed link."""
+    connection = MagicMock(connected=False)
+    connection.connect = AsyncMock(side_effect=failure)
+    connection.close = AsyncMock()
+    connection.for_unit.return_value.read_holding_registers = AsyncMock(return_value=[0])
+    transport = BatteryModbusTransport("127.0.0.1", backend="modbus_connection")
+    with (
+        patch.object(battery_modbus, "owned_modbus_connection", return_value=connection) as dial,
+        caplog.at_level(logging.ERROR),
+    ):
+        try:
+            await transport.connect()
+            assert not transport.is_connected
+            assert transport._client is None
+            assert transport._link_owner is None
+            assert transport._units == {}
+            assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+                (logging.ERROR, "Failed to connect to battery RS485 bridge at 127.0.0.1:502")
+            ]
+            assert await transport._read_registers(0, 1, 1) is None
+            connection.for_unit.return_value.read_holding_registers.assert_not_awaited()
+            connection.connect.assert_awaited_once()
+            dial.assert_called_once()
+            connection.close.assert_awaited_once()
+        finally:
+            await transport.disconnect()
+
+
+async def test_refused_owned_dial_cannot_autodial_on_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A real refused connection stays detached even when the server comes back."""
+    server = FakeModbusServer()
+    await server.start()
+    port = server.port
+    await server.stop()
+    connection = _modbus_client.owned_modbus_connection(
+        ModbusTcpParams(host="127.0.0.1", port=port), timeout=1.0
+    )
+    transport = BatteryModbusTransport(
+        "127.0.0.1", port=port, timeout=1.0, backend="modbus_connection"
+    )
+    with (
+        patch.object(battery_modbus, "owned_modbus_connection", return_value=connection),
+        patch.object(connection, "connect", wraps=connection.connect) as connect,
+        patch.object(connection, "close", wraps=connection.close) as close,
+        caplog.at_level(logging.ERROR),
+    ):
+        try:
+            await transport.connect()
+            assert not transport.is_connected
+            assert transport._link_owner is None
+            assert transport._client is None
+            assert transport._units == {}
+            assert caplog.messages == [
+                f"Failed to connect to battery RS485 bridge at 127.0.0.1:{port}"
+            ]
+            await server.start(port)
+            assert await transport._read_registers(0, 1, 2) is None
+            assert server.request_count == 0
+            connect.assert_awaited_once()
+            close.assert_awaited_once()
+        finally:
+            await transport.disconnect()
+            await server.stop()
 
 
 async def test_owned_connection_automatic_redial_honors_release(
