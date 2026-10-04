@@ -23,6 +23,8 @@ from typing import IO, Any
 import pytest
 import yaml
 
+from tests.conftest import is_ci_environment
+
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW_PATH = _ROOT / ".github" / "workflows" / "release.yml"
 _WORKFLOWS_PATH = _WORKFLOW_PATH.parent
@@ -44,6 +46,36 @@ _PYTHON_HEREDOC = re.compile(
     r"python3 -(?P<args>[^\n]*(?:\\\n[^\n]*)*) <<'PY'\n(?P<body>.*?)\nPY(?=\n|$)",
     re.DOTALL,
 )
+
+
+_DOCKER_INFO_TIMEOUT_SECONDS = 30.0
+
+
+def _require_docker() -> None:
+    """Skip locally, or fail in CI, unless the Docker CLI reaches a live daemon."""
+    if shutil.which("docker") is None:
+        reason = "Docker CLI is unavailable"
+    else:
+        try:
+            result = subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+                text=True,
+                timeout=_DOCKER_INFO_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            reason = "Docker daemon is unreachable (`docker info` timed out)"
+        else:
+            if result.returncode == 0:
+                return
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            reason = f"Docker daemon is unreachable (`docker info` exited {result.returncode})"
+            if detail:
+                reason = f"{reason}: {detail[-1]}"
+    if is_ci_environment():
+        pytest.fail(f"{reason}; Docker is required in CI for the release build gate")
+    pytest.skip(reason)
 
 
 @pytest.fixture
@@ -2361,11 +2393,35 @@ def test_package_index_workflow_audit_detects_known_publish_commands(
     assert _package_index_publisher_workflows(tmp_path) == {"competing.yml"}
 
 
+@pytest.mark.parametrize(
+    "ci_env", [{}, {"CI": "true"}, {"CI": "false"}, {"GITHUB_ACTIONS": "true"}]
+)
+@pytest.mark.parametrize("daemon_down", [False, True])
+def test_require_docker_skips_locally_and_fails_in_ci(
+    monkeypatch: pytest.MonkeyPatch, ci_env: dict[str, str], daemon_down: bool
+) -> None:
+    """An unusable Docker skips locally but fails wherever conftest detects CI."""
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for name, value in ci_env.items():
+        monkeypatch.setenv(name, value)
+    if daemon_down:
+        monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *_, **__: subprocess.CompletedProcess(["docker", "info"], 1, "", "no daemon"),
+        )
+    else:
+        monkeypatch.setattr(shutil, "which", lambda _: None)
+    with pytest.raises((pytest.fail.Exception, pytest.skip.Exception)) as outcome:
+        _require_docker()
+    assert outcome.type is (pytest.fail.Exception if ci_env else pytest.skip.Exception)
+
+
 def test_build_produces_exactly_two_bit_reproducible_distributions(tmp_path: Path) -> None:
     """A second build or nondeterministic input changes the clean-build digest set."""
-    if shutil.which("docker") is None:
-        pytest.skip("Docker CLI is unavailable")
-    subprocess.run(["docker", "info"], capture_output=True, check=True)
+    _require_docker()
     script = _step("bind-build-attest", "build-distributions")["run"]
     commit_epoch = _git(_ROOT, "show", "-s", "--format=%ct", "HEAD")
     build_command = "  uv build --offline"
@@ -2413,9 +2469,7 @@ def test_build_container_rejects_wrong_backend_or_tool_version(
     tmp_path: Path, mutation: str
 ) -> None:
     """Removing a version assertion lets a different builder produce release bytes."""
-    if shutil.which("docker") is None:
-        pytest.skip("Docker CLI is unavailable")
-    subprocess.run(["docker", "info"], capture_output=True, check=True)
+    _require_docker()
     image = _workflow()["env"]["BUILD_IMAGE"]
     source = tmp_path / "source"
     shutil.copytree(_ROOT, source, ignore=shutil.ignore_patterns(".git", ".venv"))
@@ -2450,9 +2504,7 @@ def test_build_container_denies_network_when_workflow_network_flag_is_mutated(
     tmp_path: Path,
 ) -> None:
     """Removing --network none is detected by the build's live network probe."""
-    if shutil.which("docker") is None:
-        pytest.skip("Docker CLI is unavailable")
-    subprocess.run(["docker", "info"], capture_output=True, check=True)
+    _require_docker()
     image = _workflow()["env"]["BUILD_IMAGE"]
     source = tmp_path / "source"
     shutil.copytree(_ROOT, source, ignore=shutil.ignore_patterns(".git", ".venv"))
