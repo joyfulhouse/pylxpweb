@@ -283,7 +283,9 @@ class TransportConfig:
         instance.retry_delay = data.get("retry_delay", 0.5)
         instance.inter_register_delay = data.get("inter_register_delay", 0.05)
         instance.max_input_block_size = data.get("max_input_block_size", 40)
-        instance.backend = data.get("backend", "auto")
+        # An explicit ``"backend": null`` means "not set", same as a missing key.
+        backend = data.get("backend")
+        instance.backend = "auto" if backend is None else backend
 
         # Validate the restored config
         instance.validate()

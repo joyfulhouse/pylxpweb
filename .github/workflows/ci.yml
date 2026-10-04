@@ -95,8 +95,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 1.10.0: HA 2026.9.1-2026.9.4. 1.8.2: HA 2026.8.x, the extra's floor.
-        serialx: ["1.10.0", "1.8.2"]
+        # 1.10.0: HA 2026.9.1-2026.9.4. 1.9.0: HA 2026.9.0.
+        # 1.8.2: HA 2026.8.x, the extra's floor.
+        serialx: ["1.10.0", "1.9.0", "1.8.2"]
     env:
       HA_PYMODBUS_VERSION: "3.13.1"
       HA_MODBUS_CONNECTION_VERSION: "4.10.0"
