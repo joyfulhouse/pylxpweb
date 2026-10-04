@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0b11] - 2026-10-04
+
 ### Changed
 
 - **Battery Modbus owned-link backend port** (#348): `BatteryModbusTransport`
@@ -3131,6 +3133,7 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
+[0.10.0b11]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b10...v0.10.0b11
 [0.10.0b10]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b9...v0.10.0b10
 [0.10.0b9]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b8...v0.10.0b9
 [0.10.0b8]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b7...v0.10.0b8
