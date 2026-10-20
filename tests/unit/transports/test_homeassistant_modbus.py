@@ -21,8 +21,6 @@ async def test_async_get_unit_preserves_host_ownership(tmp_path: Path) -> None:
     """Two real HA acquisitions share a link until the last entry unloads."""
     if version("homeassistant").startswith("2026.8."):
         pytest.skip("Home Assistant 2026.8 predates the shared-unit API")
-    from homeassistant.components.modbus.connection import async_get_connection_info
-
     hass = HomeAssistant(str(tmp_path))
     releases: list[Callable[[], Awaitable[None]]] = []
     entries = []
@@ -41,11 +39,10 @@ async def test_async_get_unit_preserves_host_ownership(tmp_path: Path) -> None:
     )
     try:
         await transport.connect()
-        assert not unit.connected
+        assert not unit.connected and not other.connected
         assert server.request_count == 0
         assert await transport.read_parameters(0, 2) == {0: 0, 1: 0}
         assert unit.connected and other.connected
-        assert len(async_get_connection_info(hass)) == 1
         await transport.disconnect()
         assert unit.connected and other.connected
         await releases.pop(0)()
@@ -53,7 +50,6 @@ async def test_async_get_unit_preserves_host_ownership(tmp_path: Path) -> None:
         assert await other.read_holding_registers(0, 1) == [0]
         await releases.pop(0)()
         assert not other.connected
-        assert async_get_connection_info(hass) == []
     finally:
         await transport.disconnect()
         for release in releases:

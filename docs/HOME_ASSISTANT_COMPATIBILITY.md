@@ -20,8 +20,10 @@ checks the installed dependency graph, and runs the transport tests on Python
 | 2026.9.0 | 1.9.0 | 3.13.1 | 4.10.0 | 0.6.2 | 46.2.0 |
 | 2026.9.4 | 1.10.0 | 3.13.1 | 4.10.0 | 0.6.2 | 46.2.0 |
 | 2026.10.0 | 1.11.0 | 3.13.1 | 4.12.3 | 0.6.2 | 46.6.0 |
+| 2026.10.2 | 1.11.0 | 3.13.1 | 4.12.4 | 0.6.2 | 46.6.0 |
 
-Verified against released sources on 2026-10-20. serialx 1.8.2 declares an
+Verified against released sources on 2026-10-20; 2026.10.2 (published October
+16) is the current stable HA release. serialx 1.8.2 declares an
 ESPHome minimum of aioesphomeapi 44.17.0; 1.9.0 and 1.10.0 require 46.0.0;
 1.11.0 requires 46.5.0. These are version-specific upstream requirements,
 not one universal aioesphomeapi floor. HA's corresponding pins satisfy them.
