@@ -1,6 +1,7 @@
 """Exercise units returned by the installed Home Assistant Modbus integration."""
 
 from collections.abc import Awaitable, Callable
+from importlib.metadata import version
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -18,7 +19,7 @@ from homeassistant.core import HomeAssistant  # noqa: E402
 
 async def test_async_get_unit_preserves_host_ownership(tmp_path: Path) -> None:
     """Two real HA acquisitions share a link until the last entry unloads."""
-    if not hasattr(modbus, "async_get_unit"):
+    if version("homeassistant").startswith("2026.8."):
         pytest.skip("Home Assistant 2026.8 predates the shared-unit API")
     from homeassistant.components.modbus.connection import async_get_connection_info
 
