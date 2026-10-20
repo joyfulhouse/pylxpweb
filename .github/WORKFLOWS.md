@@ -156,7 +156,7 @@ action inputs, so these facts must be re-verified whenever either pin moves
 (`tests/unit/test_release_workflow.py::test_artifact_action_pins_match_recorded_contract_verification`
 fails until this note and the test's recorded map match the new pin):
 
-- `actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` (v8.0.0),
+- `actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333` (v8.0.2),
   `action.yml` SHA-256
   `e98559b7a31ba31be4709f20d22102dc2737fa630f69a339eb89981151e505fe`:
   - Declares the `digest-mismatch` input (options `ignore`/`info`/`warn`/`error`,
@@ -178,8 +178,11 @@ fails until this note and the test's recorded map match the new pin):
     verified against the action source during review (2026-08) and re-verified
     2026-08-18.
 
-Verified 2026-08-18 by fetching `action.yml` and the named source files at the
-exact pinned commits from `github.com` and hashing them with `sha256sum`.
+Upload evidence verified 2026-08-18. Download evidence re-verified 2026-10-20
+by fetching `action.yml` and `src/download-artifact.ts` at the exact v8.0.2
+commit from `github.com` and hashing them with `sha256sum`. Both download
+files retain the recorded hashes and contracts; the v8.0.2 tag resolves to
+`9000827ccba6bdab643e8b6fd33ac0654aef8333`.
 
 GitHub build/source attestations establish the GitHub workflow and source identity
 for the local subjects. They are distinct from the PEP 740 attestations that the
