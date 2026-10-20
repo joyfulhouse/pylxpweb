@@ -12,9 +12,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import socket
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -60,6 +62,14 @@ async def server() -> AsyncIterator[FakeModbusServer]:
         yield server
     finally:
         await server.stop()
+
+
+@pytest.fixture
+def refused_port() -> Iterator[int]:
+    """Reserve a non-listening loopback port until the refusal assertion finishes."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        yield reserved.getsockname()[1]
 
 
 def _mc_transport(port: int, **kwargs: Any) -> ModbusTransport:
@@ -506,14 +516,14 @@ class TestDefaultPathLogParity:
         ]
 
     @pytest.mark.parametrize("kind", ["tcp", "serial"])
+    @pytest.mark.parametrize("backend", ["pymodbus", "modbus_connection"])
     async def test_link_probe_empty_timeout(
-        self, kind: str, caplog: pytest.LogCaptureFixture
+        self, kind: str, backend: str, caplog: pytest.LogCaptureFixture
     ) -> None:
-        transport: ModbusTransport | ModbusSerialTransport = (
-            ModbusTransport(host="h", serial="CE1")
-            if kind == "tcp"
-            else ModbusSerialTransport(port="/dev/ttyUSB0", serial="CE1")
-        )
+        kwargs: dict[str, Any] = {"backend": backend}
+        if backend == "modbus_connection":
+            kwargs["unit"] = _FakeUnit(TimeoutError())
+        transport = _shared_transport(kind, **kwargs)
         await transport.connect()
         with caplog.at_level(logging.DEBUG, logger="pylxpweb"):
             assert await transport.check_link() is False
@@ -812,10 +822,8 @@ class TestModbusConnectionBackendTcp:
             assert transport._client is None
             assert connection is not None and connection.connected is False
 
-    async def test_connect_refused_is_typed_with_cooldown(self, server: FakeModbusServer) -> None:
-        await server.stop()
-
-        transport = _mc_transport(server.port)
+    async def test_connect_refused_is_typed_with_cooldown(self, refused_port: int) -> None:
+        transport = _mc_transport(refused_port)
         with pytest.raises(TransportConnectionError, match="Failed to connect"):
             await transport.connect()
         assert transport.is_connected is False
@@ -940,11 +948,9 @@ class TestModbusConnectionBackendSerial:
         esphome = importlib.import_module("serialx.platforms.serial_esphome")
         assert esphome is not None
 
-    async def test_socket_url_connect_refused_is_typed(self, server: FakeModbusServer) -> None:
-        await server.stop()
-
+    async def test_socket_url_connect_refused_is_typed(self, refused_port: int) -> None:
         transport = ModbusSerialTransport(
-            port=f"socket://127.0.0.1:{server.port}",
+            port=f"socket://127.0.0.1:{refused_port}",
             serial="CE1",
             timeout=1.0,
             backend="modbus_connection",
@@ -1456,25 +1462,37 @@ class TestLifecycleRegressions:
         self, kind: str, links: _LinkFactory, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """After one expired wait, a link that stays held fails redials fast."""
-        bound = 0.2
+        bound = 10.0
+        now = 100.0
+        budgets: list[float] = []
         monkeypatch.setattr(_modbus_client, "LINK_RELEASE_TIMEOUT_SECONDS", bound)
+        monkeypatch.setattr(_modbus_client, "time", SimpleNamespace(monotonic=lambda: now))
         transport = _lifecycle_transport(kind)
         await transport.connect()
-        start = time.monotonic()
+        releases = transport._client.pending_releases
+
+        async def expire_release_wait(steps: list[asyncio.Future[Any]], deadline: float) -> None:
+            nonlocal now
+            pending = [step for step in steps if not step.done()]
+            if any(step in releases for step in pending):
+                budgets.append(max(0.0, deadline - now))
+                now = max(now, deadline)
+            elif pending:
+                await asyncio.gather(*pending)
+
+        monkeypatch.setattr(_modbus_client, "_wait_until", expire_release_wait)
         await transport.disconnect()
-        # Generous margin: asyncio timers may fire up to a clock tick early.
-        assert time.monotonic() - start >= bound / 2
-        # Every later disconnect/connect only checks; none waits the bound again.
+        assert budgets == [bound]
+        # Every later disconnect/connect only checks; none gets a fresh budget.
         for _ in range(3):
-            start = time.monotonic()
             await transport.disconnect()
             with pytest.raises(TransportConnectionError, match="still being released"):
                 await transport.connect()
-            assert time.monotonic() - start < bound / 2
+        assert budgets == [bound] + [0.0] * 6
         assert len(links.clients) == 1
         # Once released, the next connect dials.
         links.clients[0].link.release.set()
-        await asyncio.wait_for(_until(lambda: transport._draining_units[0].released), 1.0)
+        await asyncio.gather(*releases)
         await transport.connect()
         assert len(links.clients) == 2
         links.clients[1].link.release.set()
@@ -1820,6 +1838,7 @@ class TestLifecycleRegressions:
             assert fd is not None
             # The release gate found the real tmodbus/serialx link at creation.
             assert len(connection.pending_releases) == 1
+            assert connection.pending_releases[0] is link._closed_waiter
             await transport.disconnect()
             assert connection.pending_releases == []
             with pytest.raises(OSError):
@@ -1855,7 +1874,7 @@ class TestLifecycleRegressions:
             await transport.connect()
 
     async def test_serial_cancelled_dial_does_not_orphan_connection(
-        self, server: FakeModbusServer
+        self, server: FakeModbusServer, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Cancel a dial, dial again, disconnect: every connection ends closed."""
         transport = ModbusSerialTransport(
@@ -1865,12 +1884,19 @@ class TestLifecycleRegressions:
             backend="modbus_connection",
         )
         connections: list[ModbusConnection] = []
+        dial_started = asyncio.Event()
+        finish_dial = asyncio.Event()
+        real_connect_client = ModbusConnection._connect_client
+
+        async def gated_dial(connection: ModbusConnection) -> Any:
+            dial_started.set()
+            await finish_dial.wait()
+            return await real_connect_client(connection)
+
+        monkeypatch.setattr(ModbusConnection, "_connect_client", gated_dial)
+        task = asyncio.create_task(transport.connect())
         try:
-            task = asyncio.create_task(transport.connect())
-            for _ in range(50):
-                await asyncio.sleep(0)
-                if transport._client is not None:
-                    break
+            await asyncio.wait_for(dial_started.wait(), 5.0)
             assert isinstance(transport._client, ModbusConnection)
             connections.append(transport._client)
             task.cancel()
@@ -1878,6 +1904,7 @@ class TestLifecycleRegressions:
                 await task
             assert transport.is_connected is False
 
+            finish_dial.set()
             await transport.connect()
             assert isinstance(transport._client, ModbusConnection)
             connections.append(transport._client)
@@ -1891,6 +1918,11 @@ class TestLifecycleRegressions:
                 assert connection.pending_releases == []
             assert transport._draining_units == []
         finally:
+            finish_dial.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await transport.disconnect()
             for connection in connections:
                 await connection.close()
 

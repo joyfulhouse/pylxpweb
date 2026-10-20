@@ -508,7 +508,7 @@ class ModbusConnectionUnit:
             # class does not depend on the backend.
             raise RegisterLinkError(str(err)) from err
         except TimeoutError as err:
-            raise RegisterTimeoutError(str(err) or "timeout") from err
+            raise RegisterTimeoutError(str(err)) from err
         except OSError as err:
             raise RegisterLinkError(str(err)) from err
 
