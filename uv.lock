@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.15' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
@@ -1383,9 +1383,14 @@ dev = [
     { name = "xlrd" },
     { name = "xlwt" },
 ]
-modbus-connection = [
+esphome = [
     { name = "modbus-connection", extra = ["tmodbus"] },
     { name = "serialx", extra = ["esphome"] },
+    { name = "tmodbus" },
+]
+modbus-connection = [
+    { name = "modbus-connection", extra = ["tmodbus"] },
+    { name = "serialx" },
     { name = "tmodbus" },
 ]
 parse = [
@@ -1418,20 +1423,22 @@ requires-dist = [
     { name = "modbus-connection", extras = ["tmodbus"], marker = "extra == 'modbus-connection'", specifier = ">=4.10.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.18.2" },
     { name = "pydantic", specifier = ">=2.12.0" },
+    { name = "pylxpweb", extras = ["modbus-connection"], marker = "extra == 'esphome'" },
     { name = "pymodbus", specifier = ">=3.10.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.1" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.3.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.5" },
+    { name = "serialx", marker = "extra == 'modbus-connection'", specifier = ">=1.8.2" },
     { name = "serialx", extras = ["esphome"], marker = "extra == 'dev'", specifier = ">=1.8.2" },
-    { name = "serialx", extras = ["esphome"], marker = "extra == 'modbus-connection'", specifier = ">=1.8.2" },
+    { name = "serialx", extras = ["esphome"], marker = "extra == 'esphome'", specifier = ">=1.8.2" },
     { name = "tmodbus", marker = "extra == 'modbus-connection'", specifier = ">=0.6.2" },
     { name = "types-xlrd", marker = "extra == 'dev'", specifier = ">=2.0.0" },
     { name = "xlrd", marker = "extra == 'dev'", specifier = ">=2.0.1" },
     { name = "xlrd", marker = "extra == 'parse'", specifier = ">=2.0.1" },
     { name = "xlwt", marker = "extra == 'dev'", specifier = ">=1.3.0" },
 ]
-provides-extras = ["parse", "modbus-connection", "dev"]
+provides-extras = ["parse", "modbus-connection", "esphome", "dev"]
 
 [package.metadata.requires-dev]
 build = [{ name = "pyinstaller", specifier = ">=6.17.0" }]

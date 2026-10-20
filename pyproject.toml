@@ -33,11 +33,14 @@ parse = [
 ]
 # Opt-in second Modbus backend: Home Assistant's shared-connection library
 # (tmodbus + serialx). Enables ``backend="modbus_connection"`` on the Modbus
-# transports and serialx URL ports such as ``esphome://`` (#180).
+# transports over TCP and serial links. ESPHome URLs need the esphome extra.
 modbus-connection = [
     "modbus-connection[tmodbus]>=4.10.0",
     "tmodbus>=0.6.2",
-    # serialx's esphome:// URL scheme needs aioesphomeapi (serialx "esphome" extra).
+    "serialx>=1.8.2",
+]
+esphome = [
+    "pylxpweb[modbus-connection]",
     "serialx[esphome]>=1.8.2",
 ]
 dev = [
