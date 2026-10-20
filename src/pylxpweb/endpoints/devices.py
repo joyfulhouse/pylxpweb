@@ -22,9 +22,11 @@ from pylxpweb.models import (
     InverterInfo,
     InverterOverviewResponse,
     InverterRuntime,
+    MidboxData,
     MidboxRuntime,
     ParallelGroupDetailsResponse,
 )
+from pylxpweb.provenance import _http_field_provenance
 
 if TYPE_CHECKING:
     from pylxpweb.client import LuxpowerClient
@@ -245,7 +247,10 @@ class DeviceEndpoints(BaseEndpoint):
             cache_key=cache_key,
             cache_endpoint="inverter_energy",
         )
-        return EnergyInfo.model_validate(response)
+        fields = EnergyInfo.model_fields.keys() - {"success", "serialNum", "soc", "provenance"}
+        return EnergyInfo.model_validate(
+            {**response, "provenance": _http_field_provenance(response, fields)}
+        )
 
     async def get_parallel_energy(self, serial_num: str) -> EnergyInfo:
         """Get aggregate energy statistics for entire parallel group.
@@ -272,7 +277,10 @@ class DeviceEndpoints(BaseEndpoint):
             cache_key=cache_key,
             cache_endpoint="inverter_energy",
         )
-        return EnergyInfo.model_validate(response)
+        fields = EnergyInfo.model_fields.keys() - {"success", "serialNum", "soc", "provenance"}
+        return EnergyInfo.model_validate(
+            {**response, "provenance": _http_field_provenance(response, fields)}
+        )
 
     async def get_battery_info(self, serial_num: str) -> BatteryInfo:
         """Get battery information including individual modules.
@@ -368,7 +376,15 @@ class DeviceEndpoints(BaseEndpoint):
             cache_key=cache_key,
             cache_endpoint="midbox_runtime",
         )
-        return MidboxRuntime.model_validate(response)
+        payload = dict(response)
+        midbox_data = payload.get("midboxData")
+        if isinstance(midbox_data, dict):
+            fields = (name for name in MidboxData.model_fields if name.startswith("e"))
+            payload["midboxData"] = {
+                **midbox_data,
+                "provenance": _http_field_provenance(response, fields, values=midbox_data),
+            }
+        return MidboxRuntime.model_validate(payload)
 
     async def get_dongle_status(self, datalog_serial: str) -> DongleStatus:
         """Get dongle (datalog) connection status.

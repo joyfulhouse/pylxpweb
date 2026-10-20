@@ -22,6 +22,7 @@ Safety contract under test:
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -966,9 +967,12 @@ class TestBoundarySentinels:
         results = {}
         for block_size in (40, 120):
             transport = _transport(max_input_block_size=block_size)
-            with patch.object(
-                transport, "_read_input_registers", side_effect=_make_sentinel_read()
+            with (
+                patch.object(transport, "_read_input_registers", side_effect=_make_sentinel_read()),
+                patch.object(_register_data, "datetime", wraps=datetime) as acquisition_clock,
             ):
+                # Compare provenance too, independently of when each read runs.
+                acquisition_clock.now.return_value = datetime(2026, 10, 20, tzinfo=UTC)
                 runtime, energy, battery = await transport.read_all_input_data()
             rt = dataclasses.asdict(runtime)
             en = dataclasses.asdict(energy)

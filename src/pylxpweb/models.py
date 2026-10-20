@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_serializer
 
+from .provenance import EnergyProvenance
+
 
 class OperatingMode(StrEnum):
     """Inverter operating modes.
@@ -613,6 +615,7 @@ class EnergyInfo(BaseModel):
     Note: serialNum and soc are not present in parallel group energy responses.
     """
 
+    provenance: dict[str, EnergyProvenance] = Field(default_factory=dict)
     success: bool
     serialNum: str | None = None
     soc: int | None = None
@@ -832,6 +835,7 @@ class MidboxData(BaseModel):
     Energy values are in deciwatt-hours (÷10 for kWh).
     """
 
+    provenance: dict[str, EnergyProvenance] = Field(default_factory=dict)
     # All numeric fields are int | None — None means register read failed / unavailable
     status: int | None
     serverTime: str
