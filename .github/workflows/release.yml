@@ -434,7 +434,7 @@ jobs:
     steps:
       - id: download-release-artifact
         name: Download the sealed release artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.bind-build-attest.outputs.artifact-name }}
           path: release-bundle/
@@ -555,7 +555,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.prepare-testpypi.outputs.staging-artifact }}
           path: upload/
@@ -574,7 +574,7 @@ jobs:
       contents: read
     steps:
       - id: download-release-artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.bind-build-attest.outputs.artifact-name }}
           path: release-bundle/
@@ -762,7 +762,7 @@ jobs:
       - id: download-release-artifact
         if: steps.resolve-release-artifact.outcome == 'success'
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.resolve-release-artifact.outputs.artifact-id }}
           digest-mismatch: error
@@ -1072,7 +1072,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.prepare-pypi.outputs.staging-artifact }}
           path: upload/
@@ -1095,7 +1095,7 @@ jobs:
         env: *artifact-identity
         run: *resolve-release-artifact
       - id: download-release-artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.resolve-release-artifact.outputs.artifact-id }}
           digest-mismatch: error
