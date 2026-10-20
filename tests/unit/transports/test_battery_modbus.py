@@ -1434,6 +1434,7 @@ class TestReadAllWithSlaves:
             with patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0):
                 complete_results = await transport.read_all()
             with patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=2.0):
+                await transport.scan_units()
                 partial_results = await transport.read_all()
 
         assert complete_results[0].soc == 76
@@ -1541,6 +1542,7 @@ class TestReadAllWithSlaves:
                 "pylxpweb.transports.battery_modbus.time.monotonic",
                 return_value=_UNIT_TOPOLOGY_RETENTION + 2.0,
             ):
+                await transport.scan_units()
                 results = await transport.read_all()
 
         assert len(results) == 2
@@ -1616,10 +1618,10 @@ class TestReadAllWithSlaves:
         unit_ids=None whose very first scan misses a unit has nothing to compare
         against: the remembered set is already short and the re-decode gate
         passes on incomplete topology.  This is the original defect's shape in a
-        narrow, self-healing window, and it is pinned deliberately rather than
+        narrow window that heals on explicit rediscovery, and it is pinned deliberately rather than
         fixed -- closing it would require a declared expected unit count, which
         is exactly the configuration auto-scan exists to avoid.  The second half
-        of this test is the self-heal: once the missing unit answers even once,
+        of this test is explicit rediscovery: once the missing unit answers even once,
         it is remembered and its later silence blocks the gate.
         """
         transport = BatteryModbusTransport(host="10.100.3.27", max_units=3)
@@ -1649,7 +1651,7 @@ class TestReadAllWithSlaves:
         assert cold[0].current_capacity == pytest.approx(213.0)
         assert set(transport._unit_last_seen) == {1, 2}
 
-        # Self-heal: unit 3 answers once, so it joins remembered topology...
+        # Explicit rediscovery: unit 3 answers once and joins remembered topology...
         with (
             patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
             patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=2.0),
@@ -1667,6 +1669,7 @@ class TestReadAllWithSlaves:
                     _mock_result([0] * 23),
                 ]
             )
+            await transport.scan_units()
             await transport.read_all()
         assert set(transport._unit_last_seen) == {1, 2, 3}
 
@@ -1686,6 +1689,7 @@ class TestReadAllWithSlaves:
                     _mock_result([0] * 23),
                 ]
             )
+            await transport.scan_units()
             healed = await transport.read_all()
 
         assert healed[0].current_capacity is None
