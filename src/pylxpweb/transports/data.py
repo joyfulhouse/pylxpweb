@@ -25,6 +25,7 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from pylxpweb.provenance import EnergyProvenance
 from pylxpweb.transports._canonical_reader import (
     clamp_percentage as _clamp_percentage,
 )
@@ -50,6 +51,36 @@ if TYPE_CHECKING:
     from pylxpweb.models import EnergyInfo, InverterRuntime, MidboxData
 
 _LOGGER = logging.getLogger(__name__)
+
+# Keep the provenance mapping identical to the numeric HTTP conversion.
+HTTP_ENERGY_FIELDS: dict[str, str] = {
+    "pv_energy_today": "todayYielding",
+    "charge_energy_today": "todayCharging",
+    "discharge_energy_today": "todayDischarging",
+    "grid_import_today": "todayImport",
+    "grid_export_today": "todayExport",
+    "load_energy_today": "todayUsage",
+    "pv_energy_total": "totalYielding",
+    "charge_energy_total": "totalCharging",
+    "discharge_energy_total": "totalDischarging",
+    "grid_import_total": "totalImport",
+    "grid_export_total": "totalExport",
+    "load_energy_total": "totalUsage",
+}
+
+MID_ENERGY_FIELDS: dict[str, str] = {
+    f"{transport}_energy_{period}_{leg.lower()}": f"e{http}{period.title()}{leg}"
+    for transport, http in (
+        ("load", "Load"),
+        ("ups", "Ups"),
+        ("to_grid", "ToGrid"),
+        ("to_user", "ToUser"),
+        *((f"ac_couple_{port}", f"ACcouple{port}") for port in range(1, 5)),
+        *((f"smart_load_{port}", f"SmartLoad{port}") for port in range(1, 5)),
+    )
+    for period in ("today", "total")
+    for leg in ("L1", "L2")
+}
 
 # Absolute ceiling for any single lifetime energy counter (kWh).  Values above
 # this indicate 32-bit register corruption (e.g. a high-word bit flip).  A
@@ -740,6 +771,9 @@ class InverterEnergyData:
     # Timestamp
     timestamp: datetime = field(default_factory=datetime.now)
 
+    # Missing entries mean unknown provenance; construction is not acquisition.
+    provenance: dict[str, EnergyProvenance] = field(default_factory=dict, kw_only=True)
+
     # Daily energy (kWh)
     pv_energy_today: float | None = None
     pv1_energy_today: float | None = None
@@ -880,6 +914,11 @@ class InverterEnergyData:
         return cls(
             timestamp=datetime.now(),
             # Daily - API returns 0.1 kWh units, scale to kWh
+            provenance={
+                target: energy.provenance[source]
+                for target, source in HTTP_ENERGY_FIELDS.items()
+                if source in energy.provenance
+            },
             pv_energy_today=scale_energy_value("todayYielding", energy.todayYielding),
             charge_energy_today=scale_energy_value("todayCharging", energy.todayCharging),
             discharge_energy_today=scale_energy_value("todayDischarging", energy.todayDischarging),
@@ -967,7 +1006,7 @@ class InverterEnergyData:
             kwargs.get("pv6_energy_total"),
         )
 
-        return cls(timestamp=datetime.now(), **kwargs)
+        return cls(timestamp=datetime.now(), provenance={}, **kwargs)
 
 
 @dataclass
@@ -1791,6 +1830,8 @@ class MidboxRuntimeData:
     # Timestamp
     timestamp: datetime = field(default_factory=datetime.now)
 
+    provenance: dict[str, EnergyProvenance] = field(default_factory=dict, kw_only=True)
+
     # -------------------------------------------------------------------------
     # Voltage (V)
     # -------------------------------------------------------------------------
@@ -2111,6 +2152,11 @@ class MidboxRuntimeData:
 
         return cls(
             timestamp=datetime.now(),
+            provenance={
+                target: midbox_data.provenance[source]
+                for target, source in MID_ENERGY_FIELDS.items()
+                if source in midbox_data.provenance
+            },
             # Voltages (API returns decivolts, divide by 10)
             grid_voltage=_f_div(midbox_data.gridRmsVolt, 10.0),
             ups_voltage=_f_div(midbox_data.upsRmsVolt, 10.0),

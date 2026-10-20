@@ -24,6 +24,7 @@ from pylxpweb.constants import (
 )
 from pylxpweb.exceptions import LuxpowerAPIError, LuxpowerConnectionError, LuxpowerDeviceError
 from pylxpweb.models import OperatingMode
+from pylxpweb.provenance import EnergyProvenance, unknown_provenance
 from pylxpweb.transports.data import (
     BatteryBankData,
     InverterEnergyData,
@@ -1557,6 +1558,47 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
             return None
         cloud_val = self._runtime.pLoad170
         return float(cloud_val) if cloud_val is not None else None
+
+    @property
+    def energy_provenance(self) -> dict[str, EnergyProvenance]:
+        """Return provenance for the available public energy properties.
+
+        Keys match the numeric property names. The transport snapshot takes
+        precedence as a whole, just as those properties do; an unavailable
+        transport field does not borrow cloud provenance. Legacy values without
+        acquisition evidence have explicit unknown provenance. Access never
+        refreshes a timestamp, and HTTP acquisition does not establish a counter day.
+        """
+        fields = {
+            "total_energy_today": ("pv_energy_today", "todayYielding"),
+            "total_energy_lifetime": ("pv_energy_total", "totalYielding"),
+            "energy_today_charging": ("charge_energy_today", "todayCharging"),
+            "energy_today_discharging": ("discharge_energy_today", "todayDischarging"),
+            "energy_today_import": ("grid_import_today", "todayImport"),
+            "energy_today_export": ("grid_export_today", "todayExport"),
+            "energy_today_usage": ("load_energy_today", "todayUsage"),
+            "energy_lifetime_charging": ("charge_energy_total", "totalCharging"),
+            "energy_lifetime_discharging": ("discharge_energy_total", "totalDischarging"),
+            "energy_lifetime_import": ("grid_import_total", "totalImport"),
+            "energy_lifetime_export": ("grid_export_total", "totalExport"),
+            "energy_lifetime_usage": ("load_energy_total", "totalUsage"),
+        }
+        result: dict[str, EnergyProvenance] = {}
+        for public_name, (transport_field, http_field) in fields.items():
+            if self._transport_energy is not None:
+                if getattr(self._transport_energy, transport_field) is None:
+                    continue
+                provenance = self._transport_energy.provenance.get(transport_field)
+                field_name = transport_field
+            elif self._energy is not None:
+                provenance = self._energy.provenance.get(http_field)
+                field_name = http_field
+            else:
+                continue
+            result[public_name] = provenance or unknown_provenance(
+                f"inverter:{self.serial_number}", field_name=field_name
+            )
+        return result
 
     @property
     def total_energy_today(self) -> float | None:

@@ -21,10 +21,11 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Coroutine, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from pylxpweb.provenance import EnergyProvenance, derived_provenance, unknown_provenance
 from pylxpweb.registers import (
     BATTERY_BASE_ADDRESS,
     BATTERY_MAX_COUNT,
@@ -1300,6 +1301,38 @@ class RegisterDataMixin(_DataMixinBase):
     # Device data methods
     # ------------------------------------------------------------------
 
+    def _stamp_energy_provenance(self, data: InverterEnergyData | MidboxRuntimeData) -> None:
+        """Record physical snapshot completion, without claiming a device sample day."""
+        acquired_at = datetime.now(UTC)
+        source_id = f"{type(self).__name__}:{self._serial}"
+        data.provenance = {
+            item.name: EnergyProvenance(
+                source="local",
+                source_id=source_id,
+                field_name=item.name,
+                acquired_at=acquired_at,
+            )
+            for item in fields(data)
+            if ("_today" in item.name or "_total" in item.name)
+            and getattr(data, item.name) is not None
+        }
+        if isinstance(data, InverterEnergyData):
+            for period in ("today", "total"):
+                name = f"pv_energy_{period}"
+                if getattr(data, name) is not None:
+                    data.provenance[name] = derived_provenance(
+                        f"{source_id}:{name}",
+                        (
+                            data.provenance.get(f"pv{port}_energy_{period}")
+                            or unknown_provenance(
+                                source_id, field_name=f"pv{port}_energy_{period}"
+                            )
+                            # The decoder always includes PV1-3; the model
+                            # count gates only the extended PV4-6 registers.
+                            for port in range(1, max(3, self._pv_string_count) + 1)
+                        ),
+                    )
+
     async def read_runtime(self) -> InverterRuntimeData:
         """Read runtime data via input registers.
 
@@ -1358,6 +1391,7 @@ class RegisterDataMixin(_DataMixinBase):
             family,
             pv_string_count=self._pv_string_count,
         )
+        self._stamp_energy_provenance(result)
         if segments:
             await self._notify_observed_segments((RegisterSpace.INPUT, segments))
         return result
@@ -1583,6 +1617,7 @@ class RegisterDataMixin(_DataMixinBase):
             family,
             pv_string_count=self._pv_string_count,
         )
+        self._stamp_energy_provenance(energy)
         # The battery bank lives entirely in the bms_data group (reg 96 +
         # voltage/SOC/current/cell/BMS-limit fields).  If that group's read
         # dropped — common on a flaky dongle link, where single requests time
@@ -1687,6 +1722,7 @@ class RegisterDataMixin(_DataMixinBase):
         result = MidboxRuntimeData.from_modbus_registers(
             input_registers, smart_port_mode_reg=smart_port_mode_reg
         )
+        self._stamp_energy_provenance(result)
         if input_segments:
             await self._notify_observed_segments(
                 (RegisterSpace.INPUT, input_segments),
