@@ -102,10 +102,13 @@ async def test_real_hybrid_fallback_and_recovery_preserve_each_source() -> None:
         },
     )
     local_transport = Mock(serial="A")
+    local_transport.connect = AsyncMock()
     local_transport.read_energy = AsyncMock(side_effect=[TransportReadError("offline"), local])
     http_transport = Mock()
+    http_transport.connect = AsyncMock()
     http_transport.read_energy = AsyncMock(return_value=cloud)
     hybrid = HybridTransport(local_transport, http_transport, local_retry_interval=0)
+    await hybrid.connect()
 
     fallback = await hybrid.read_energy()
     assert fallback is cloud
