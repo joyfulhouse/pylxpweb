@@ -273,27 +273,55 @@ reg_27 = (r4 * 10) & 0xFFFF    # multiply by 10, overflow uint16
 
 Both registers end up in units of **Ah × 100** after all multiplications.
 
-### Unwrap Formula
+### Conservative Reconstruction (#384)
 
-To recover the true value, find N such that the result is physically reasonable:
+The full-capacity wrap count is **not** the remaining-capacity wrap count.
+For three 280 Ah packs at 10%, register 26 is 8400 (84 Ah) while register 27
+is 18464 (840 Ah modulo 655.36 Ah). Adding the full-capacity wrap to register
+26 invents another 655.36 Ah.
 
+With a complete bank and known individual capacities, enumerate candidates:
+
+```text
+bank_remaining = (reg_26 + N * 65536) / 100
+sum(slave_remaining) <= bank_remaining <= sum(slave_remaining) + master_designed
 ```
-total_remaining_Ah = (reg_26 + N * 65536) / 100
-total_full_Ah      = (reg_27 + N * 65536) / 100
-```
 
-N is deterministic from the battery count and designed capacity:
-- `expected_full = num_batteries × designed_capacity_Ah`
-- `N = round(expected_full * 100 / 65536)` (typically N=1 for 3× 280 Ah)
+Accept only one candidate within these strict bounds, then subtract the slave
+remaining capacities and derive master SOC. No guessed 280 Ah default, negative
+remainder clamp, or SOC clamp repairs inconsistent evidence. A master capacity
+large enough to admit multiple candidates remains unknown.
 
-### Master SOC Back-Calculation
+Register 27 must also exactly match the sum of known designed capacities modulo
+65536 in Ah x 100 ticks. This is a consistency check, **not proof of topology**:
+an unseen pack can alias after wrapping. `decode_with_slaves()` therefore requires
+`topology_complete=True`, which attests that every physical slave is represented.
+Without that attestation it returns `soc=None` and `current_capacity=None`.
+Missing/invalid capacities or registers, duplicate identities, a full-capacity
+mismatch, and no unique candidate also return unknown. Valid empty packs return
+zero, including a zero remaining register at a wrap boundary.
 
-Once unwrapped, the master battery's individual remaining capacity and SOC:
+`BatteryModbusTransport.read_all()` supplies the attestation only with the explicit
+opt-in `topology_complete=True`, a complete physical inventory in `unit_ids`, and
+every configured and remembered unit responding. The default is False: existing
+callers may use `unit_ids` for selective polling, which does not prove completeness.
+A single configured master is supported. Automatic discovery,
+partial reads, and expiry of a silent configured unit cannot establish completeness.
+`read_unit()` and basic master `decode()` always leave individual SOC/capacity
+unknown because register 21 is the bank aggregate. Master cell-derived voltage
+and slave measurements remain available.
 
-```
-master_remaining = total_remaining - Σ slave_remaining
-master_soc = master_remaining / master_designed_capacity × 100
-```
+`BatteryData.soc`, `Battery.soc`, remaining-capacity properties, and capacity
+percentages can now return `None`. The public `BatteryModule.soc` and
+`currentRemainCapacity` fields also preserve null when serialized. Bank SOC spread is unavailable when any pack's
+SOC is unknown. Consumers must preserve this distinction from a genuine zero.
+
+The tests use synthetic register inputs and the historical firmware-derived
+example below; they do not represent a new live-hardware validation. Sequential
+bank/slave reads are not an atomic snapshot, so inconsistent readings may be
+rejected conservatively. Re-enabling integration master measurements requires a
+published library fix and an integration dependency update; this change does not
+publish a release or remove that consumer gate.
 
 ### Validated Example (2026-03-03, 3× WP-16/280-1AWLL)
 

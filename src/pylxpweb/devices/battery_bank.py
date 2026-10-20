@@ -207,7 +207,9 @@ class BatteryBank(BaseDevice):
         """
         if len(self.batteries) < 2:
             return None
-        soc_values = [b.soc for b in self.batteries]
+        soc_values = [b.soc for b in self.batteries if b.soc is not None]
+        if len(soc_values) != len(self.batteries):
+            return None
         return max(soc_values) - min(soc_values)
 
     # ========== State of Health ==========

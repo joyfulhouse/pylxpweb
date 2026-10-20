@@ -727,6 +727,17 @@ class TestBatteryBankSocDelta:
         bank = _make_bank(mock_client, sample_battery_info, [_make_battery(mock_client, 85)])
         assert bank.soc_delta is None
 
+    def test_soc_delta_unknown_master(self, mock_client, sample_battery_info):
+        from pylxpweb.transports.data import BatteryData
+
+        master = Battery.from_transport_data(mock_client, BatteryData(soc=None), "test")
+        bank = _make_bank(
+            mock_client,
+            sample_battery_info,
+            [master, _make_battery(mock_client, 80), _make_battery(mock_client, 80)],
+        )
+        assert bank.soc_delta is None
+
     def test_soc_delta_two_batteries(self, mock_client, sample_battery_info):
         """Test soc_delta computes max - min across two batteries."""
         bank = _make_bank(

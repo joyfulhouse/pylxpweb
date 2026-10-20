@@ -64,8 +64,8 @@ _INTER_UNIT_DELAY = 0.2
 
 # A unit that stops answering must not silently shrink the remembered topology
 # and re-enable master back-calculation against a partial bank. Retention mirrors
-# the 6h battery-eviction precedent (#258/#170) so a genuinely removed battery
-# still converges instead of pinning the master to the aggregate forever (#249).
+# the 6h battery-eviction precedent (#258/#170). Configured units remain required
+# for capacity reconstruction even after remembered topology expires (#384).
 _UNIT_TOPOLOGY_RETENTION = 6 * 3600.0
 
 # Minimum interval between reconnect attempts. This code uses an absolute
@@ -125,8 +125,13 @@ class BatteryModbusTransport:
     Args:
         host: Bridge IP address (e.g., "10.100.3.27").
         port: Modbus TCP port (default 502).
-        unit_ids: Specific unit IDs to read. None = discover up to max_units once.
+        unit_ids: Specific unit IDs to read. None discovers up to max_units once.
             Call scan_units() to refresh discovery after changing the battery bank.
+        topology_complete: Attest that unit_ids lists every physical pack, including
+            the master. Defaults to False; selective polling and discovery cannot
+            establish completeness. True requires explicit unit_ids and every
+            configured/remembered unit to respond before master SOC/capacity
+            reconstruction is attempted.
         max_units: Maximum unit IDs to scan when unit_ids is None.
         protocol: Protocol name or "auto" for auto-detection.
         inverter_serial: Serial number of the inverter these batteries belong to.
@@ -145,7 +150,11 @@ class BatteryModbusTransport:
         timeout: float = 3.0,
         *,
         backend: str = "auto",
+        topology_complete: bool = False,
     ) -> None:
+        if topology_complete and unit_ids is None:
+            raise ValueError("topology_complete requires explicit unit_ids for every physical pack")
+        self.topology_complete = topology_complete
         self.host = host
         self.port = port
         self.unit_ids = unit_ids
@@ -662,8 +671,10 @@ class BatteryModbusTransport:
         Call scan_units() after adding batteries or recovering a battery that
         was absent during the first discovery.
 
-        Reads slaves first, then re-decodes the master using slave context
-        (for individual SOC/remaining capacity). If inverter BMS data is
+        Re-decodes the master using complete configured slave context for
+        individual SOC/remaining capacity. Auto-discovery and partial reads keep
+        these fields unavailable. Set topology_complete=True only with the full
+        physical inventory in unit_ids to enable them. If inverter BMS data is
         provided, overlays missing master fields (per-cell temperatures)
         that are only available via the inverter's CAN bus connection.
 
@@ -709,23 +720,9 @@ class BatteryModbusTransport:
 
             await asyncio.sleep(_INTER_UNIT_DELAY)
 
-        # Re-decode only when decoded slave IDs cover the retained topology.
-        # Thus a three-unit bank scanning as [1, 2] keeps aggregate reg 21, while
-        # a genuine [1, 2] bank re-decodes. A one-unit bank has no slave result,
-        # so its already-individual aggregate remains unchanged. After a removed
-        # battery is absent for six hours it is evicted and re-decode resumes
-        # against the remaining topology; this is intentional convergence (#249).
-        #
-        # KNOWN BOUNDARY -- auto-scan cold start. Topology memory cannot
-        # remember a unit it has never seen, so on a fresh transport with
-        # unit_ids=None whose first scan misses a unit, the remembered set is
-        # already short and this gate passes on incomplete topology. It is the
-        # original defect's shape until explicit rediscovery. A newly observed
-        # unit joins retained topology, after which
-        # its silence blocks the gate like any other. Explicit unit_ids have no
-        # such window because the declared list seeds memory before the first
-        # read. Closing it would need a declared expected count, which is the
-        # configuration auto-scan exists to avoid.
+        # Discovery and topology expiry cannot establish physical completeness.
+        # Require every configured and remembered unit before assigning bank
+        # capacity to an individual master; partial results remain unknown.
         remembered_unit_ids = self._remembered_unit_ids()
         required_slave_ids = (
             remembered_unit_ids - {master_uid} if master_uid is not None else remembered_unit_ids
@@ -733,8 +730,11 @@ class BatteryModbusTransport:
         if (
             master_uid is not None
             and master_data is not None
-            and slave_results
-            and decoded_slave_ids.issuperset(required_slave_ids)
+            and self.topology_complete
+            and self.unit_ids is not None
+            and decoded_slave_ids.issuperset(
+                required_slave_ids | (set(self.unit_ids) - {master_uid})
+            )
         ):
             master_proto = self._get_protocol(master_uid, raw_by_unit[master_uid])
             if isinstance(master_proto, EG4MasterProtocol):
@@ -742,6 +742,7 @@ class BatteryModbusTransport:
                     raw_by_unit[master_uid],
                     slave_results,
                     battery_index=master_uid - 1,
+                    topology_complete=True,
                 )
 
         # Overlay inverter BMS data onto master (fills RS485 gaps)

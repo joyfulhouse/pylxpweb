@@ -117,7 +117,7 @@ class Battery(BaseDevice):
             batterySn=battery_data.serial_number or battery_key,
             batIndex=battery_data.battery_index,
             lost=False,
-            # BatteryModule's schema is non-nullable, so transport absence stays
+            # BatteryModule's voltage is non-nullable, so transport absence stays
             # encoded as zero. Derived properties below treat it as unavailable
             # rather than turning it into a measurement (#249).
             totalVoltage=int(battery_data.voltage * 100),  # Convert back to raw
@@ -130,7 +130,11 @@ class Battery(BaseDevice):
             # .data, so .data.soh does read 0 on an unreported battery. Use
             # .soh, not .data.soh, for a measurement.
             soh=battery_data.soh if battery_data.soh is not None else 0,
-            currentRemainCapacity=int(battery_data.remaining_capacity or 0),
+            currentRemainCapacity=(
+                int(battery_data.remaining_capacity)
+                if battery_data.remaining_capacity is not None
+                else None
+            ),
             currentFullCapacity=int(battery_data.max_capacity or 0),
             batMaxCellTemp=int(battery_data.max_cell_temperature * 10),
             batMinCellTemp=int(battery_data.min_cell_temperature * 10),
@@ -283,15 +287,14 @@ class Battery(BaseDevice):
     # ========== State of Charge/Health ==========
 
     @property
-    def soc(self) -> int:
+    def soc(self) -> int | None:
         """Get battery state of charge.
 
         Returns:
-            State of charge percentage (0-100).
+            State of charge percentage (0-100), or None when unavailable.
         """
-        val = self._get_transport_attr("soc")
-        if val is not None:
-            return int(val)
+        if self._transport_data is not None:
+            return self._transport_data.soc
         return self._data.soc
 
     @property
@@ -314,15 +317,15 @@ class Battery(BaseDevice):
     # ========== Capacity Properties ==========
 
     @property
-    def current_remain_capacity(self) -> int:
+    def current_remain_capacity(self) -> int | None:
         """Get current remaining capacity in amp-hours.
 
         Returns:
-            Current remaining capacity in Ah.
+            Current remaining capacity in Ah, or None when unavailable.
         """
-        val = self._get_transport_attr("remaining_capacity")
-        if val is not None:
-            return int(val)
+        if self._transport_data is not None:
+            val = self._transport_data.remaining_capacity
+            return int(val) if val is not None else None
         return self._data.currentRemainCapacity
 
     @property
@@ -338,7 +341,7 @@ class Battery(BaseDevice):
         return self._data.currentFullCapacity
 
     @property
-    def capacity_percent(self) -> int:
+    def capacity_percent(self) -> int | None:
         """Get current capacity as percentage of full capacity.
 
         Returns:
@@ -346,13 +349,15 @@ class Battery(BaseDevice):
             from currentRemainCapacity / currentFullCapacity and rounds to
             nearest integer.
         """
-        val = self._get_transport_attr("capacity_percent")
-        if val is not None:
-            return int(val)
+        if self._transport_data is not None:
+            return self._transport_data.capacity_percent
 
         # Use API value if available
         if self._data.currentCapacityPercent is not None:
             return self._data.currentCapacityPercent
+
+        if self._data.currentRemainCapacity is None:
+            return None
 
         # Calculate from remain/full capacity, rounded to nearest integer
         if self._data.currentFullCapacity > 0:
@@ -625,7 +630,7 @@ class Battery(BaseDevice):
         return self.min_cell_voltage_num
 
     @property
-    def remaining_capacity(self) -> int:
+    def remaining_capacity(self) -> int | None:
         """Alias for :attr:`current_remain_capacity` (BatteryData compatibility)."""
         return self.current_remain_capacity
 

@@ -603,7 +603,14 @@ class TestCloudSohUnreportedIsNone:
         [(0, None), (None, None), (100, 100), (1, 1)],
     )
     @pytest.mark.asyncio
-    async def test_battery_array_soh(self, cloud_soh: int | None, expected_soh: int | None) -> None:
+    @pytest.mark.parametrize("soc,remaining", [(None, None), (0, 0), (85, 85)])
+    async def test_battery_array_soh(
+        self,
+        cloud_soh: int | None,
+        expected_soh: int | None,
+        soc: int | None,
+        remaining: int | None,
+    ) -> None:
         client = MagicMock()
         client.login = AsyncMock()
 
@@ -615,7 +622,10 @@ class TestCloudSohUnreportedIsNone:
         mock_battery.maxBatteryCharge = 100
         mock_battery.currentBatteryCharge = 85.0
         mock_battery.totalNumber = 1
-        mock_battery.batteryArray = [self._mock_battery_module(cloud_soh)]
+        module = self._mock_battery_module(cloud_soh)
+        module.soc = soc
+        module.currentRemainCapacity = remaining
+        mock_battery.batteryArray = [module]
 
         client.api.devices.get_battery_info = AsyncMock(return_value=mock_battery)
 
@@ -626,5 +636,6 @@ class TestCloudSohUnreportedIsNone:
 
         assert bank is not None
         assert len(bank.batteries) == 1
-        assert bank.batteries[0].soc == 85
+        assert bank.batteries[0].soc == soc
+        assert bank.batteries[0].current_capacity == remaining
         assert bank.batteries[0].soh == expected_soh

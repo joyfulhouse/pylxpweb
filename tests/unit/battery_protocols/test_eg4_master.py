@@ -172,7 +172,7 @@ class TestEG4MasterProtocol:
         raw = self._base_regs()
         raw[21] = 79
         data = self.protocol.decode(raw)
-        assert data.soc == 79
+        assert data.soc is None
 
     def test_decode_cycle_count(self) -> None:
         """Cycle count: reg 30, direct."""
@@ -266,7 +266,7 @@ class TestEG4MasterProtocol:
         raw = self._base_regs()
         raw[21] = 100
         data = self.protocol.decode(raw)
-        assert data.soc == 100
+        assert data.soc is None
 
     def test_decode_battery_index_passthrough(self) -> None:
         """Battery index is passed through to BatteryData."""
@@ -280,7 +280,7 @@ class TestEG4MasterProtocol:
         data = self.protocol.decode(raw)
         assert data.voltage == 0.0
         assert data.current == 0.0
-        assert data.soc == 0
+        assert data.soc is None
         assert data.soh is None  # SOH 0 = not reported (#309)
         assert data.max_capacity == 0.0
         assert data.firmware_version == ""
@@ -331,331 +331,200 @@ class TestEG4MasterProtocol:
         return dict.fromkeys(range(42), 0) | dict.fromkeys(range(113, 129), 0)
 
 
-class TestUnwrapCapacityRegister:
-    """Tests for uint16 overflow unwrap of master regs 26/27.
+class TestCapacityReconstruction:
+    """Remaining capacity requires unique wrap and complete physical topology."""
 
-    The firmware stores total_capacity_Ah * 100 as uint16, which overflows
-    for multi-battery systems (e.g., 660 Ah * 100 = 66000 > 65535).
-    """
-
-    def test_3_battery_remaining_overflow(self) -> None:
-        """Validated against live data: 3x 280Ah batteries, 660 Ah total remaining.
-
-        reg 26 = 464, actual = (464 + 65536) / 100 = 660.0 Ah
-        """
-        result = EG4MasterProtocol.unwrap_capacity_register(
-            raw_reg=464, num_batteries=3, designed_capacity_ah=280.0
-        )
-        assert result == pytest.approx(660.0)
-
-    def test_3_battery_full_capacity(self) -> None:
-        """Validated against live data: 3x 280Ah = 840 Ah total.
-
-        reg 27 = 18464, actual = (18464 + 65536) / 100 = 840.0 Ah
-        """
-        result = EG4MasterProtocol.unwrap_capacity_register(
-            raw_reg=18464, num_batteries=3, designed_capacity_ah=280.0
-        )
-        assert result == pytest.approx(840.0)
-
-    def test_single_battery_no_overflow(self) -> None:
-        """Single battery: 280 Ah * 100 = 28000, fits in uint16."""
-        result = EG4MasterProtocol.unwrap_capacity_register(
-            raw_reg=28000, num_batteries=1, designed_capacity_ah=280.0
-        )
-        assert result == pytest.approx(280.0)
-
-    def test_2_battery_system(self) -> None:
-        """2x 280Ah: 560 Ah * 100 = 56000, fits in uint16 (no overflow)."""
-        result = EG4MasterProtocol.unwrap_capacity_register(
-            raw_reg=56000, num_batteries=2, designed_capacity_ah=280.0
-        )
-        assert result == pytest.approx(560.0)
-
-    def test_4_battery_double_overflow(self) -> None:
-        """4x 280Ah = 1120 Ah * 100 = 112000, overflows twice (N=2)."""
-        raw_reg = 112000 % 65536  # 112000 - 131072 = -19072 → 65536 - 19072 = 46464
-        result = EG4MasterProtocol.unwrap_capacity_register(
-            raw_reg=raw_reg, num_batteries=4, designed_capacity_ah=280.0
-        )
-        assert result == pytest.approx(1120.0, abs=1.0)
-
-    def test_zero_batteries_returns_zero(self) -> None:
-        """Invalid input: 0 batteries."""
-        result = EG4MasterProtocol.unwrap_capacity_register(
-            raw_reg=464, num_batteries=0, designed_capacity_ah=280.0
-        )
-        assert result == 0.0
-
-    def test_negative_batteries_returns_zero(self) -> None:
-        """Invalid input: negative battery count."""
-        result = EG4MasterProtocol.unwrap_capacity_register(
-            raw_reg=464, num_batteries=-1, designed_capacity_ah=280.0
-        )
-        assert result == 0.0
-
-    def test_zero_capacity_returns_zero(self) -> None:
-        """Invalid input: 0 designed capacity."""
-        result = EG4MasterProtocol.unwrap_capacity_register(
-            raw_reg=464, num_batteries=3, designed_capacity_ah=0.0
-        )
-        assert result == 0.0
-
-    def test_negative_capacity_returns_zero(self) -> None:
-        """Invalid input: negative designed capacity."""
-        result = EG4MasterProtocol.unwrap_capacity_register(
-            raw_reg=464, num_batteries=3, designed_capacity_ah=-100.0
-        )
-        assert result == 0.0
-
-    def test_partial_charge(self) -> None:
-        """3x 280Ah at ~50% = 420 Ah, fits in uint16 (N=1 due to rounding)."""
-        # 420 Ah * 100 = 42000 → with N=1 unwrap: (42000 + 65536) / 100 = 1075.36
-        # But N = round(840 * 100 / 65536) = round(1.28) = 1
-        # So result = (42000 + 65536) / 100 = 1075.36 → outside range → 0.0
-        # Actually need the overflowed value: 42000 is what the uint16 stores
-        # when the actual is 42000 (no overflow needed)
-        # N=1 → (42000 + 65536)/100 = 1075.36 > 840*1.1=924 → fails
-        # This means 420 Ah actually does NOT overflow.
-        # The firmware stores 420*100 = 42000 which fits in uint16.
-        # But our unwrap with N=1 gives 1075.36 which is out of range.
-        # We need N=0: 42000/100 = 420 → but round(840*100/65536)=1
-        # This is a known limitation when the actual value straddles the overflow boundary.
-        # For 3x280Ah at exactly 50%, the raw reg IS 42000 and N should be 0.
-        # However round(84000/65536)=round(1.28)=1, so our heuristic picks N=1.
-        # This means for very low remaining (<~327 Ah for 3 batteries), the unwrap fails.
-        # In practice, batteries rarely go below ~10% (84 Ah), where the overflow
-        # boundary is well-defined. Skip this edge case.
-        pass
-
-
-class TestComputeMasterRemaining:
-    """Tests for back-calculating master battery's individual remaining capacity."""
-
-    def test_basic_subtraction(self) -> None:
-        """Total 660 Ah, slaves have 224+223 = 447 Ah → master = 213 Ah."""
-        result = EG4MasterProtocol.compute_master_remaining(
-            total_remaining_ah=660.0,
-            slave_remaining=[224.0, 223.0],
-        )
-        assert result == pytest.approx(213.0)
-
-    def test_single_slave(self) -> None:
-        """2-battery system: total 500 Ah, 1 slave at 250 Ah → master = 250 Ah."""
-        result = EG4MasterProtocol.compute_master_remaining(
-            total_remaining_ah=500.0,
-            slave_remaining=[250.0],
-        )
-        assert result == pytest.approx(250.0)
-
-    def test_no_slaves(self) -> None:
-        """Single battery (master only): total = master."""
-        result = EG4MasterProtocol.compute_master_remaining(
-            total_remaining_ah=280.0,
-            slave_remaining=[],
-        )
-        assert result == pytest.approx(280.0)
-
-    def test_clamps_to_zero(self) -> None:
-        """If slaves report more than total (rounding errors), clamp to 0."""
-        result = EG4MasterProtocol.compute_master_remaining(
-            total_remaining_ah=400.0,
-            slave_remaining=[210.0, 200.0],
-        )
-        assert result == 0.0
-
-    def test_three_slaves(self) -> None:
-        """4-battery system: total 1000, 3 slaves at 250 each → master = 250."""
-        result = EG4MasterProtocol.compute_master_remaining(
-            total_remaining_ah=1000.0,
-            slave_remaining=[250.0, 250.0, 250.0],
-        )
-        assert result == pytest.approx(250.0)
-
-
-class TestDecodeWithSlaves:
-    """Tests for decode_with_slaves() master SOC back-calculation."""
-
-    def setup_method(self) -> None:
-        self.protocol = EG4MasterProtocol()
-
-    def test_live_data_match(self) -> None:
-        """Validated against live RS485 + cloud data.
-
-        Master regs: reg26=464, reg27=18464, reg33=5600 (280Ah), reg21=79% (aggregate)
-        Slave remaining: [224, 223] Ah
-        Expected: master_remaining=213Ah, master_soc=76%
-        Cloud actual: master_soc=76%, master_remaining=212Ah
-        """
-        raw = self._base_regs()
-        raw[21] = 79  # Aggregate SOC
-        raw[22] = 5294  # Voltage (52.94V)
-        raw[26] = 464  # Total remaining (overflowed)
-        raw[27] = 18464  # Total full (overflowed)
-        raw[33] = 5600  # Designed capacity (280Ah)
-
-        slave_data = [
-            BatteryData(battery_index=1, current_capacity=224.0, soc=80),
-            BatteryData(battery_index=2, current_capacity=223.0, soc=80),
+    @pytest.mark.parametrize("count", [1, 2, 3, 5, 10])
+    @pytest.mark.parametrize("soc", [0, 1, 10, 25, 50, 75, 99, 100])
+    def test_empty_through_full_at_multiple_bank_sizes(self, count: int, soc: int) -> None:
+        remaining = 280 * soc / 100
+        slaves = [
+            BatteryData(battery_index=i, current_capacity=remaining, max_capacity=280)
+            for i in range(1, count)
         ]
+        raw = {
+            21: soc,
+            26: round(remaining * count * 100) % 65536,
+            27: (28000 * count) % 65536,
+            33: 5600,
+        }
+        result = EG4MasterProtocol().decode_with_slaves(raw, slaves, topology_complete=True)
+        assert result.current_capacity == pytest.approx(remaining)
+        assert result.soc == soc
 
-        data = self.protocol.decode_with_slaves(raw, slave_data)
-        assert data.soc == 76  # Individual master SOC, not 79% aggregate
-        assert data.current_capacity == pytest.approx(213.0)
-
-    def test_falls_back_when_reg26_27_zero(self) -> None:
-        """When reg 26 and 27 are both zero, returns basic decode (aggregate SOC)."""
-        raw = self._base_regs()
-        raw[21] = 79
-        raw[26] = 0
-        raw[27] = 0
-        raw[33] = 5600
-
-        slave_data = [BatteryData(battery_index=1, current_capacity=224.0)]
-        data = self.protocol.decode_with_slaves(raw, slave_data)
-        assert data.soc == 79  # Falls back to aggregate SOC
-        assert data.current_capacity is None  # Not computed
-
-    def test_uses_cell_voltages_for_voltage(self) -> None:
-        """Slave-context decoding preserves the voltage derived by decode()."""
-        raw = self._base_regs()
-        raw[22] = 5200  # MIN voltage across all batteries (52.00V)
-        raw[26] = 464
-        raw[27] = 18464
-        raw[33] = 5600
-        raw[41] = 16  # 16 cells
-        # Set cell voltages to ~3.31V each → sum ≈ 52.96V
-        for i in range(16):
-            raw[113 + i] = 3310
-
-        slave_data = [
-            BatteryData(battery_index=1, current_capacity=224.0),
-            BatteryData(battery_index=2, current_capacity=223.0),
+    @pytest.mark.parametrize("wrap", [1, 2, 3, 4])
+    @pytest.mark.parametrize("offset", [-1, 0, 1])
+    def test_each_wrap_boundary(self, wrap: int, offset: int) -> None:
+        total_ticks = wrap * 65536 + offset
+        total = total_ticks / 100
+        count = 10
+        per_slave = int(total / count)
+        slaves = [
+            BatteryData(battery_index=i, current_capacity=per_slave, max_capacity=280)
+            for i in range(1, count)
         ]
+        result = EG4MasterProtocol().decode_with_slaves(
+            {26: total_ticks % 65536, 27: 280000 % 65536, 33: 5600},
+            slaves,
+            topology_complete=True,
+        )
+        assert result.current_capacity == pytest.approx(total - 9 * per_slave)
+        assert result.soc == round((total - 9 * per_slave) / 280 * 100)
 
-        data = self.protocol.decode_with_slaves(raw, slave_data)
-        # Should use cell sum (52.96V) not MIN voltage (52.00V)
-        assert data.voltage == pytest.approx(52.96)
-
-    def test_voltage_from_cells_when_capacity_registers_zero(self) -> None:
-        """Capacity early-return cannot skip complete-cell voltage derivation."""
-        raw = self._base_regs()
-        raw[21] = 79
-        raw[22] = 5200
-        raw[26] = 0
-        raw[27] = 0
-        raw[33] = 5600
-        raw[41] = 16
-        for i in range(16):
-            raw[113 + i] = 3310
-
-        data = self.protocol.decode_with_slaves(raw, [])
-
-        assert data.soc == 79
-        assert data.current_capacity is None
-        assert data.voltage == pytest.approx(52.96)
-
-    def test_preserves_other_fields(self) -> None:
-        """decode_with_slaves preserves non-SOC fields from basic decode."""
-        raw = self._base_regs()
-        raw[22] = 5294
-        raw[24] = 22  # Temperature
-        raw[26] = 464
-        raw[27] = 18464
-        raw[28] = 0x0211  # Firmware 2.17
-        raw[30] = 138  # Cycle count
-        raw[32] = 100  # SOH
-        raw[33] = 5600
-
-        slave_data = [
-            BatteryData(battery_index=1, current_capacity=224.0),
-            BatteryData(battery_index=2, current_capacity=223.0),
+    def test_issue_384_requires_topology_attestation(self) -> None:
+        slaves = [
+            BatteryData(battery_index=i, soc=10, current_capacity=28, max_capacity=280)
+            for i in (1, 2)
         ]
+        raw = {21: 10, 26: 8400, 27: 18464, 33: 5600}
+        protocol = EG4MasterProtocol()
+        assert protocol.decode_with_slaves(raw, slaves).soc is None
+        result = protocol.decode_with_slaves(raw, slaves, topology_complete=True)
+        assert result.soc == 10
+        assert result.current_capacity == 28
 
-        data = self.protocol.decode_with_slaves(raw, slave_data)
-        assert data.temperature == 22.0
-        assert data.cycle_count == 138
-        assert data.soh == 100
-        assert data.firmware_version == "2.17"
-        assert data.max_capacity == pytest.approx(280.0)
+    def test_historical_firmware_example(self) -> None:
+        result = EG4MasterProtocol().decode_with_slaves(
+            {21: 79, 26: 464, 27: 18464, 33: 5600},
+            [
+                BatteryData(battery_index=1, current_capacity=224, max_capacity=280),
+                BatteryData(battery_index=2, current_capacity=223, max_capacity=280),
+            ],
+            topology_complete=True,
+        )
+        assert result.current_capacity == 213
+        assert result.soc == 76
 
-    def test_soc_clamped_to_100(self) -> None:
-        """SOC should not exceed 100% even with rounding."""
-        raw = self._base_regs()
-        raw[26] = 464  # Will unwrap to 660
-        raw[27] = 18464
-        raw[33] = 5600  # 280 Ah
+    def test_empty_master_in_charged_bank(self) -> None:
+        result = EG4MasterProtocol().decode_with_slaves(
+            {21: 50, 26: 28000, 27: 56000, 33: 5600},
+            [BatteryData(battery_index=1, current_capacity=280, max_capacity=280)],
+            topology_complete=True,
+        )
+        assert result.current_capacity == 0
+        assert result.soc == 0
 
-        # Slaves report very low remaining → master gets almost all of 660 Ah
-        slave_data = [
-            BatteryData(battery_index=1, current_capacity=10.0),
-            BatteryData(battery_index=2, current_capacity=10.0),
-        ]
+    def test_mixed_designed_capacities_and_different_soc(self) -> None:
+        slave = BatteryData(battery_index=1, current_capacity=50, max_capacity=100)
+        result = EG4MasterProtocol().decode_with_slaves(
+            {21: 69, 26: 26300, 27: 38000, 33: 5600}, [slave], topology_complete=True
+        )
+        assert result.current_capacity == 213
+        assert result.soc == 76
 
-        data = self.protocol.decode_with_slaves(raw, slave_data)
-        assert data.soc <= 100
+    @pytest.mark.parametrize("missing", [26, 27, 33])
+    def test_missing_register_is_unknown(self, missing: int) -> None:
+        raw = {21: 10, 26: 2800, 27: 28000, 33: 5600}
+        del raw[missing]
+        result = EG4MasterProtocol().decode_with_slaves(raw, [], topology_complete=True)
+        assert result.soc is None
+        assert result.current_capacity is None
 
-    def test_soc_clamped_to_0(self) -> None:
-        """SOC should not go below 0% when slaves consume all remaining."""
-        raw = self._base_regs()
-        raw[26] = 464  # Will unwrap to 660
-        raw[27] = 18464
-        raw[33] = 5600  # 280 Ah
+    @pytest.mark.parametrize(
+        "remaining,designed",
+        [
+            (None, 280),
+            (28, 0),
+            (28, -1),
+            (-1, 280),
+            (281, 280),
+            (float("nan"), 280),
+            (float("inf"), 280),
+            (28, float("inf")),
+        ],
+    )
+    def test_invalid_slave_capacity_is_unknown(
+        self,
+        remaining: float | None,
+        designed: float,
+    ) -> None:
+        slave = BatteryData(battery_index=1, current_capacity=remaining, max_capacity=designed)
+        result = EG4MasterProtocol().decode_with_slaves(
+            {21: 10, 26: 5600, 27: 56000, 33: 5600}, [slave], topology_complete=True
+        )
+        assert result.soc is None
+        assert result.current_capacity is None
 
-        # Slaves report more than total (unlikely but defensive)
-        slave_data = [
-            BatteryData(battery_index=1, current_capacity=400.0),
-            BatteryData(battery_index=2, current_capacity=400.0),
-        ]
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            {26: 8400, 27: 18464, 33: 5600},  # missing third pack
+            {26: 10, 27: 56000, 33: 5600},  # negative master remainder
+            {26: 60000, 27: 56000, 33: 5600},  # overfull master
+            {26: 5600, 27: 56000, 33: 0},
+            {26: -1, 27: 56000, 33: 5600},
+            {26: 65536, 27: 56000, 33: 5600},
+            {26: 5600, 27: -1, 33: 5600},
+        ],
+    )
+    def test_inconsistent_evidence_is_unknown(self, raw: dict[int, int]) -> None:
+        result = EG4MasterProtocol().decode_with_slaves(
+            raw,
+            [BatteryData(battery_index=1, current_capacity=28, max_capacity=280)],
+            topology_complete=True,
+        )
+        assert result.soc is None
+        assert result.current_capacity is None
 
-        data = self.protocol.decode_with_slaves(raw, slave_data)
-        assert data.soc >= 0
+    @pytest.mark.parametrize("indices", [[1, 1], [0, 1]])
+    def test_duplicate_or_master_slave_identity_rejected(self, indices: list[int]) -> None:
+        result = EG4MasterProtocol().decode_with_slaves(
+            {26: 8400, 27: 18464, 33: 5600},
+            [BatteryData(battery_index=i, current_capacity=28, max_capacity=280) for i in indices],
+            topology_complete=True,
+        )
+        assert result.soc is None
 
-    def test_slave_with_none_capacity(self) -> None:
-        """Slaves with None current_capacity should be treated as 0."""
-        raw = self._base_regs()
-        raw[26] = 464
-        raw[27] = 18464
-        raw[33] = 5600
+    def test_ambiguous_large_master_rejected(self) -> None:
+        result = EG4MasterProtocol().decode_with_slaves(
+            {21: 10, 26: 8000, 27: 14464, 33: 16000}, [], topology_complete=True
+        )
+        assert result.soc is None
+        assert result.current_capacity is None
 
-        slave_data = [
-            BatteryData(battery_index=1, current_capacity=None),
-            BatteryData(battery_index=2, current_capacity=223.0),
-        ]
+    def test_full_capacity_modulo_cannot_establish_topology(self) -> None:
+        # An unseen 655.36Ah pack contributes zero modulo 65536 at full charge.
+        result = EG4MasterProtocol().decode_with_slaves(
+            {21: 100, 26: 28000, 27: 28000, 33: 5600}, []
+        )
+        assert result.soc is None
+        assert result.current_capacity is None
 
-        data = self.protocol.decode_with_slaves(raw, slave_data)
-        # master_remaining = 660 - 0 - 223 = 437 → SOC = 437/280*100 = 156% → clamped to 100
-        assert data.soc == 100
-        assert data.current_capacity == pytest.approx(437.0)
+    def test_other_fields_preserved(self) -> None:
+        raw = {
+            21: 79,
+            22: 5200,
+            24: 22,
+            26: 21300,
+            27: 28000,
+            28: 0x0211,
+            30: 138,
+            32: 100,
+            33: 5600,
+            41: 16,
+        }
+        raw.update(dict.fromkeys(range(113, 129), 3310))
+        protocol = EG4MasterProtocol()
+        basic = protocol.decode(raw)
+        reconstructed = protocol.decode_with_slaves(raw, [], topology_complete=True)
+        assert reconstructed.soc == 76
+        assert reconstructed.current_capacity == 213
+        assert reconstructed.voltage == basic.voltage == pytest.approx(52.96)
+        assert reconstructed.temperature == basic.temperature == 22
+        assert reconstructed.firmware_version == basic.firmware_version == "2.17"
+        assert reconstructed.cycle_count == basic.cycle_count == 138
+        assert reconstructed.soh == basic.soh == 100
 
-    def test_default_capacity_when_reg33_zero(self) -> None:
-        """When designed capacity unknown (reg 33=0), defaults to 280 Ah."""
-        raw = self._base_regs()
-        raw[26] = 464
-        raw[27] = 18464
-        raw[33] = 0  # Unknown capacity
+    def test_unwrap_rejects_nominal_capacity_ambiguity(self) -> None:
+        assert EG4MasterProtocol.unwrap_capacity_register(8400, 3, 280) is None
+        assert EG4MasterProtocol.unwrap_capacity_register(42000, 3, 280) == 420
+        assert EG4MasterProtocol.unwrap_capacity_register(0, 1, 280) == 0
+        assert EG4MasterProtocol.unwrap_capacity_register(28000, 1, 280) == 280
 
-        slave_data = [
-            BatteryData(battery_index=1, current_capacity=224.0),
-            BatteryData(battery_index=2, current_capacity=223.0),
-        ]
+    @pytest.mark.parametrize("count,designed", [(0, 280), (-1, 280), (3, 0), (3, -1)])
+    def test_unwrap_invalid_bounds(self, count: int, designed: float) -> None:
+        assert EG4MasterProtocol.unwrap_capacity_register(464, count, designed) is None
 
-        data = self.protocol.decode_with_slaves(raw, slave_data)
-        # Should use 280 Ah default
-        assert data.soc == 76
-        assert data.current_capacity == pytest.approx(213.0)
-
-    def test_battery_index_passthrough(self) -> None:
-        """Battery index parameter is preserved in output."""
-        raw = self._base_regs()
-        raw[26] = 464
-        raw[27] = 18464
-        raw[33] = 5600
-
-        slave_data = [BatteryData(battery_index=1, current_capacity=224.0)]
-        data = self.protocol.decode_with_slaves(raw, slave_data, battery_index=0)
-        assert data.battery_index == 0
-
-    def _base_regs(self) -> dict[int, int]:
-        """Create a minimal raw register dict with all zeros."""
-        return dict.fromkeys(range(42), 0) | dict.fromkeys(range(113, 129), 0)
+    def test_subtraction_rejects_negative_result(self) -> None:
+        assert EG4MasterProtocol.compute_master_remaining(400, [210, 200]) is None
+        assert EG4MasterProtocol.compute_master_remaining(0, [0]) == 0

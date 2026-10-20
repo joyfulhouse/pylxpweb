@@ -307,7 +307,7 @@ class TestBatteryModbusTransportReadUnit:
         data = await connected_transport.read_unit(1)
         assert data is not None
         assert data.voltage == pytest.approx(52.8)
-        assert data.soc == 76
+        assert data.soc is None
         assert data.battery_index == 0  # unit_id 1 -> index 0
 
     @pytest.mark.asyncio
@@ -1293,7 +1293,9 @@ class TestReadAllWithSlaves:
     @pytest.mark.asyncio
     async def test_full_slave_context_redecodes_master(self) -> None:
         """A complete slave set back-calculates master remaining capacity."""
-        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+        transport = BatteryModbusTransport(
+            host="10.100.3.27", unit_ids=[1, 2, 3], topology_complete=True
+        )
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
         transport._connected = True
@@ -1328,9 +1330,9 @@ class TestReadAllWithSlaves:
         assert results[2].soc == 80
 
     @pytest.mark.asyncio
-    async def test_single_battery_keeps_aggregate_soc_and_derives_voltage(self) -> None:
-        """A genuine one-battery bank needs no capacity back-calculation."""
-        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1])
+    async def test_declared_single_battery_reconstructs_capacity_and_voltage(self) -> None:
+        """A declared one-battery bank recovers individual capacity from register 26."""
+        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1], topology_complete=True)
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
         transport._client.connected = True
@@ -1349,13 +1351,15 @@ class TestReadAllWithSlaves:
         results = await transport.read_all()
         assert len(results) == 1
         assert results[0].voltage == pytest.approx(52.96)
-        assert results[0].soc == 79
-        assert results[0].current_capacity is None
+        assert results[0].soc == 80
+        assert results[0].current_capacity == 224
 
     @pytest.mark.asyncio
-    async def test_failed_only_slave_keeps_master_aggregate_soc(self) -> None:
+    async def test_failed_only_slave_keeps_master_soc_unknown(self) -> None:
         """An empty slave result is failed topology, not proof of one battery (#249)."""
-        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2])
+        transport = BatteryModbusTransport(
+            host="10.100.3.27", unit_ids=[1, 2], topology_complete=True
+        )
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
         transport._client.connected = True
@@ -1373,13 +1377,15 @@ class TestReadAllWithSlaves:
 
         assert len(results) == 1
         assert results[0].voltage == pytest.approx(52.96)
-        assert results[0].soc == 79
+        assert results[0].soc is None
         assert results[0].current_capacity is None
 
     @pytest.mark.asyncio
-    async def test_partial_slave_context_keeps_master_aggregate_soc(self) -> None:
+    async def test_partial_slave_context_keeps_master_soc_unknown(self) -> None:
         """One missing battery from a three-unit bank makes subtraction unsafe (#249)."""
-        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+        transport = BatteryModbusTransport(
+            host="10.100.3.27", unit_ids=[1, 2, 3], topology_complete=True
+        )
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
         transport._client.connected = True
@@ -1398,7 +1404,7 @@ class TestReadAllWithSlaves:
         results = await transport.read_all()
 
         assert len(results) == 2
-        assert results[0].soc == 79
+        assert results[0].soc is None
         assert results[0].current_capacity is None
 
     @pytest.mark.asyncio
@@ -1437,15 +1443,15 @@ class TestReadAllWithSlaves:
                 await transport.scan_units()
                 partial_results = await transport.read_all()
 
-        assert complete_results[0].soc == 76
-        assert complete_results[0].current_capacity == pytest.approx(213.0)
+        assert complete_results[0].soc is None
+        assert complete_results[0].current_capacity is None
         assert len(partial_results) == 2
-        assert partial_results[0].soc == 79
+        assert partial_results[0].soc is None
         assert partial_results[0].current_capacity is None
 
     @pytest.mark.asyncio
-    async def test_auto_scan_two_battery_bank_redecodes_master(self) -> None:
-        """Remembered topology permits a complete genuine two-unit bank (#249)."""
+    async def test_auto_scan_two_battery_bank_keeps_master_unknown(self) -> None:
+        """Observed topology cannot prove that every physical pack was seen."""
         transport = BatteryModbusTransport(host="10.100.3.27", max_units=2)
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
@@ -1469,13 +1475,15 @@ class TestReadAllWithSlaves:
             results = await transport.read_all()
 
         assert len(results) == 2
-        assert results[0].soc == 76
-        assert results[0].current_capacity == pytest.approx(213.0)
+        assert results[0].soc is None
+        assert results[0].current_capacity is None
 
     @pytest.mark.asyncio
     async def test_never_seen_explicit_slave_remains_required(self) -> None:
         """A configured slave is required even before its first response (#249)."""
-        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+        transport = BatteryModbusTransport(
+            host="10.100.3.27", unit_ids=[1, 2, 3], topology_complete=True
+        )
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
         transport._client.connected = True
@@ -1497,7 +1505,7 @@ class TestReadAllWithSlaves:
             results = await transport.read_all()
 
         assert len(results) == 2
-        assert results[0].soc == 79
+        assert results[0].soc is None
         assert results[0].current_capacity is None
         assert transport._unit_last_seen == {1: 1.0, 2: 1.0, 3: 1.0}
 
@@ -1505,7 +1513,7 @@ class TestReadAllWithSlaves:
     async def test_stale_topology_evicts_after_retention_from_small_monotonic(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A removed unit eventually stops pinning aggregate SOC on low uptime (#249)."""
+        """Topology eviction remains observable but cannot establish completeness."""
         transport = BatteryModbusTransport(host="10.100.3.27", max_units=3)
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
@@ -1546,8 +1554,8 @@ class TestReadAllWithSlaves:
                 results = await transport.read_all()
 
         assert len(results) == 2
-        assert results[0].soc == 76
-        assert results[0].current_capacity == pytest.approx(213.0)
+        assert results[0].soc is None
+        assert results[0].current_capacity is None
         assert set(transport._unit_last_seen) == {1, 2}
         assert any(
             record.levelno == logging.INFO
@@ -1557,18 +1565,11 @@ class TestReadAllWithSlaves:
         )
 
     @pytest.mark.asyncio
-    async def test_evicted_declared_unit_does_not_re_arm_the_gate(self) -> None:
-        """Convergence must hold, not flap once per retention window (#249).
-
-        With explicit unit_ids, every poll re-offers the configured list to
-        topology memory.  Seeding on that offer alone would re-admit a unit the
-        previous cycle had just evicted, so an removed-but-still-configured
-        battery would hand back one cycle of individual SOC/capacity every six
-        hours and revert in between -- a periodic step in history rather than a
-        convergence.  Only a genuine response re-admits an evicted unit, so the
-        cycle after eviction must look exactly like the eviction cycle.
-        """
-        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+    async def test_evicted_declared_unit_still_blocks_capacity_reconstruction(self) -> None:
+        """Expiry of a configured unit is not evidence that it left the bank."""
+        transport = BatteryModbusTransport(
+            host="10.100.3.27", unit_ids=[1, 2, 3], topology_complete=True
+        )
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
         transport._client.connected = True
@@ -1587,7 +1588,7 @@ class TestReadAllWithSlaves:
             with patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=1.0):
                 transport._client.read_holding_registers = AsyncMock(side_effect=one_poll())
                 first = await transport.read_all()
-            assert first[0].current_capacity is None  # aggregate held
+            assert first[0].current_capacity is None  # individual capacity unavailable
 
             with patch(
                 "pylxpweb.transports.battery_modbus.time.monotonic",
@@ -1595,7 +1596,7 @@ class TestReadAllWithSlaves:
             ):
                 transport._client.read_holding_registers = AsyncMock(side_effect=one_poll())
                 converged = await transport.read_all()
-            assert converged[0].current_capacity == pytest.approx(213.0)
+            assert converged[0].current_capacity is None
 
             # The next poll re-offers unit 3; it must not be re-seeded.
             with patch(
@@ -1605,25 +1606,14 @@ class TestReadAllWithSlaves:
                 transport._client.read_holding_registers = AsyncMock(side_effect=one_poll())
                 after = await transport.read_all()
 
-        assert after[0].current_capacity == pytest.approx(213.0)
+        assert after[0].current_capacity is None
         assert after[0].soc == converged[0].soc
         assert set(transport._unit_last_seen) == {1, 2}
         assert transport._evicted_units == {3}
 
     @pytest.mark.asyncio
-    async def test_auto_scan_cold_start_boundary_is_pinned_as_is(self) -> None:
-        """Auto-scan's first scan cannot protect against a unit never seen (#249).
-
-        Topology memory is built from observation, so a fresh transport with
-        unit_ids=None whose very first scan misses a unit has nothing to compare
-        against: the remembered set is already short and the re-decode gate
-        passes on incomplete topology.  This is the original defect's shape in a
-        narrow window that heals on explicit rediscovery, and it is pinned deliberately rather than
-        fixed -- closing it would require a declared expected unit count, which
-        is exactly the configuration auto-scan exists to avoid.  The second half
-        of this test is explicit rediscovery: once the missing unit answers even once,
-        it is remembered and its later silence blocks the gate.
-        """
+    async def test_auto_scan_cold_start_and_rediscovery_keep_master_unknown(self) -> None:
+        """Neither the first scan nor rediscovery attests physical completeness."""
         transport = BatteryModbusTransport(host="10.100.3.27", max_units=3)
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
@@ -1647,8 +1637,8 @@ class TestReadAllWithSlaves:
             )
             cold = await transport.read_all()
 
-        # Boundary: the gate passed, because unit 3 was never observed.
-        assert cold[0].current_capacity == pytest.approx(213.0)
+        # A never-observed pack cannot be ruled out.
+        assert cold[0].current_capacity is None
         assert set(transport._unit_last_seen) == {1, 2}
 
         # Explicit rediscovery: unit 3 answers once and joins remembered topology...
@@ -1673,7 +1663,7 @@ class TestReadAllWithSlaves:
             await transport.read_all()
         assert set(transport._unit_last_seen) == {1, 2, 3}
 
-        # ...and from now on its silence keeps the master on the aggregate.
+        # Its later silence also leaves master capacity unknown.
         with (
             patch("pylxpweb.transports.battery_modbus.asyncio.sleep", new_callable=AsyncMock),
             patch("pylxpweb.transports.battery_modbus.time.monotonic", return_value=3.0),
@@ -1693,7 +1683,7 @@ class TestReadAllWithSlaves:
             healed = await transport.read_all()
 
         assert healed[0].current_capacity is None
-        assert healed[0].soc == 79
+        assert healed[0].soc is None
 
     @pytest.mark.asyncio
     async def test_returning_unit_is_readmitted_after_eviction(self) -> None:
@@ -1702,7 +1692,9 @@ class TestReadAllWithSlaves:
         Eviction is not a permanent blacklist: a genuine response re-admits the
         unit, which immediately makes the re-decode gate demand it again.
         """
-        transport = BatteryModbusTransport(host="10.100.3.27", unit_ids=[1, 2, 3])
+        transport = BatteryModbusTransport(
+            host="10.100.3.27", unit_ids=[1, 2, 3], topology_complete=True
+        )
         transport._client = AsyncMock()
         transport._client.close = MagicMock()
         transport._client.connected = True
@@ -1821,3 +1813,28 @@ class TestOverlayInverterBMS:
         assert master.max_cell_temperature == 19.0
         # Slave unaffected
         assert results[1].min_cell_temperature == 17.0  # from packed temps
+
+
+class TestMasterTopologyAttestation:
+    def test_discovery_cannot_attest_complete_topology(self) -> None:
+        with pytest.raises(ValueError, match="explicit unit_ids"):
+            BatteryModbusTransport(host="battery", topology_complete=True)
+
+    @pytest.mark.asyncio
+    async def test_configured_subset_defaults_to_unknown_even_with_modulo_alias(self) -> None:
+        transport = BatteryModbusTransport(host="battery", unit_ids=[1])
+        transport._client = AsyncMock()
+        transport._client.close = MagicMock()
+        transport._client.connected = True
+        transport._connected = True
+        # An omitted 655.36Ah pack could alias both full and remaining registers.
+        transport._client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _mock_result(_make_master_regs(soc=100, reg26=28000, reg27=28000)),
+                _mock_result([3310] * 16),
+            ]
+        )
+        results = await transport.read_all()
+        assert results[0].soc is None
+        assert results[0].current_capacity is None
+        assert results[0].voltage == pytest.approx(52.96)
