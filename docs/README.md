@@ -17,6 +17,8 @@ documentation for the Luxpower/EG4 inverter Python API client library.
   battery module types.
 - **[Battery RS485 Protocols](BATTERY_RS485_PROTOCOLS.md)** — Direct RS485 battery
   communication protocol details.
+- **[Modbus Host Ownership](MODBUS_HOST_OWNERSHIP.md)** — Shared-unit lifecycle,
+  per-connection request serialization, and host-owned endpoint scheduling.
 - **[Collect Device Data](COLLECT_DEVICE_DATA.md)** — Guide for capturing live API
   sample data for testing and diagnostics.
 
