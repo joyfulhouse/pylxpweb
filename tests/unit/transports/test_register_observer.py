@@ -196,9 +196,13 @@ def _without_timestamps(value: object) -> object:
     if isinstance(value, tuple):
         return tuple(_without_timestamps(item) for item in value)
     if is_dataclass(value) and not isinstance(value, type):
-        payload = asdict(value)
-        payload.pop("timestamp", None)
-        return payload
+        return _without_timestamps(asdict(value))
+    if isinstance(value, dict):
+        return {
+            key: _without_timestamps(item)
+            for key, item in value.items()
+            if key not in ("timestamp", "acquired_at")
+        }
     return value
 
 

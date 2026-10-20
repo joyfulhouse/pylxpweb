@@ -253,6 +253,7 @@ class TestInverterEnergyData:
     def test_from_http_response(self) -> None:
         """Test conversion from HTTP API response."""
         energy = MagicMock(spec=EnergyInfo)
+        energy.provenance = {}
         energy.todayYielding = 184  # 18.4 kWh after /10
         energy.todayCharging = 50  # 5.0 kWh
         energy.todayDischarging = 30  # 3.0 kWh

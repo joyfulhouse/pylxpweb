@@ -29,7 +29,7 @@ from collections import deque
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import aiohttp
 from aiohttp import ClientTimeout
@@ -58,6 +58,7 @@ from .exceptions import (
     LuxpowerConnectionError,
 )
 from .models import LoginResponse
+from .provenance import _HTTPResponse, _utc_now
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -653,6 +654,16 @@ class LuxpowerClient:
 
                     # Non-transient error or max retries exceeded
                     raise LuxpowerAPIError(f"API error (HTTP {response.status}): {error_msg}")
+
+                # Metadata travels with this payload, including cache hits and retries.
+                # Receipt of cloud JSON does not establish the device measurement day.
+                if isinstance(json_data, dict):
+                    source_id = url
+                    if data is not None and "serialNum" in data:
+                        source_id += "?serialNum=" + quote(str(data["serialNum"]), safe="")
+                    json_data = _HTTPResponse(
+                        json_data, source_id=source_id, acquired_at=_utc_now()
+                    )
 
                 # Cache successful response
                 if cache_key and cache_endpoint:

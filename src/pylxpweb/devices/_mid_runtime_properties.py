@@ -23,6 +23,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
+from pylxpweb.provenance import EnergyProvenance, derived_provenance, unknown_provenance
+from pylxpweb.transports.data import MID_ENERGY_FIELDS
+
 if TYPE_CHECKING:
     from pylxpweb.models import MidboxRuntime
     from pylxpweb.transports.data import MidboxRuntimeData
@@ -47,6 +50,47 @@ class MIDRuntimePropertiesMixin:
 
     _runtime: MidboxRuntime | None
     _transport_runtime: MidboxRuntimeData | None
+    serial_number: str
+
+    @property
+    def energy_provenance(self) -> dict[str, EnergyProvenance]:
+        """Provenance for the selected public energy values, including both phases.
+
+        An absent value has no entry. A value without acquisition metadata has
+        explicit unknown provenance. Derived totals retain missing contributors
+        as unknown, matching the numeric getters' partial-sum behavior.
+        """
+        result: dict[str, EnergyProvenance] = {}
+        source_id = f"mid:{self.serial_number}"
+        for transport_attr, http_attr in MID_ENERGY_FIELDS.items():
+            public_attr = "e_" + transport_attr.replace("_energy", "")
+            public_attr = public_attr.replace("ac_couple_", "ac_couple").replace(
+                "smart_load_", "smart_load"
+            )
+            tr = self._transport_runtime
+            if tr is not None and getattr(tr, transport_attr) is not None:
+                result[public_attr] = tr.provenance.get(transport_attr) or unknown_provenance(
+                    source_id, field_name=transport_attr
+                )
+            elif self._runtime is not None:
+                data = self._runtime.midboxData
+                if getattr(data, http_attr) is not None:
+                    result[public_attr] = data.provenance.get(http_attr) or unknown_provenance(
+                        source_id, field_name=http_attr
+                    )
+        for name in tuple(result):
+            total = name.rsplit("_", 1)[0]
+            if total not in result:
+                result[total] = derived_provenance(
+                    source_id,
+                    (
+                        result.get(f"{total}_{leg}")
+                        or unknown_provenance(source_id, field_name=f"{total}_{leg}")
+                        for leg in ("l1", "l2")
+                    ),
+                    field_name=total,
+                )
+        return result
 
     # ===========================================
     # Data Access Helpers

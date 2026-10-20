@@ -313,17 +313,17 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         try:
             from pylxpweb.transports.data import MidboxRuntimeData
 
-            self._runtime = await self._client.api.devices.get_midbox_runtime(self.serial_number)
-            if self._runtime.lost:
+            runtime = await self._client.api.devices.get_midbox_runtime(self.serial_number)
+            if runtime.lost:
                 # The portal says the dongle is offline and is serving a
                 # frozen register mirror — arm the energy catch-up widening
                 # for the eventual reconnect delta (#479), mirroring the
                 # inverter _fetch_runtime_http path.
                 self._note_energy_source_stale()
-            new_runtime = MidboxRuntimeData.from_http_response(self._runtime.midboxData)
+            new_runtime = MidboxRuntimeData.from_http_response(runtime.midboxData)
             # Extract isOffGrid from deviceData (primary inverter's data)
-            if self._runtime.deviceData is not None:
-                new_runtime.off_grid = self._runtime.deviceData.isOffGrid
+            if runtime.deviceData is not None:
+                new_runtime.off_grid = runtime.deviceData.isOffGrid
             prev_lifetime = (
                 self._transport_runtime.lifetime_energy_values()
                 if self._transport_runtime is not None
@@ -332,6 +332,7 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
             if not self._validate_runtime_energy(new_runtime):
                 return  # keep cached runtime
             now = datetime.now()
+            self._runtime = runtime
             self._transport_runtime = new_runtime
             self._runtime_cache_time = now
             self._last_refresh = now

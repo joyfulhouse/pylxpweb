@@ -315,6 +315,7 @@ class TestComputeEnergyFromInvertersUsesEnergyBalance:
         so the test can verify it is NOT used in the computation.
         """
         energy = Mock()
+        energy.provenance = {}
         energy.pv_energy_today = pv
         energy.charge_energy_today = charge
         energy.discharge_energy_today = discharge

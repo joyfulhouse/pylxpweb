@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pylxpweb.provenance import EnergyProvenance, derived_provenance, unknown_provenance
+
 if TYPE_CHECKING:
     from pylxpweb import LuxpowerClient
     from pylxpweb.models import EnergyInfo
@@ -119,29 +121,44 @@ class ParallelGroup:
             Synthetic EnergyInfo with summed values.
         """
 
-        def _sum_field(attr: str) -> int:
+        provenance: dict[str, EnergyProvenance] = {}
+        source_id = f"parallel:{self.first_device_serial}:{self.name}"
+
+        def _sum_field(attr: str, api_field: str) -> int:
             """Sum a transport energy field across inverters, converting kWh to 0.1 kWh."""
             total = 0.0
+            components: list[EnergyProvenance] = []
             for inv in self.inverters:
-                val = getattr(inv._transport_energy, attr, None)
+                snapshot = inv._transport_energy
+                val = getattr(snapshot, attr, None)
                 if val is not None:
                     total += float(val)
+                component = (
+                    snapshot.provenance.get(attr)
+                    if snapshot is not None and val is not None
+                    else None
+                )
+                components.append(
+                    component
+                    or unknown_provenance(f"inverter:{inv.serial_number}", field_name=attr)
+                )
+            provenance[api_field] = derived_provenance(source_id, components, field_name=api_field)
             # Convert kWh back to raw API units (0.1 kWh)
             return int(round(total * 10))
 
         from pylxpweb.models import EnergyInfo as EnergyInfoModel
 
-        today_yield = _sum_field("pv_energy_today")
-        today_charge = _sum_field("charge_energy_today")
-        today_discharge = _sum_field("discharge_energy_today")
-        today_import = _sum_field("grid_import_today")
-        today_export = _sum_field("grid_export_today")
+        today_yield = _sum_field("pv_energy_today", "todayYielding")
+        today_charge = _sum_field("charge_energy_today", "todayCharging")
+        today_discharge = _sum_field("discharge_energy_today", "todayDischarging")
+        today_import = _sum_field("grid_import_today", "todayImport")
+        today_export = _sum_field("grid_export_today", "todayExport")
 
-        total_yield = _sum_field("pv_energy_total")
-        total_charge = _sum_field("charge_energy_total")
-        total_discharge = _sum_field("discharge_energy_total")
-        total_import = _sum_field("grid_import_total")
-        total_export = _sum_field("grid_export_total")
+        total_yield = _sum_field("pv_energy_total", "totalYielding")
+        total_charge = _sum_field("charge_energy_total", "totalCharging")
+        total_discharge = _sum_field("discharge_energy_total", "totalDischarging")
+        total_import = _sum_field("grid_import_total", "totalImport")
+        total_export = _sum_field("grid_export_total", "totalExport")
 
         # Usage via energy balance.  Per-inverter ``load_energy_today`` (now the
         # real Eload register, reg 171) is not a reliable parallel-group
@@ -151,9 +168,20 @@ class ParallelGroup:
         # See: eg4_web_monitor issue #163
         today_usage = today_yield + today_discharge + today_import - today_charge - today_export
         total_usage = total_yield + total_discharge + total_import - total_charge - total_export
+        for prefix in ("today", "total"):
+            field_name = f"{prefix}Usage"
+            provenance[field_name] = derived_provenance(
+                source_id,
+                (
+                    provenance[f"{prefix}{component}"]
+                    for component in ("Yielding", "Discharging", "Import", "Charging", "Export")
+                ),
+                field_name=field_name,
+            )
 
         return EnergyInfoModel(
             success=True,
+            provenance=provenance,
             todayYielding=today_yield,
             todayCharging=today_charge,
             todayDischarging=today_discharge,
@@ -244,6 +272,32 @@ class ParallelGroup:
     # Daily energy values reset at midnight (API server time).
     # The client automatically invalidates cache on hour boundaries
     # to minimize stale data, but cannot control API reset timing.
+
+    @property
+    def energy_provenance(self) -> dict[str, EnergyProvenance]:
+        """Return provenance keyed by public daily and lifetime energy properties.
+
+        Derived entries retain every component's original source and acquisition
+        time. Missing contributor evidence remains unknown; neither aggregation
+        nor property access supplies a new timestamp or infers a shared counter day.
+        An empty mapping means no accepted energy snapshot exists.
+        """
+        if self._energy is None:
+            return {}
+        source_id = f"parallel:{self.first_device_serial}:{self.name}"
+        return {
+            f"{prefix}_{name}": self._energy.provenance.get(f"{prefix}{api_name}")
+            or unknown_provenance(source_id, field_name=f"{prefix}{api_name}")
+            for prefix in ("today", "total")
+            for name, api_name in (
+                ("yielding", "Yielding"),
+                ("charging", "Charging"),
+                ("discharging", "Discharging"),
+                ("import", "Import"),
+                ("export", "Export"),
+                ("usage", "Usage"),
+            )
+        }
 
     @property
     def today_yielding(self) -> float:

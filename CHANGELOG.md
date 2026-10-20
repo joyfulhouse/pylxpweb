@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Energy provenance preserves source identity and aware UTC acquisition time
+  across HTTP caches, local reads, validation, and component aggregates (#383).
+  Device measurement times and counter days remain explicitly unknown without
+  supporting evidence; HTTP receive time does not establish a daily reset.
+
 ### Changed
 
 - Split `pylxpweb[esphome]` from `pylxpweb[modbus-connection]`: TCP and serial
@@ -18,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   See `docs/HOME_ASSISTANT_COMPATIBILITY.md` for verified dependency floors.
 
 ### Fixed
+
+- Rejected GridBOSS HTTP samples no longer replace the fallback data behind
+  accepted energy values and their provenance.
 
 - Recognize field-reported GEN-LB-EU device code 20 and 12000XP code 2102
   without masking high bits; preserve raw codes through discovery and scanning.
