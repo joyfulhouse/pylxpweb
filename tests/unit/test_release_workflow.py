@@ -2303,7 +2303,7 @@ def test_only_absent_state_can_reach_action_only_production_publisher() -> None:
     assert tolerated == [("prepare-pypi", step_id) for step_id in _PREPARE_EVIDENCE_STEPS]
 
 
-# CI-only artifact-action contract facts, verified 2026-08-18 against the pinned
+# CI-only artifact-action contract facts, download re-verified 2026-10-20 against the pinned
 # actions' committed sources (evidence, including the verified file hashes, lives
 # in .github/WORKFLOWS.md under "Pinned artifact-action contract evidence"):
 # - actions/download-artifact `action.yml` declares the `digest-mismatch` input
@@ -2315,7 +2315,7 @@ def test_only_absent_state_can_reach_action_only_production_publisher() -> None:
 #   `src/shared/upload-artifact.ts` emits the toolkit's bare-hex SHA-256 (no
 #   `sha256:` prefix), matching the workflow's `[0-9a-f]{64}` fullmatch.
 _VERIFIED_ARTIFACT_ACTION_CONTRACTS = {
-    "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c": (
+    "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333": (
         "e98559b7a31ba31be4709f20d22102dc2737fa630f69a339eb89981151e505fe"
     ),
     "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a": (
