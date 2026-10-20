@@ -32,6 +32,9 @@ sentinel instead.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from decimal import Decimal
+
 from pylxpweb.constants.scaling import ScaleFactor
 from pylxpweb.transports.data import BatteryData
 
@@ -163,56 +166,45 @@ class EG4MasterProtocol(BatteryProtocol):
         raw_reg: int,
         num_batteries: int,
         designed_capacity_ah: float,
-    ) -> float:
-        """Unwrap a uint16-overflowed capacity register to get true Ah value.
+        *,
+        minimum_capacity_ah: float = 0.0,
+    ) -> float | None:
+        """Return the unique uint16 capacity candidate within the supplied bounds.
 
-        The firmware stores ``total_capacity_Ah * 100`` as uint16, which
-        overflows for multi-battery systems.  We find the overflow count N
-        such that ``(raw_reg + N * 65536) / 100`` falls within the expected
-        physical range ``[0, num_batteries * designed_capacity_ah * 1.05]``.
-
-        Uses floor-based N estimation with fallback to N-1 to handle both
-        near-full-capacity and low-SOC cases correctly.
-
-        Args:
-            raw_reg: Raw uint16 register value (reg 26 or 27).
-            num_batteries: Total number of batteries on the chain.
-            designed_capacity_ah: Designed capacity per battery in Ah.
-
-        Returns:
-            Total capacity in Ah, or 0.0 if inputs are invalid.
+        Nominal capacity alone cannot select a remaining-capacity wrap count.
+        The default lower bound is zero; ambiguous or invalid inputs return None.
+        ``num_batteries * designed_capacity_ah`` is the strict upper bound.
         """
-        if num_batteries <= 0 or designed_capacity_ah <= 0:
-            return 0.0
-
-        max_expected = num_batteries * designed_capacity_ah
-        upper_bound = max_expected * 1.05
-        n = int(max_expected * 100 / 65536)
-
-        for candidate_n in [n, max(0, n - 1)]:
-            result = (raw_reg + candidate_n * 65536) / 100.0
-            if 0 <= result <= upper_bound:
-                return result
-
-        return 0.0
+        lower = Decimal(str(minimum_capacity_ah)) * 100
+        upper = Decimal(str(designed_capacity_ah)) * num_batteries * 100
+        if (
+            not 0 <= raw_reg <= 65535
+            or num_batteries <= 0
+            or not lower.is_finite()
+            or not upper.is_finite()
+            or upper <= 0
+            or lower < 0
+            or lower > upper
+        ):
+            return None
+        # Work in register ticks to avoid floating-point boundary errors.
+        first = max(0, int(((lower - raw_reg) / 65536).to_integral_value(rounding="ROUND_CEILING")))
+        last = int(((upper - raw_reg) / 65536).to_integral_value(rounding="ROUND_FLOOR"))
+        if first != last:
+            return None
+        return (raw_reg + first * 65536) / 100.0
 
     @staticmethod
     def compute_master_remaining(
         total_remaining_ah: float,
         slave_remaining: list[float],
-    ) -> float:
-        """Compute master battery's individual remaining capacity.
-
-        Subtracts all slave remaining capacities from the bank total.
-
-        Args:
-            total_remaining_ah: Total remaining Ah from unwrapped reg 26.
-            slave_remaining: List of slave remaining capacities in Ah.
-
-        Returns:
-            Master's own remaining capacity in Ah, clamped to >= 0.
-        """
-        return max(0.0, total_remaining_ah - sum(slave_remaining))
+    ) -> float | None:
+        """Subtract known slave capacities, rejecting invalid or negative results."""
+        values = [Decimal(str(value)) for value in [total_remaining_ah, *slave_remaining]]
+        if any(not value.is_finite() or value < 0 for value in values):
+            return None
+        remaining = values[0] - sum(values[1:])
+        return float(remaining) if remaining >= 0 else None
 
     def decode(self, raw_regs: dict[int, int], battery_index: int = 0) -> BatteryData:
         """Decode master battery registers into BatteryData.
@@ -240,20 +232,14 @@ class EG4MasterProtocol(BatteryProtocol):
 
         temperature = float(signed_int16(raw_regs.get(24, 0)))
 
-        # SOC: reg 21, direct % (capacity-weighted aggregate across all batteries)
-        # Firmware: total_remaining / total_full * 100 via FUN_190BA
-        # For master's individual SOC, use decode_with_slaves() instead
-        soc = raw_regs.get(21, 0)
+        # Register 21 is bank SOC, not an individual master measurement.
+        # Only decode_with_slaves() with complete evidence can recover master SOC.
         soh_raw = raw_regs.get(32, 0)
         soh = soh_raw if soh_raw > 0 else None  # 0 = not reported (#309)
         cycle_count = raw_regs.get(30, 0)
 
         # Designed capacity: reg 33 /20 (unique to master protocol)
         max_capacity = raw_regs.get(33, 0) / 20.0
-
-        # Total remaining/full from reg 26/27 (overflow uint16, stored for decode_with_slaves)
-        self._last_total_remaining_raw = raw_regs.get(26, 0)
-        self._last_total_full_raw = raw_regs.get(27, 0)
 
         num_cells = raw_regs.get(41, 0)
         cell_voltages, fallback_min, fallback_max = self.decode_cell_voltages(
@@ -293,7 +279,7 @@ class EG4MasterProtocol(BatteryProtocol):
             battery_index=battery_index,
             voltage=voltage,
             current=current,
-            soc=soc,
+            soc=None,
             soh=soh,
             temperature=temperature,
             max_capacity=max_capacity,
@@ -317,64 +303,61 @@ class EG4MasterProtocol(BatteryProtocol):
         raw_regs: dict[int, int],
         slave_data: list[BatteryData],
         battery_index: int = 0,
+        *,
+        topology_complete: bool = False,
     ) -> BatteryData:
-        """Decode master registers with slave context for individual SOC.
+        """Recover individual master capacity only with complete, consistent evidence.
 
-        Uses reg 26/27 overflow unwrap and slave remaining capacities to
-        back-calculate the master battery's own remaining capacity and SOC,
-        instead of reporting the aggregate values.
-
-        Args:
-            raw_regs: Dict mapping register address to raw 16-bit value.
-            slave_data: List of decoded BatteryData from slave batteries.
-            battery_index: 0-based index of the battery in the bank.
-
-        Returns:
-            BatteryData with master's individual SOC and remaining capacity.
+        ``topology_complete`` attests that every slave in the physical bank is
+        represented. Discovery alone cannot establish this: an unseen pack may
+        alias register 27 after wrapping. Unknown topology, missing capacities,
+        inconsistent full capacity, and ambiguous remaining capacity leave SOC
+        and current_capacity as None. Valid empty packs retain zero.
         """
         data = self.decode(raw_regs, battery_index)
-
-        reg26 = raw_regs.get(26, 0)
-        reg27 = raw_regs.get(27, 0)
-        if reg26 == 0 and reg27 == 0:
+        if not topology_complete or any(address not in raw_regs for address in (26, 27, 33)):
+            return data
+        if any(not 0 <= raw_regs[address] <= 65535 for address in (26, 27, 33)):
+            return data
+        if data.max_capacity <= 0:
+            return data
+        indices = [slave.battery_index for slave in slave_data]
+        if len(set(indices)) != len(indices) or battery_index in indices:
             return data
 
-        num_batteries = 1 + len(slave_data)
-        designed_ah = data.max_capacity if data.max_capacity > 0 else 280.0
+        full = Decimal(str(data.max_capacity))
+        slave_remaining: list[float] = []
+        for slave in slave_data:
+            designed = Decimal(str(slave.max_capacity))
+            if slave.current_capacity is None:
+                return data
+            remaining = Decimal(str(slave.current_capacity))
+            if (
+                not designed.is_finite()
+                or not remaining.is_finite()
+                or designed <= 0
+                or remaining < 0
+                or remaining > designed
+            ):
+                return data
+            full += designed
+            slave_remaining.append(slave.current_capacity)
 
-        total_remaining = self.unwrap_capacity_register(reg26, num_batteries, designed_ah)
-
-        if total_remaining <= 0:
+        full_ticks = full * 100
+        if full_ticks != full_ticks.to_integral_value() or int(full_ticks) % 65536 != raw_regs[27]:
             return data
-
-        slave_remaining = [
-            s.current_capacity if s.current_capacity is not None else 0.0 for s in slave_data
-        ]
-        master_remaining = self.compute_master_remaining(total_remaining, slave_remaining)
-
-        master_soc = round(master_remaining / designed_ah * 100) if designed_ah > 0 else 0
-        master_soc = max(0, min(100, master_soc))
-
-        return BatteryData(
-            battery_index=data.battery_index,
-            voltage=data.voltage,
-            current=data.current,
-            soc=master_soc,
-            soh=data.soh,
-            temperature=data.temperature,
-            max_capacity=data.max_capacity,
-            current_capacity=master_remaining,
-            cycle_count=data.cycle_count,
-            cell_count=data.cell_count,
-            cell_voltages=data.cell_voltages,
-            min_cell_voltage=data.min_cell_voltage,
-            max_cell_voltage=data.max_cell_voltage,
-            min_cell_temperature=data.min_cell_temperature,
-            max_cell_temperature=data.max_cell_temperature,
-            max_cell_num_voltage=data.max_cell_num_voltage,
-            min_cell_num_voltage=data.min_cell_num_voltage,
-            firmware_version=data.firmware_version,
-            status=data.status,
-            fault_code=data.fault_code,
-            warning_code=data.warning_code,
+        lower = sum(Decimal(str(value)) for value in slave_remaining)
+        upper = lower + Decimal(str(data.max_capacity))
+        total = self.unwrap_capacity_register(
+            raw_regs[26], 1, float(upper), minimum_capacity_ah=float(lower)
+        )
+        if total is None:
+            return data
+        remaining_ah = self.compute_master_remaining(total, slave_remaining)
+        if remaining_ah is None or remaining_ah > data.max_capacity:
+            return data
+        return replace(
+            data,
+            soc=round(remaining_ah / data.max_capacity * 100),
+            current_capacity=remaining_ah,
         )

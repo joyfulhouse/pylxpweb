@@ -139,7 +139,7 @@ class EG4SlaveProtocol(BatteryProtocol):
             soh=soh,
             temperature=float(max_temp),
             max_capacity=max_capacity,
-            current_capacity=remaining_capacity if remaining_capacity > 0 else None,
+            current_capacity=remaining_capacity if 21 in raw_regs else None,
             cycle_count=cycle_count,
             cell_count=num_cells,
             cell_voltages=cell_voltages,

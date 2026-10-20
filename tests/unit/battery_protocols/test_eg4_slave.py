@@ -287,3 +287,11 @@ class TestEG4SlaveProtocol:
         assert data.cell_temperatures == []
         assert data.min_cell_temperature == 25.0
         assert data.max_cell_temperature == 27.0
+
+
+@pytest.mark.parametrize("registers,expected", [({21: 0}, 0), ({}, None)])
+def test_remaining_capacity_distinguishes_empty_from_missing(
+    registers: dict[int, int],
+    expected: float | None,
+) -> None:
+    assert EG4SlaveProtocol().decode(registers).current_capacity == expected

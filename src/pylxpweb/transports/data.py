@@ -977,8 +977,7 @@ class BatteryData:
     All values are already scaled to proper units.
 
     Validation:
-        - soc and soh are clamped to 0-100 range (soh stays None when
-          the BMS does not report it)
+        - soc and soh are clamped to 0-100 range; unavailable values stay None
     """
 
     # Identity
@@ -988,7 +987,7 @@ class BatteryData:
     # State
     voltage: float = 0.0  # V
     current: float = 0.0  # A
-    soc: int = 0  # %
+    soc: int | None = 0  # % (None = individual SOC unavailable)
     soh: int | None = None  # % (None = not reported by BMS)
     temperature: float = 0.0  # °C
 
@@ -1036,16 +1035,14 @@ class BatteryData:
     last_seen: datetime | None = None  # When this battery's data was last read
 
     # Pre-clamp raw values for corruption detection (populated by __post_init__)
-    _raw_soc: int = field(default=0, repr=False)
+    _raw_soc: int | None = field(default=0, repr=False)
     _raw_soh: int | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         """Validate and clamp percentage values."""
         self._raw_soc = self.soc
         self._raw_soh = self.soh
-        # soc is non-nullable (default 0), so _clamp_percentage always
-        # returns a non-None int for it.  soh stays None when unreported.
-        self.soc = _clamp_percentage(self.soc, "battery_soc") or 0
+        self.soc = _clamp_percentage(self.soc, "battery_soc")
         self.soh = _clamp_percentage(self.soh, "battery_soh")
 
     def is_corrupt(self) -> bool:
@@ -1056,7 +1053,7 @@ class BatteryData:
         catches catastrophic corruption like 0xFFFF → ~6553V).
         Batteries with voltage=0 (no CAN data) are NOT corrupt — just absent.
         """
-        if self._raw_soc > 100:
+        if self._raw_soc is not None and self._raw_soc > 100:
             _LOGGER.warning(
                 "Battery %d canary: raw_soc=%d > 100",
                 self.battery_index,
@@ -1141,12 +1138,14 @@ class BatteryData:
 
     @property
     def remaining_capacity(self) -> float | None:
-        """Calculate remaining capacity in Ah from max_capacity and SOC.
+        """Return measured remaining Ah, or derive it from known capacity and SOC.
 
         Returns:
             Remaining capacity in Ah (max_capacity * soc / 100), or None if unavailable
         """
-        if self.max_capacity > 0 and self.soc > 0:
+        if self.current_capacity is not None:
+            return self.current_capacity
+        if self.max_capacity > 0 and self.soc is not None:
             return self.max_capacity * self.soc / 100
         return None
 
@@ -1168,7 +1167,7 @@ class BatteryData:
         return round(self.voltage * self.current, 2)
 
     @property
-    def capacity_percent(self) -> int:
+    def capacity_percent(self) -> int | None:
         """Calculate capacity percentage (remaining / full * 100).
 
         This is different from SOC - it represents the battery's actual
@@ -1178,7 +1177,7 @@ class BatteryData:
             Capacity percentage (0-100), or SOC if current_capacity unavailable.
         """
         current_cap = self.current_capacity
-        if self.max_capacity > 0 and current_cap is not None and current_cap > 0:
+        if self.max_capacity > 0 and current_cap is not None and current_cap >= 0:
             return round((current_cap / self.max_capacity) * 100)
         # Fall back to SOC if current_capacity not available
         return self.soc
@@ -1538,6 +1537,8 @@ class BatteryBankData:
     def soc_delta(self) -> int | None:
         """SOC spread across batteries (max - min)."""
         vals = [b.soc for b in self.batteries if b.soc is not None]
+        if len(vals) != len(self.batteries):
+            return None
         return max(vals) - min(vals) if len(vals) >= 2 else None
 
     @property

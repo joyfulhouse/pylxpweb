@@ -666,11 +666,11 @@ class BatteryModule(BaseModel):
     current: int
 
     # State of Charge/Health
-    soc: int
+    soc: int | None
     soh: int
 
     # Capacity
-    currentRemainCapacity: int
+    currentRemainCapacity: int | None
     currentFullCapacity: int
     currentCapacityPercent: int | None = None
     maxBatteryCharge: int | None = None

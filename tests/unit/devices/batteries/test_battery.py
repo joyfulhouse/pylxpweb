@@ -474,3 +474,40 @@ class TestCloudSohUnreportedIsNone:
             "1234567890",
         )
         assert battery.soh is None
+
+
+class TestUnknownTransportCapacity:
+    """Public properties preserve transport absence through the legacy model."""
+
+    @pytest.mark.parametrize("soc,remaining", [(None, None), (0, 0), (76, 213)])
+    def test_transport_properties_preserve_unknown_and_empty(
+        self,
+        mock_client: LuxpowerClient,
+        soc: int | None,
+        remaining: float | None,
+    ) -> None:
+        battery = Battery.from_transport_data(
+            mock_client,
+            BatteryData(soc=soc, current_capacity=remaining, max_capacity=280),
+            "1234567890",
+        )
+        assert battery.soc == soc
+        assert battery.data.soc == soc
+        assert battery.data.currentRemainCapacity == remaining
+        serialized = battery.data.model_dump()
+        assert serialized["soc"] == soc
+        assert serialized["currentRemainCapacity"] == remaining
+        assert battery.current_remain_capacity == remaining
+        assert battery.remaining_capacity == remaining
+        assert battery.capacity_percent == soc
+
+    def test_unknown_transport_does_not_fall_back_to_cloud(
+        self,
+        mock_client: LuxpowerClient,
+        sample_battery_module: BatteryModule,
+    ) -> None:
+        battery = Battery(client=mock_client, battery_data=sample_battery_module)
+        battery._transport_data = BatteryData(soc=None, max_capacity=280)
+        assert battery.soc is None
+        assert battery.current_remain_capacity is None
+        assert battery.capacity_percent is None

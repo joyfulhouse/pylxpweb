@@ -185,14 +185,18 @@ class HTTPTransport(BaseTransport):
                             voltage=apply_scale(bat.totalVoltage, ScaleFactor.SCALE_100),
                             # current needs /10 scaling (not /100!)
                             current=apply_scale(bat.current, ScaleFactor.SCALE_10),
-                            soc=bat.soc or 0,
+                            soc=bat.soc,
                             # 0 = not reported; surface None, never a
                             # fabricated 100 (#309)
                             soh=bat.soh if bat.soh else None,
                             # Temperatures: batMaxCellTemp/batMinCellTemp are /10
                             temperature=apply_scale(bat.batMaxCellTemp, ScaleFactor.SCALE_10),
                             max_capacity=float(bat.currentFullCapacity or 0),
-                            current_capacity=float(bat.currentRemainCapacity or 0),
+                            current_capacity=(
+                                float(bat.currentRemainCapacity)
+                                if bat.currentRemainCapacity is not None
+                                else None
+                            ),
                             cycle_count=bat.cycleCnt or 0,
                             # Cell voltage extremes: /1000 scaling
                             min_cell_voltage=apply_scale(

@@ -1046,3 +1046,30 @@ class TestSohUnreportedIsNone:
         data = BatteryData(voltage=53.0, soc=85, soh=150)
         assert data.soh == 100  # clamped
         assert data.is_corrupt() is True
+
+
+class TestUnknownIndividualBatteryCapacity:
+    """Unknown master data must not become zero or a partial-bank balance."""
+
+    def test_unknown_soc_survives_validation_and_properties(self) -> None:
+        data = BatteryData(soc=None, max_capacity=280)
+        assert data.soc is None
+        assert data._raw_soc is None
+        assert not data.is_corrupt()
+        assert data.remaining_capacity is None
+        assert data.capacity_percent is None
+
+    def test_empty_pack_is_known_zero(self) -> None:
+        data = BatteryData(soc=0, max_capacity=280, current_capacity=0)
+        assert data.remaining_capacity == 0
+        assert data.capacity_percent == 0
+
+    def test_measured_capacity_is_not_replaced_by_rounded_soc(self) -> None:
+        data = BatteryData(soc=76, max_capacity=280, current_capacity=213)
+        assert data.remaining_capacity == 213
+
+    def test_soc_spread_requires_every_pack(self) -> None:
+        bank = BatteryBankData(
+            batteries=[BatteryData(soc=None), BatteryData(soc=80), BatteryData(soc=80)]
+        )
+        assert bank.soc_delta is None
