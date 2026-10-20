@@ -88,6 +88,11 @@ A local connection must have a **single client**: sharing the same dongle or RS-
 between multiple applications (e.g. Home Assistant plus a script, or two Home Assistant
 instances) causes interleaved responses, data corruption, and intermittent errors.
 
+For cooperating consumers within one host, see
+[Modbus connection ownership and scheduling](docs/MODBUS_HOST_OWNERSHIP.md).
+It explains shared-unit request serialization, the host's responsibility for
+separate connections to one gateway, and the current close-completion limitation.
+
 
 ## Installation
 

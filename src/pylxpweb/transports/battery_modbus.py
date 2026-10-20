@@ -125,7 +125,8 @@ class BatteryModbusTransport:
     Args:
         host: Bridge IP address (e.g., "10.100.3.27").
         port: Modbus TCP port (default 502).
-        unit_ids: Specific unit IDs to read. None = scan up to max_units.
+        unit_ids: Specific unit IDs to read. None = discover up to max_units once.
+            Call scan_units() to refresh discovery after changing the battery bank.
         max_units: Maximum unit IDs to scan when unit_ids is None.
         protocol: Protocol name or "auto" for auto-detection.
         inverter_serial: Serial number of the inverter these batteries belong to.
@@ -149,6 +150,7 @@ class BatteryModbusTransport:
         self.port = port
         self.unit_ids = unit_ids
         self.max_units = max_units
+        self._discovered_unit_ids: list[int] | None = None
         self.protocol_name = protocol
         self.inverter_serial = inverter_serial
         self.timeout = timeout
@@ -537,7 +539,11 @@ class BatteryModbusTransport:
         """Discover which unit IDs respond on the bus.
 
         If explicit unit_ids were provided at construction, returns them
-        without probing. Otherwise, probes unit IDs 1 through max_units.
+        without probing. Otherwise, probes unit IDs 1 through max_units and
+        replaces the IDs used by read_all() after a nonempty scan. An empty
+        scan preserves the previous discovery so a temporary outage cannot
+        erase the polling topology. Before any successful discovery, read_all()
+        retries the scan on each call.
 
         Returns:
             List of responding unit IDs.
@@ -558,6 +564,7 @@ class BatteryModbusTransport:
                 await asyncio.sleep(_INTER_UNIT_DELAY)
 
             if responding:
+                self._discovered_unit_ids = responding.copy()
                 self._consecutive_errors = 0
                 if self._empty_scan_warned:
                     self._empty_scan_warned = False
@@ -651,6 +658,10 @@ class BatteryModbusTransport:
     ) -> list[BatteryData]:
         """Read all battery units with master SOC back-calculation and BMS overlay.
 
+        Auto-discovered IDs are reused until scan_units() refreshes them.
+        Call scan_units() after adding batteries or recovering a battery that
+        was absent during the first discovery.
+
         Reads slaves first, then re-decodes the master using slave context
         (for individual SOC/remaining capacity). If inverter BMS data is
         provided, overlays missing master fields (per-cell temperatures)
@@ -665,7 +676,12 @@ class BatteryModbusTransport:
         Returns:
             List of BatteryData objects for responding units, master first.
         """
-        units = self.unit_ids or await self.scan_units()
+        if self.unit_ids is not None:
+            units = self.unit_ids
+        elif self._discovered_unit_ids is not None:
+            units = self._discovered_unit_ids
+        else:
+            units = await self.scan_units()
         self._remember_polled_units(units)
 
         # Read all units, keeping track of raw registers for master re-decode
@@ -704,8 +720,8 @@ class BatteryModbusTransport:
         # remember a unit it has never seen, so on a fresh transport with
         # unit_ids=None whose first scan misses a unit, the remembered set is
         # already short and this gate passes on incomplete topology. It is the
-        # original defect's shape in a narrow, self-healing window: the missing
-        # unit's first genuine response is remembered permanently, after which
+        # original defect's shape until explicit rediscovery. A newly observed
+        # unit joins retained topology, after which
         # its silence blocks the gate like any other. Explicit unit_ids have no
         # such window because the declared list seeds memory before the first
         # read. Closing it would need a declared expected count, which is the

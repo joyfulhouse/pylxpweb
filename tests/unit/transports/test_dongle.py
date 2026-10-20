@@ -7,6 +7,7 @@ import contextlib
 import logging
 import ssl
 import struct
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1239,6 +1240,7 @@ class TestDongleFrameAssembly:
     async def test_fragment_assembly_uses_one_overall_timeout(self) -> None:
         """Each fragment must not restart the response timeout budget."""
         first_chunk = PACKET_PREFIX + struct.pack("<HH", PROTOCOL_VERSION, 32)
+        body_read_started = asyncio.Event()
         block_forever = asyncio.Event()
         calls = 0
 
@@ -1247,22 +1249,38 @@ class TestDongleFrameAssembly:
             calls += 1
             if calls == 1:
                 return first_chunk
+            body_read_started.set()
             await block_forever.wait()
             return b""
 
         reader = AsyncMock()
         reader.read = AsyncMock(side_effect=fragmented_read)
-        transport, writer = self._connected_transport(reader, timeout=0.02)
-        started = asyncio.get_running_loop().time()
+        transport, writer = self._connected_transport(reader, timeout=10.0)
+        real_wait_for = asyncio.wait_for
 
+        async def expire_frame_wait(awaitable, *, timeout: float):
+            assert timeout == 10.0
+            receive = asyncio.create_task(awaitable)
+            try:
+                await real_wait_for(body_read_started.wait(), 5.0)
+                assert not receive.done()
+            finally:
+                receive.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await receive
+            raise TimeoutError
+
+        wait = AsyncMock(side_effect=expire_frame_wait)
+        # Isolate the response timer from the channel's real writer-close timeout.
+        response_asyncio = SimpleNamespace(**(vars(asyncio) | {"wait_for": wait}))
         with (
             patch.object(transport, "_drain_buffer", new=AsyncMock()),
+            patch("pylxpweb.transports.dongle.asyncio", response_asyncio),
             pytest.raises(TransportTimeoutError, match="Timeout waiting"),
         ):
             await transport._send_receive(self._read_packet(transport), max_retries=0)
 
-        elapsed = asyncio.get_running_loop().time() - started
-        assert elapsed < 0.5
+        wait.assert_called_once()
         assert reader.read.await_count == 2
         writer.close.assert_called_once()
         assert transport.is_connected is False
