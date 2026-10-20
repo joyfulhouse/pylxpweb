@@ -8,7 +8,7 @@ import pytest
 from pylxpweb import LuxpowerClient
 
 # Mark all tests in this module as integration tests
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.control]
 
 
 async def ensure_correct_dst(client: LuxpowerClient, plant_id: str) -> bool:
