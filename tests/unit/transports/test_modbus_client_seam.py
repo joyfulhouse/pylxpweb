@@ -936,7 +936,7 @@ class TestSharedUnitLifecycle:
 
 class TestModbusConnectionBackendSerial:
     def test_esphome_url_scheme_is_openable(self) -> None:
-        """The ``modbus-connection`` extra must make ``esphome://`` reachable.
+        """The ``esphome`` extra must make ``esphome://`` reachable.
 
         serialx only registers the scheme when aioesphomeapi is importable
         (its ``esphome`` extra), so a missing dependency would leave the

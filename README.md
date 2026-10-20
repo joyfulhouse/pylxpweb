@@ -68,9 +68,11 @@ The base URL is fully configurable to support regional variations and future end
     `esphome://` serial ports or an injected `unit=`, which select `modbus_connection`.
     The two wire backends are `backend="pymodbus"` and `backend="modbus_connection"`,
     Home Assistant's shared-connection library (tmodbus + serialx; install the
-    `pylxpweb[modbus-connection]` extra). `esphome://` ports need the latter and are
-    selected automatically. Both transports also accept a host-provided `unit=` (Home
-    Assistant's `async_get_unit()`) to run over a link the host owns.
+    `pylxpweb[modbus-connection]` extra). `esphome://` ports need the
+    `pylxpweb[esphome]` extra and select that backend automatically. Both transports
+    also accept a host-provided `unit=` (Home Assistant's `async_get_unit()`) to run over a link the host owns.
+    See [Home Assistant compatibility](docs/HOME_ASSISTANT_COMPATIBILITY.md)
+    for the tested release pins and host-owned setup example.
   - The optional backend strictly matches TCP transaction IDs. Gateways that return
     zero or incorrect IDs can time out even when pymodbus's gateway workaround succeeds;
     validate the exact gateway and firmware with a packet capture before switching.
