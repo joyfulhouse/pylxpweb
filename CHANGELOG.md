@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Master battery SOC and remaining capacity are now nullable throughout public
+  battery models and properties (#384). Reconstruction requires explicit
+  `topology_complete=True` and a complete physical inventory; discovery and
+  selective polling leave these measurements unknown. Ambiguous uint16 capacity
+  wraps are rejected, while valid empty packs retain zero.
+
 - Split `pylxpweb[esphome]` from `pylxpweb[modbus-connection]`: TCP and serial
   installs no longer pull aioesphomeapi. ESPHome users must select the new
   extra, which includes the optional Modbus backend.
