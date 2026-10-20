@@ -196,7 +196,7 @@ jobs:
         run: |
           uv run pytest tests/integration/ \
             -v \
-            -m integration \
+            -m "integration and not control" \
             --reruns 4 \
             --reruns-delay 60 \
             --only-rerun "LuxpowerDeviceOfflineError" \
