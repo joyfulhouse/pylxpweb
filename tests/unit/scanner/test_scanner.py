@@ -327,8 +327,11 @@ class TestNetworkScanner:
         assert results[0].device_type_code == 2092
         assert results[0].firmware_version == "1.0.5"
 
-    async def test_scan_verifies_6000xp_type_code_38(self) -> None:
-        """Code 38 (6000XP variant, GH eg4_web_monitor#222) scans as VERIFIED.
+    @pytest.mark.parametrize(
+        ("code", "family"), [(38, "EG4_OFFGRID"), (2102, "EG4_OFFGRID"), (20, "LXP"), (44, "LXP")]
+    )
+    async def test_scan_verifies_field_reported_codes(self, code: int, family: str) -> None:
+        """Field-reported model codes scan as VERIFIED without losing their raw value.
 
         Uses the real get_model_family_name so the known_codes membership and
         the family mapping are exercised together.
@@ -346,7 +349,7 @@ class TestNetworkScanner:
 
         mock_info = MagicMock()
         mock_info.serial = "4233740012"
-        mock_info.device_type_code = 38  # 6000XP variant
+        mock_info.device_type_code = code
         mock_info.firmware_version = "2.0.1"
 
         mock_transport = MagicMock()
@@ -372,8 +375,8 @@ class TestNetworkScanner:
 
         assert len(results) == 1
         assert results[0].device_type == DeviceType.MODBUS_VERIFIED
-        assert results[0].model_family == "EG4_OFFGRID"
-        assert results[0].device_type_code == 38
+        assert results[0].model_family == family
+        assert results[0].device_type_code == code
 
     async def test_scan_with_modbus_verification_unknown_code(self) -> None:
         """Test Modbus verification with unknown device type code."""

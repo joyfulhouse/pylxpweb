@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Recognize field-reported GEN-LB-EU device code 20 and 12000XP code 2102
+  without masking high bits; preserve raw codes through discovery and scanning.
+
 - Battery auto-discovery now caches responding unit IDs instead of probing every
   possible ID on every poll (#364). Call `scan_units()` to discover added batteries;
   initial empty scans retry, and later empty scans preserve known polling IDs.

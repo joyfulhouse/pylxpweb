@@ -31,9 +31,12 @@ from pylxpweb.constants import (
     DEVICE_TYPE_CODE_FLEXBOSS,
     DEVICE_TYPE_CODE_GRIDBOSS,
     DEVICE_TYPE_CODE_LXP_EU,
+    DEVICE_TYPE_CODE_LXP_GEN2,
+    DEVICE_TYPE_CODE_LXP_LB,
     DEVICE_TYPE_CODE_PV_SERIES,
     DEVICE_TYPE_CODE_SNA,
     DEVICE_TYPE_CODE_SNA_6000XP,
+    DEVICE_TYPE_CODE_SNA_12000XP,
 )
 
 if TYPE_CHECKING:
@@ -93,10 +96,13 @@ def get_model_family_name(device_type_code: int) -> str:
     family_map = {
         DEVICE_TYPE_CODE_GRIDBOSS: "GridBOSS",
         DEVICE_TYPE_CODE_SNA: "EG4_OFFGRID",
+        DEVICE_TYPE_CODE_SNA_12000XP: "EG4_OFFGRID",
         DEVICE_TYPE_CODE_SNA_6000XP: "EG4_OFFGRID",  # 6000XP variant (GH #222)
         DEVICE_TYPE_CODE_PV_SERIES: "EG4_HYBRID",
         DEVICE_TYPE_CODE_FLEXBOSS: "EG4_HYBRID",  # FlexBOSS is part of EG4 Hybrid family
         DEVICE_TYPE_CODE_LXP_EU: "LXP",
+        DEVICE_TYPE_CODE_LXP_GEN2: "LXP",
+        DEVICE_TYPE_CODE_LXP_LB: "LXP",
     }
     return family_map.get(device_type_code, "UNKNOWN")
 

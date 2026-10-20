@@ -1835,8 +1835,12 @@ DEVICE_TYPE_CODE_SNA = 54  # SNA Series (e.g., SNA12K-US, 12000XP, 6000XP)
 # EG4 6000XP via WiFi dongle (joyfulhouse/eg4_web_monitor#222).  Same
 # EG4 Off-Grid register layout/feature set as code 54.
 DEVICE_TYPE_CODE_SNA_6000XP = 38
+# Exact 12000XP field report (eg4_web_monitor#659); high-bit semantics are unknown.
+DEVICE_TYPE_CODE_SNA_12000XP = 2102
 DEVICE_TYPE_CODE_PV_SERIES = 2092  # PV Series (e.g., 12KPV, 18KPV)
 DEVICE_TYPE_CODE_LXP_EU = 12  # LXP-EU Series (e.g., LXP-EU 12K)
+# GEN-LB-EU 3.6K, reported on the EU cloud portal (eg4_web_monitor#612).
+DEVICE_TYPE_CODE_LXP_GEN2 = 20
 DEVICE_TYPE_CODE_LXP_LB = 44  # LXP-LB Low-voltage Battery (LXP-US 8-10K)
 DEVICE_TYPE_CODE_FLEXBOSS = 10284  # FlexBOSS Series (e.g., FlexBOSS21, FlexBOSS18)
 DEVICE_TYPE_CODE_GRIDBOSS = 50  # GridBOSS/MIDbox (parallel group controller)

@@ -20,10 +20,12 @@ from pylxpweb.constants import (
     DEVICE_TYPE_CODE_FLEXBOSS,
     DEVICE_TYPE_CODE_GRIDBOSS,
     DEVICE_TYPE_CODE_LXP_EU,
+    DEVICE_TYPE_CODE_LXP_GEN2,
     DEVICE_TYPE_CODE_LXP_LB,
     DEVICE_TYPE_CODE_PV_SERIES,
     DEVICE_TYPE_CODE_SNA,
     DEVICE_TYPE_CODE_SNA_6000XP,
+    DEVICE_TYPE_CODE_SNA_12000XP,
 )
 from pylxpweb.registers.inverter_input import pv_string_count_for_model
 
@@ -145,10 +147,12 @@ DEVICE_TYPE_CODE_TO_FAMILY: dict[int, InverterFamily] = {
     DEVICE_TYPE_CODE_SNA: InverterFamily.EG4_OFFGRID,
     # 6000XP variant reporting type code 38 (field-confirmed, GH eg4_web_monitor#222)
     DEVICE_TYPE_CODE_SNA_6000XP: InverterFamily.EG4_OFFGRID,
+    DEVICE_TYPE_CODE_SNA_12000XP: InverterFamily.EG4_OFFGRID,
     # EG4 Hybrid Series (18kPV, 12kPV, FlexBOSS21, FlexBOSS18)
     DEVICE_TYPE_CODE_PV_SERIES: InverterFamily.EG4_HYBRID,  # 18KPV, 12kPV
     DEVICE_TYPE_CODE_FLEXBOSS: InverterFamily.EG4_HYBRID,  # FlexBOSS21, FlexBOSS18
     # Luxpower Series (LXP-EU, LXP-LB-BR, LXP-LV - all use same register maps)
+    DEVICE_TYPE_CODE_LXP_GEN2: InverterFamily.LXP,  # GEN-LB-EU (GH #612)
     DEVICE_TYPE_CODE_LXP_EU: InverterFamily.LXP,  # LXP-EU 12K
     DEVICE_TYPE_CODE_LXP_LB: InverterFamily.LXP,  # LXP-LB Series (US, Brazil)
     # Add more mappings as devices are discovered
@@ -437,6 +441,10 @@ class InverterModelInfo:
             - FlexBOSS (DEVICE_TYPE_CODE_FLEXBOSS=10284): 8=21kW, 9=18kW
             - LXP-LB (DEVICE_TYPE_CODE_LXP_LB=44): 4=10kW
         """
+        if device_type_code == DEVICE_TYPE_CODE_LXP_GEN2:
+            # No verified powerRating encoding for the reported 3.6K model.
+            return 0
+
         # EG4 PV Series (12KPV, 18KPV)
         if device_type_code == DEVICE_TYPE_CODE_PV_SERIES:
             pv_rating_map = {2: 12, 6: 18}
@@ -500,8 +508,15 @@ class InverterModelInfo:
             )
 
         # EG4 Off-Grid Series (54 = SNA12K/12000XP/6000XP, 38 = 6000XP variant)
-        if device_type_code in (DEVICE_TYPE_CODE_SNA, DEVICE_TYPE_CODE_SNA_6000XP):
+        if device_type_code in (
+            DEVICE_TYPE_CODE_SNA,
+            DEVICE_TYPE_CODE_SNA_6000XP,
+            DEVICE_TYPE_CODE_SNA_12000XP,
+        ):
             return f"EG4-{kw}KXP" if kw else "EG4-XP"
+
+        if device_type_code == DEVICE_TYPE_CODE_LXP_GEN2:
+            return "GEN-LB-EU"
 
         # Luxpower EU Series
         if device_type_code == DEVICE_TYPE_CODE_LXP_EU:
