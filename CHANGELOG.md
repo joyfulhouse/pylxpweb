@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Future Home Assistant compatibility support starts at 2026.10.0; CI covers
+  that minimum and current stable 2026.10.2. Older HA environments are no
+  longer tested. Standalone Python 3.13 library support is unchanged.
+
 ## [0.10.0b13] - 2026-10-20
 
 ### Added

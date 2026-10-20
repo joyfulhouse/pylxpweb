@@ -8,6 +8,11 @@ when upgrading. Backend selection remains automatic for ESPHome URLs.
 
 ## Released Home Assistant versions
 
+Future releases support Home Assistant 2026.10.0 and newer. Older HA versions
+are no longer part of the compatibility matrix. Library 0.10.0b13 and integration
+3.5.1-beta.20 retain their published requirements; upgrade HA before moving
+to later integration releases. Standalone Python 3.13 support is unchanged.
+
 The CI matrix fetches each release's actual `package_constraints.txt`, Modbus
 integration manifest, and the aioesphomeapi requirement from the ESPHome
 manifest. It co-installs Home Assistant and pylxpweb under those constraints,
@@ -16,9 +21,6 @@ checks the installed dependency graph, and runs the transport tests on Python
 
 | HA release | serialx | pymodbus | modbus-connection | tmodbus | aioesphomeapi |
 | --- | --- | --- | --- | --- | --- |
-| 2026.8.0 | 1.8.2 | 3.13.1 | not pinned by HA | not pinned by HA | 45.6.1 |
-| 2026.9.0 | 1.9.0 | 3.13.1 | 4.10.0 | 0.6.2 | 46.2.0 |
-| 2026.9.4 | 1.10.0 | 3.13.1 | 4.10.0 | 0.6.2 | 46.2.0 |
 | 2026.10.0 | 1.11.0 | 3.13.1 | 4.12.3 | 0.6.2 | 46.6.0 |
 | 2026.10.2 | 1.11.0 | 3.13.1 | 4.12.4 | 0.6.2 | 46.6.0 |
 
@@ -49,8 +51,7 @@ Transport connect does not dial a borrowed unit. Reads open the host's link
 lazily; transport disconnect leaves it available to other consumers. The last
 Home Assistant entry unload closes the connection. The installed-HA CI test
 calls the real `async_get_unit`, uses a loopback Modbus server, and verifies
-this lifecycle with two consumers. HA 2026.8 predates this API and skips only
-that wiring test; it still runs the transport suite.
+this lifecycle with two consumers on every supported HA matrix row.
 
 These tests establish dependency and API compatibility. They do not validate
 a specific physical gateway's transaction-ID behavior or firmware.
