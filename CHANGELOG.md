@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Split `pylxpweb[esphome]` from `pylxpweb[modbus-connection]`: TCP and serial
+  installs no longer pull aioesphomeapi. ESPHome users must select the new
+  extra, which includes the optional Modbus backend.
+- CI now co-installs actual Home Assistant 2026.8/9/10 releases on Python 3.14
+  with their Modbus manifest requirements, ESPHome API pin, and package
+  constraints. A real HA `async_get_unit` lifecycle test covers host ownership.
+  See `docs/HOME_ASSISTANT_COMPATIBILITY.md` for verified dependency floors.
+
 ### Fixed
 
 - Recognize field-reported GEN-LB-EU device code 20 and 12000XP code 2102

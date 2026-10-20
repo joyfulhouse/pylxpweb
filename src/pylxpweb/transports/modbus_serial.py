@@ -73,6 +73,7 @@ class ModbusSerialTransport(BaseModbusTransport):
     ``backend="pymodbus"`` (pyserial underneath) is the historical default.
     ``backend="modbus_connection"`` uses Home Assistant's shared-connection
     library (tmodbus + serialx) and needs the ``modbus-connection`` extra.
+    ESPHome URLs additionally need the ``esphome`` extra.
     ``backend="auto"`` keeps pymodbus unless the port is a URL only serialx
     can open.
 
