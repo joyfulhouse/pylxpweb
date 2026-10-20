@@ -125,7 +125,7 @@ jobs:
         run: |
           for tag in 2026.8.0 2026.9.0 2026.9.4; do
             constraints="${RUNNER_TEMP}/ha-${tag}-constraints.txt"
-            curl --fail --silent --show-error --location \
+            curl --fail --silent --show-error --location --retry 5 --retry-delay 2 \
               "https://raw.githubusercontent.com/home-assistant/core/${tag}/homeassistant/package_constraints.txt" \
               --output "$constraints"
             uv pip compile pyproject.toml --extra modbus-connection \
