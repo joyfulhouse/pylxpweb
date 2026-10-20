@@ -122,6 +122,7 @@ class TestDataframeTimeoutResilience:
                 pytest.skip("DATAFRAME_TIMEOUT after max retries - genuine hardware issue")
             raise
 
+    @pytest.mark.control
     async def test_write_operations_with_dataframe_timeout_resilience(
         self, client: LuxpowerClient
     ) -> None:
