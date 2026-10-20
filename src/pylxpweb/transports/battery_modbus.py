@@ -720,8 +720,8 @@ class BatteryModbusTransport:
         # remember a unit it has never seen, so on a fresh transport with
         # unit_ids=None whose first scan misses a unit, the remembered set is
         # already short and this gate passes on incomplete topology. It is the
-        # original defect's shape in a window that heals on explicit rediscovery: the missing
-        # unit's first genuine response is remembered permanently, after which
+        # original defect's shape until explicit rediscovery. A newly observed
+        # unit joins retained topology, after which
         # its silence blocks the gate like any other. Explicit unit_ids have no
         # such window because the declared list seeds memory before the first
         # read. Closing it would need a declared expected count, which is the
