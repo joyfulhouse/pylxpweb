@@ -1324,9 +1324,7 @@ class RegisterDataMixin(_DataMixinBase):
                         f"{source_id}:{name}",
                         (
                             data.provenance.get(f"pv{port}_energy_{period}")
-                            or unknown_provenance(
-                                source_id, field_name=f"pv{port}_energy_{period}"
-                            )
+                            or unknown_provenance(source_id, field_name=f"pv{port}_energy_{period}")
                             # The decoder always includes PV1-3; the model
                             # count gates only the extended PV4-6 registers.
                             for port in range(1, max(3, self._pv_string_count) + 1)
