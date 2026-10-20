@@ -983,3 +983,50 @@ class TestPVStringCount:
         # Flexibility for a hypothetical >3-string model.
         features = InverterFeatures(pv_string_count=5)
         assert features.pv_string_count == 5
+
+
+@pytest.mark.parametrize(
+    ("code", "family", "grid_type"),
+    [
+        (20, InverterFamily.LXP, GridType.SINGLE_PHASE),
+        (2102, InverterFamily.EG4_OFFGRID, GridType.SPLIT_PHASE),
+        (44, InverterFamily.LXP, GridType.SPLIT_PHASE),
+        (2092, InverterFamily.EG4_HYBRID, GridType.SPLIT_PHASE),
+    ],
+)
+def test_field_reported_codes_agree_across_discovery_and_features(
+    code: int, family: InverterFamily, grid_type: GridType
+) -> None:
+    """Discovery and feature gating preserve the reported full register word."""
+    from pylxpweb.transports.discovery import get_model_family_name
+
+    assert get_inverter_family(code) is family
+    assert get_model_family_name(code) == family.value
+    features = InverterFeatures.from_device_type_code(code)
+    assert features.device_type_code == code
+    assert features.model_family is family
+    assert features.grid_type is grid_type
+    restored = InverterFeatures.from_family(family, code)
+    assert restored is not None
+    assert restored.device_type_code == code
+    assert restored.grid_type is grid_type
+
+
+@pytest.mark.parametrize("code", [0x1014, 0x1036, 0x012C])
+def test_unreported_high_byte_variants_remain_unknown(code: int) -> None:
+    """Low-byte collisions must not promote unverified models to writable families."""
+    from pylxpweb.transports.discovery import get_model_family_name
+
+    assert get_inverter_family(code) is InverterFamily.UNKNOWN
+    assert get_model_family_name(code) == "UNKNOWN"
+    features = InverterFeatures.from_device_type_code(code)
+    assert features.device_type_code == code
+    assert features.model_family is InverterFamily.UNKNOWN
+    assert features.grid_type is GridType.UNKNOWN
+
+
+def test_gen_lb_eu_rating_is_not_inferred_from_other_families() -> None:
+    model = InverterModelInfo(power_rating=6)
+    assert model.get_model_name(20) == "GEN-LB-EU"
+    assert model.get_power_rating_kw(20) == 0
+    assert model.get_model_name(2102) == "EG4-12KXP"

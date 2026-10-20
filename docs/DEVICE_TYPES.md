@@ -24,11 +24,23 @@ This is the firmware-level model identifier stored in register 19. It identifies
 | Code | Model Family | Example Models |
 |------|--------------|----------------|
 | **54** | EG4 Off-Grid | 12000XP, 6000XP |
+| **38** | EG4 Off-Grid | 6000XP variant |
+| **2102** | EG4 Off-Grid | Reported 12000XP variant (#659) |
 | **2092** | EG4 Hybrid (PV Series) | 18kPV, 12kPV |
 | **10284** | EG4 Hybrid (FlexBOSS Series) | FlexBOSS21, FlexBOSS18 |
 | **12** | Luxpower | LXP-EU 12K |
+| **20** | Luxpower | GEN-LB-EU 3.6K (#612) |
 | **44** | Luxpower | LXP-LB-BR 10K |
 | **50** | GridBOSS (MID) | GridBOSS |
+
+Codes 20 and 2102 are exact identifications from
+[eg4_web_monitor #612](https://github.com/joyfulhouse/eg4_web_monitor/issues/612)
+and [#659](https://github.com/joyfulhouse/eg4_web_monitor/issues/659). The raw
+register word is retained; these reports do not establish a general high-byte
+mask. In particular, 2092 (`0x082c`, EG4 Hybrid) and 44 (`0x002c`, Luxpower)
+share a low byte but belong to different families. Unknown variants stay unknown.
+The code-20 power-rating encoding is unverified, so no numeric rating is inferred.
+Identification reuses existing family behavior and is not new local-write validation.
 
 ### 3. `HOLD_MODEL_powerRating` (from HOLD_MODEL register)
 
