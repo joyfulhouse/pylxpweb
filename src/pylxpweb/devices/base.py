@@ -53,8 +53,8 @@ LINK_PROBE_MAX_INTERVAL_SECONDS = 60.0
 
 # Ceiling on the doublings fed into the backoff.  The failure counter grows by
 # one per failed probe for as long as an outage lasts; without a ceiling
-# ``2.0 ** excess`` overflows at excess == 1024 (about 36 hours of one probe
-# per minute) and _link_probe_due() raises OverflowError inside refresh()
+# ``2.0 ** excess`` overflows at excess == 1024 during a sustained outage,
+# and _link_probe_due() raises OverflowError inside refresh()
 # before the probe runs, so the link can never recover (eg4_web_monitor
 # deployment, 2026-10-24).  Ten doublings already exceed the cap by 60x.
 LINK_PROBE_MAX_DOUBLINGS = 10

@@ -122,8 +122,8 @@ class TestProbeBackoff:
         """The exponent is clamped: deep counters must not overflow the float power.
 
         Regression: ``2.0 ** 1024`` raises OverflowError, which escaped from
-        _link_probe_due() into refresh() after ~36 h of one failed probe per
-        minute and made the device unrecoverable without a restart.
+        _link_probe_due() into refresh() after sufficiently many failed probes
+        and made the device unrecoverable without a restart.
         """
         inverter = _make_down_inverter(extra_failures=extra_failures)
 

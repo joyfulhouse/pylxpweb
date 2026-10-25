@@ -196,7 +196,8 @@ class TestInverterFailureCounter:
         assert inverter.transport_link_down is False
 
     @pytest.mark.asyncio
-    async def test_recovery_repopulates_transport_data(self) -> None:
+    @pytest.mark.parametrize("extra_failures", [0, 1024, 10_000_000])
+    async def test_recovery_repopulates_transport_data(self, extra_failures: int) -> None:
         """Recovery is detected by the cheap runtime probe; the next healthy
         refresh repopulates energy/battery via the combined read."""
         inverter = _make_inverter()
@@ -206,12 +207,18 @@ class TestInverterFailureCounter:
             await inverter.refresh(force=True)
         assert inverter.transport_link_down is True
 
+        inverter._transport_consecutive_failures += extra_failures
+        inverter._last_link_probe_monotonic = (
+            time.monotonic() - LINK_PROBE_MAX_INTERVAL_SECONDS - 1.0
+        )
         runtime, energy, battery = _make_combined_data()
         # While down, only the runtime probe runs — recovery is detected there.
         transport.read_runtime.side_effect = None
         transport.read_runtime.return_value = runtime
         await inverter.refresh(force=True)
         assert inverter.transport_link_down is False
+        assert inverter.transport_consecutive_failures == 0
+        assert inverter._last_link_probe_monotonic is None
         assert inverter._transport_runtime is runtime
 
         # Link healthy again: the combined read resumes and repopulates energy.
@@ -952,7 +959,8 @@ class TestMIDDeviceLinkHealth:
         assert transport.read_midbox_runtime.await_count == TRANSPORT_LINK_DOWN_THRESHOLD
 
     @pytest.mark.asyncio
-    async def test_recovery_resets_counter_and_restores_data(self) -> None:
+    @pytest.mark.parametrize("extra_failures", [0, 1024, 10_000_000])
+    async def test_recovery_resets_counter_and_restores_data(self, extra_failures: int) -> None:
         """A successful probe after link-down resumes local data."""
         from pylxpweb.transports.data import MidboxRuntimeData
 
@@ -963,6 +971,8 @@ class TestMIDDeviceLinkHealth:
             await mid.refresh()
         assert mid.transport_link_down is True
 
+        mid._transport_consecutive_failures += extra_failures
+        mid._last_link_probe_monotonic = time.monotonic() - LINK_PROBE_MAX_INTERVAL_SECONDS - 1.0
         runtime = Mock(spec=MidboxRuntimeData)
         runtime.lifetime_energy_values.return_value = {}
         runtime.daily_energy_values.return_value = {}
@@ -971,6 +981,8 @@ class TestMIDDeviceLinkHealth:
         await mid.refresh()
 
         assert mid.transport_link_down is False
+        assert mid.transport_consecutive_failures == 0
+        assert mid._last_link_probe_monotonic is None
         assert mid._transport_runtime is runtime
 
     @pytest.mark.asyncio
