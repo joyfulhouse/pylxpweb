@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from pylxpweb.devices.base import (
+    LINK_PROBE_MAX_DOUBLINGS,
     LINK_PROBE_MAX_INTERVAL_SECONDS,
     LINK_PROBE_MIN_INTERVAL_SECONDS,
     TRANSPORT_LINK_DOWN_THRESHOLD,
@@ -115,6 +116,30 @@ class TestProbeBackoff:
             time.monotonic() - LINK_PROBE_MAX_INTERVAL_SECONDS + 2.0
         )
         assert inverter._link_probe_due() is False
+
+    @pytest.mark.parametrize("extra_failures", [1024, 1100, 10_000_000])
+    def test_interval_survives_multi_day_outage(self, extra_failures: int) -> None:
+        """The exponent is clamped: deep counters must not overflow the float power.
+
+        Regression: ``2.0 ** 1024`` raises OverflowError, which escaped from
+        _link_probe_due() into refresh() after ~36 h of one failed probe per
+        minute and made the device unrecoverable without a restart.
+        """
+        inverter = _make_down_inverter(extra_failures=extra_failures)
+
+        assert inverter._link_probe_interval() == LINK_PROBE_MAX_INTERVAL_SECONDS
+
+        inverter._last_link_probe_monotonic = (
+            time.monotonic() - LINK_PROBE_MAX_INTERVAL_SECONDS - 1.0
+        )
+        assert inverter._link_probe_due() is True
+
+    def test_doubling_ceiling_exceeds_cap(self) -> None:
+        """The clamp is loose: it must never lower the window below the cap."""
+        assert (
+            LINK_PROBE_MIN_INTERVAL_SECONDS * (2.0**LINK_PROBE_MAX_DOUBLINGS)
+            >= LINK_PROBE_MAX_INTERVAL_SECONDS
+        )
 
     def test_base_interval_at_threshold(self) -> None:
         """Exactly at the threshold the window is the unscaled base."""

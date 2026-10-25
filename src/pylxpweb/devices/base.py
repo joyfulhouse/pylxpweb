@@ -51,6 +51,14 @@ LINK_PROBE_MIN_INTERVAL_SECONDS = 4.0
 # full timeout chain inside every coordinator refresh (eg4_web_monitor#587).
 LINK_PROBE_MAX_INTERVAL_SECONDS = 60.0
 
+# Ceiling on the doublings fed into the backoff.  The failure counter grows by
+# one per failed probe for as long as an outage lasts; without a ceiling
+# ``2.0 ** excess`` overflows at excess == 1024 (about 36 hours of one probe
+# per minute) and _link_probe_due() raises OverflowError inside refresh()
+# before the probe runs, so the link can never recover (eg4_web_monitor
+# deployment, 2026-10-24).  Ten doublings already exceed the cap by 60x.
+LINK_PROBE_MAX_DOUBLINGS = 10
+
 _T = TypeVar("_T")
 
 
@@ -646,11 +654,16 @@ class BaseDevice(ABC):
         capped at LINK_PROBE_MAX_INTERVAL_SECONDS, so a sustained outage
         settles at ~one probe per minute instead of paying the transport
         timeout chain inside every coordinator refresh.  Any successful
-        read resets the failure counter and with it the window.
+        read resets the failure counter and with it the window.  The
+        exponent is clamped to LINK_PROBE_MAX_DOUBLINGS so an outage of any
+        length cannot overflow the float power.
         """
-        excess = max(
-            0,
-            self._transport_consecutive_failures - TRANSPORT_LINK_DOWN_THRESHOLD,
+        excess = min(
+            max(
+                0,
+                self._transport_consecutive_failures - TRANSPORT_LINK_DOWN_THRESHOLD,
+            ),
+            LINK_PROBE_MAX_DOUBLINGS,
         )
         return min(
             LINK_PROBE_MIN_INTERVAL_SECONDS * (2.0**excess),
