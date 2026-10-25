@@ -8,7 +8,7 @@ when upgrading. Backend selection remains automatic for ESPHome URLs.
 
 ## Released Home Assistant versions
 
-Future releases support Home Assistant 2026.10.0 and newer. Older HA versions
+Releases starting with 0.10.0b14 support Home Assistant 2026.10.0 and newer. Older HA versions
 are no longer part of the compatibility matrix. Library 0.10.0b13 and integration
 3.5.1-beta.20 retain their published requirements; upgrade HA before moving
 to later integration releases. Standalone Python 3.13 support is unchanged.
@@ -22,10 +22,10 @@ checks the installed dependency graph, and runs the transport tests on Python
 | HA release | serialx | pymodbus | modbus-connection | tmodbus | aioesphomeapi |
 | --- | --- | --- | --- | --- | --- |
 | 2026.10.0 | 1.11.0 | 3.13.1 | 4.12.3 | 0.6.2 | 46.6.0 |
-| 2026.10.2 | 1.11.0 | 3.13.1 | 4.12.4 | 0.6.2 | 46.6.0 |
+| 2026.10.4 | 1.11.0 | 3.13.1 | 4.12.4 | 0.6.2 | 46.6.0 |
 
-Verified against released sources on 2026-10-20; 2026.10.2 (published October
-16) is the current stable HA release. serialx 1.8.2 declares an
+The 2026.10.0 row was verified against released sources on 2026-10-20;
+the current stable 2026.10.4 row was verified on 2026-10-25. serialx 1.8.2 declares an
 ESPHome minimum of aioesphomeapi 44.17.0; 1.9.0 and 1.10.0 require 46.0.0;
 1.11.0 requires 46.5.0. These are version-specific upstream requirements,
 not one universal aioesphomeapi floor. HA's corresponding pins satisfy them.

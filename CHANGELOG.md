@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0b14] - 2026-10-25
+
+### Fixed
+
+- Clamp the link-probe backoff exponent so sustained outages cannot overflow
+  and prevent inverter or GridBOSS recovery (#389, #390). Thanks to
+  @notexpected for the fix. Recovery regressions cover deep failure counters
+  and verify that successful probes reset the backoff state (#391).
+
 ### Changed
 
 - Future Home Assistant compatibility support starts at 2026.10.0; CI covers
-  that minimum and current stable 2026.10.2. Older HA environments are no
+  that minimum and current stable 2026.10.4. Older HA environments are no
   longer tested. Standalone Python 3.13 library support is unchanged.
 
 ## [0.10.0b13] - 2026-10-20
