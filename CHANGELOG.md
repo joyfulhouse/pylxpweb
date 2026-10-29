@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Parallel group `first_device_serial` is now the group's primary inverter.
   Cloud role labels "Primary"/"Master" are recognized and GridBOSS rows are
-  never chosen, so groups listing the GridBOSS first no longer report its
-  serial (joyfulhouse/eg4_web_monitor#706).
+  never chosen when the group has inverter rows, so groups listing the
+  GridBOSS first no longer report its serial (joyfulhouse/eg4_web_monitor#706).
 
 ## [0.10.0b14] - 2026-10-25
 

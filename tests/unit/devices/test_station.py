@@ -1239,10 +1239,30 @@ class TestLoadDevicesGridBossListedFirst:
     """Parallel group primary detection with portal role labels (eg4_web_monitor#706)."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rows",
+        [
+            pytest.param(
+                [("0000000009", 9, "Midbox Slave"), ("1111111111", 6, "Primary")],
+                id="gridboss-then-primary",
+            ),
+            pytest.param(
+                [
+                    ("0000000009", 9, "Midbox Slave"),
+                    ("2222222222", 6, "Subordinates"),
+                    ("1111111111", 6, "Primary"),
+                ],
+                id="gridboss-subordinate-then-primary",
+            ),
+        ],
+    )
     async def test_primary_is_inverter_not_gridboss(
-        self, mock_client: LuxpowerClient, sample_location: Location
+        self,
+        mock_client: LuxpowerClient,
+        sample_location: Location,
+        rows: list[tuple[str, int, str]],
     ) -> None:
-        """GridBOSS ("Midbox Slave") listed first must not become first_device_serial."""
+        """The "Primary" inverter becomes first_device_serial, not a row listed before it."""
         from pylxpweb.models import (
             InverterOverviewItem,
             InverterOverviewResponse,
@@ -1261,52 +1281,36 @@ class TestLoadDevicesGridBossListedFirst:
 
         devices_response = InverterOverviewResponse(
             success=True,
-            total=2,
+            total=len(rows),
             rows=[
                 InverterOverviewItem.model_construct(
-                    serialNum="0000000009",
+                    serialNum=serial,
                     statusText="Online",
-                    deviceType=9,  # GridBOSS
+                    deviceType=device_type,
                     subDeviceType=0,
                     parallelGroup="A",
-                    deviceTypeText="GridBOSS",
+                    deviceTypeText="GridBOSS" if device_type == 9 else "18KPV",
                     plantId=12345,
                     plantName="Test Station",
-                ),
-                InverterOverviewItem.model_construct(
-                    serialNum="1111111111",
-                    statusText="Online",
-                    deviceType=6,  # Inverter
-                    subDeviceType=0,
-                    parallelGroup="A",
-                    deviceTypeText="18KPV",
-                    plantId=12345,
-                    plantName="Test Station",
-                ),
+                )
+                for serial, device_type, _ in rows
             ],
         )
 
         group_data = ParallelGroupDetailsResponse.model_construct(
             success=True,
             deviceType=9,
-            total=2,
+            total=len(rows),
             devices=[
                 ParallelGroupDeviceItem.model_construct(
-                    serialNum="0000000009",
-                    deviceType=9,
-                    parallelIndex="0",
-                    parallelNumText="0",
+                    serialNum=serial,
+                    deviceType=device_type,
+                    parallelIndex=str(index),
+                    parallelNumText=str(index),
                     lost=False,
-                    roleText="Midbox Slave",
-                ),
-                ParallelGroupDeviceItem.model_construct(
-                    serialNum="1111111111",
-                    deviceType=6,
-                    parallelIndex="1",
-                    parallelNumText="1",
-                    lost=False,
-                    roleText="Primary",
-                ),
+                    roleText=role,
+                )
+                for index, (serial, device_type, role) in enumerate(rows)
             ],
         )
 
