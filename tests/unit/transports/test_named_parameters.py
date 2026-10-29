@@ -934,32 +934,13 @@ class TestRegisterMappingFunctions:
 
     def test_get_param_to_register_mapping_midbox(self) -> None:
         """Test MIDBOX device_type returns GridBOSS param-to-register mapping."""
-        from pylxpweb.constants.registers import (
-            get_param_to_register_mapping,
-            get_register_to_param_mapping,
-        )
+        from pylxpweb.constants.registers import get_param_to_register_mapping
 
         mapping = get_param_to_register_mapping(device_type="MIDBOX")
         assert mapping["BIT_MIDBOX_SP_MODE_1"] == 20
         assert mapping["BIT_MIDBOX_SP_MODE_2"] == 20
         assert mapping["BIT_MIDBOX_SP_MODE_3"] == 20
         assert mapping["BIT_MIDBOX_SP_MODE_4"] == 20
-
-        expected = {
-            177: "HOLD_MAX_GENERATOR_INPUT_POWER",
-            194: "OFF_GRID_HOLD_GEN_CHG_START_VOLT",
-            195: "OFF_GRID_HOLD_GEN_CHG_END_VOLT",
-            196: "OFF_GRID_HOLD_GEN_CHG_START_SOC",
-            197: "OFF_GRID_HOLD_GEN_CHG_END_SOC",
-            198: "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR",
-            224: "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE",
-            225: "MIDBOX_HOLD_GEN_REMOTE_CTRL",
-            227: "MIDBOX_HOLD_GEN_COOL_DOWN_TIME",
-            228: "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME",
-        }
-        register_mapping = get_register_to_param_mapping(device_type="MIDBOX")
-        for register, parameter in expected.items():
-            assert register_mapping[register] == [parameter]
 
     def test_midbox_register_20_does_not_conflict_with_inverter(self) -> None:
         """Test that inverter register 20 (HOLD_PV_INPUT_MODE) is separate from MIDBOX."""

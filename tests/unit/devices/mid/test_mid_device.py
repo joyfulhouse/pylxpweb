@@ -49,6 +49,13 @@ class TestMIDDeviceInitialization:
 
         assert mid.serial_number == "1234567890"
         assert mid.model == "GridBOSS"
+        assert mid._runtime is None
+
+    def test_mid_device_default_model(self, mock_client: LuxpowerClient) -> None:
+        """Test MIDDevice uses GridBOSS as default model."""
+        mid = MIDDevice(client=mock_client, serial_number="1234567890")
+
+        assert mid.model == "GridBOSS"
 
 
 class TestGeneratorChargeControls:
@@ -133,13 +140,6 @@ class TestGeneratorChargeControls:
             "set_generator_boost",
         ):
             assert not hasattr(mid, method_name)
-        assert mid._runtime is None
-
-    def test_mid_device_default_model(self, mock_client: LuxpowerClient) -> None:
-        """Test MIDDevice uses GridBOSS as default model."""
-        mid = MIDDevice(client=mock_client, serial_number="1234567890")
-
-        assert mid.model == "GridBOSS"
 
 
 class TestMIDDeviceRefresh:
