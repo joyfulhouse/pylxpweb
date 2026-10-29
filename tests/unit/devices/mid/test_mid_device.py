@@ -49,6 +49,93 @@ class TestMIDDeviceInitialization:
 
         assert mid.serial_number == "1234567890"
         assert mid.model == "GridBOSS"
+
+
+class TestGeneratorChargeControls:
+    """Validated cloud writes for GridBOSS generator settings."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method_name", "value", "parameter"),
+        [
+            ("set_generator_charge_start_voltage", 40, "OFF_GRID_HOLD_GEN_CHG_START_VOLT"),
+            ("set_generator_charge_end_voltage", 56, "OFF_GRID_HOLD_GEN_CHG_END_VOLT"),
+            ("set_generator_charge_start_soc", 10, "OFF_GRID_HOLD_GEN_CHG_START_SOC"),
+            ("set_generator_charge_end_soc", 100, "OFF_GRID_HOLD_GEN_CHG_END_SOC"),
+            ("set_generator_cool_down_time", 120, "MIDBOX_HOLD_GEN_COOL_DOWN_TIME"),
+            (
+                "set_generator_remote_auto_turn_off_time",
+                20,
+                "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME",
+            ),
+        ],
+    )
+    async def test_generator_setters_write_cloud_parameters(
+        self,
+        mock_client: LuxpowerClient,
+        method_name: str,
+        value: int,
+        parameter: str,
+    ) -> None:
+        from pylxpweb.models import SuccessResponse
+
+        mid = MIDDevice(mock_client, "1234567890")
+        mock_client.api.control = Mock()
+        mock_client.api.control.write_parameter = AsyncMock(
+            return_value=SuccessResponse(success=True)
+        )
+
+        result = await getattr(mid, method_name)(value)
+
+        assert result is True
+        mock_client.api.control.write_parameter.assert_awaited_once_with(
+            "1234567890", parameter, str(value)
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method_name", "value"),
+        [
+            ("set_generator_charge_start_voltage", 39),
+            ("set_generator_charge_start_voltage", 58),
+            ("set_generator_charge_end_voltage", 41),
+            ("set_generator_charge_end_voltage", 60),
+            ("set_generator_charge_start_soc", -1),
+            ("set_generator_charge_start_soc", 101),
+            ("set_generator_charge_end_soc", -1),
+            ("set_generator_charge_end_soc", 101),
+            ("set_generator_cool_down_time", 29),
+            ("set_generator_cool_down_time", 601),
+            ("set_generator_remote_auto_turn_off_time", 4),
+            ("set_generator_remote_auto_turn_off_time", 21),
+        ],
+    )
+    async def test_generator_setters_reject_invalid_values_without_writing(
+        self,
+        mock_client: LuxpowerClient,
+        method_name: str,
+        value: int,
+    ) -> None:
+        mid = MIDDevice(mock_client, "1234567890")
+        mock_client.api.control = Mock()
+        mock_client.api.control.write_parameter = AsyncMock()
+
+        with pytest.raises(ValueError):
+            await getattr(mid, method_name)(value)
+
+        mock_client.api.control.write_parameter.assert_not_awaited()
+
+    def test_no_unproven_generator_setters_exist(self, mock_client: LuxpowerClient) -> None:
+        mid = MIDDevice(mock_client, "1234567890")
+        for method_name in (
+            "set_generator_rated_power",
+            "set_generator_battery_charge_current_limit",
+            "set_generator_volt_soc_enable",
+            "set_generator_remote_control",
+            "set_generator_warm_up_time",
+            "set_generator_boost",
+        ):
+            assert not hasattr(mid, method_name)
         assert mid._runtime is None
 
     def test_mid_device_default_model(self, mock_client: LuxpowerClient) -> None:

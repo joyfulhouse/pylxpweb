@@ -48,6 +48,34 @@ class TestReadNamedParametersModbus:
         assert result["HOLD_AC_CHARGE_POWER_CMD"] == 50
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("register", "parameter"),
+        [
+            (177, "HOLD_MAX_GENERATOR_INPUT_POWER"),
+            (194, "OFF_GRID_HOLD_GEN_CHG_START_VOLT"),
+            (195, "OFF_GRID_HOLD_GEN_CHG_END_VOLT"),
+            (196, "OFF_GRID_HOLD_GEN_CHG_START_SOC"),
+            (197, "OFF_GRID_HOLD_GEN_CHG_END_SOC"),
+            (198, "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR"),
+            (224, "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE"),
+            (225, "MIDBOX_HOLD_GEN_REMOTE_CTRL"),
+            (226, "MIDBOX_HOLD_GEN_WARN_UP_TIME"),
+            (227, "MIDBOX_HOLD_GEN_COOL_DOWN_TIME"),
+            (228, "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME"),
+        ],
+    )
+    async def test_midbox_generator_registers_decode_cloud_names(
+        self, register: int, parameter: str
+    ) -> None:
+        transport = ModbusTransport(host="192.168.1.100", serial="1234567890")
+        transport._device_type = "MIDBOX"
+        transport.read_parameters = AsyncMock(return_value={register: 123})
+
+        result = await transport.read_named_parameters(register, 1)
+
+        assert result[parameter] == 123
+
+    @pytest.mark.asyncio
     async def test_read_named_parameters_bit_field_register(
         self, mock_modbus_transport: ModbusTransport
     ) -> None:
@@ -907,13 +935,33 @@ class TestRegisterMappingFunctions:
 
     def test_get_param_to_register_mapping_midbox(self) -> None:
         """Test MIDBOX device_type returns GridBOSS param-to-register mapping."""
-        from pylxpweb.constants.registers import get_param_to_register_mapping
+        from pylxpweb.constants.registers import (
+            get_param_to_register_mapping,
+            get_register_to_param_mapping,
+        )
 
         mapping = get_param_to_register_mapping(device_type="MIDBOX")
         assert mapping["BIT_MIDBOX_SP_MODE_1"] == 20
         assert mapping["BIT_MIDBOX_SP_MODE_2"] == 20
         assert mapping["BIT_MIDBOX_SP_MODE_3"] == 20
         assert mapping["BIT_MIDBOX_SP_MODE_4"] == 20
+
+        expected = {
+            177: "HOLD_MAX_GENERATOR_INPUT_POWER",
+            194: "OFF_GRID_HOLD_GEN_CHG_START_VOLT",
+            195: "OFF_GRID_HOLD_GEN_CHG_END_VOLT",
+            196: "OFF_GRID_HOLD_GEN_CHG_START_SOC",
+            197: "OFF_GRID_HOLD_GEN_CHG_END_SOC",
+            198: "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR",
+            224: "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE",
+            225: "MIDBOX_HOLD_GEN_REMOTE_CTRL",
+            226: "MIDBOX_HOLD_GEN_WARN_UP_TIME",
+            227: "MIDBOX_HOLD_GEN_COOL_DOWN_TIME",
+            228: "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME",
+        }
+        register_mapping = get_register_to_param_mapping(device_type="MIDBOX")
+        for register, parameter in expected.items():
+            assert register_mapping[register] == [parameter]
 
     def test_midbox_register_20_does_not_conflict_with_inverter(self) -> None:
         """Test that inverter register 20 (HOLD_PV_INPUT_MODE) is separate from MIDBOX."""

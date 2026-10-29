@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- GridBOSS generator charge registers are decoded separately from inverter
+  mappings, with validated cloud setters for charge thresholds and generator
+  timing settings (#705).
+
 ## [0.10.0b14] - 2026-10-25
 
 ### Fixed

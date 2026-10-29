@@ -374,6 +374,52 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
         result = await self._client.api.control.set_smart_port_mode(self.serial_number, port, mode)
         return result.success
 
+    async def _set_generator_parameter(self, name: str, value: int) -> bool:
+        """Write a validated GridBOSS generator parameter through the cloud API."""
+        result = await self._client.api.control.write_parameter(
+            self.serial_number, name, str(value)
+        )
+        return result.success
+
+    async def set_generator_charge_start_voltage(self, volts: int) -> bool:
+        """Set generator charge start voltage (40-57 V, as shown in the portal)."""
+        if not 40 <= volts <= 57:
+            raise ValueError("Generator charge start voltage must be between 40 and 57 V")
+        return await self._set_generator_parameter("OFF_GRID_HOLD_GEN_CHG_START_VOLT", volts)
+
+    async def set_generator_charge_end_voltage(self, volts: int) -> bool:
+        """Set generator charge end voltage (42-59 V, as shown in the portal)."""
+        if not 42 <= volts <= 59:
+            raise ValueError("Generator charge end voltage must be between 42 and 59 V")
+        return await self._set_generator_parameter("OFF_GRID_HOLD_GEN_CHG_END_VOLT", volts)
+
+    async def set_generator_charge_start_soc(self, percent: int) -> bool:
+        """Set generator charge start SOC (0-100%, the sane SOC range)."""
+        if not 0 <= percent <= 100:
+            raise ValueError("Generator charge start SOC must be between 0 and 100 percent")
+        return await self._set_generator_parameter("OFF_GRID_HOLD_GEN_CHG_START_SOC", percent)
+
+    async def set_generator_charge_end_soc(self, percent: int) -> bool:
+        """Set generator charge end SOC (0-100%, as shown in the portal)."""
+        if not 0 <= percent <= 100:
+            raise ValueError("Generator charge end SOC must be between 0 and 100 percent")
+        return await self._set_generator_parameter("OFF_GRID_HOLD_GEN_CHG_END_SOC", percent)
+
+    async def set_generator_cool_down_time(self, seconds: int) -> bool:
+        """Set generator cool-down time (30-600 seconds, portal warm-up range)."""
+        if not 30 <= seconds <= 600:
+            raise ValueError("Generator cool-down time must be between 30 and 600 seconds")
+        return await self._set_generator_parameter("MIDBOX_HOLD_GEN_COOL_DOWN_TIME", seconds)
+
+    async def set_generator_remote_auto_turn_off_time(self, minutes: int) -> bool:
+        """Set remote auto turn-off time (5-20 minutes, as shown in the portal)."""
+        if not 5 <= minutes <= 20:
+            raise ValueError("Generator remote auto turn-off time must be between 5 and 20 minutes")
+        return await self._set_generator_parameter("MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME", minutes)
+
+    # Generator remote control (register 225) is intentionally not writable:
+    # enabling it can physically start a generator.
+
     async def enable_smart_load(self, port: int) -> bool:
         """Enable a smart load on the specified port.
 
