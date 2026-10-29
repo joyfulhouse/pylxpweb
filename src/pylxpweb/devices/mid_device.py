@@ -405,12 +405,6 @@ class MIDDevice(FirmwareUpdateMixin, MIDRuntimePropertiesMixin, BaseDevice):
             raise ValueError("Generator charge end SOC must be between 0 and 100 percent")
         return await self._set_generator_parameter("OFF_GRID_HOLD_GEN_CHG_END_SOC", percent)
 
-    async def set_generator_cool_down_time(self, seconds: int) -> bool:
-        """Set generator cool-down time (30-600 seconds, portal warm-up range)."""
-        if not 30 <= seconds <= 600:
-            raise ValueError("Generator cool-down time must be between 30 and 600 seconds")
-        return await self._set_generator_parameter("MIDBOX_HOLD_GEN_COOL_DOWN_TIME", seconds)
-
     async def set_generator_remote_auto_turn_off_time(self, minutes: int) -> bool:
         """Set remote auto turn-off time (5-20 minutes, as shown in the portal)."""
         if not 5 <= minutes <= 20:

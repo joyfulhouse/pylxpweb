@@ -62,7 +62,6 @@ class TestGeneratorChargeControls:
             ("set_generator_charge_end_voltage", 56, "OFF_GRID_HOLD_GEN_CHG_END_VOLT"),
             ("set_generator_charge_start_soc", 10, "OFF_GRID_HOLD_GEN_CHG_START_SOC"),
             ("set_generator_charge_end_soc", 100, "OFF_GRID_HOLD_GEN_CHG_END_SOC"),
-            ("set_generator_cool_down_time", 120, "MIDBOX_HOLD_GEN_COOL_DOWN_TIME"),
             (
                 "set_generator_remote_auto_turn_off_time",
                 20,
@@ -104,8 +103,6 @@ class TestGeneratorChargeControls:
             ("set_generator_charge_start_soc", 101),
             ("set_generator_charge_end_soc", -1),
             ("set_generator_charge_end_soc", 101),
-            ("set_generator_cool_down_time", 29),
-            ("set_generator_cool_down_time", 601),
             ("set_generator_remote_auto_turn_off_time", 4),
             ("set_generator_remote_auto_turn_off_time", 21),
         ],

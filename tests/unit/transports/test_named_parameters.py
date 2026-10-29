@@ -59,7 +59,6 @@ class TestReadNamedParametersModbus:
             (198, "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR"),
             (224, "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE"),
             (225, "MIDBOX_HOLD_GEN_REMOTE_CTRL"),
-            (226, "MIDBOX_HOLD_GEN_WARN_UP_TIME"),
             (227, "MIDBOX_HOLD_GEN_COOL_DOWN_TIME"),
             (228, "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME"),
         ],
@@ -955,7 +954,6 @@ class TestRegisterMappingFunctions:
             198: "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR",
             224: "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE",
             225: "MIDBOX_HOLD_GEN_REMOTE_CTRL",
-            226: "MIDBOX_HOLD_GEN_WARN_UP_TIME",
             227: "MIDBOX_HOLD_GEN_COOL_DOWN_TIME",
             228: "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME",
         }
