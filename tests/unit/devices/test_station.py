@@ -1233,3 +1233,91 @@ class TestLoadDevicesParallelInvertersOnly:
 
         # Verify API was called with inverter serial (not GridBOSS)
         mock_client.api.devices.get_parallel_group_details.assert_called_once_with("1111111111")
+
+
+class TestLoadDevicesGridBossListedFirst:
+    """Parallel group primary detection with portal role labels (eg4_web_monitor#706)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rows",
+        [
+            pytest.param(
+                [("0000000009", 9, "Midbox Slave"), ("1111111111", 6, "Primary")],
+                id="gridboss-then-primary",
+            ),
+            pytest.param(
+                [
+                    ("0000000009", 9, "Midbox Slave"),
+                    ("2222222222", 6, "Subordinates"),
+                    ("1111111111", 6, "Primary"),
+                ],
+                id="gridboss-subordinate-then-primary",
+            ),
+        ],
+    )
+    async def test_primary_is_inverter_not_gridboss(
+        self,
+        mock_client: LuxpowerClient,
+        sample_location: Location,
+        rows: list[tuple[str, int, str]],
+    ) -> None:
+        """The "Primary" inverter becomes first_device_serial, not a row listed before it."""
+        from pylxpweb.models import (
+            InverterOverviewItem,
+            InverterOverviewResponse,
+            ParallelGroupDetailsResponse,
+            ParallelGroupDeviceItem,
+        )
+
+        station = Station(
+            client=mock_client,
+            plant_id=12345,
+            name="Test Station",
+            location=sample_location,
+            timezone="America/New_York",
+            created_date=datetime(2024, 1, 1),
+        )
+
+        devices_response = InverterOverviewResponse(
+            success=True,
+            total=len(rows),
+            rows=[
+                InverterOverviewItem.model_construct(
+                    serialNum=serial,
+                    statusText="Online",
+                    deviceType=device_type,
+                    subDeviceType=0,
+                    parallelGroup="A",
+                    deviceTypeText="GridBOSS" if device_type == 9 else "18KPV",
+                    plantId=12345,
+                    plantName="Test Station",
+                )
+                for serial, device_type, _ in rows
+            ],
+        )
+
+        group_data = ParallelGroupDetailsResponse.model_construct(
+            success=True,
+            deviceType=9,
+            total=len(rows),
+            devices=[
+                ParallelGroupDeviceItem.model_construct(
+                    serialNum=serial,
+                    deviceType=device_type,
+                    parallelIndex=str(index),
+                    parallelNumText=str(index),
+                    lost=False,
+                    roleText=role,
+                )
+                for index, (serial, device_type, role) in enumerate(rows)
+            ],
+        )
+
+        mock_client.api.devices.get_devices = AsyncMock(return_value=devices_response)
+        mock_client.api.devices.get_parallel_group_details = AsyncMock(return_value=group_data)
+
+        await station._load_devices()
+
+        assert len(station.parallel_groups) == 1
+        assert station.parallel_groups[0].first_device_serial == "1111111111"
