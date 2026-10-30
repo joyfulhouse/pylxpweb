@@ -301,6 +301,33 @@ class TestWriteNamedParametersModbus:
         with pytest.raises(ValueError, match="Unknown parameter name"):
             await mock_modbus_transport.write_named_parameters({"UNKNOWN_PARAM": 123})
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "parameter",
+        [
+            "HOLD_MAX_GENERATOR_INPUT_POWER",
+            "OFF_GRID_HOLD_GEN_CHG_START_VOLT",
+            "OFF_GRID_HOLD_GEN_CHG_END_VOLT",
+            "OFF_GRID_HOLD_GEN_CHG_START_SOC",
+            "OFF_GRID_HOLD_GEN_CHG_END_SOC",
+            "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR",
+            "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE",
+            "MIDBOX_HOLD_GEN_REMOTE_CTRL",
+            "MIDBOX_HOLD_GEN_COOL_DOWN_TIME",
+            "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME",
+        ],
+    )
+    async def test_midbox_generator_named_writes_are_rejected_before_io(
+        self, mock_modbus_transport: ModbusTransport, parameter: str
+    ) -> None:
+        """Unverified GridBOSS generator names must never reach local writes."""
+        mock_modbus_transport._device_type = "MIDBOX"
+
+        with pytest.raises(ValueError, match="Unknown parameter name"):
+            await mock_modbus_transport.write_named_parameters({parameter: 1})
+
+        mock_modbus_transport.write_parameters.assert_not_awaited()
+
 
 class TestRegister120CompoundFields:
     """Register 120 is one bit, two compound fields, then two sparse bits."""

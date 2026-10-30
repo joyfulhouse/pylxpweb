@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add bounded cloud setters for GridBOSS generator charge thresholds and remote
+  auto turn-off time (#705). Local GridBOSS register decoding is deferred until
+  controlled portal changes can be paired with local dongle raw reads.
+
 ### Fixed
 
 - Parallel group `first_device_serial` is now the group's primary inverter.
