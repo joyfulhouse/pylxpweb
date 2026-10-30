@@ -129,18 +129,6 @@ class TestGeneratorChargeControls:
 
         mock_client.api.control.write_parameter.assert_not_awaited()
 
-    def test_no_unproven_generator_setters_exist(self, mock_client: LuxpowerClient) -> None:
-        mid = MIDDevice(mock_client, "1234567890")
-        for method_name in (
-            "set_generator_rated_power",
-            "set_generator_battery_charge_current_limit",
-            "set_generator_volt_soc_enable",
-            "set_generator_remote_control",
-            "set_generator_warm_up_time",
-            "set_generator_boost",
-        ):
-            assert not hasattr(mid, method_name)
-
 
 class TestMIDDeviceRefresh:
     """Test MIDDevice refresh functionality."""

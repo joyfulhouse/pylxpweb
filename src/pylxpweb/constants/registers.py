@@ -1102,16 +1102,6 @@ MIDBOX_REGISTER_TO_PARAM_KEYS: dict[int, list[str]] = {
         "BIT_MIDBOX_SP_MODE_3",  # Bits 4-5 (2-bit field)
         "BIT_MIDBOX_SP_MODE_4",  # Bits 6-7 (2-bit field)
     ],
-    177: ["HOLD_MAX_GENERATOR_INPUT_POWER"],
-    194: ["OFF_GRID_HOLD_GEN_CHG_START_VOLT"],
-    195: ["OFF_GRID_HOLD_GEN_CHG_END_VOLT"],
-    196: ["OFF_GRID_HOLD_GEN_CHG_START_SOC"],
-    197: ["OFF_GRID_HOLD_GEN_CHG_END_SOC"],
-    198: ["OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR"],
-    224: ["MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE"],
-    225: ["MIDBOX_HOLD_GEN_REMOTE_CTRL"],
-    227: ["MIDBOX_HOLD_GEN_COOL_DOWN_TIME"],
-    228: ["MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME"],
 }
 
 # Explicit GridBOSS bit-field offsets.  Keeping this subset distinct lets the

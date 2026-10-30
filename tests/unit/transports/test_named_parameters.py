@@ -48,33 +48,6 @@ class TestReadNamedParametersModbus:
         assert result["HOLD_AC_CHARGE_POWER_CMD"] == 50
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("register", "parameter"),
-        [
-            (177, "HOLD_MAX_GENERATOR_INPUT_POWER"),
-            (194, "OFF_GRID_HOLD_GEN_CHG_START_VOLT"),
-            (195, "OFF_GRID_HOLD_GEN_CHG_END_VOLT"),
-            (196, "OFF_GRID_HOLD_GEN_CHG_START_SOC"),
-            (197, "OFF_GRID_HOLD_GEN_CHG_END_SOC"),
-            (198, "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR"),
-            (224, "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE"),
-            (225, "MIDBOX_HOLD_GEN_REMOTE_CTRL"),
-            (227, "MIDBOX_HOLD_GEN_COOL_DOWN_TIME"),
-            (228, "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME"),
-        ],
-    )
-    async def test_midbox_generator_registers_decode_cloud_names(
-        self, register: int, parameter: str
-    ) -> None:
-        transport = ModbusTransport(host="192.168.1.100", serial="1234567890")
-        transport._device_type = "MIDBOX"
-        transport.read_parameters = AsyncMock(return_value={register: 123})
-
-        result = await transport.read_named_parameters(register, 1)
-
-        assert result[parameter] == 123
-
-    @pytest.mark.asyncio
     async def test_read_named_parameters_bit_field_register(
         self, mock_modbus_transport: ModbusTransport
     ) -> None:
@@ -327,6 +300,33 @@ class TestWriteNamedParametersModbus:
         """Test writing unknown parameter raises ValueError."""
         with pytest.raises(ValueError, match="Unknown parameter name"):
             await mock_modbus_transport.write_named_parameters({"UNKNOWN_PARAM": 123})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "parameter",
+        [
+            "HOLD_MAX_GENERATOR_INPUT_POWER",
+            "OFF_GRID_HOLD_GEN_CHG_START_VOLT",
+            "OFF_GRID_HOLD_GEN_CHG_END_VOLT",
+            "OFF_GRID_HOLD_GEN_CHG_START_SOC",
+            "OFF_GRID_HOLD_GEN_CHG_END_SOC",
+            "OFF_GRID_HOLD_MAX_GEN_CHG_BAT_CURR",
+            "MIDBOX_HOLD_GEN_VOLT_SOC_ENABLE",
+            "MIDBOX_HOLD_GEN_REMOTE_CTRL",
+            "MIDBOX_HOLD_GEN_COOL_DOWN_TIME",
+            "MIDBOX_HOLD_GEN_REMOTE_TURN_OFF_TIME",
+        ],
+    )
+    async def test_midbox_generator_named_writes_are_rejected_before_io(
+        self, mock_modbus_transport: ModbusTransport, parameter: str
+    ) -> None:
+        """Unverified GridBOSS generator names must never reach local writes."""
+        mock_modbus_transport._device_type = "MIDBOX"
+
+        with pytest.raises(ValueError, match="Unknown parameter name"):
+            await mock_modbus_transport.write_named_parameters({parameter: 1})
+
+        mock_modbus_transport.write_parameters.assert_not_awaited()
 
 
 class TestRegister120CompoundFields:
