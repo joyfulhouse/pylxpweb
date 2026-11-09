@@ -1780,14 +1780,14 @@ wheels = [
 
 [[package]]
 name = "tmodbus"
-version = "0.6.2"
+version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/aa/94/3bcac21580627aaba908e6653d0b815ba0ae22ef211bd021d21718989c3a/tmodbus-0.6.2.tar.gz", hash = "sha256:4df75bf3976f32d7481ee43f91f4f8ba3e6905315caa3f1376be4024f987d6a4", size = 198637, upload-time = "2026-08-28T13:20:24.514Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/da/6d/82c18c6661f067e5a3b42cb77afb31196724e58f9309fd5fba719bab8f69/tmodbus-1.1.0.tar.gz", hash = "sha256:5ec0f216c75bf33f9c932569ad377e8e926be033cc300b90c48d4f4aff6b7b37", size = 205827, upload-time = "2026-10-26T16:15:54.197Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7a/3f/09d532685b15fdbc2811aec5544a44203c970793da2673cf7d494bd78d5d/tmodbus-0.6.2-py3-none-any.whl", hash = "sha256:dd4dc59247b0f3cc9ea6a7ee91e4424122ff40a6aa6bff0e4c6fbc37c5c794c0", size = 107932, upload-time = "2026-08-28T13:20:23.09Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/3b/7309be6eec2af5e02131a4e3ebab1c6e8aaa95180899cc7b60795e3caf33/tmodbus-1.1.0-py3-none-any.whl", hash = "sha256:6aa5d54c3d42a0aa3fdfc1b8562c866a565da84696f17ff0149e0abf47ee0c10", size = 108611, upload-time = "2026-10-26T16:15:52.911Z" },
 ]
 
 [package.optional-dependencies]
