@@ -1510,7 +1510,7 @@ class HybridInverter(GenericInverter):
         this level while grid-connected.
 
         Returns:
-            Cutoff SOC percentage (10-100)
+            Cutoff SOC percentage (0-100)
 
         Example:
             >>> soc = await inverter.get_on_grid_cutoff_soc()
@@ -1525,7 +1525,7 @@ class HybridInverter(GenericInverter):
         """Set on-grid discharge cutoff SOC via Modbus.
 
         Args:
-            soc_percent: Cutoff SOC percentage (10-100)
+            soc_percent: Cutoff SOC percentage (0-100)
 
         Returns:
             True if successful

@@ -898,8 +898,7 @@ INVERTER_HOLDING_REGISTERS: tuple[HoldingRegisterDefinition, ...] = (
         api_param_key="HOLD_DISCHG_CUT_OFF_SOC_EOD",  # verified
         ha_entity_key="ongrid_discharge_soc",
         unit="%",
-        # Bounds owned by constants.devices (eg4 #603: ceiling 100, not the
-        # portal's 90 hint; one-model evidence, floor unproven either way).
+        # Shared client bounds; the device/portal may still reject a value.
         min_value=ONGRID_DISCHARGE_CUTOFF_SOC_MIN,
         max_value=ONGRID_DISCHARGE_CUTOFF_SOC_MAX,
         category=HoldingCategory.BATTERY,

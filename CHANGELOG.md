@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Allow on-grid discharge cut-off SOC writes from 0-100% instead of 10-100%
+  (joyfulhouse/eg4_web_monitor#713); device/portal acceptance still applies.
+
 - Parallel group `first_device_serial` is now the group's primary inverter.
   Cloud role labels "Primary"/"Master" are recognized and GridBOSS rows are
   never chosen when the group has inverter rows, so groups listing the

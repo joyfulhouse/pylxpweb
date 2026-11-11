@@ -19,14 +19,10 @@ def test_h160_firmware_range() -> None:
     assert register.max_value == 90
 
 
-def test_h105_range_ceiling_is_100() -> None:
-    """eg4 #603: a portal-typed 95 is stored (LXP-LB-US 10K); >100 rejected.
-
-    The ceiling is portal-correlated on one model, not firmware-proven. The 10
-    floor is the portal hint, unproven either way — pinned so a drift is loud.
-    """
+def test_h105_range_is_0_to_100() -> None:
+    """Expose the client write range; portal evidence does not prove every value."""
     register = BY_NAME["ongrid_discharge_cutoff_soc"]
 
     assert register.address == 105
-    assert register.min_value == 10
+    assert register.min_value == 0
     assert register.max_value == 100

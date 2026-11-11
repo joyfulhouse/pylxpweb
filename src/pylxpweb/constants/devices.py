@@ -35,10 +35,9 @@ SOC_MAX_PERCENT = 100
 # Ceiling 100, not the portal's 90 arrow-button hint: a portal-typed 95 is
 # stored on a Luxpower LXP-LB-US 10K and 101 is rejected (eg4 #603); 96-100
 # are inferred from that pair, not individually tested.
-# That evidence is a single model; other families are unconfirmed, and the
-# firmware exception remains the authoritative reject path. The 10 floor is
-# the same portal hint — unproven either way — kept as shipped.
-ONGRID_DISCHARGE_CUTOFF_SOC_MIN = 10
+# Do not restore the portal hint as a floor: 5 is stored/read back on a
+# FlexBOSS21; 0-4 are untested. Device/portal rejection remains authoritative.
+ONGRID_DISCHARGE_CUTOFF_SOC_MIN = 0
 ONGRID_DISCHARGE_CUTOFF_SOC_MAX = 100
 
 # ==============================================================================
