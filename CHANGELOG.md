@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0b15] - 2026-11-11
+
 ### Added
 
 - Add bounded cloud setters for GridBOSS generator charge thresholds and remote
@@ -3208,7 +3210,8 @@ ac_power = inverter.ac_charge_power_limit  # Property access (uses 1-hour cache)
 - **v0.1.1** (2025-11-15): Bug fixes and improvements
 - **v0.1.0** (2025-11-14): Initial release with core functionality
 
-[Unreleased]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b12...HEAD
+[Unreleased]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b15...HEAD
+[0.10.0b15]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b14...v0.10.0b15
 [0.10.0b12]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b11...v0.10.0b12
 [0.10.0b11]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b10...v0.10.0b11
 [0.10.0b10]: https://github.com/joyfulhouse/pylxpweb/compare/v0.10.0b9...v0.10.0b10
