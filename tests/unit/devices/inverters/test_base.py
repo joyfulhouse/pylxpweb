@@ -1121,9 +1121,12 @@ class TestInverterControlOperations:
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        # Try to set on-grid limit below 10%
-        with pytest.raises(ValueError, match="on_grid_limit must be between 10 and 100%"):
-            await inverter.set_battery_soc_limits(on_grid_limit=5)
+        mock_client.api.control.write_parameter = AsyncMock()
+
+        with pytest.raises(ValueError, match="on_grid_limit must be between 0 and 100%"):
+            await inverter.set_battery_soc_limits(on_grid_limit=-1)
+
+        mock_client.api.control.write_parameter.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_set_battery_soc_limits_validation_on_grid_too_high(
@@ -1134,20 +1137,19 @@ class TestInverterControlOperations:
             client=mock_client, serial_number="1234567890", model="TestModel"
         )
 
-        # Try to set on-grid limit above 100%
-        with pytest.raises(ValueError, match="on_grid_limit must be between 10 and 100%"):
+        mock_client.api.control.write_parameter = AsyncMock()
+
+        with pytest.raises(ValueError, match="on_grid_limit must be between 0 and 100%"):
             await inverter.set_battery_soc_limits(on_grid_limit=101)
 
+        mock_client.api.control.write_parameter.assert_not_awaited()
+
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("limit", [91, 95, 100])
-    async def test_set_battery_soc_limits_on_grid_accepts_above_90(
+    @pytest.mark.parametrize("limit", [0, 5, 9, 91, 95, 100])
+    async def test_set_battery_soc_limits_on_grid_accepts_range(
         self, mock_client: LuxpowerClient, limit: int
     ) -> None:
-        """Client-side range: 91-100 is forwarded to the cloud writer, no ValueError.
-
-        Pins the client no longer refusing the value; firmware evidence is
-        one LXP-LB-US 10K (95 stored, 101 rejected — eg4 #603).
-        """
+        """Forward client-accepted bounds to the cloud; device acceptance may differ."""
         inverter = ConcreteInverter(
             client=mock_client, serial_number="1234567890", model="TestModel"
         )

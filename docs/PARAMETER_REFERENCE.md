@@ -125,7 +125,9 @@ response = await client.write_parameter(
 #### On-Grid SOC Cut-Off
 - **Parameter Name**: `HOLD_DISCHG_CUT_OFF_SOC_EOD`
 - **Type**: Write
-- **Range**: 10-100 % (the portal's arrow buttons stop at 90, but a typed 95 is stored and 101 is rejected on an LXP-LB-US 10K; 96-100 are inferred from that pair)
+- **Range**: 0-100 % (client write bounds)
+- **Evidence**: [eg4 #713](https://github.com/joyfulhouse/eg4_web_monitor/issues/713) reports 5% stored and read back via the EG4 portal on a FlexBOSS21; 0-4 are untested. For the ceiling, the portal's arrow buttons stop at 90, but a typed 95 is stored and 101 is rejected on an LXP-LB-US 10K ([eg4 #603](https://github.com/joyfulhouse/eg4_web_monitor/issues/603)); 96-100 are inferred from that pair.
+- **Device acceptance**: One [portal user report on an LXP-LB-EU 12K](https://github.com/joyfulhouse/eg4_web_monitor/issues/668#issuecomment-6507853454) says the portal refuses an on-grid cut-off below the off-grid cut-off, with equal values allowed. This is not a verified firmware rule. The library adds no cross-field validation; the device/portal may still reject a value, and firmware/portal rejection remains authoritative.
 - **Unit**: Percent
 - **Purpose**: Minimum SOC before stopping discharge when grid is available
 - **Default**: Typically 10-20%

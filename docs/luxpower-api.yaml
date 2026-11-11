@@ -838,7 +838,7 @@ paths:
         | 21 | FuncEn | Function enable bit field | 0-65535 | R/W |
         | 66 | ACChgPowerCMD | AC charge power | 0-100% | R/W |
         | 67 | ACChgSOCLimit | AC charge SOC limit | 0-101% | R/W |
-        | 105 | EOD | On-grid discharge cutoff | 10-100% | R/W |
+        | 105 | EOD | On-grid discharge cutoff | 0-100% | R/W |
         | 125 | SOC_Low_Limit_EPS | Off-grid SOC limit | 0-100% | R/W |
 
         **See Also**:
@@ -937,7 +937,7 @@ paths:
         | 100 | BatVoltMinChg | Min charge voltage | 40-55V (×100) | 4800 (48.00V) |
         | 103 | MaxChgCurr | Max charge current | 0-200A (×10) | 1000 (100.0A) |
         | 104 | MaxDisChgCurr | Max discharge current | 0-200A (×10) | 1000 (100.0A) |
-        | 105 | EOD | On-grid discharge cutoff | 10-100% | 15 |
+        | 105 | EOD | On-grid discharge cutoff | 0-100% | 15 |
         | 125 | SOC_Low_Limit_EPS | Off-grid SOC limit | 0-100% | 10 |
 
         ### Grid Protection (Registers 25-28)

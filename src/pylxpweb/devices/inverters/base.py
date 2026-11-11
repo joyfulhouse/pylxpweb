@@ -2576,7 +2576,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters have SOC limits.
 
         Returns:
-            Dictionary with on_grid_limit (10-100%) and off_grid_limit (0-100%),
+            Dictionary with on_grid_limit (0-100%) and off_grid_limit (0-100%),
             or None if parameters haven't been loaded yet
 
         Example:
@@ -2603,7 +2603,7 @@ class BaseInverter(FirmwareUpdateMixin, InverterRuntimePropertiesMixin, BaseDevi
         Universal control: All inverters have SOC protection.
 
         Args:
-            on_grid_limit: On-grid discharge cutoff SOC (10-100%)
+            on_grid_limit: On-grid discharge cutoff SOC (0-100%)
             off_grid_limit: Off-grid/EPS discharge cutoff SOC (0-100%)
 
         Returns:
